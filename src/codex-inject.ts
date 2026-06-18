@@ -1,9 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "./types";
 
-const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
+const CODEX_HOME = join(homedir(), ".codex");
+const CODEX_CONFIG_PATH = join(CODEX_HOME, "config.toml");
+const CODEX_PROFILE_PATH = join(CODEX_HOME, "opencodex.config.toml");
 
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 
@@ -15,11 +17,17 @@ function buildProviderBlock(port: number): string {
     'name = "OpenCodex Proxy"',
     `base_url = "http://localhost:${port}/v1"`,
     'wire_api = "responses"',
-    "",
-    "[profiles.opencodex]",
-    'model_provider = "opencodex"',
   ];
   return lines.join("\n") + "\n";
+}
+
+function buildProfileFile(port: number): string {
+  return [
+    "# OpenCodex proxy profile — use with: codex --profile opencodex",
+    `# Routes all model requests through the opencodex proxy at localhost:${port}`,
+    'model_provider = "opencodex"',
+    "",
+  ].join("\n");
 }
 
 export async function injectCodexConfig(port: number, _config?: OcxConfig): Promise<{ success: boolean; message: string }> {
@@ -37,9 +45,11 @@ export async function injectCodexConfig(port: number, _config?: OcxConfig): Prom
   content = content.trimEnd() + "\n" + block;
 
   writeFileSync(CODEX_CONFIG_PATH, content, "utf-8");
+  writeFileSync(CODEX_PROFILE_PATH, buildProfileFile(port), "utf-8");
+
   return {
     success: true,
-    message: `Injected opencodex provider + profile into Codex config.\n` +
+    message: `Injected opencodex provider into Codex config.\n` +
       `  Default mode: OpenAI models (gpt-5.5, o3, etc.) work normally.\n` +
       `  Proxy mode:   codex --profile opencodex`,
   };
@@ -52,7 +62,7 @@ function removeOcxSection(content: string): string {
   for (const line of lines) {
     if (line.includes(OCX_SECTION_MARKER)) { inOcxSection = true; continue; }
     if (inOcxSection) {
-      if (line.startsWith("[") && !line.includes("model_providers.opencodex") && !line.includes("profiles.opencodex")) {
+      if (line.startsWith("[") && !line.includes("model_providers.opencodex")) {
         inOcxSection = false;
         filtered.push(line);
       }
@@ -71,6 +81,7 @@ export function removeCodexConfig(): { success: boolean; message: string } {
   let content = readFileSync(CODEX_CONFIG_PATH, "utf-8");
 
   if (!content.includes("[model_providers.opencodex]")) {
+    if (existsSync(CODEX_PROFILE_PATH)) unlinkSync(CODEX_PROFILE_PATH);
     return { success: true, message: "opencodex not found in Codex config." };
   }
 
@@ -84,7 +95,12 @@ export function removeCodexConfig(): { success: boolean; message: string } {
   content = content.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 
   writeFileSync(CODEX_CONFIG_PATH, content, "utf-8");
-  return { success: true, message: "Removed opencodex from Codex config." };
+
+  if (existsSync(CODEX_PROFILE_PATH)) {
+    unlinkSync(CODEX_PROFILE_PATH);
+  }
+
+  return { success: true, message: "Removed opencodex from Codex config and profile." };
 }
 
 export function getCodexConfigPath(): string {
