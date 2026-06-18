@@ -18,7 +18,7 @@ import type { CatalogModel } from "./codex-catalog";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch } from "./web-search";
 import { describeImagesInPlace, planVisionSidecar } from "./vision";
 import { removeCredential } from "./oauth/store";
-import { listKeyLoginProviders } from "./oauth/key-providers";
+import { enrichProviderFromCatalog, listKeyLoginProviders } from "./oauth/key-providers";
 import type { OcxConfig, OcxProviderConfig } from "./types";
 
 const VERSION = "0.0.1";
@@ -300,6 +300,9 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
+    // Catalog providers (e.g. ollama-cloud) carry a models + vision/reasoning classification the GUI
+    // doesn't send — merge it in so the sidecars are gated correctly.
+    enrichProviderFromCatalog(name, prov);
     const { saveConfig: save } = await import("./config");
     config.providers[name] = prov;
     if (body.setDefault) config.defaultProvider = name;

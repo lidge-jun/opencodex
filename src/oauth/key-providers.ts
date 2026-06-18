@@ -1,3 +1,5 @@
+import type { OcxProviderConfig } from "../types";
+
 /**
  * API-key "login" providers: not OAuth — the flow opens the provider's dashboard so the user can
  * create/copy a key, then validates + stores it as the provider's `apiKey` (authMode "key").
@@ -11,6 +13,13 @@ export interface KeyLoginProvider {
   dashboardUrl: string;
   models?: string[];
   defaultModel?: string;
+  /**
+   * Model ids that do NOT accept image input (the vision sidecar describes images for them) / do NOT
+   * accept a reasoning param. Copied into the created provider config by `enrichProviderFromCatalog`,
+   * so the classification actually gates the sidecars (matching is tolerant of an Ollama ":size" tag).
+   */
+  noVisionModels?: string[];
+  noReasoningModels?: string[];
 }
 
 export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = {
@@ -32,7 +41,43 @@ export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = {
   parallel: { label: "Parallel", baseUrl: "https://platform.parallel.ai", adapter: "openai-chat", dashboardUrl: "https://platform.parallel.ai" },
   zenmux: { label: "ZenMux", baseUrl: "https://zenmux.ai/api/v1", adapter: "openai-chat", dashboardUrl: "https://zenmux.ai" },
   litellm: { label: "LiteLLM (self-hosted)", baseUrl: "http://localhost:4000/v1", adapter: "openai-chat", dashboardUrl: "https://docs.litellm.ai/docs/proxy/quick_start" },
+  // Ollama Cloud — hosted (not local), OpenAI-compatible at /v1, Bearer key from ollama.com.
+  // models/noVisionModels reflect the live ollama.com cloud lineup (the proxy still fetches /v1/models
+  // live; this is the seed + the vision/text classification, web-verified against ollama.com search
+  // filters). Vision-capable cloud models are EXCLUDED from noVisionModels: kimi-k2.5/.6/.7-code,
+  // minimax-m3, gemma3/gemma4, qwen3.5, gemini-3-flash-preview, ministral-3, devstral-small-2,
+  // mistral-large-3. gpt-oss is text-only despite a stale third-party list claiming otherwise.
+  "ollama-cloud": {
+    label: "Ollama Cloud",
+    baseUrl: "https://ollama.com/v1",
+    adapter: "openai-chat",
+    dashboardUrl: "https://ollama.com/settings/keys",
+    models: ["glm-5.2", "deepseek-v4-pro", "qwen3-coder", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5", "gemma4"],
+    defaultModel: "glm-5.2",
+    noVisionModels: [
+      "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
+      "minimax-m2.7", "minimax-m2.5", "minimax-m2.1",
+      "nemotron-3-ultra", "nemotron-3-super",
+      "deepseek-v4-pro", "deepseek-v4-flash",
+      "gpt-oss", "qwen3-coder",
+    ],
+  },
 };
+
+/**
+ * Copy a key-login catalog entry's seed/classification (`models`, `noVisionModels`,
+ * `noReasoningModels`, `defaultModel`) onto a provider config being created, for any field the caller
+ * didn't already supply. Lets the vision/reasoning classification actually reach the saved config
+ * (the GUI/API only send adapter/baseUrl/apiKey/defaultModel). No-op for non-catalog provider names.
+ */
+export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig): void {
+  const e = KEY_LOGIN_PROVIDERS[name];
+  if (!e) return;
+  if (!prov.models && e.models) prov.models = [...e.models];
+  if (!prov.defaultModel && e.defaultModel) prov.defaultModel = e.defaultModel;
+  if (!prov.noVisionModels && e.noVisionModels) prov.noVisionModels = [...e.noVisionModels];
+  if (!prov.noReasoningModels && e.noReasoningModels) prov.noReasoningModels = [...e.noReasoningModels];
+}
 
 export function isKeyLoginProvider(name: string): boolean {
   return name in KEY_LOGIN_PROVIDERS;
