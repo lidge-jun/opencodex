@@ -13,6 +13,8 @@ function buildProviderBlock(port: number): string {
   const lines = [
     "",
     OCX_SECTION_MARKER,
+    'model_provider = "opencodex"',
+    "",
     "[model_providers.opencodex]",
     'name = "OpenCodex Proxy"',
     `base_url = "http://localhost:${port}/v1"`,
@@ -49,9 +51,11 @@ export async function injectCodexConfig(port: number, _config?: OcxConfig): Prom
 
   return {
     success: true,
-    message: `Injected opencodex provider into Codex config.\n` +
-      `  Default mode: OpenAI models (gpt-5.5, o3, etc.) work normally.\n` +
-      `  Proxy mode:   codex --profile opencodex`,
+    message: `Injected opencodex as default provider into Codex config.\n` +
+      `  All models now route through opencodex proxy (like OpenRouter).\n` +
+      `  OpenAI models (gpt-5.5, etc.) are passed through to OpenAI.\n` +
+      `  Custom models route to their configured providers.\n` +
+      `  Fallback: codex --profile opencodex (same behavior)`,
   };
 }
 
@@ -60,7 +64,10 @@ function removeOcxSection(content: string): string {
   const filtered: string[] = [];
   let inOcxSection = false;
   for (const line of lines) {
-    if (line.includes(OCX_SECTION_MARKER)) { inOcxSection = true; continue; }
+    if (line.includes(OCX_SECTION_MARKER) || line.trim() === "[model_providers.opencodex]") {
+      inOcxSection = true;
+      continue;
+    }
     if (inOcxSection) {
       if (line.startsWith("[") && !line.includes("model_providers.opencodex")) {
         inOcxSection = false;
