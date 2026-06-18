@@ -57,24 +57,29 @@ You can also start OAuth from the [web dashboard](/opencodex/guides/web-dashboar
 
 ## 3. API-key catalog
 
-opencodex ships a catalog of OpenAI-compatible, key-based providers. The dashboard's **Add provider**
-picker opens the provider's key dashboard, validates the key, and stores it. Notable entries:
+opencodex ships a catalog of key-based providers (mostly OpenAI-compatible, a few
+Anthropic-compatible). The dashboard's **Add provider** picker opens the provider's key dashboard,
+validates the key, and stores it. Notable entries:
 
 | Provider | Base URL |
 | --- | --- |
 | **Ollama Cloud** | `https://ollama.com/v1` |
+| Mistral | `https://api.mistral.ai/v1` |
+| MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) | `https://api.moonshot.ai/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Qwen Portal | `https://portal.qwen.ai/v1` |
-| …and more | Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+| Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
-All use the `openai-chat` adapter and a bearer key.
+Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
+endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
 
 ### Ollama Cloud
 
