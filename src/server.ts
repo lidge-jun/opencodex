@@ -106,6 +106,59 @@ async function handleResponses(req: Request, config: OcxConfig): Promise<Respons
   return formatErrorResponse(500, "internal_error", "Non-streaming not supported by this adapter");
 }
 
+const requestLog: { timestamp: number; model: string; provider: string; status: number; durationMs: number }[] = [];
+const MAX_LOG_SIZE = 200;
+
+function addRequestLog(entry: typeof requestLog[number]) {
+  requestLog.push(entry);
+  if (requestLog.length > MAX_LOG_SIZE) requestLog.shift();
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+}
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json", ...corsHeaders() },
+  });
+}
+
+async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): Promise<Response | null> {
+  if (url.pathname === "/api/config" && req.method === "GET") {
+    const safeConfig = JSON.parse(JSON.stringify(config));
+    for (const prov of Object.values(safeConfig.providers as Record<string, OcxProviderConfig>)) {
+      if (prov.apiKey) prov.apiKey = prov.apiKey.slice(0, 8) + "...";
+    }
+    return jsonResponse(safeConfig);
+  }
+
+  if (url.pathname === "/api/config" && req.method === "PUT") {
+    const body = await req.json() as OcxConfig;
+    const { saveConfig: save } = await import("./config");
+    save(body);
+    return jsonResponse({ success: true });
+  }
+
+  if (url.pathname === "/api/logs" && req.method === "GET") {
+    return jsonResponse(requestLog);
+  }
+
+  if (url.pathname === "/api/providers" && req.method === "GET") {
+    return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
+      name, adapter: p.adapter, baseUrl: p.baseUrl, defaultModel: p.defaultModel,
+      hasApiKey: !!p.apiKey,
+    })));
+  }
+
+  return null;
+}
+
 export function startServer(port?: number) {
   const config = loadConfig();
   const listenPort = port ?? config.port ?? 10100;
@@ -115,14 +168,30 @@ export function startServer(port?: number) {
     async fetch(req) {
       const url = new URL(req.url);
 
+      if (req.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders() });
+      }
+
       if (url.pathname === "/healthz" && req.method === "GET") {
-        return new Response(JSON.stringify({ status: "ok", version: VERSION }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        return jsonResponse({ status: "ok", version: VERSION, uptime: process.uptime() });
+      }
+
+      if (url.pathname.startsWith("/api/")) {
+        const mgmtResponse = await handleManagementAPI(req, url, config);
+        if (mgmtResponse) return mgmtResponse;
       }
 
       if (url.pathname === "/v1/responses" && req.method === "POST") {
-        return handleResponses(req, config);
+        const start = Date.now();
+        const response = await handleResponses(req, config);
+        addRequestLog({
+          timestamp: start,
+          model: "unknown",
+          provider: config.defaultProvider,
+          status: response.status,
+          durationMs: Date.now() - start,
+        });
+        return response;
       }
 
       return formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`);
@@ -132,6 +201,7 @@ export function startServer(port?: number) {
   console.log(`🚀 opencodex proxy running on http://localhost:${listenPort}`);
   console.log(`   POST /v1/responses → provider translation`);
   console.log(`   GET  /healthz      → health check`);
+  console.log(`   GET  /api/*        → management API`);
 
   return server;
 }

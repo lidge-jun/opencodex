@@ -92,6 +92,16 @@ switch (command) {
   case "status":
     handleStatus();
     break;
+  case "gui": {
+    const { loadConfig } = await import("./config");
+    const config = loadConfig();
+    const guiUrl = `http://localhost:${config.port}`;
+    console.log(`Opening GUI at ${guiUrl}...`);
+    console.log("Note: proxy must be running (ocx start) and GUI dev server (cd gui && bun dev)");
+    const { exec } = await import("node:child_process");
+    exec(`open ${guiUrl}`);
+    break;
+  }
   case "help":
   case "--help":
   case "-h":
