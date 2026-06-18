@@ -224,12 +224,17 @@ export function parseRequest(body: unknown): OcxParsedRequest {
 
       if (effectiveType === "function_call") {
         const call = item as { id?: string; call_id: string; name: string; arguments?: string; namespace?: string };
-        let args: Record<string, unknown>;
-        try {
-          const raw: unknown = JSON.parse(call.arguments ?? "{}");
-          args = isObj(raw) ? raw : {};
-        } catch {
-          throw new Error(`function_call ${call.call_id} has invalid JSON arguments`);
+        // Tolerate empty/non-JSON arguments (e.g. a no-arg tool call serialized as "") instead of
+        // throwing — a single poisoned history item would otherwise 400 every subsequent turn.
+        let args: Record<string, unknown> = {};
+        const rawArgs = call.arguments?.trim();
+        if (rawArgs) {
+          try {
+            const parsed: unknown = JSON.parse(rawArgs);
+            if (isObj(parsed)) args = parsed;
+          } catch {
+            console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
+          }
         }
         const toolCall: OcxToolCall = {
           type: "toolCall", id: call.call_id, name: call.name, arguments: args,

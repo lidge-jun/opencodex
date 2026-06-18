@@ -99,10 +99,14 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
+        // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
+        // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
+        // would 400 the whole session ("invalid JSON arguments"), poisoning all later turns.
+        const argsStr = currentToolCall.args || "{}";
         // Finalize streamed function-call arguments so Codex commits the call (incl. MCP / computer_use).
         if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
           emit("response.function_call_arguments.done", {
-            item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex, arguments: currentToolCall.args,
+            item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex, arguments: argsStr,
           });
         }
         const item = currentToolCall.toolSearch
@@ -120,7 +124,7 @@ export function bridgeToResponsesSSE(
           : {
               type: "function_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
-              arguments: currentToolCall.args, status: "completed",
+              arguments: argsStr, status: "completed",
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
             };
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
