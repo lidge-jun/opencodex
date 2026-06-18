@@ -11,8 +11,8 @@ import { parseRequest } from "./responses/parser";
 import { routeModel } from "./router";
 import { namespacedToolName } from "./types";
 import {
-  clearLoginState, getLoginStatus, getValidAccessToken, isOAuthProvider,
-  listOAuthProviders, resolveModelsAuthToken, startLoginFlow, upsertOAuthProvider,
+  buildModelsRequest, clearLoginState, getLoginStatus, getValidAccessToken, isOAuthProvider,
+  listOAuthProviders, reconcileOAuthProviders, resolveModelsAuthToken, startLoginFlow, upsertOAuthProvider,
 } from "./oauth/index";
 import { removeCredential } from "./oauth/store";
 import { listKeyLoginProviders } from "./oauth/key-providers";
@@ -286,6 +286,12 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     const { saveConfig: save } = await import("./config");
     delete config.providers[name];
     save(config);
+    // Drop its models from Codex's catalog immediately (re-sync + cache bust) so removal is live.
+    try {
+      const { syncCatalogModels, invalidateCodexModelsCache } = await import("./codex-catalog");
+      await syncCatalogModels(config);
+      invalidateCodexModelsCache();
+    } catch { /* catalog absent */ }
     return jsonResponse({ success: true });
   }
 
@@ -330,7 +336,13 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const disabled = new Set(config.disabledModels ?? []);
-    const available = models.map(m => `${m.provider}/${m.id}`).filter(ns => !disabled.has(ns));
+    // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
+    // catalog, just buried by priority. List them first so the user can feature them over routed.
+    const { listCatalogNativeSlugs } = await import("./codex-catalog");
+    const available = [
+      ...listCatalogNativeSlugs(),
+      ...models.map(m => `${m.provider}/${m.id}`),
+    ].filter(ns => !disabled.has(ns));
     return jsonResponse({ chosen: config.subagentModels ?? [], available });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
@@ -358,6 +370,12 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     try {
       const { url: authUrl, instructions } = await startLoginFlow(provider);
       upsertOAuthProvider(config, provider); // mutate LIVE config — routing sees it without restart
+      if (authUrl) {
+        // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
+        // window.open is popup-blocked because it runs after an await, not a direct click.
+        const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? 'start ""' : "xdg-open";
+        (await import("node:child_process")).exec(`${cmd} "${authUrl}"`, () => {});
+      }
       return jsonResponse({ url: authUrl, instructions });
     } catch (err) {
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
@@ -386,11 +404,10 @@ async function fetchAllModels(config: OcxConfig) {
     if (prov.authMode === "forward") return; // ChatGPT backend has no /models; gpt listed statically
     const apiKey = await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) return; // not logged in → skip silently
-    const headers: Record<string, string> = { ...(prov.headers ?? {}) };
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    const { url, headers } = buildModelsRequest(prov, apiKey);
     const liveIds = new Set<string>();
     try {
-      const res = await fetch(`${prov.baseUrl}/models`, { headers, signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const json = await res.json() as { data?: { id: string; owned_by?: string }[] };
         if (json.data && Array.isArray(json.data)) {
@@ -413,6 +430,9 @@ async function fetchAllModels(config: OcxConfig) {
 
 export function startServer(port?: number) {
   const config = loadConfig();
+  // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
+  // adding/dropping models reaches existing configs on start — not just fresh installs.
+  reconcileOAuthProviders(config);
   const listenPort = port ?? config.port ?? 10100;
 
   const server = Bun.serve({
@@ -442,7 +462,8 @@ export function startServer(port?: number) {
         if (url.searchParams.has("client_version")) {
           // Codex client → Codex catalog shape: native gpt + namespaced routed models,
           // cloned from a native template so required fields (base_instructions, etc.) are present.
-          return jsonResponse({ models: buildCatalogEntries(loadCatalogTemplate(), NATIVE_OPENAI_MODELS, goOrdered) });
+          // Pass the subagent picks so featured models lead by priority (matches the on-disk file).
+          return jsonResponse({ models: buildCatalogEntries(loadCatalogTemplate(), NATIVE_OPENAI_MODELS, goOrdered, config.subagentModels) });
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         const data = [

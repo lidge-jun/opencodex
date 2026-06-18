@@ -2,7 +2,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFil
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "./config";
-import { resolveModelsAuthToken } from "./oauth/index";
+import { DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, setCached } from "./model-cache";
+import { buildModelsRequest, resolveModelsAuthToken } from "./oauth/index";
 import type { OcxConfig, OcxProviderConfig } from "./types";
 
 const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
@@ -102,44 +103,93 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
  * catalog sync and the proxy `/v1/models?client_version` branch.
  * Native gpt slugs stay bare; routed models are namespaced `<provider>/<model>`.
  */
-export function buildCatalogEntries(template: RawEntry | null, gptSlugs: string[], goModels: CatalogModel[]): RawEntry[] {
+export function buildCatalogEntries(template: RawEntry | null, gptSlugs: string[], goModels: CatalogModel[], featured?: string[]): RawEntry[] {
+  // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
+  // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
+  // ARRAY order is discarded — so "featuring" a model = giving it the LOWEST priority (0..N-1) so
+  // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
+  const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const out: RawEntry[] = [];
   for (const slug of gptSlugs) {
-    out.push(deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9));
+    const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
+    if (rank.has(slug)) e.priority = rank.get(slug)!;
+    out.push(e);
   }
   for (const m of goModels) {
-    out.push(deriveEntry(template, `${m.provider}/${m.id}`, `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`, 5));
+    const slug = `${m.provider}/${m.id}`;
+    const e = deriveEntry(template, slug, `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`, 5);
+    if (rank.has(slug)) e.priority = rank.get(slug)!;
+    out.push(e);
   }
   return out;
 }
 
-/** Fetch a provider's `/models` (openai-chat style). Skips forward-auth providers. */
-async function fetchProviderModels(name: string, prov: OcxProviderConfig): Promise<CatalogModel[]> {
+/** Bare picker-visible native slugs in the live Codex catalog (drives the subagent picker UI). */
+export function listCatalogNativeSlugs(): string[] {
+  const cat = readCatalog(readCodexCatalogPath());
+  return (cat?.models ?? [])
+    .filter(m => typeof m.slug === "string" && !(m.slug as string).includes("/") && m.visibility === "list")
+    .map(m => m.slug as string);
+}
+
+/**
+ * Native-model priority baseline read from the PRISTINE backup, so featuring stays reversible:
+ * a featured native gets its low rank, and un-featuring restores its original catalog priority
+ * (rather than the modified value left in the live catalog by a previous sync).
+ */
+function readNativeBaseline(): Map<string, number> {
+  const backup = readCatalog(CATALOG_BACKUP_PATH);
+  const out = new Map<string, number>();
+  for (const e of backup?.models ?? []) {
+    if (typeof e.slug === "string" && !e.slug.includes("/") && typeof e.priority === "number") {
+      out.set(e.slug, e.priority);
+    }
+  }
+  return out;
+}
+
+/**
+ * Fetch a provider's `/models` (openai-chat style) with a TTL cache + stale fallback. Skips
+ * forward-auth providers. Fresh cache → no network; live fetch → cache the merged result;
+ * fetch failure → last-known-good cache (so a provider blip doesn't drop its models), else the
+ * static config list. This is the per-provider half of jawcode's "always latest" resolver.
+ */
+async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
   const apiKey = await resolveModelsAuthToken(name, prov);
   if (prov.authMode === "oauth" && !apiKey) return []; // not logged in → skip
+  const fresh = getFreshCached(name, ttlMs);
+  if (fresh) return fresh; // dedups Codex's frequent /v1/models polling within the TTL
   const configured: CatalogModel[] = (prov.models ?? []).map(id => ({ id, provider: name }));
-  const headers: Record<string, string> = { ...(prov.headers ?? {}) };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  const { url, headers } = buildModelsRequest(prov, apiKey);
   try {
-    const res = await fetch(`${prov.baseUrl}/models`, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return configured;
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return getStaleCached(name) ?? configured;
     const json = await res.json() as { data?: { id: string; owned_by?: string }[] };
     const live = (json.data ?? []).map(m => ({ id: m.id, provider: name, owned_by: m.owned_by }));
     const liveIds = new Set(live.map(m => m.id));
     // Merge explicit config additions (e.g. a model not in the provider's /models, like a new endpoint).
-    return [...live, ...configured.filter(m => !liveIds.has(m.id))];
+    const merged = [...live, ...configured.filter(m => !liveIds.has(m.id))];
+    setCached(name, merged);
+    return merged;
   } catch {
-    return configured;
+    return getStaleCached(name) ?? configured;
   }
 }
 
-/** Gather routed (non-forward) provider models across the config. */
+/**
+ * Gather routed (non-forward) provider models across the config — the single source of truth for
+ * the live model list, used by both the on-disk catalog sync and the proxy's /api/* + /v1/models
+ * endpoints. Providers are fetched in parallel; the result is sorted (provider, then id) for a
+ * stable listing. TTL comes from `config.modelCacheTtlMs` (default 5 min).
+ */
 export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
-  const all: CatalogModel[] = [];
-  for (const [name, prov] of Object.entries(config.providers)) {
-    all.push(...await fetchProviderModels(name, prov));
-  }
+  const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const lists = await Promise.all(
+    Object.entries(config.providers).map(([name, prov]) => fetchProviderModels(name, prov, ttlMs)),
+  );
+  const all = lists.flat();
+  all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   return all;
 }
 
@@ -181,22 +231,33 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   const goModels = await gatherRoutedModels(config);
   if (goModels.length === 0) return { added: 0, path: catalogPath };
 
-  // Hide disabled models from Codex, then feature the chosen subagent models first.
+  // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
+  // by giving them the lowest priority — see buildCatalogEntries for why priority, not array order.
   const disabled = new Set(config.disabledModels ?? []);
   const enabledGo = goModels.filter(m => !disabled.has(`${m.provider}/${m.id}`));
-  const orderedGoModels = orderForSubagents(enabledGo, config.subagentModels);
-  const goEntries = buildCatalogEntries(template ? JSON.parse(JSON.stringify(template)) : null, [], orderedGoModels);
-  // Keep genuine native entries (gpt-*, codex-*), but drop bare duplicates of routed models —
-  // they're replaced by the namespaced, identity-corrected entries — plus any prior "/" entries.
+  const featured = config.subagentModels ?? [];
+  const rank = new Map(featured.map((slug, i) => [slug, i] as const));
+  const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
+  const goEntries = buildCatalogEntries(template ? JSON.parse(JSON.stringify(template)) : null, [], orderedGoModels, featured);
+  // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields, but drop bare
+  // duplicates of routed models (replaced by namespaced entries) + any prior "/" entries. Re-derive
+  // each native's priority from the pristine baseline so featuring a native is reversible.
+  const baseline = readNativeBaseline();
   const goIds = new Set(enabledGo.map(m => m.id));
-  const native = (catalog.models ?? []).filter(
-    m => typeof m.slug === "string" && !m.slug.includes("/") && !goIds.has(m.slug),
-  );
+  const native = (catalog.models ?? [])
+    .filter(m => typeof m.slug === "string" && !(m.slug as string).includes("/") && !goIds.has(m.slug as string))
+    .map(m => {
+      const slug = m.slug as string;
+      const priority = rank.has(slug) ? rank.get(slug)! : (baseline.get(slug) ?? (m.priority as number));
+      return { ...m, priority };
+    });
   catalog.models = [...native, ...goEntries];
 
   try {
     if (!existsSync(OCX_DIR)) mkdirSync(OCX_DIR, { recursive: true });
-    copyFileSync(catalogPath, CATALOG_BACKUP_PATH);
+    // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
+    // (later syncs would otherwise overwrite it with featured-modified priorities).
+    if (!existsSync(CATALOG_BACKUP_PATH)) copyFileSync(catalogPath, CATALOG_BACKUP_PATH);
   } catch { /* backup best-effort */ }
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
   return { added: goEntries.length, path: catalogPath };

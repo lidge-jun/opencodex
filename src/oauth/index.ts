@@ -3,7 +3,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { getCredential, saveCredential } from "./store";
 import { loginXai, refreshXaiToken } from "./xai";
-import { loginAnthropic, refreshAnthropicToken } from "./anthropic";
+import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
 
 const REFRESH_SKEW_MS = 60_000;
@@ -40,10 +40,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
       adapter: "anthropic",
       baseUrl: "https://api.anthropic.com",
       authMode: "oauth",
-      models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
-      defaultModel: "claude-sonnet-4-5",
+      // Current dateless flagship ids — routing hint / fallback only; the proxy fetches the live
+      // list from Anthropic's GET /v1/models at sync time (always-latest), so this just seeds a
+      // sane set when that fetch is unavailable.
+      models: ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+      defaultModel: "claude-sonnet-4-6",
     },
-    defaultModel: "claude-sonnet-4-5",
+    defaultModel: "claude-sonnet-4-6",
   },
   kimi: {
     login: (ctrl) => loginKimi(ctrl),
@@ -95,6 +98,64 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
     }
   }
   return resolveEnvValue(prov.apiKey);
+}
+
+/**
+ * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
+ * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
+ * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` (key) or
+ * `Authorization: Bearer` + the OAuth beta (oauth) — not a bare Bearer. Everyone else uses the
+ * OpenAI-style `/models` + Bearer. Response shape is `{ data: [{ id, owned_by? }] }` for both.
+ */
+export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined): { url: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = { ...(prov.headers ?? {}) };
+  if (prov.adapter === "anthropic") {
+    headers["anthropic-version"] = "2023-06-01";
+    if (prov.authMode === "oauth") {
+      headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    } else if (apiKey) {
+      headers["x-api-key"] = apiKey;
+    }
+    return { url: `${prov.baseUrl}/v1/models?limit=1000`, headers };
+  }
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  return { url: `${prov.baseUrl}/models`, headers };
+}
+
+/**
+ * Refresh OAuth-managed provider presets (`models`, `noReasoningModels`, and a stale `defaultModel`)
+ * from the registry so a proxy update that revises a provider's models — e.g. dropping deprecated
+ * Claude snapshots or adding a new grok endpoint not in the live `/models` — reaches EXISTING
+ * configs on the next `ocx start`, instead of only fresh installs. The live `/models` fetch stays
+ * the primary source; this keeps the static fallback (and models-not-in-/models) current.
+ *
+ * Only touches providers that are registry-managed AND still `authMode: "oauth"`, and only the
+ * preset fields (never apiKey/baseUrl/user toggles). Persists + returns true when anything changed.
+ */
+export function reconcileOAuthProviders(config: OcxConfig): boolean {
+  let changed = false;
+  for (const [name, prov] of Object.entries(config.providers)) {
+    const def = OAUTH_PROVIDERS[name];
+    if (!def || prov.authMode !== "oauth") continue;
+    const preset = def.providerConfig;
+    if (preset.models && JSON.stringify(prov.models) !== JSON.stringify(preset.models)) {
+      prov.models = [...preset.models];
+      changed = true;
+    }
+    if (JSON.stringify(prov.noReasoningModels) !== JSON.stringify(preset.noReasoningModels)) {
+      if (preset.noReasoningModels) prov.noReasoningModels = [...preset.noReasoningModels];
+      else delete prov.noReasoningModels;
+      changed = true;
+    }
+    // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
+    if (prov.defaultModel && preset.defaultModel && !(prov.models ?? []).includes(prov.defaultModel)) {
+      prov.defaultModel = preset.defaultModel;
+      changed = true;
+    }
+  }
+  if (changed) saveConfig(config);
+  return changed;
 }
 
 /** Add/refresh an OAuth provider's config entry on a config object (does not persist). */
@@ -154,6 +215,9 @@ export async function startLoginFlow(provider: string): Promise<{ url: string; i
     runLogin(provider, ctrl)
       .then(() => {
         loginState.set(provider, { done: true });
+        // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
+        // resolve so the GUI call returns instead of hanging.
+        if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
       })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);

@@ -133,6 +133,8 @@ export interface OcxConfig {
   subagentModels?: string[];
   /** Routed model ids ("<provider>/<model>") hidden from Codex (excluded from the catalog + /v1/models). */
   disabledModels?: string[];
+  /** Freshness window (ms) for the per-provider live `/models` cache. Defaults to 5 min. */
+  modelCacheTtlMs?: number;
 }
 
 export interface OcxProviderConfig {
