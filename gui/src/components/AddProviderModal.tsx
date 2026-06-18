@@ -64,8 +64,10 @@ export default function AddProviderModal({
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthMsg, setOauthMsg] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const aliveRef = useRef(true);
 
   useEffect(() => { searchRef.current?.focus(); }, []);
+  useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -139,6 +141,7 @@ export default function AddProviderModal({
         body: JSON.stringify({ provider: providerId }),
       });
       const data = await res.json();
+      if (!aliveRef.current) return;
       if (!res.ok || !data.url) {
         setOauthMsg(data.error === "unknown oauth provider"
           ? "OAuth login for this provider arrives in the next update — use an API key for now."
@@ -149,15 +152,17 @@ export default function AddProviderModal({
       setOauthMsg("Waiting for browser login…");
       for (let i = 0; i < 100; i++) {
         await new Promise(r => setTimeout(r, 2000));
+        if (!aliveRef.current) return; // modal closed → stop polling, don't fire onAdded
         const s = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).then(r => r.json()).catch(() => null);
+        if (!aliveRef.current) return;
         if (s?.loggedIn) { onAdded(providerId); return; }
         if (s?.error) { setOauthMsg(`Login error: ${s.error}`); return; }
       }
       setOauthMsg("Login timed out — try again.");
     } catch {
-      setOauthMsg("Network error — is the proxy running?");
+      if (aliveRef.current) setOauthMsg("Network error — is the proxy running?");
     } finally {
-      setOauthBusy(false);
+      if (aliveRef.current) setOauthBusy(false);
     }
   };
 

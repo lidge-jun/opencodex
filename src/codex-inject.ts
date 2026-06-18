@@ -71,7 +71,9 @@ function removeOcxSection(content: string): string {
       continue;
     }
     if (inOcxSection) {
-      if (line.startsWith("[") && !line.includes("model_providers.opencodex")) {
+      // End the injected section at the next table header that ISN'T our own — exact match so a
+      // user's "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
+      if (line.startsWith("[") && line.trim() !== "[model_providers.opencodex]") {
         inOcxSection = false;
         filtered.push(line);
       }
@@ -88,9 +90,9 @@ export function stripOpencodexConfig(content: string): string {
   if (out.includes("[model_providers.opencodex]")) {
     out = removeOcxSection(out);
   }
-  if (/^\s*model_provider\s*=\s*"opencodex"/m.test(out)) {
-    out = out.split("\n").filter(l => l.trim() !== 'model_provider = "opencodex"').join("\n");
-  }
+  // Regex (not exact-string) removal so compact `model_provider="opencodex"` is stripped too —
+  // must match the detection regex above, or a detected line could survive un-removed.
+  out = out.split("\n").filter(l => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l)).join("\n");
   return out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
