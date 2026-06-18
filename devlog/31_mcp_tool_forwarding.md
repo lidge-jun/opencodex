@@ -1,6 +1,6 @@
-# Phase 4.1 — Forward MCP (namespace) + apply_patch tools to chat models
+# Phase 4.1 — Forward MCP (namespace) + apply_patch + tool_search (subagents) to chat models
 
-Status: DONE (MCP + apply_patch). Verified incl. live e2e.
+Status: DONE (MCP + apply_patch + tool_search/subagents). Verified incl. live e2e (incl. subagent spawn).
 Date: 2026-06-19
 Work class: C3 (cross-module: parser + adapter + bridge + server; tool round-trip protocol)
 
@@ -51,8 +51,26 @@ apply_patch (freeform `custom`):
 created with exactly `APT_E2E_OK`. Combined unit test confirms MCP (function_call+namespace) and apply_patch
 (custom_tool_call+raw patch) round-trips coexist; web_search dropped.
 
-## Deferred / out of scope
-- **tool_search / web_search / image_generation**: hosted/client tools; no opencode.ai equivalent. Intentionally dropped.
+## tool_search → subagents (the hard one)
+Subagents (`spawn_agent`) are **deferred** tools: Codex doesn't send them upfront — the model must call
+`tool_search` (client-executed) to load them. Three pieces were needed:
+1. **Forward tool_search**: `type:"tool_search"` → a function tool; the model's call is relayed as a
+   `tool_search_call` item (`execution:"client"`), NOT a function_call (router.rs:112 matches a dedicated
+   `ToolSearchCall`). (parser/server/bridge, mirroring the freeform path.)
+2. **Preserve multi-turn history**: re-encode the prior `tool_search_call` (assistant) + `tool_search_output`
+   (result) into the chat history. Without this the model never sees it already searched → **infinite loop**
+   (caught by the first e2e: 70 turns of "I'll use tool_search").
+3. **Re-inject loaded tools**: Codex does NOT re-list a tool_search-loaded tool in `tools`, but chat models
+   can only call listed tools. So the parser harvests `tool_search_output.tools` (the loaded specs) and merges
+   them into `context.tools` (deduped). (`spawn_agent` routes via the registry alias even without namespace —
+   registry.rs:728.)
+
+**Live e2e (gate):** `codex exec -m opencode-go/kimi-k2.7-code "use tool_search to load the spawn tool, then
+spawn a sub-agent that replies PONG"` → kimi called tool_search → multi_agent surfaced → `collab: SpawnAgent`
+→ `collab: Wait` → **sub-agent replied PONG**. No loop. (Earlier loop without #2/#3 was rolled back, then fixed.)
+
+## Out of scope
+- **web_search / image_generation**: OpenAI-hosted (executed server-side); no opencode.ai equivalent → dropped.
 
 ## Note
 Full end-to-end (glm actually invoking an MCP tool through Codex) depends on the model choosing to call it;

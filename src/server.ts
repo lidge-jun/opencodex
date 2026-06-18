@@ -153,11 +153,13 @@ async function handleResponses(req: Request, config: OcxConfig, logCtx: { model:
     // namespace field Codex needs to route the call to the right MCP server.
     const toolNsMap = new Map<string, { namespace: string; name: string }>();
     const freeformToolNames = new Set<string>();
+    const toolSearchToolNames = new Set<string>();
     for (const t of parsed.context.tools ?? []) {
       if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
       if (t.freeform) freeformToolNames.add(t.name);
+      if (t.toolSearch) toolSearchToolNames.add(t.name);
     }
-    const sseStream = bridgeToResponsesSSE(eventStream, parsed.modelId, toolNsMap, freeformToolNames);
+    const sseStream = bridgeToResponsesSSE(eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames);
     return new Response(sseStream, {
       headers: {
         "Content-Type": "text/event-stream",

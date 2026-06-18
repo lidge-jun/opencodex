@@ -19,12 +19,17 @@ export function bridgeToResponsesSSE(
   modelId: string,
   toolNsMap?: Map<string, { namespace: string; name: string }>,
   freeformToolNames?: Set<string>,
+  toolSearchToolNames?: Set<string>,
 ): ReadableStream<Uint8Array> {
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
   // function with `{input:string}`, so unwrap it here when relaying back as a custom_tool_call.
   const freeformInput = (args: string): string => {
     try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
     return args;
+  };
+  // tool_search_call carries arguments as a JSON object ({query, limit}); parse the model's arg string.
+  const parseArgsObj = (args: string): Record<string, unknown> => {
+    try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
   const encoder = new TextEncoder();
   const responseId = `resp_${uuid()}`;
@@ -50,7 +55,7 @@ export function bridgeToResponsesSSE(
 
       let currentMsg: { itemId: string; outputIndex: number; text: string } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string } | null = null;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; namespace?: string; freeform?: boolean } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; namespace?: string; freeform?: boolean; toolSearch?: boolean } | null = null;
 
       const closeCurrentMessage = () => {
         if (!currentMsg) return;
@@ -78,7 +83,13 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
-        const item = currentToolCall.freeform
+        const item = currentToolCall.toolSearch
+          ? {
+              type: "tool_search_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, execution: "client",
+              arguments: parseArgsObj(currentToolCall.args), status: "completed",
+            }
+          : currentToolCall.freeform
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
@@ -150,18 +161,21 @@ export function bridgeToResponsesSSE(
               const mapped = toolNsMap?.get(event.name);
               const realName = mapped?.name ?? event.name;
               const ns = mapped?.namespace;
-              const freeform = freeformToolNames?.has(realName) ?? false;
-              const item = freeform
+              const toolSearch = toolSearchToolNames?.has(realName) ?? false;
+              const freeform = !toolSearch && (freeformToolNames?.has(realName) ?? false);
+              const item = toolSearch
+                ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
+                : freeform
                 ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
                 : { type: "function_call", id: itemId, call_id: event.id, name: realName, arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}) };
               emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", namespace: ns, freeform };
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", namespace: ns, freeform, toolSearch };
               break;
             }
             case "tool_call_delta": {
               if (currentToolCall) {
                 currentToolCall.args += event.arguments;
-                if (!currentToolCall.freeform) {
+                if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
                   emit("response.function_call_arguments.delta", {
                     item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
                     delta: event.arguments,

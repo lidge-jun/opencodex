@@ -9,6 +9,7 @@ import type {
   OcxTool,
   OcxToolCall,
 } from "../types";
+import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -103,8 +104,25 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
         freeform: true,
       });
     }
-    // tool_search, web_search, image_generation are hosted/client tools with no opencode.ai
-    // equivalent and are intentionally dropped on this path.
+    else if (t.type === "tool_search") {
+      // Client-executed tool discovery — the gateway to deferred tools (subagents, extra MCP tools).
+      // Expose as a function so chat models can call it; the bridge relays it as a tool_search_call.
+      out.push({
+        name: "tool_search",
+        description: (t.description as string) ?? "Search for additional tools to load for the next turn.",
+        parameters: (isObj(t.parameters) ? t.parameters : {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query for tools to load." },
+            limit: { type: "number", description: "Maximum number of tools to return." },
+          },
+          required: ["query"],
+        }) as Record<string, unknown>,
+        toolSearch: true,
+      });
+    }
+    // web_search and image_generation are OpenAI-hosted (executed server-side) with no opencode.ai
+    // equivalent, so they cannot be relayed to a chat model and are intentionally dropped.
   }
   return out.length > 0 ? out : undefined;
 }
@@ -152,6 +170,9 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   const now = Date.now();
   const messages: OcxMessage[] = [];
   const systemPrompt: string[] = [];
+  // Tool specs surfaced by a prior tool_search (deferred tools, e.g. subagents). Codex does not
+  // re-list these in `tools`, but chat models can only call listed tools — so we re-inject them.
+  const loadedToolSpecs: unknown[] = [];
 
   if (typeof data.instructions === "string" && data.instructions.length > 0) {
     systemPrompt.push(data.instructions);
@@ -231,6 +252,33 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         continue;
       }
 
+      if (effectiveType === "tool_search_call") {
+        // Preserve the model's prior tool_search call as an assistant tool call so multi-turn
+        // history stays complete (otherwise the model re-issues tool_search forever).
+        const call = item as { id?: string; call_id?: string; arguments?: unknown };
+        const callId = call.call_id ?? call.id ?? "";
+        ensureAssistantPlaceholder(messages, data.model, now).content.push({
+          type: "toolCall", id: callId, name: "tool_search",
+          arguments: isObj(call.arguments) ? call.arguments : {},
+        });
+        continue;
+      }
+
+      if (effectiveType === "tool_search_output") {
+        // Pair the tool_search call with its result so the model sees what was loaded.
+        const out = item as { call_id?: string; tools?: { name?: string }[] };
+        if (Array.isArray(out.tools)) loadedToolSpecs.push(...out.tools);
+        const names = Array.isArray(out.tools) ? out.tools.map(t => t?.name).filter((n): n is string => !!n) : [];
+        messages.push({
+          role: "toolResult", toolCallId: out.call_id ?? "", toolName: "tool_search",
+          content: names.length
+            ? `Tool search loaded ${names.length} tool(s): ${names.join(", ")}. They are now in your available tools — call the appropriate one directly.`
+            : "Tool search returned no tools.",
+          isError: false, timestamp: now,
+        });
+        continue;
+      }
+
       if (effectiveType === "function_call_output") {
         const output = item as { call_id: string; output?: string | unknown[] };
         const text = typeof output.output === "string"
@@ -255,11 +303,19 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     }
   }
 
-  const tools = buildTools(data.tools as unknown[] | undefined);
+  const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
+  const loadedTools = buildTools(loadedToolSpecs) ?? [];
+  const seenTools = new Set<string>();
+  const mergedTools = [...declaredTools, ...loadedTools].filter(t => {
+    const k = namespacedToolName(t.namespace, t.name);
+    if (seenTools.has(k)) return false;
+    seenTools.add(k);
+    return true;
+  });
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
     messages,
-    ...(tools ? { tools } : {}),
+    ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
   const options: OcxRequestOptions = {};

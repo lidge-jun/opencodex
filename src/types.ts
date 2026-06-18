@@ -80,6 +80,8 @@ export interface OcxTool {
   namespace?: string;
   /** Freeform/custom tool (e.g. apply_patch): the model's call must be relayed as a custom_tool_call. */
   freeform?: boolean;
+  /** Client-executed tool discovery (tool_search): the model's call must be relayed as a tool_search_call. */
+  toolSearch?: boolean;
 }
 
 /**
