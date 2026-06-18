@@ -2,7 +2,8 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
-const FORWARD_HEADERS = ["authorization", "chatgpt-account-id", "openai-beta", "originator", "session_id"];
+// Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
+export const FORWARD_HEADERS = ["authorization", "chatgpt-account-id", "openai-beta", "originator", "session_id"];
 
 export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
   return {

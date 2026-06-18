@@ -4,6 +4,12 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /**
+   * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
+   * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
+   * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
+   */
+  _webSearch?: Record<string, unknown>;
 }
 
 export interface OcxContext {
@@ -82,6 +88,8 @@ export interface OcxTool {
   freeform?: boolean;
   /** Client-executed tool discovery (tool_search): the model's call must be relayed as a tool_search_call. */
   toolSearch?: boolean;
+  /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
+  webSearch?: boolean;
 }
 
 /**
@@ -135,6 +143,21 @@ export interface OcxConfig {
   disabledModels?: string[];
   /** Freshness window (ms) for the per-provider live `/models` cache. Defaults to 5 min. */
   modelCacheTtlMs?: number;
+  /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
+  webSearchSidecar?: OcxWebSearchSidecarConfig;
+}
+
+export interface OcxWebSearchSidecarConfig {
+  /** Master switch. Default: enabled when a forward (ChatGPT) provider exists and the caller is logged in. */
+  enabled?: boolean;
+  /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
+  model?: string;
+  /** Reasoning effort for the sidecar — "minimal" (non-thinking) keeps it fast/cheap. */
+  reasoning?: string;
+  /** Max searches executed per main-model turn (loop guard). */
+  maxSearchesPerTurn?: number;
+  /** Sidecar fetch timeout (ms). */
+  timeoutMs?: number;
 }
 
 export interface OcxProviderConfig {

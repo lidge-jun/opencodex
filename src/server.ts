@@ -15,6 +15,7 @@ import {
   listOAuthProviders, reconcileOAuthProviders, startLoginFlow, upsertOAuthProvider,
 } from "./oauth/index";
 import type { CatalogModel } from "./codex-catalog";
+import { buildWebSearchTool, planWebSearch, runWithWebSearch } from "./web-search";
 import { removeCredential } from "./oauth/store";
 import { listKeyLoginProviders } from "./oauth/key-providers";
 import type { OcxConfig, OcxProviderConfig } from "./types";
@@ -143,6 +144,22 @@ async function handleResponses(req: Request, config: OcxConfig, logCtx: { model:
     return new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
       headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+    });
+  }
+
+  // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
+  // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
+  // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
+  const wsPlan = planWebSearch(config, parsed, false, req.headers);
+  if (wsPlan) {
+    parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
+    return runWithWebSearch({
+      parsed, adapter,
+      forwardProvider: wsPlan.forwardProvider,
+      hostedTool: wsPlan.hostedTool,
+      incomingHeaders: req.headers,
+      settings: wsPlan.settings,
+      maxSearches: wsPlan.maxSearches,
     });
   }
 

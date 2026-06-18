@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
+import { extractHostedWebSearch } from "../web-search/synthetic-tool";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -351,5 +352,13 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
   if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
 
-  return { modelId: data.model, context, stream: data.stream === true, options, _rawBody: body };
+  // Stash the hosted web_search config (if Codex enabled it) so the proxy can run searches via the
+  // gpt-mini sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
+  // re-injects a synthetic function tool only when it will actually handle the call.
+  const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
+
+  return {
+    modelId: data.model, context, stream: data.stream === true, options, _rawBody: body,
+    ...(webSearch ? { _webSearch: webSearch } : {}),
+  };
 }
