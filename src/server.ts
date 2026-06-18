@@ -96,10 +96,20 @@ async function handleResponses(req: Request, config: OcxConfig): Promise<Respons
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
 
+  // Apply the routed model id upstream: routing may strip a "<provider>/" namespace
+  // (e.g. "opencode-go/deepseek-v4-pro" → "deepseek-v4-pro"). Adapters read parsed.modelId,
+  // and the passthrough adapter serializes _rawBody, so rewrite both.
+  if (route.modelId !== parsed.modelId) {
+    if (parsed._rawBody && typeof parsed._rawBody === "object") {
+      (parsed._rawBody as { model?: string }).model = route.modelId;
+    }
+    parsed.modelId = route.modelId;
+  }
+
   const adapter = resolveAdapter(route.provider);
 
   if ("passthrough" in adapter && adapter.passthrough) {
-    const request = adapter.buildRequest(parsed);
+    const request = adapter.buildRequest(parsed, { headers: req.headers });
     let upstreamResponse: Response;
     try {
       upstreamResponse = await fetch(request.url, {
@@ -116,7 +126,7 @@ async function handleResponses(req: Request, config: OcxConfig): Promise<Respons
     });
   }
 
-  const request = adapter.buildRequest(parsed);
+  const request = adapter.buildRequest(parsed, { headers: req.headers });
 
   let upstreamResponse: Response;
   try {
@@ -209,7 +219,8 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
   }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
-    return jsonResponse(await fetchAllModels(config));
+    const models = await fetchAllModels(config);
+    return jsonResponse(models.map(m => ({ ...m, namespaced: `${m.provider}/${m.id}` })));
   }
 
   return null;
@@ -218,6 +229,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
 async function fetchAllModels(config: OcxConfig) {
   const results: { id: string; provider: string; owned_by?: string }[] = [];
   const fetches = Object.entries(config.providers).map(async ([name, prov]) => {
+    if (prov.authMode === "forward") return; // ChatGPT backend has no /models; gpt listed statically
     const apiKey = resolveEnvValue(prov.apiKey);
     const headers: Record<string, string> = { ...(prov.headers ?? {}) };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
@@ -260,18 +272,19 @@ export function startServer(port?: number) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
-        const models = await fetchAllModels(config);
-        const accept = req.headers.get("accept") ?? "";
-        const isCodexClient = url.searchParams.has("client_version");
-        if (isCodexClient) {
-          return jsonResponse({ models: [] });
+        const goModels = await fetchAllModels(config);
+        const { buildCatalogEntries, loadCatalogTemplate, NATIVE_OPENAI_MODELS } = await import("./codex-catalog");
+        if (url.searchParams.has("client_version")) {
+          // Codex client → Codex catalog shape: native gpt + namespaced routed models,
+          // cloned from a native template so required fields (base_instructions, etc.) are present.
+          return jsonResponse({ models: buildCatalogEntries(loadCatalogTemplate(), NATIVE_OPENAI_MODELS, goModels) });
         }
-        return jsonResponse({
-          object: "list",
-          data: models.map(m => ({
-            id: m.id, object: "model", created: 0, owned_by: m.owned_by ?? m.provider,
-          })),
-        });
+        // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
+        const data = [
+          ...NATIVE_OPENAI_MODELS.map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
+          ...goModels.map(m => ({ id: `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
+        ];
+        return jsonResponse({ object: "list", data });
       }
 
       if (url.pathname === "/v1/responses" && req.method === "POST") {

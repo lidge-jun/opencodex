@@ -39,13 +39,16 @@ export function saveConfig(config: OcxConfig): void {
 }
 
 export function getDefaultConfig(): OcxConfig {
+  // Fresh-install default: works out of the box with Codex's ChatGPT OAuth (no API key).
+  // gpt-* requests forward the caller's incoming OAuth headers to the ChatGPT backend.
+  // Adding extra providers (e.g. opencode-go) and switching defaultProvider is a user/runtime choice.
   return {
     port: 10100,
     providers: {
       openai: {
         adapter: "openai-responses",
-        baseUrl: "https://api.openai.com",
-        apiKey: "${OPENAI_API_KEY}",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
       },
     },
     defaultProvider: "openai",

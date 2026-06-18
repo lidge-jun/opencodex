@@ -20,6 +20,23 @@ const MODEL_PROVIDER_PATTERNS: Record<string, string[]> = {
 };
 
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
+  // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
+  //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
+  //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
+  //    no such provider exists.
+  const slash = modelId.indexOf("/");
+  if (slash > 0) {
+    const provName = modelId.slice(0, slash);
+    const prov = config.providers[provName];
+    if (prov) {
+      return {
+        providerName: provName,
+        provider: { ...prov, apiKey: resolveEnvValue(prov.apiKey) },
+        modelId: modelId.slice(slash + 1),
+      };
+    }
+  }
+
   for (const [provName, prov] of Object.entries(config.providers)) {
     if (prov.defaultModel === modelId) {
       return {

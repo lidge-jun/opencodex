@@ -117,4 +117,10 @@ export interface OcxProviderConfig {
   defaultModel?: string;
   models?: string[];
   headers?: Record<string, string>;
+  /**
+   * "key" (default): authenticate upstream with `apiKey`.
+   * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough).
+   * Only the openai-responses adapter implements "forward"; openai-chat always uses its own key.
+   */
+  authMode?: "key" | "forward";
 }
