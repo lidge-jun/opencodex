@@ -1,0 +1,58 @@
+name: Publish to npm
+
+# Publishes opencodex to the npm registry so `bun install -g opencodex` /
+# `npm install -g opencodex` work. Triggered by pushing a version tag (v1.2.3),
+# which `npm version` creates — or manually from the Actions tab.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+# id-token: write enables npm provenance (supply-chain attestation from this CI run).
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # opencodex is bun-native (the `prepublishOnly` build runs under bun).
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # node + npm do the actual publish (with provenance); registry-url wires NODE_AUTH_TOKEN.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: bun install
+
+      # Guard: a pushed tag (v1.2.3) must match package.json "version" so we never
+      # publish a mismatched build.
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json=$PKG  tag=$TAG"
+          test "$PKG" = "$TAG" || { echo "::error::tag v$TAG != package.json $PKG"; exit 1; }
+
+      # `npm publish` runs prepublishOnly (typecheck + build the GUI into gui/dist) first,
+      # so the published tarball always ships a fresh GUI. --access public for the unscoped name.
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
