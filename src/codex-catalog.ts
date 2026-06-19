@@ -69,17 +69,16 @@ export function loadCatalogTemplate(): RawEntry | null {
 }
 
 /**
- * The full reasoning ladder advertised for routed models in Codex's picker:
- * low → medium → high → xhigh → max. (Codex's native catalog tops out at `xhigh`; `max` is added
- * for providers/adapters that support a higher tier — e.g. the Anthropic adapter maps it to the
- * largest thinking budget. Previously routed models were clamped to low/medium/high.)
+ * The reasoning ladder advertised for routed models in Codex's picker: low → medium → high → xhigh.
+ * This matches Codex's NATIVE catalog exactly — Codex's strict parser rejects an unknown effort like
+ * `max`, so it must not be advertised here. (Previously routed models were clamped down to
+ * low/medium/high, which dropped the `xhigh` that Codex does support.)
  */
 const ROUTED_REASONING_LEVELS: { effort: string; description: string }[] = [
   { effort: "low", description: "Fast responses with lighter reasoning" },
   { effort: "medium", description: "Balances speed and reasoning depth" },
   { effort: "high", description: "Greater reasoning depth for complex problems" },
   { effort: "xhigh", description: "Extended reasoning for the hardest problems" },
-  { effort: "max", description: "Maximum reasoning effort" },
 ];
 
 function deriveEntry(template: RawEntry | null, slug: string, desc: string, priority: number): RawEntry {
@@ -93,7 +92,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
     if ("upgrade" in e) e.upgrade = null;
     delete e.availability_nux; // don't replay another model's "now available" NUX
     // Routed (namespaced) models inherit the gpt template — correct its OpenAI/GPT identity
-    // and advertise the full reasoning ladder (low/medium/high/xhigh/max).
+    // and advertise the reasoning ladder Codex accepts (low/medium/high/xhigh).
     if (slug.includes("/")) {
       const modelName = slug.slice(slug.indexOf("/") + 1);
       if (typeof e.base_instructions === "string") {
