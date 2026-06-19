@@ -1,5 +1,5 @@
 {
-  "name": "opencx",
+  "name": "@bitkyc08/opencodex",
   "version": "0.1.0",
   "description": "Universal provider proxy for OpenAI Codex — use any LLM with Codex CLI/App/SDK",
   "type": "module",

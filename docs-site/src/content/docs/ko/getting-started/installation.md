@@ -17,11 +17,11 @@ opencodex는 단일 CLI인 `ocx`로 제공됩니다. 작은 로컬 HTTP 서버(B
 ## 설치
 
 ```bash
-# With Bun (recommended)
-bun install -g opencx
+# With npm (recommended)
+npm install -g @bitkyc08/opencodex
 
-# With npm
-npm install -g opencx
+# With Bun
+bun install -g @bitkyc08/opencodex
 ```
 
 바이너리가 `PATH`에 있는지 확인합니다:

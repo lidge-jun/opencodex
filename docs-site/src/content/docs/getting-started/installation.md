@@ -17,11 +17,11 @@ sends your traffic anywhere except the provider you configure.
 ## Install
 
 ```bash
-# With Bun (recommended)
-bun install -g opencx
+# With npm (recommended)
+npm install -g @bitkyc08/opencodex
 
-# With npm
-npm install -g opencx
+# With Bun
+bun install -g @bitkyc08/opencodex
 ```
 
 Verify the binary is on your `PATH`:

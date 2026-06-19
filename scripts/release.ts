@@ -64,4 +64,4 @@ await Bun.sleep(4000);
 await watchLatest();
 console.log(dryRun
   ? "\n✓ Dry run complete. Re-run with --publish to publish for real."
-  : "\n✓ Published. Try:  bun install -g opencx");
+  : "\n✓ Published. Try:  npm install -g @bitkyc08/opencodex");

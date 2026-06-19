@@ -34,7 +34,7 @@ Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provi
 
 ```bash
 # Install
-bun install -g opencx      # or: npm install -g opencx
+npm install -g @bitkyc08/opencodex      # or: bun install -g @bitkyc08/opencodex
 
 # Interactive setup (writes config + injects into Codex)
 ocx init
@@ -59,7 +59,7 @@ curl -fsSL https://bun.sh/install | bash
 powershell -c "irm bun.sh/install.ps1 | iex"
 ```
 
-然后重新运行 `bun install -g opencx`。（`ocx` 可执行文件是 bun 原生的，因此 bun 必须在你的 `PATH` 中。）
+然后重新运行 `npm install -g @bitkyc08/opencodex`。（`ocx` 可执行文件是 bun 原生的，因此 bun 必须在你的 `PATH` 中。）
 
 </details>
 

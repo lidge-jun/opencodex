@@ -34,7 +34,7 @@ Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provi
 
 ```bash
 # Install
-bun install -g opencx      # or: npm install -g opencx
+npm install -g @bitkyc08/opencodex      # or: bun install -g @bitkyc08/opencodex
 
 # Interactive setup (writes config + injects into Codex)
 ocx init
@@ -59,7 +59,7 @@ curl -fsSL https://bun.sh/install | bash
 powershell -c "irm bun.sh/install.ps1 | iex"
 ```
 
-설치 후 `bun install -g opencx`를 다시 실행하세요. (`ocx` 바이너리는 bun 기반이라 bun이 `PATH`에 있어야 합니다.)
+설치 후 `npm install -g @bitkyc08/opencodex`를 다시 실행하세요. (`ocx` 바이너리는 bun 기반이라 bun이 `PATH`에 있어야 합니다.)
 
 </details>
 

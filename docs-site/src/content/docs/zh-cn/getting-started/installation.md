@@ -17,11 +17,11 @@ provider 之外,绝不会把你的流量发送到任何地方。
 ## 安装
 
 ```bash
-# With Bun (recommended)
-bun install -g opencx
+# With npm (recommended)
+npm install -g @bitkyc08/opencodex
 
-# With npm
-npm install -g opencx
+# With Bun
+bun install -g @bitkyc08/opencodex
 ```
 
 验证该二进制文件已在你的 `PATH` 中:

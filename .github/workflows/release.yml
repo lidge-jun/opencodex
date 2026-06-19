@@ -90,4 +90,4 @@ jobs:
         if: ${{ inputs.dry-run != true }}
         run: |
           sleep 10
-          npm view "opencx@${{ inputs.version }}" version dist-tags
+          npm view "@bitkyc08/opencodex@${{ inputs.version }}" version dist-tags
