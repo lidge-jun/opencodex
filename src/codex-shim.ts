@@ -102,10 +102,29 @@ function writeState(state: ShimState): void {
   writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
+function writeShim(wrapperPath: string, realCodexPath: string): void {
+  const { bun, cli } = cliEntry();
+  if (process.platform === "win32") {
+    writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli), "utf8");
+  } else {
+    writeFileSync(wrapperPath, buildUnixCodexShim(realCodexPath, bun, cli), "utf8");
+    chmodSync(wrapperPath, 0o755);
+  }
+}
+
 export function installCodexShim(): { installed: boolean; message: string } {
   const existing = readState();
-  if (existing && existsSync(existing.wrapperPath) && existsSync(existing.backupPath)) {
+  if (existing && existsSync(existing.wrapperPath) && existsSync(existing.backupPath) && isShim(existing.wrapperPath)) {
     return { installed: false, message: `Codex autostart shim already installed at ${existing.wrapperPath}.` };
+  }
+  if (existing && existsSync(existing.backupPath) && (!existsSync(existing.wrapperPath) || !isShim(existing.wrapperPath))) {
+    if (existsSync(existing.wrapperPath)) unlinkSync(existing.wrapperPath);
+    writeShim(existing.wrapperPath, existing.backupPath);
+    writeState({ ...existing, platform: process.platform });
+    return {
+      installed: true,
+      message: `Codex autostart shim repaired at ${existing.wrapperPath}. Original remains at ${existing.backupPath}.`,
+    };
   }
 
   const originalPath = findCodexOnPath();
@@ -114,15 +133,9 @@ export function installCodexShim(): { installed: boolean; message: string } {
   const backupPath = backupPathFor(originalPath);
   if (existsSync(backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${backupPath}` };
 
-  const { bun, cli } = cliEntry();
   const wrapperPath = process.platform === "win32" ? join(dirname(originalPath), "codex.cmd") : originalPath;
   renameSync(originalPath, backupPath);
-  if (process.platform === "win32") {
-    writeFileSync(wrapperPath, buildWindowsCodexShim(backupPath, bun, cli), "utf8");
-  } else {
-    writeFileSync(wrapperPath, buildUnixCodexShim(backupPath, bun, cli), "utf8");
-    chmodSync(wrapperPath, 0o755);
-  }
+  writeShim(wrapperPath, backupPath);
   writeState({ platform: process.platform, wrapperPath, originalPath, backupPath });
   return { installed: true, message: `Codex autostart shim installed at ${wrapperPath}. Original saved at ${backupPath}.` };
 }
@@ -139,7 +152,11 @@ export function uninstallCodexShim(): { removed: boolean; message: string } {
 export function codexShimStatus(): string {
   const state = readState();
   if (!state) return "Codex autostart shim is not installed.";
-  const wrapper = existsSync(state.wrapperPath) ? "present" : "missing";
+  const wrapper = existsSync(state.wrapperPath)
+    ? isShim(state.wrapperPath)
+      ? "shim present"
+      : "present but not an opencodex shim"
+    : "missing";
   const backup = existsSync(state.backupPath) ? "present" : "missing";
   return `Codex autostart shim: wrapper ${wrapper} at ${state.wrapperPath}; original backup ${backup} at ${state.backupPath}.`;
 }
