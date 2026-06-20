@@ -14,6 +14,7 @@ Commits:
 - `2e4733d fix: preserve websocket turn cancellation hooks`
 - `df8c047 fix: abort websocket turns before upstream headers`
 - `91b3671 fix: propagate websocket aborts to sidecars`
+- `78ca706 fix: abort web-search loop provider fetches`
 
 Modified:
 
@@ -58,11 +59,11 @@ Modified:
 - `bun test tests/passthrough-abort.test.ts`
   - 4 pass, 0 fail, 8 assertions.
 - `bun test tests/sidecar-abort.test.ts`
-  - 2 pass, 0 fail, 6 assertions.
+  - 3 pass, 0 fail, 10 assertions.
 - `bun test tests/sidecar-abort.test.ts tests/ws-endpoint.test.ts tests/passthrough-abort.test.ts`
-  - 25 pass, 0 fail, 53 assertions.
+  - 26 pass, 0 fail, 57 assertions.
 - `bun test tests`
-  - 83 pass, 0 fail, 270 assertions.
+  - 84 pass, 0 fail, 274 assertions.
 - `bun x tsc --noEmit`
   - passed with exit 0.
 
@@ -133,3 +134,9 @@ The second read-only Phase 132 release review found a remaining sidecar cancella
 - `src/abort.ts` composes the per-turn abort signal with each sidecar timeout signal.
 - `tests/sidecar-abort.test.ts` asserts both web-search and vision sidecar fetches observe the
   WebSocket turn abort signal.
+
+The third read-only Phase 132 release review found one last web-search loop gap. Fix:
+
+- The routed-provider fetch inside `runWithWebSearch` now receives the WebSocket turn abort signal.
+- `tests/sidecar-abort.test.ts` asserts the loop's routed-provider fetch receives and observes the
+  same abort signal.
