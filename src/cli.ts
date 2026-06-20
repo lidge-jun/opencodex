@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { restoreNativeCodex } from "./codex-inject";
 import { loadConfig, readPid, removePid, writePid } from "./config";
 import { serviceCommand, stopServiceIfInstalled } from "./service";
@@ -38,11 +37,10 @@ async function syncModelsToCodex(port?: number) {
   const p = port ?? config.port ?? 10100;
   let catalogPath: string | null | undefined;
   try {
-    const { invalidateCodexModelsCache, syncCatalogModels } = await import("./codex-catalog");
-    const cat = await syncCatalogModels(config);
-    catalogPath = existsSync(cat.path) ? cat.path : null;
+    const { refreshCodexModelCatalog } = await import("./codex-refresh");
+    const cat = await refreshCodexModelCatalog(config);
+    catalogPath = cat.catalogExists ? cat.path : null;
     if (cat.added > 0) {
-      invalidateCodexModelsCache();
       console.log(`   + ${cat.added} models appended to Codex catalog (${cat.path})`);
     } else if (catalogPath === null) {
       console.error("catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.");
@@ -56,7 +54,7 @@ async function syncModelsToCodex(port?: number) {
   return result;
 }
 
-async function handleStart() {
+async function handleStart(options: { block?: boolean } = {}) {
   const existingPid = readPid();
   if (existingPid) {
     console.error(`⚠️  Proxy already running (PID ${existingPid}). Use 'ocx stop' first.`);
@@ -91,6 +89,10 @@ async function handleStart() {
 
   await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
+  if (options.block ?? true) {
+    setInterval(() => {}, 60_000);
+    await new Promise<void>(() => {});
+  }
 }
 
 function killProxy(pid: number): void {
@@ -204,7 +206,12 @@ switch (command) {
     const guiUrl = `http://localhost:${config.port}`;
     if (!cfg.readPid()) {
       console.log("Proxy not running. Starting...");
-      await handleStart();
+      const child = spawn(process.execPath, [process.argv[1], "start"], {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
+      child.unref();
       await new Promise(r => setTimeout(r, 1000));
     }
     console.log(`Opening ${guiUrl}`);

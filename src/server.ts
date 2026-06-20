@@ -362,6 +362,15 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): Promise<Response | null> {
+  async function refreshCodexCatalogBestEffort(): Promise<void> {
+    try {
+      const { refreshCodexModelCatalog } = await import("./codex-refresh");
+      await refreshCodexModelCatalog(config);
+    } catch {
+      /* catalog absent */
+    }
+  }
+
   if (url.pathname === "/api/config" && req.method === "GET") {
     const safeConfig = JSON.parse(JSON.stringify(config));
     for (const prov of Object.values(safeConfig.providers as Record<string, OcxProviderConfig>)) {
@@ -406,6 +415,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     config.providers[name] = prov;
     if (body.setDefault) config.defaultProvider = name;
     save(config);
+    await refreshCodexCatalogBestEffort();
     return jsonResponse({ success: true, name });
   }
 
@@ -416,11 +426,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     delete config.providers[name];
     save(config);
     // Drop its models from Codex's catalog immediately (re-sync + cache bust) so removal is live.
-    try {
-      const { syncCatalogModels, invalidateCodexModelsCache } = await import("./codex-catalog");
-      await syncCatalogModels(config);
-      invalidateCodexModelsCache();
-    } catch { /* catalog absent */ }
+    await refreshCodexCatalogBestEffort();
     return jsonResponse({ success: true });
   }
 
@@ -442,11 +448,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     config.disabledModels = disabled;
     const { saveConfig: save } = await import("./config");
     save(config);
-    try {
-      const { syncCatalogModels, invalidateCodexModelsCache } = await import("./codex-catalog");
-      await syncCatalogModels(config);
-      invalidateCodexModelsCache();
-    } catch { /* catalog absent */ }
+    await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, disabled });
   }
 
@@ -487,11 +489,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     config.subagentModels = chosen;
     const { saveConfig: save } = await import("./config");
     save(config);
-    try {
-      const { syncCatalogModels, invalidateCodexModelsCache } = await import("./codex-catalog");
-      await syncCatalogModels(config);
-      invalidateCodexModelsCache();
-    } catch { /* catalog absent */ }
+    await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, applied: chosen });
   }
 
