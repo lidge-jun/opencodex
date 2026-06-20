@@ -106,6 +106,12 @@ codex -m "ollama/llama3" "Refactor this function"
 
 When you omit the `provider/` prefix, opencodex routes to the default provider — or auto-matches based on the model name pattern (e.g., `claude-*` routes to Anthropic, `gpt-*` routes to OpenAI).
 
+Routed models also appear in the **Codex App** model picker with per-model reasoning effort controls:
+
+<p align="center">
+  <img src="assets/codex-app-picker.png" alt="Codex App showing opencodex routed models with reasoning effort picker" width="480">
+</p>
+
 ## Highlights
 
 - **Use any LLM with Codex.** 5 protocol adapters cover Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — that's 40+ providers out of the box.
