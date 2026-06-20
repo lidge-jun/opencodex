@@ -79,6 +79,24 @@ pass/fail per criterion) and reference it from `50_closure-overview.md`'s status
 to **Closed**). If any criterion fails, capture the exact log line and open a follow-up doc in
 the 56+ range rather than editing the implemented fixes blind.
 
+## Results — executed 2026-06-20 (F5 PASS)
+
+Live run against the real `opencode-go` upstream (`opencode.ai/zen/go/v1`) using the saved token,
+model `opencode-go/kimi-k2.7-code`, via the **bridge path** (openai-chat adapter). Isolated repo
+build on port 10199 (the running 10100 instance and codex config untouched).
+
+| Criterion | Result |
+|-----------|--------|
+| Clean lifecycle, single terminal | PASS — `response.created → reasoning_text.delta×20 → output_item.done → message → response.completed` |
+| Exactly one `response.completed`; zero `ApiError::Stream` | PASS — `status: completed`; 0 error/`stream closed` frames |
+| Usage present in terminal (F2 live) | PASS — `usage {input_tokens:13, output_tokens:25, total_tokens:38}` |
+| Answer correctness | PASS — output text `"hello world"` as prompted |
+| RC2 client-disconnect mid-stream | PASS — curl `--max-time 1.5` (exit 28); server stayed healthy; a subsequent request returned `response.completed`; no unhandled rejection / crash in server log |
+
+Error-path fixes (F1 inline error, F3 overload/transient-429) are covered by unit tests
+(`adapter-error-inline`, `error-fidelity`) since the live upstream returned success. Stall/idle
+(RC3) is covered by `bridge-lifecycle` unit tests. **F5 status: Closed.**
+
 ## Non-goals
 
 - No native `gpt-*` WS path here (phase 120).
