@@ -148,6 +148,7 @@ ocx start [--port 10100]       # start the proxy
 ocx stop                       # stop + restore native Codex
 ocx restore                    # restore without stopping (alias: ocx eject)
 ocx sync                       # refresh models + re-inject into Codex
+ocx codex-shim install         # auto-start the proxy whenever `codex` is launched
 ocx status                     # is the proxy running?
 ocx login <xai|anthropic|kimi> # OAuth login
 ocx logout <provider>          # remove a stored login

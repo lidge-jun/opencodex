@@ -19,6 +19,7 @@ Usage:
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx service <sub>           Run as a background service (install|start|stop|status|uninstall)
+  ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall)
   ocx sync                    Fetch models from providers and inject into Codex config
   ocx status                  Check proxy server status
   ocx login <provider>        OAuth login (xai) — opens browser, stores token in ~/.opencodex/auth.json
@@ -215,6 +216,29 @@ switch (command) {
   case "service":
     serviceCommand(args[1]);
     break;
+  case "codex-shim": {
+    const { codexShimStatus, installCodexShim, uninstallCodexShim } = await import("./codex-shim");
+    switch (args[1]) {
+      case "install": {
+        const r = installCodexShim();
+        console.log(r.installed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        break;
+      }
+      case "status":
+        console.log(codexShimStatus());
+        break;
+      case "uninstall":
+      case "remove": {
+        const r = uninstallCodexShim();
+        console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        break;
+      }
+      default:
+        console.error("Usage: ocx codex-shim <install|status|uninstall>");
+        process.exit(1);
+    }
+    break;
+  }
   case "update": {
     const { runUpdate } = await import("./update");
     runUpdate();

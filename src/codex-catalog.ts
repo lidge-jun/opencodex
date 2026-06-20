@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile, websocketsEnabled } from "./config";
@@ -560,12 +560,15 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
 }
 
 /**
- * Delete Codex's models cache ($CODEX_HOME/models_cache.json) so the next turn re-fetches /v1/models.
- * Codex caches the model list for 5 min (DEFAULT_MODEL_CACHE_TTL); invalidating makes catalog edits
- * (enable/disable, subagent reorder) apply on the next turn instead of waiting for the TTL.
+ * Refresh Codex's models cache ($CODEX_HOME/models_cache.json) from the active catalog.
+ * Codex caches the model list for 5 min (DEFAULT_MODEL_CACHE_TTL); copying the injected catalog
+ * makes catalog edits (enable/disable, subagent reorder) apply on the next turn instead of waiting.
  */
 export function invalidateCodexModelsCache(): void {
   try {
-    if (existsSync(CODEX_MODELS_CACHE_PATH)) unlinkSync(CODEX_MODELS_CACHE_PATH);
+    const catalogPath = readCodexCatalogPath();
+    if (!existsSync(catalogPath)) return;
+    const catalog = readFileSync(catalogPath, "utf8");
+    atomicWriteFile(CODEX_MODELS_CACHE_PATH, catalog.endsWith("\n") ? catalog : `${catalog}\n`);
   } catch { /* best-effort */ }
 }

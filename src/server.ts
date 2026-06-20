@@ -568,6 +568,7 @@ export function startServer(port?: number) {
 
   const server = Bun.serve<WsData>({
     port: listenPort,
+    idleTimeout: 255,
     async fetch(req) {
       const url = new URL(req.url);
 
