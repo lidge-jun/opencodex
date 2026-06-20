@@ -19,13 +19,13 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
         headers["api-key"] = provider.apiKey;
         delete headers["Authorization"];
       }
-      const apiVersion = (provider.headers?.["api-version"]) ?? "2025-04-01-preview";
-      const separator = request.url.includes("?") ? "&" : "?";
-      return {
-        ...request,
-        url: `${request.url}${separator}api-version=${apiVersion}`,
-        headers,
-      };
+      let url = request.url;
+      if (!url.includes("/v1/")) {
+        const apiVersion = (provider.headers?.["api-version"]) ?? "2025-04-01-preview";
+        const separator = url.includes("?") ? "&" : "?";
+        url = `${url}${separator}api-version=${apiVersion}`;
+      }
+      return { ...request, url, headers };
     },
   };
 }
