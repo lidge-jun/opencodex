@@ -17,8 +17,4 @@ export interface ProviderAdapter {
 
   parseStream(response: Response): AsyncGenerator<AdapterEvent>;
   parseResponse?(response: Response): Promise<AdapterEvent[]>;
-
-  /** Optional: adapter handles its own fetch + streaming via a provider SDK. When present,
-   *  server.ts uses this instead of buildRequest → fetch → parseStream. */
-  executeStream?(parsed: OcxParsedRequest, signal?: AbortSignal): AsyncGenerator<AdapterEvent>;
 }

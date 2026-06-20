@@ -29,7 +29,6 @@
     "release:watch": "bun scripts/release.ts watch"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.105.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
