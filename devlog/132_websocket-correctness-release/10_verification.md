@@ -13,6 +13,7 @@ Commits:
 - `e27f44c fix: harden responses websocket protocol`
 - `2e4733d fix: preserve websocket turn cancellation hooks`
 - `df8c047 fix: abort websocket turns before upstream headers`
+- `91b3671 fix: propagate websocket aborts to sidecars`
 
 Modified:
 
@@ -41,7 +42,8 @@ Modified:
   headers, including Codex rate-limit header families; inbound WS data stores only forwarded
   allowlist headers.
 - Cancellation: socket close still cancels upstream, and same-socket replacement turns cancel the
-  previous in-flight reader/fetch before upstream headers arrive and suppress stale frames.
+  previous in-flight reader/fetch before upstream headers arrive, including vision/web-search
+  sidecar fetches, and suppress stale frames.
 - Framing/backpressure: CRLF, multiline data, split chunks, unterminated final event, dropped send,
   `-1` backpressure, and bounded sniff replay are covered by tests.
 - Advertisement: absent `websockets` is now false; only explicit `websockets: true` advertises
@@ -55,8 +57,12 @@ Modified:
   - 19 pass, 0 fail, 39 assertions.
 - `bun test tests/passthrough-abort.test.ts`
   - 4 pass, 0 fail, 8 assertions.
+- `bun test tests/sidecar-abort.test.ts`
+  - 2 pass, 0 fail, 6 assertions.
+- `bun test tests/sidecar-abort.test.ts tests/ws-endpoint.test.ts tests/passthrough-abort.test.ts`
+  - 25 pass, 0 fail, 53 assertions.
 - `bun test tests`
-  - 81 pass, 0 fail, 264 assertions.
+  - 83 pass, 0 fail, 270 assertions.
 - `bun x tsc --noEmit`
   - passed with exit 0.
 
@@ -119,3 +125,11 @@ Regression coverage:
   controller before response headers arrive.
 - `tests/ws-endpoint.test.ts` asserts stale successful response bodies are cancelled before pumping
   and Codex rate-limit headers survive WebSocket error sanitization.
+
+The second read-only Phase 132 release review found a remaining sidecar cancellation gap. Fix:
+
+- `options.abortSignal` now threads through `describeImagesInPlace`, `describeImage`,
+  `runWithWebSearch`, and `runWebSearch`.
+- `src/abort.ts` composes the per-turn abort signal with each sidecar timeout signal.
+- `tests/sidecar-abort.test.ts` asserts both web-search and vision sidecar fetches observe the
+  WebSocket turn abort signal.
