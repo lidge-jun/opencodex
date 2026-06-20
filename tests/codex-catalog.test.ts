@@ -74,6 +74,22 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.default_reasoning_level).toBe("medium");
   });
 
+  test("routed entries fill auto compact when context already exists on the template", () => {
+    const template = {
+      ...nativeTemplate(),
+      context_window: 272_000,
+      max_context_window: 272_000,
+    };
+    const entries = buildCatalogEntries(template, [], [
+      { provider: "local", id: "qwen3-coder" },
+    ]);
+    const routed = entries.find(e => e.slug === "local/qwen3-coder");
+
+    expect(routed?.context_window).toBe(272_000);
+    expect(routed?.max_context_window).toBe(272_000);
+    expect(routed?.auto_compact_token_limit).toBe(244_800);
+  });
+
   test("buildCatalogEntries preserves native bare GPT template fields", () => {
     const entries = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], []);
     const native = entries.find(e => e.slug === "gpt-5.5");
@@ -123,6 +139,18 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.max_context_window).toBe(1_000_000);
     expect(routed?.auto_compact_token_limit).toBe(900_000);
     expect(routed?.input_modalities).toEqual(["text"]);
+  });
+
+  test("anthropic sonnet 4.6 uses the 200k opencodex catalog cap", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
+    ]);
+    const routed = entries.find(e => e.slug === "anthropic/claude-sonnet-4-6");
+
+    expect(routed?.context_window).toBe(200_000);
+    expect(routed?.max_context_window).toBe(200_000);
+    expect(routed?.auto_compact_token_limit).toBe(180_000);
+    expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(200_000);
   });
 
   test("routed entries resolve jawcode provider aliases", () => {

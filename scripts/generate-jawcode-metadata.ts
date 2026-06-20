@@ -17,6 +17,10 @@ const sourcePath = process.env.JAWCODE_MODELS_JSON
   ? resolve(process.env.JAWCODE_MODELS_JSON)
   : resolve(process.cwd(), "../jawcode/packages/ai/src/models.json");
 const outPath = resolve(process.cwd(), "src/generated/jawcode-model-metadata.ts");
+const CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
+  "anthropic/claude-sonnet-4-6": 200_000,
+  "anthropic/claude-sonnet-4-6[1m]": 200_000,
+};
 
 if (!existsSync(sourcePath)) {
   throw new Error(`jawcode models.json not found: ${sourcePath}`);
@@ -55,7 +59,7 @@ for (const provider of allowedProviders) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, model]) => compactRow([
       id,
-      model.contextWindow,
+      CONTEXT_WINDOW_OVERRIDES[`${provider}/${id}`] ?? model.contextWindow,
       model.maxTokens,
       Array.isArray(model.input) ? model.input.join(",") : undefined,
       model.reasoning === undefined ? undefined : (model.reasoning ? 1 : 0),

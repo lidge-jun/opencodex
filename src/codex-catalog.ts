@@ -71,6 +71,17 @@ function normalizeServiceTiers(entry: RawEntry): RawEntry {
   return entry;
 }
 
+function ensureAutoCompactTokenLimit(entry: RawEntry): RawEntry {
+  if (
+    typeof entry.context_window === "number"
+    && entry.context_window > 0
+    && typeof entry.auto_compact_token_limit !== "number"
+  ) {
+    entry.auto_compact_token_limit = Math.floor(entry.context_window * 0.9);
+  }
+  return entry;
+}
+
 export function normalizeRoutedCatalogEntry(entry: RawEntry): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;
@@ -85,7 +96,7 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry): RawEntry {
   // runs through native gpt-5.4-mini, so image search is available and verbalized for text-only models.
   entry.web_search_tool_type = "text_and_image";
   entry.supports_search_tool = true;
-  return entry;
+  return ensureAutoCompactTokenLimit(entry);
 }
 
 function applyJawcodeCatalogMetadata(entry: RawEntry, slug: string): void {
@@ -174,7 +185,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
       normalizeRoutedCatalogEntry(e);
       applyJawcodeCatalogMetadata(e, slug);
     }
-    return normalizeServiceTiers(e);
+    return ensureAutoCompactTokenLimit(normalizeServiceTiers(e));
   }
   // Fallback when no template is available (best-effort; strict parser may need more).
   const entry: RawEntry = {
@@ -186,7 +197,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
     ...(slug.includes("/") ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
   };
   applyJawcodeCatalogMetadata(entry, slug);
-  return normalizeServiceTiers(entry);
+  return ensureAutoCompactTokenLimit(normalizeServiceTiers(entry));
 }
 
 /**
@@ -354,7 +365,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
   catalog.models = [...native, ...goEntries].map(m => {
-    const e = normalizeServiceTiers(m);
+    const e = ensureAutoCompactTokenLimit(normalizeServiceTiers(m));
     if (wsEnabled) e.supports_websockets = true;
     else delete e.supports_websockets;
     return e;
