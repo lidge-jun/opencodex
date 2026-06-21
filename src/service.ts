@@ -256,6 +256,27 @@ export function stopServiceIfInstalled(): boolean {
   return false;
 }
 
+/**
+ * Best-effort service removal for full uninstall. Unlike `ocx service uninstall`, this is quiet
+ * when no service exists and never exits the process just because the platform has no service
+ * manager.
+ */
+export function uninstallServiceIfInstalled(): boolean {
+  if (process.platform === "darwin") {
+    if (existsSync(plistPath())) {
+      try { uninstallLaunchd(); return true; } catch { return false; }
+    }
+  } else if (process.platform === "win32") {
+    try {
+      const q = sh(`schtasks /query /tn ${TASK} 2>nul`);
+      if (q.includes(TASK)) { uninstallWindows(); return true; }
+    } catch { /* task not found */ }
+  } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
+    try { uninstallSystemd(); return true; } catch { return false; }
+  }
+  return false;
+}
+
 export function serviceCommand(sub?: string): void {
   const ops = platformOps();
   if (!ops) {

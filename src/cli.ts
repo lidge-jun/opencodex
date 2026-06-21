@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { restoreNativeCodex } from "./codex-inject";
-import { codexAutoStartEnabled, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
+import { codexAutoStartEnabled, getConfigDir, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
 import { findAvailablePort } from "./ports";
-import { serviceCommand, stopServiceIfInstalled } from "./service";
+import { serviceCommand, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
 import { startServer } from "./server";
 import { maybeShowStarPrompt } from "./star-prompt";
 
@@ -18,6 +19,7 @@ Usage:
   ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
+  ocx uninstall               Remove service/shim/config and restore native Codex
   ocx service <sub>           Run as a background service (install|start|stop|status|uninstall)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall)
   ocx ensure                  Ensure the proxy is running and Codex config/cache are current
@@ -237,6 +239,58 @@ function handleStop() {
   if (stopFailed) process.exit(1);
 }
 
+async function handleUninstall() {
+  const failures: string[] = [];
+
+  const runStep = (label: string, step: () => void | boolean) => {
+    try {
+      const changed = step();
+      if (changed === false) console.log(`- ${label}: not installed`);
+      else console.log(`✅ ${label}`);
+    } catch (err) {
+      failures.push(label);
+      console.error(`⚠️  ${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  runStep("service removed", () => {
+    stopServiceIfInstalled();
+    return uninstallServiceIfInstalled();
+  });
+
+  runStep("proxy stopped", () => {
+    const pid = readPid();
+    if (!pid) return false;
+    killProxy(pid);
+    removePid();
+    return true;
+  });
+
+  runStep("native Codex restored", () => {
+    const r = restoreNativeCodex();
+    if (!r.success) throw new Error(r.message);
+  });
+
+  try {
+    const { uninstallCodexShim } = await import("./codex-shim");
+    const r = uninstallCodexShim();
+    console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
+  } catch (err) {
+    failures.push("Codex autostart shim removed");
+    console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  runStep("opencodex config removed", () => {
+    rmSync(getConfigDir(), { recursive: true, force: true });
+  });
+
+  if (failures.length > 0) {
+    console.error(`\nUninstall finished with ${failures.length} failed step(s): ${failures.join(", ")}`);
+    process.exit(1);
+  }
+  console.log("\n✅ opencodex local state removed. Remove the package with: npm uninstall -g @bitkyc08/opencodex");
+}
+
 function handleStatus() {
   const pid = readPid();
   if (pid) {
@@ -265,6 +319,10 @@ switch (command) {
     console.log("Plain `codex` now runs natively (no proxy).");
     break;
   }
+  case "uninstall":
+  case "remove":
+    await handleUninstall();
+    break;
   case "status":
     handleStatus();
     break;

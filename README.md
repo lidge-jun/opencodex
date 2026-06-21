@@ -150,6 +150,7 @@ ocx init                       # interactive setup
 ocx start [--port 10100]       # start the proxy; falls back to a free port if busy
 ocx stop                       # stop + restore native Codex
 ocx restore                    # restore without stopping (alias: ocx eject)
+ocx uninstall                  # remove service/shim/config and restore native Codex
 ocx ensure                     # start if needed + refresh Codex config/cache
 ocx sync                       # refresh models + re-inject into Codex
 ocx codex-shim install         # run `ocx ensure` whenever `codex` is launched
@@ -177,6 +178,18 @@ Use the **service** for always-on proxy (recommended for development machines). 
 lightweight, on-demand proxy startup without a background daemon. Shim autostart is enabled by default
 and can be disabled from the GUI dashboard. If the configured proxy port is already busy, `ocx start`
 automatically picks another free local port and updates Codex to use it.
+
+### Uninstall
+
+Before removing the npm/bun package, clean up local state:
+
+```bash
+ocx uninstall
+npm uninstall -g @bitkyc08/opencodex   # or: bun remove -g @bitkyc08/opencodex
+```
+
+`ocx uninstall` stops the proxy, removes any installed service, removes the Codex shim, restores
+native Codex config/catalog/history, and deletes `~/.opencodex`.
 
 ## Configuration
 
