@@ -39,6 +39,8 @@ export const ko: Record<TKey, string> = {
   "dash.stop": "프록시 중지",
   "dash.stopConfirm": "프록시를 중지하고 Codex 원본 설정을 복원할까요?",
   "dash.stopping": "중지 중…",
+  "dash.codexAutoStart": "Codex 실행 시 opencodex 시작",
+  "dash.codexAutoStartHint": "켜져 있으면 Codex CLI/App 실행 전 shim이 ocx ensure를 실행합니다. 끄면 Codex를 건드리지 않습니다.",
 
   // providers
   "prov.subtitle": "opencodex가 Codex로 라우팅하는 업스트림 프로바이더를 설정합니다. 계정으로 로그인하거나, 프로바이더를 추가하거나, 원본 설정을 편집하세요.",

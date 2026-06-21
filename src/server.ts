@@ -16,7 +16,7 @@ import {
   type WsData,
 } from "./ws-bridge";
 import type { ServerWebSocket } from "bun";
-import { DEFAULT_SUBAGENT_MODELS, loadConfig, saveConfig, websocketsEnabled } from "./config";
+import { DEFAULT_SUBAGENT_MODELS, codexAutoStartEnabled, loadConfig, saveConfig, websocketsEnabled } from "./config";
 import { parseRequest } from "./responses/parser";
 import { routeModel } from "./router";
 import { namespacedToolName } from "./types";
@@ -409,6 +409,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
 
   if (url.pathname === "/api/config" && req.method === "GET") {
     const safeConfig = JSON.parse(JSON.stringify(config));
+    safeConfig.codexAutoStart = codexAutoStartEnabled(config);
     for (const prov of Object.values(safeConfig.providers as Record<string, OcxProviderConfig>)) {
       if (prov.apiKey) prov.apiKey = prov.apiKey.slice(0, 8) + "...";
     }
@@ -417,6 +418,26 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
     return jsonResponse({ error: "Full config PUT is disabled. Use /api/providers POST for provider changes." }, 405);
+  }
+
+  if (url.pathname === "/api/settings" && req.method === "GET") {
+    return jsonResponse({
+      codexAutoStart: codexAutoStartEnabled(config),
+      port: config.port,
+      hostname: config.hostname ?? "127.0.0.1",
+    });
+  }
+
+  if (url.pathname === "/api/settings" && req.method === "PUT") {
+    let body: { codexAutoStart?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (typeof body.codexAutoStart !== "boolean") {
+      return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
+    }
+    config.codexAutoStart = body.codexAutoStart;
+    const { saveConfig: save } = await import("./config");
+    save(config);
+    return jsonResponse({ ok: true, codexAutoStart: codexAutoStartEnabled(config) });
   }
 
   if (url.pathname === "/api/logs" && req.method === "GET") {

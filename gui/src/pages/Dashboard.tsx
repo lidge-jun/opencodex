@@ -5,24 +5,29 @@ import { useT, Trans } from "../i18n";
 interface HealthData { status: string; version: string; uptime: number }
 interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
 interface ModelInfo { id: string; provider: string; owned_by?: string }
+interface SettingsData { codexAutoStart: boolean; port: number; hostname: string }
 
 export default function Dashboard({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [health, setHealth] = useState<HealthData | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [settings, setSettings] = useState<SettingsData | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [hRes, pRes] = await Promise.all([
+        const [hRes, pRes, sRes] = await Promise.all([
           fetch(`${apiBase}/healthz`),
           fetch(`${apiBase}/api/providers`),
+          fetch(`${apiBase}/api/settings`),
         ]);
         setHealth(await hRes.json());
         setProviders(await pRes.json());
+        setSettings(await sRes.json());
         setError(false);
       } catch {
         setError(true);
@@ -61,6 +66,27 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
 
   const online = health?.status === "ok";
 
+  const toggleCodexAutoStart = async () => {
+    if (!settings || settingsSaving) return;
+    const next = !settings.codexAutoStart;
+    setSettingsSaving(true);
+    setSettings({ ...settings, codexAutoStart: next });
+    try {
+      const res = await fetch(`${apiBase}/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codexAutoStart: next }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      const data = await res.json();
+      setSettings(prev => prev ? { ...prev, codexAutoStart: data.codexAutoStart } : prev);
+    } catch {
+      setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   return (
     <>
       <div className="page-head"><h2>{t("nav.dashboard")}</h2></div>
@@ -76,6 +102,24 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         <div className="stat"><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
         <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? `${Math.floor(health.uptime)}s` : "—"}</div></div>
         <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="spread">
+          <div>
+            <div style={{ fontWeight: 650 }}>{t("dash.codexAutoStart")}</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.codexAutoStartHint")}</div>
+          </div>
+          <button
+            className={`switch ${settings?.codexAutoStart ?? true ? "on" : ""}`}
+            onClick={toggleCodexAutoStart}
+            disabled={!settings || settingsSaving}
+            aria-label={t("dash.codexAutoStart")}
+            aria-pressed={settings?.codexAutoStart ?? true}
+          >
+            <span className="knob" />
+          </button>
+        </div>
       </div>
 
       <div className="h-section">{t("dash.activeProviders")} <span className="count">{providers.length}</span></div>

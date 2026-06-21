@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
 import { restoreNativeCodex } from "./codex-inject";
-import { loadConfig, readPid, removePid, writePid } from "./config";
+import { codexAutoStartEnabled, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
+import { findAvailablePort } from "./ports";
 import { serviceCommand, stopServiceIfInstalled } from "./service";
 import { startServer } from "./server";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -19,6 +20,7 @@ Usage:
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx service <sub>           Run as a background service (install|start|stop|status|uninstall)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall)
+  ocx ensure                  Ensure the proxy is running and Codex config/cache are current
   ocx sync                    Fetch models from providers and inject into Codex config
   ocx sync-cache              Refresh Codex's model cache from the active catalog
   ocx status                  Check proxy server status
@@ -56,22 +58,73 @@ async function syncModelsToCodex(port?: number) {
   return result;
 }
 
+function parsePortOption(): number | undefined {
+  const portIdx = args.indexOf("--port");
+  if (portIdx === -1) return undefined;
+  const value = args[portIdx + 1];
+  const port = value ? parseInt(value, 10) : NaN;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    console.error("Invalid port number");
+    process.exit(1);
+  }
+  return port;
+}
+
+function healthHost(hostname?: string): string {
+  return !hostname || hostname === "0.0.0.0" || hostname === "::" ? "127.0.0.1" : hostname;
+}
+
+async function proxyHealthy(port?: number): Promise<boolean> {
+  const config = loadConfig();
+  const p = port ?? config.port ?? 10100;
+  try {
+    const res = await fetch(`http://${healthHost(config.hostname)}:${p}/healthz`, {
+      signal: AbortSignal.timeout(750),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProxy(timeoutMs = 8_000): Promise<number | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const config = loadConfig();
+    const port = config.port ?? 10100;
+    if (await proxyHealthy(port)) return port;
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return null;
+}
+
+async function chooseListenPort(requestedPort?: number): Promise<number> {
+  const config = loadConfig();
+  const preferred = requestedPort ?? config.port ?? 10100;
+  const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1");
+  if (selected !== preferred) {
+    console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+  }
+  if (config.port !== selected) {
+    config.port = selected;
+    saveConfig(config);
+  }
+  return selected;
+}
+
 async function handleStart(options: { block?: boolean } = {}) {
   const existingPid = readPid();
   if (existingPid) {
-    console.error(`⚠️  Proxy already running (PID ${existingPid}). Use 'ocx stop' first.`);
-    process.exit(1);
-  }
-
-  let port: number | undefined;
-  const portIdx = args.indexOf("--port");
-  if (portIdx !== -1 && args[portIdx + 1]) {
-    port = parseInt(args[portIdx + 1], 10);
-    if (isNaN(port)) {
-      console.error("Invalid port number");
+    const config = loadConfig();
+    if (await proxyHealthy(config.port)) {
+      console.error(`⚠️  Proxy already running (PID ${existingPid}). Use 'ocx stop' first.`);
       process.exit(1);
     }
+    removePid();
   }
+
+  const requestedPort = parsePortOption();
+  const port = await chooseListenPort(requestedPort);
 
   const server = startServer(port);
   writePid(process.pid);
@@ -95,6 +148,35 @@ async function handleStart(options: { block?: boolean } = {}) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
   }
+}
+
+async function handleEnsure() {
+  let config = loadConfig();
+  if (!codexAutoStartEnabled(config)) {
+    console.log("Codex autostart is disabled.");
+    return;
+  }
+  if (await proxyHealthy(config.port)) {
+    await syncModelsToCodex(config.port).catch(() => {});
+    console.log(`✅ Proxy running on port ${config.port}`);
+    return;
+  }
+
+  const child = spawn(process.execPath, [process.argv[1], "start"], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, OCX_SERVICE: "1" },
+  });
+  child.unref();
+
+  const port = await waitForProxy();
+  if (!port) {
+    console.error("❌ Proxy did not become healthy after starting.");
+    process.exit(1);
+  }
+  config = loadConfig();
+  await syncModelsToCodex(config.port ?? port).catch(() => {});
+  console.log(`✅ Proxy running on port ${config.port ?? port}`);
 }
 
 function killProxy(pid: number): void {
@@ -185,6 +267,9 @@ switch (command) {
   }
   case "status":
     handleStatus();
+    break;
+  case "ensure":
+    await handleEnsure();
     break;
   case "login": {
     const { handleLogin } = await import("./oauth/login-cli");

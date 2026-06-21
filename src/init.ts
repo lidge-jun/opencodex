@@ -131,6 +131,17 @@ export async function runInit(): Promise<void> {
     console.log(result.success ? `✅ ${result.message}` : `⚠️  ${result.message}`);
   }
 
+  const shimAnswer = await prompt.ask("Install Codex autostart shim? [Y/n]: ");
+  if (shimAnswer.trim().toLowerCase() !== "n") {
+    try {
+      const { installCodexShim } = await import("./codex-shim");
+      const result = installCodexShim();
+      console.log(result.installed ? `✅ ${result.message}` : `⚠️  ${result.message}`);
+    } catch (err) {
+      console.log(`⚠️  Codex autostart shim skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   console.log(`\n🚀 Setup complete! Run 'ocx start' to start the proxy.`);
   prompt.close();
 }

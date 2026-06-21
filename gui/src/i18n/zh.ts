@@ -39,6 +39,8 @@ export const zh: Record<TKey, string> = {
   "dash.stop": "停止代理",
   "dash.stopConfirm": "停止代理并恢复原生 Codex 配置？",
   "dash.stopping": "正在停止…",
+  "dash.codexAutoStart": "随 Codex 启动 opencodex",
+  "dash.codexAutoStartHint": "启用后，Codex shim 会在每次 Codex CLI/App 启动前运行 ocx ensure。关闭后不会改动 Codex。",
 
   // providers
   "prov.subtitle": "配置 opencodex 路由到 Codex 的上游提供方。使用账户登录、添加提供方，或编辑原始配置。",

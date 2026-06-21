@@ -79,6 +79,10 @@ export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolea
   return config.websockets === true;
 }
 
+export function codexAutoStartEnabled(config: Pick<OcxConfig, "codexAutoStart">): boolean {
+  return config.codexAutoStart !== false;
+}
+
 export function getDefaultConfig(): OcxConfig {
   // Fresh-install default: works out of the box with Codex's ChatGPT OAuth (no API key).
   // gpt-* requests forward the caller's incoming OAuth headers to the ChatGPT backend.
@@ -95,6 +99,7 @@ export function getDefaultConfig(): OcxConfig {
     defaultProvider: "openai",
     subagentModels: [...DEFAULT_SUBAGENT_MODELS],
     websockets: false,
+    codexAutoStart: true,
   };
 }
 

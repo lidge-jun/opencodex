@@ -39,6 +39,8 @@ export const en = {
   "dash.stop": "Stop Proxy",
   "dash.stopConfirm": "Stop the proxy and restore native Codex?",
   "dash.stopping": "Stopping…",
+  "dash.codexAutoStart": "Start opencodex with Codex",
+  "dash.codexAutoStartHint": "When enabled, the Codex shim runs ocx ensure before every Codex CLI/App launch. Disable this to leave Codex untouched.",
 
   // providers
   "prov.subtitle": "Configure the upstream providers opencodex routes into Codex. Log in with an account, add a provider, or edit the raw config.",

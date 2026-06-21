@@ -54,19 +54,7 @@ export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPa
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
 if [ -z "$OCX_SHIM_BYPASS" ]; then
-  if ! "${bunPath}" "${cliPath}" status 2>/dev/null | grep -q "Proxy running"; then
-    mkdir -p "$HOME/.opencodex"
-    nohup env OCX_SERVICE=1 "${bunPath}" "${cliPath}" start >> "$HOME/.opencodex/shim.log" 2>&1 &
-    i=0
-    while [ "$i" -lt 50 ]; do
-      if "${bunPath}" "${cliPath}" status 2>/dev/null | grep -q "Proxy running"; then
-        break
-      fi
-      sleep 0.1
-      i=$((i + 1))
-    done
-  fi
-  "${bunPath}" "${cliPath}" sync-cache >/dev/null 2>&1 || true
+  "${bunPath}" "${cliPath}" ensure >/dev/null 2>&1 || true
 fi
 exec "${realCodexPath}" "$@"
 `;
@@ -76,17 +64,8 @@ export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cl
   return `@echo off\r
 rem ${SHIM_MARKER}\r
 if not "%OCX_SHIM_BYPASS%"=="" goto run_codex\r
-"${bunPath}" "${cliPath}" status 2>nul | findstr /C:"Proxy running" >nul\r
-if %ERRORLEVEL% EQU 0 goto run_codex\r
-if not exist "%USERPROFILE%\\.opencodex" mkdir "%USERPROFILE%\\.opencodex"\r
-start "" /b cmd /c "set OCX_SERVICE=1 && ""${bunPath}"" ""${cliPath}"" start >> ""%USERPROFILE%\\.opencodex\\shim.log"" 2>&1"\r
-for /l %%i in (1,1,50) do (\r
-  "${bunPath}" "${cliPath}" status 2>nul | findstr /C:"Proxy running" >nul\r
-  if not errorlevel 1 goto run_codex\r
-  powershell -NoProfile -Command "Start-Sleep -Milliseconds 100" >nul 2>nul\r
-)\r
+"${bunPath}" "${cliPath}" ensure >nul 2>nul\r
 :run_codex\r
-"${bunPath}" "${cliPath}" sync-cache >nul 2>nul\r
 "${realCodexPath}" %*\r
 `;
 }

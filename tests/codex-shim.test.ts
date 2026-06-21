@@ -11,10 +11,8 @@ describe("Codex autostart shim", () => {
     const script = buildUnixCodexShim("/usr/local/bin/codex-real", "/usr/local/bin/bun", "/opt/opencodex/src/cli.ts");
 
     expect(script).toContain(SHIM_MARKER);
-    expect(script).toContain("status");
-    expect(script).toContain("OCX_SERVICE=1");
-    expect(script).toContain("start");
-    expect(script).toContain("sync-cache");
+    expect(script).toContain("ensure");
+    expect(script).not.toContain("sync-cache");
     expect(script).toContain('exec "/usr/local/bin/codex-real" "$@"');
   });
 
@@ -22,9 +20,8 @@ describe("Codex autostart shim", () => {
     const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts");
 
     expect(script).toContain(SHIM_MARKER);
-    expect(script).toContain("findstr");
-    expect(script).toContain("OCX_SERVICE=1");
-    expect(script).toContain("sync-cache");
+    expect(script).toContain("ensure");
+    expect(script).not.toContain("sync-cache");
     expect(script).toContain('"C:\\Tools\\codex-real.exe" %*');
   });
 

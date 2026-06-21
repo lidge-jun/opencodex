@@ -27,4 +27,11 @@ describe("startup star prompt", () => {
     expect(syncIndex).toBeGreaterThan(-1);
     expect(promptIndex).toBeLessThan(syncIndex);
   });
+
+  test("ocx init offers the Codex autostart shim by default", async () => {
+    const init = await readText("src/init.ts");
+
+    expect(init).toContain("Install Codex autostart shim? [Y/n]");
+    expect(init).toContain("installCodexShim");
+  });
 });

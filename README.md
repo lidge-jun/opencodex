@@ -40,11 +40,14 @@ Requires [Bun](https://bun.sh) 1.1+. All three platforms work natively (no WSL n
 # Install
 npm install -g @bitkyc08/opencodex      # or: bun install -g @bitkyc08/opencodex
 
-# Interactive setup (writes config + injects into Codex)
+# Interactive setup (writes config, injects into Codex, and offers autostart shim install)
 ocx init
 
 # Start the proxy
 ocx start
+
+# If you skipped it during init, install the on-demand autostart shim later
+ocx codex-shim install
 
 # Use Codex normally — it now routes through opencodex
 codex "Write a hello world in Rust"
@@ -144,11 +147,12 @@ Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging
 
 ```bash
 ocx init                       # interactive setup
-ocx start [--port 10100]       # start the proxy
+ocx start [--port 10100]       # start the proxy; falls back to a free port if busy
 ocx stop                       # stop + restore native Codex
 ocx restore                    # restore without stopping (alias: ocx eject)
+ocx ensure                     # start if needed + refresh Codex config/cache
 ocx sync                       # refresh models + re-inject into Codex
-ocx codex-shim install         # auto-start the proxy whenever `codex` is launched
+ocx codex-shim install         # run `ocx ensure` whenever `codex` is launched
 ocx status                     # is the proxy running?
 ocx login <xai|anthropic|kimi> # OAuth login
 ocx logout <provider>          # remove a stored login
@@ -164,13 +168,15 @@ opencodex has two ways to auto-start the proxy:
 | | `ocx service install` | `ocx codex-shim install` |
 |---|---|---|
 | **How** | OS service manager (launchd / systemd / schtasks) | Replaces the `codex` binary with a wrapper script |
-| **When** | Always running after login | On-demand — starts only when `codex` is launched |
+| **When** | Always running after login | On-demand — runs `ocx ensure` when `codex` is launched |
 | **Restart** | Auto-restarts on crash | Starts once per `codex` invocation |
 | **Codex updates** | Unaffected | Repairs on next `ocx codex-shim install` or `ocx update` |
 | **Remove** | `ocx service uninstall` | `ocx codex-shim uninstall` |
 
 Use the **service** for always-on proxy (recommended for development machines). Use the **shim** for
-lightweight, on-demand proxy startup without a background daemon.
+lightweight, on-demand proxy startup without a background daemon. Shim autostart is enabled by default
+and can be disabled from the GUI dashboard. If the configured proxy port is already busy, `ocx start`
+automatically picks another free local port and updates Codex to use it.
 
 ## Configuration
 
