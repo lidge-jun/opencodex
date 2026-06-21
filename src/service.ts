@@ -85,6 +85,12 @@ function systemdEnvironmentAssignment(name: string, value: string | undefined): 
   return `Environment=${systemdQuote(`${name}=${value}`)}`;
 }
 
+function systemdOutputTarget(value: string): string {
+  // StandardOutput/StandardError use output specifiers such as append:/path.
+  // Quoting the full specifier makes systemd reject it as an invalid output target.
+  return value.replace(/%/g, "%%").replace(/\n/g, "\\n");
+}
+
 function sh(cmd: string): string {
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
@@ -183,8 +189,8 @@ ExecStart=${systemdQuote(bun)} ${systemdQuote(cli)} start
 Restart=on-failure
 RestartSec=5
 ${envLines}
-StandardOutput=${systemdQuote(`append:${log}`)}
-StandardError=${systemdQuote(`append:${log}`)}
+StandardOutput=${systemdOutputTarget(`append:${log}`)}
+StandardError=${systemdOutputTarget(`append:${log}`)}
 
 [Install]
 WantedBy=default.target

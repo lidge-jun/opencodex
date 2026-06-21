@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { linkAbortSignal, relayWithAbort } from "../src/server";
+import { linkAbortSignal, relaySseWithHeartbeat, relayWithAbort } from "../src/server";
 
 function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   let i = 0;
@@ -44,6 +44,24 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     const ac = new AbortController();
     expect(relayWithAbort(null, ac)).toBeNull();
     expect(ac.signal.aborted).toBe(false);
+  });
+
+  test("SSE passthrough emits heartbeat comments while upstream is silent", async () => {
+    const ac = new AbortController();
+    const body = new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } });
+    const relayed = relaySseWithHeartbeat(body, ac, 5)!;
+    const reader = relayed.getReader();
+    const first = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("heartbeat timeout")), 200)),
+    ]);
+
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value)).toBe(": opencodex keepalive\n\n");
+
+    await reader.cancel("client gone");
+    expect(ac.signal.aborted).toBe(true);
+    expect(ac.signal.reason).toBe("client gone");
   });
 
   test("turn-level abort signal aborts the upstream fetch before headers arrive", () => {

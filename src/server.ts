@@ -199,9 +199,14 @@ async function handleResponses(
         : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
       return formatErrorResponse(502, "upstream_error", msg);
     }
-    return new Response(relayWithAbort(upstreamResponse.body, upstream), {
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
+    const isEventStream = headers.get("content-type")?.toLowerCase().includes("text/event-stream") ?? false;
+    const body = isEventStream
+      ? relaySseWithHeartbeat(upstreamResponse.body, upstream)
+      : relayWithAbort(upstreamResponse.body, upstream);
+    return new Response(body, {
       status: upstreamResponse.status,
-      headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+      headers,
     });
   }
 
@@ -337,6 +342,56 @@ export function relayWithAbort(
     },
     cancel(reason) {
       // Client disconnected: abort the upstream fetch and release the reader so we do not leak it.
+      upstream.abort(reason);
+      reader.cancel(reason).catch(() => {});
+    },
+  });
+}
+
+export function relaySseWithHeartbeat(
+  body: ReadableStream<Uint8Array> | null,
+  upstream: AbortController,
+  heartbeatMs = 15_000,
+): ReadableStream<Uint8Array> | null {
+  if (!body) return null;
+  const reader = body.getReader();
+  const heartbeat = new TextEncoder().encode(": opencodex keepalive\n\n");
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+
+  const cleanup = () => {
+    closed = true;
+    if (timer) clearInterval(timer);
+    timer = undefined;
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      timer = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(heartbeat);
+        } catch {
+          cleanup();
+        }
+      }, heartbeatMs);
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          cleanup();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        cleanup();
+        try { controller.error(err); } catch { /* already torn down */ }
+      }
+    },
+    cancel(reason) {
+      cleanup();
       upstream.abort(reason);
       reader.cancel(reason).catch(() => {});
     },
