@@ -60,6 +60,8 @@ describe("Codex autostart shim", () => {
   });
 
   test("Unix shim skips ocx startup for Codex internal commands", () => {
+    if (process.platform === "win32") return;
+
     const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
     const logPath = join(dir, "calls.log");
     const bunPath = join(dir, "bun");
