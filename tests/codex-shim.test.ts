@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildUnixCodexShim, buildWindowsCodexShim } from "../src/codex-shim";
@@ -56,5 +57,41 @@ describe("Codex autostart shim", () => {
   test("Windows shim uses bypass env var to skip proxy start", () => {
     const script = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts");
     expect(script).toContain("OCX_SHIM_BYPASS");
+  });
+
+  test("Unix shim skips ocx startup for Codex internal commands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
+    const logPath = join(dir, "calls.log");
+    const bunPath = join(dir, "bun");
+    const realCodexPath = join(dir, "codex-real");
+    const shimPath = join(dir, "codex");
+
+    writeFileSync(bunPath, `#!/usr/bin/env sh\necho "bun:$*" >> "${logPath}"\n`, "utf8");
+    writeFileSync(realCodexPath, `#!/usr/bin/env sh\necho "codex:$*" >> "${logPath}"\n`, "utf8");
+    writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/opt/opencodex/src/cli.ts"), "utf8");
+    chmodSync(bunPath, 0o755);
+    chmodSync(realCodexPath, 0o755);
+    chmodSync(shimPath, 0o755);
+    const env = { ...process.env };
+    delete env.OCX_SHIM_BYPASS;
+
+    const resume = spawnSync(shimPath, ["resume", "--all"], { encoding: "utf8", env });
+    expect(resume.status).toBe(0);
+    expect(readFileSync(logPath, "utf8")).toBe("codex:resume --all\n");
+
+    const prompt = spawnSync(shimPath, ["hello"], { encoding: "utf8", env });
+    expect(prompt.status).toBe(0);
+    expect(readFileSync(logPath, "utf8")).toBe(
+      "codex:resume --all\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:hello\n",
+    );
+  });
+
+  test("Windows shim skips ocx startup for Codex internal commands", () => {
+    const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts");
+
+    expect(script).toContain('if /I "%~1"=="resume" goto run_codex');
+    expect(script).toContain('if /I "%~1"=="app-server" goto run_codex');
+    expect(script).toContain('if /I "%~1"=="exec" goto run_codex');
+    expect(script).toContain('if /I "%~1"=="--help" goto run_codex');
   });
 });
