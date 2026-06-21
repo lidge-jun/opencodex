@@ -39,7 +39,21 @@ export function getPidPath(): string {
   return PID_PATH;
 }
 
+export function hardenConfigDir(): void {
+  if (existsSync(OCX_DIR)) {
+    try { chmodSync(OCX_DIR, 0o700); } catch { /* best-effort */ }
+  }
+}
+
+export function hardenExistingSecret(path: string): void {
+  if (existsSync(path)) {
+    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
+  }
+}
+
 export function loadConfig(): OcxConfig {
+  hardenConfigDir();
+  hardenExistingSecret(CONFIG_PATH);
   if (!existsSync(CONFIG_PATH)) {
     return getDefaultConfig();
   }
@@ -92,7 +106,11 @@ export function resolveEnvValue(value: string | undefined): string | undefined {
 }
 
 export function writePid(pid: number): void {
-  if (!existsSync(OCX_DIR)) mkdirSync(OCX_DIR, { recursive: true, mode: 0o700 });
+  if (!existsSync(OCX_DIR)) {
+    mkdirSync(OCX_DIR, { recursive: true, mode: 0o700 });
+  } else {
+    hardenConfigDir();
+  }
   writeFileSync(PID_PATH, String(pid), "utf-8");
 }
 

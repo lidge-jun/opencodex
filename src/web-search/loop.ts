@@ -193,7 +193,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const sse = bridgeToResponsesSSE(
     replay(finalEvents), parsed.modelId, toolNsMap, freeform, toolSearch,
     undefined, undefined,
-    deps.forceEmptyResponseId ? { responseId: "" } : undefined,
+    {
+      ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
+      hideThinkingSummary: parsed.options.hideThinkingSummary,
+    },
   );
   return new Response(sse, { headers: SSE_HEADERS });
 }

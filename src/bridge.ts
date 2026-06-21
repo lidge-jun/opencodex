@@ -231,6 +231,8 @@ export function bridgeToResponsesSSE(
 
       try {
         for await (const event of events) {
+          activity = true;
+          stallTicks = 0;
           switch (event.type) {
             case "text_delta": {
               if (currentReasoning) closeCurrentReasoning();
@@ -411,75 +413,140 @@ export function buildResponseJSON(
   options?: {
     hideThinkingSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string }>;
+    freeformToolNames?: Set<string>;
+    toolSearchToolNames?: Set<string>;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
   const output: OutputItem[] = [];
-  let text = "";
-  let summaryReasoning = "";
-  let rawReasoning = "";
   let usage: OcxUsage | undefined;
+  let errorMessage: string | undefined;
+
+  let currentText = "";
+  let currentSummaryReasoning = "";
+  let currentRawReasoning = "";
   let currentToolCallId = "";
   let currentToolCallName = "";
   let currentToolCallArgs = "";
 
+  const freeformInput = (args: string): string => {
+    try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
+    return args;
+  };
+  const parseArgsObj = (args: string): Record<string, unknown> => {
+    try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
+  };
+
+  const flushText = () => {
+    if (!currentText) return;
+    output.push({
+      type: "message", id: `msg_${uuid()}`, role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: currentText, annotations: [] }],
+    });
+    currentText = "";
+  };
+  const flushSummaryReasoning = () => {
+    if (!currentSummaryReasoning || options?.hideThinkingSummary) { currentSummaryReasoning = ""; return; }
+    output.push({
+      type: "reasoning", id: `rs_${uuid()}`,
+      summary: [{ type: "summary_text", text: currentSummaryReasoning }],
+    });
+    currentSummaryReasoning = "";
+  };
+  const flushRawReasoning = () => {
+    if (!currentRawReasoning) return;
+    output.push({
+      type: "reasoning", id: `rs_${uuid()}`, summary: [],
+      content: [{ type: "reasoning_text", text: currentRawReasoning }],
+    });
+    currentRawReasoning = "";
+  };
   const flushToolCall = () => {
     if (!currentToolCallId) return;
     const mapped = options?.toolNsMap?.get(currentToolCallName);
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;
-    output.push({
-      type: "function_call", id: `fc_${uuid()}`,
-      call_id: currentToolCallId, name: realName,
-      arguments: currentToolCallArgs || "{}", status: "completed",
-      ...(ns ? { namespace: ns } : {}),
-    });
+    const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
+    const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+    if (toolSearch) {
+      output.push({
+        type: "tool_search_call", id: `fc_${uuid()}`,
+        call_id: currentToolCallId, execution: "client",
+        arguments: parseArgsObj(currentToolCallArgs), status: "completed",
+      });
+    } else if (freeform) {
+      output.push({
+        type: "custom_tool_call", id: `fc_${uuid()}`,
+        call_id: currentToolCallId, name: realName,
+        input: freeformInput(currentToolCallArgs), status: "completed",
+      });
+    } else {
+      output.push({
+        type: "function_call", id: `fc_${uuid()}`,
+        call_id: currentToolCallId, name: realName,
+        arguments: currentToolCallArgs || "{}", status: "completed",
+        ...(ns ? { namespace: ns } : {}),
+      });
+    }
     currentToolCallId = "";
     currentToolCallName = "";
     currentToolCallArgs = "";
   };
 
   for (const e of events) {
-    if (e.type === "text_delta") text += e.text;
-    if (e.type === "thinking_delta") summaryReasoning += e.thinking;
-    if (e.type === "reasoning_raw_delta") rawReasoning += e.text;
-    if (e.type === "tool_call_start") {
-      flushToolCall();
-      currentToolCallId = e.id;
-      currentToolCallName = e.name;
-      currentToolCallArgs = "";
+    switch (e.type) {
+      case "text_delta":
+        if (currentSummaryReasoning) flushSummaryReasoning();
+        if (currentRawReasoning) flushRawReasoning();
+        if (currentToolCallId) flushToolCall();
+        currentText += e.text;
+        break;
+      case "thinking_delta":
+        if (currentText) flushText();
+        if (currentRawReasoning) flushRawReasoning();
+        if (currentToolCallId) flushToolCall();
+        currentSummaryReasoning += e.thinking;
+        break;
+      case "reasoning_raw_delta":
+        if (currentText) flushText();
+        if (currentSummaryReasoning) flushSummaryReasoning();
+        if (currentToolCallId) flushToolCall();
+        currentRawReasoning += e.text;
+        break;
+      case "tool_call_start":
+        if (currentText) flushText();
+        if (currentSummaryReasoning) flushSummaryReasoning();
+        if (currentRawReasoning) flushRawReasoning();
+        flushToolCall();
+        currentToolCallId = e.id;
+        currentToolCallName = e.name;
+        currentToolCallArgs = "";
+        break;
+      case "tool_call_delta":
+        currentToolCallArgs += e.arguments;
+        break;
+      case "tool_call_end":
+        flushToolCall();
+        break;
+      case "error":
+        errorMessage = e.message;
+        break;
+      case "done":
+        usage = e.usage;
+        break;
     }
-    if (e.type === "tool_call_delta") currentToolCallArgs += e.arguments;
-    if (e.type === "tool_call_end") flushToolCall();
-    if (e.type === "done") usage = e.usage;
   }
+  flushText();
+  flushSummaryReasoning();
+  flushRawReasoning();
   flushToolCall();
-
-  if (rawReasoning) {
-    output.push({
-      type: "reasoning", id: `rs_${uuid()}`, summary: [],
-      content: [{ type: "reasoning_text", text: rawReasoning }],
-    });
-  }
-
-  if (summaryReasoning && !options?.hideThinkingSummary) {
-    output.push({
-      type: "reasoning", id: `rs_${uuid()}`,
-      summary: [{ type: "summary_text", text: summaryReasoning }],
-    });
-  }
-
-  if (text) {
-    output.push({
-      type: "message", id: `msg_${uuid()}`, role: "assistant", status: "completed",
-      content: [{ type: "output_text", text, annotations: [] }],
-    });
-  }
 
   return {
     id: responseId, object: "response",
     created_at: Math.floor(Date.now() / 1000),
-    status: "completed", model: modelId, output,
+    status: errorMessage ? "failed" : "completed",
+    model: modelId, output,
+    ...(errorMessage ? { error: { message: errorMessage } } : {}),
     usage: responsesUsage(usage),
   };
 }

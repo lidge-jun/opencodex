@@ -263,12 +263,18 @@ async function handleResponses(
   if (adapter.parseResponse) {
     const events = await adapter.parseResponse(upstreamResponse);
     const toolNsMap = new Map<string, { namespace: string; name: string }>();
+    const freeformToolNames = new Set<string>();
+    const toolSearchToolNames = new Set<string>();
     for (const t of parsed.context.tools ?? []) {
       if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
+      if (t.freeform) freeformToolNames.add(t.name);
+      if (t.toolSearch) toolSearchToolNames.add(t.name);
     }
     const json = buildResponseJSON(events, parsed.modelId, {
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
+      freeformToolNames,
+      toolSearchToolNames,
     });
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }

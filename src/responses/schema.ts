@@ -50,6 +50,7 @@ const functionCallItemSchema = z.object({
   id: z.string().optional(),
   call_id: z.string().min(1),
   name: z.string().min(1),
+  namespace: z.string().optional(),
   arguments: z.string().optional(),
 });
 const functionCallOutputItemSchema = z.object({
