@@ -38,6 +38,69 @@ Examples:
   ocx sync                    Sync available models to Codex`);
 }
 
+function hasHelpFlag(values: string[]): boolean {
+  return values.some(value => value === "--help" || value === "-h" || value === "help");
+}
+
+function printSubcommandUsage(name: string | undefined): void {
+  switch (name) {
+    case "init":
+      console.log("Usage: ocx init\n\nInteractive setup for providers and Codex config injection.");
+      break;
+    case "start":
+      console.log("Usage: ocx start [--port <port>]\n\nStart the proxy server and sync models to Codex.");
+      break;
+    case "stop":
+      console.log("Usage: ocx stop\n\nStop the proxy and restore native Codex config.");
+      break;
+    case "restore":
+    case "eject":
+      console.log(`Usage: ocx ${name}\n\nRestore native Codex config without stopping the proxy.`);
+      break;
+    case "uninstall":
+    case "remove":
+      console.log(`Usage: ocx ${name}\n\nRemove service/shim/config and restore native Codex.`);
+      break;
+    case "service":
+      console.log("Usage: ocx service <install|start|stop|status|uninstall>");
+      break;
+    case "codex-shim":
+      console.log("Usage: ocx codex-shim <install|status|uninstall>");
+      break;
+    case "ensure":
+      console.log("Usage: ocx ensure\n\nEnsure the proxy is running and Codex config/cache are current.");
+      break;
+    case "sync":
+      console.log("Usage: ocx sync\n\nFetch provider models and inject them into Codex config.");
+      break;
+    case "sync-cache":
+      console.log("Usage: ocx sync-cache\n\nRefresh Codex's model cache from the active catalog.");
+      break;
+    case "status":
+      console.log("Usage: ocx status\n\nCheck proxy server status.");
+      break;
+    case "login":
+      console.log("Usage: ocx login <provider>\n\nOAuth or API-key login for a provider.");
+      break;
+    case "logout":
+      console.log("Usage: ocx logout <provider>\n\nRemove a stored provider login.");
+      break;
+    case "gui":
+      console.log("Usage: ocx gui\n\nOpen the opencodex dashboard.");
+      break;
+    case "update":
+      console.log("Usage: ocx update\n\nUpdate opencodex to the latest published version.");
+      break;
+    default:
+      printUsage();
+  }
+}
+
+if (command !== undefined && command !== "help" && hasHelpFlag(args.slice(1))) {
+  printSubcommandUsage(command);
+  process.exit(0);
+}
+
 async function syncModelsToCodex(port?: number) {
   const config = loadConfig();
   const p = port ?? config.port ?? 10100;
