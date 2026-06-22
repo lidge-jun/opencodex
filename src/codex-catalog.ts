@@ -341,18 +341,26 @@ type ProviderModelsApiItem = {
   };
 };
 
+function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
+  const modelContextWindow = prov.modelContextWindows?.[id];
+  if (typeof modelContextWindow === "number" && modelContextWindow > 0) return modelContextWindow;
+  return typeof prov.contextWindow === "number" && prov.contextWindow > 0 ? prov.contextWindow : undefined;
+}
+
 function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
   void name;
   const reasoningEfforts = configuredReasoningEfforts(prov, id);
+  const contextWindow = configuredContextWindow(prov, id);
   return {
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
   };
 }
 
 function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[]): CatalogModel[] {
   return models.map(model => ({
-    ...catalogHintsFromProviderConfig(name, prov, model.id),
     ...model,
+    ...catalogHintsFromProviderConfig(name, prov, model.id),
   }));
 }
 
@@ -414,8 +422,8 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       id: m.id,
       provider: name,
       owned_by: m.owned_by,
-      ...catalogHintsFromProviderConfig(name, prov, m.id),
       ...catalogHintsFromModelsApiItem(name, m),
+      ...catalogHintsFromProviderConfig(name, prov, m.id),
     }));
     const liveIds = new Set(live.map(m => m.id));
     // Merge explicit config additions (e.g. a model not in the provider's /models, like a new endpoint).

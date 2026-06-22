@@ -223,6 +223,10 @@ export interface OcxProviderConfig {
   apiKey?: string;
   defaultModel?: string;
   models?: string[];
+  /** Provider-wide Codex-visible context window cap, in tokens. */
+  contextWindow?: number;
+  /** Model-specific Codex-visible context window caps, in tokens. */
+  modelContextWindows?: Record<string, number>;
   headers?: Record<string, string>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.

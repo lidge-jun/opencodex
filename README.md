@@ -243,6 +243,26 @@ Local models work too. Point opencodex at any OpenAI-compatible server running o
 
 WebSocket transport is off by default. Set `"websockets": true` only if you want Codex to advertise and use the Responses WebSocket path instead of HTTP/SSE.
 
+Some providers report very large context windows from `/models`. To keep Codex from retaining more
+history than you want, cap the Codex-visible context window per provider or per model:
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "contextWindow": 262144,
+      "modelContextWindows": {
+        "z-ai/glm-5.2": 262144,
+        "deepseek/deepseek-v4-pro": 262144
+      }
+    }
+  }
+}
+```
+
 See the **[Configuration reference](https://lidge-jun.github.io/opencodex/reference/configuration/)** for every field.
 
 ## Documentation
