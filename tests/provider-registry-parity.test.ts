@@ -25,7 +25,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "azure-openai",
+  "openai-apikey", "opencode-go", "neuralwatt", "umans", "openrouter", "groq", "google", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -45,13 +45,13 @@ describe("provider registry parity", () => {
     expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M2.5");
     expect(KEY_LOGIN_PROVIDERS.umans).toMatchObject({
-      label: "Umans AI Coding Plan",
-      adapter: "anthropic",
-      baseUrl: "https://api.code.umans.ai",
+      label: "Umans Code",
+      adapter: "openai-chat",
+      baseUrl: "https://api.code.umans.ai/v1",
       defaultModel: "umans-coder",
-      escapeBuiltinToolNames: true,
     });
-    expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
+    expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
+    expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text", "image"]);
   });
 
   test("CLI init providers are derived from the registry", () => {
@@ -68,17 +68,19 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "anthropic", "kimi", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "anthropic", "kimi", "openai-apikey", "opencode-go", "umans", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
     ]);
 
     const presets = deriveProviderPresets();
     expect(presets.at(-1)?.id).toBe("custom");
     expect(presets.find(p => p.id === "kimi")?.baseUrl).toBe("https://api.kimi.com/coding/v1");
+    expect(presets.find(p => p.id === "umans")?.baseUrl).toBe("https://api.code.umans.ai/v1");
+    expect(presets.find(p => p.id === "umans")?.defaultModel).toBe("umans-coder");
     expect(presets.find(p => p.id === "anthropic")?.defaultModel).toBe("claude-sonnet-4-6");
     expect(presets.find(p => p.id === "umans")).toMatchObject({
-      adapter: "anthropic",
-      baseUrl: "https://api.code.umans.ai",
+      adapter: "openai-chat",
+      baseUrl: "https://api.code.umans.ai/v1",
       auth: "key",
       defaultModel: "umans-coder",
     });

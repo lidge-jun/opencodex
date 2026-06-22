@@ -344,8 +344,12 @@ type ProviderModelsApiItem = {
 function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
   void name;
   const reasoningEfforts = configuredReasoningEfforts(prov, id);
+  const contextWindow = prov.modelContextWindows?.[id];
+  const inputModalities = prov.modelInputModalities?.[id];
   return {
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(typeof contextWindow === "number" && contextWindow > 0 ? { contextWindow } : {}),
+    ...(inputModalities && inputModalities.length > 0 ? { inputModalities: [...inputModalities] } : {}),
   };
 }
 

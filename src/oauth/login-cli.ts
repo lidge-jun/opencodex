@@ -63,6 +63,8 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     ...(def.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(def.modelReasoningEfforts) } : {}),
     ...(def.reasoningEffortMap ? { reasoningEffortMap: { ...def.reasoningEffortMap } } : {}),
     ...(def.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(def.modelReasoningEffortMap) } : {}),
+    ...(def.modelContextWindows ? { modelContextWindows: { ...def.modelContextWindows } } : {}),
+    ...(def.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(def.modelInputModalities) } : {}),
     ...(def.noVisionModels ? { noVisionModels: [...def.noVisionModels] } : {}),
     ...(def.noReasoningModels ? { noReasoningModels: [...def.noReasoningModels] } : {}),
     ...(def.noTemperatureModels ? { noTemperatureModels: [...def.noTemperatureModels] } : {}),

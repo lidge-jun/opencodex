@@ -12,6 +12,8 @@ export interface DerivedKeyLoginProvider {
   modelReasoningEfforts?: Record<string, string[]>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
+  modelContextWindows?: Record<string, number>;
+  modelInputModalities?: Record<string, string[]>;
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
@@ -67,6 +69,8 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
     ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
     ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
+    ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
+    ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
     ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
     ...(entry.noReasoningModels ? { noReasoningModels: [...entry.noReasoningModels] } : {}),
     ...(entry.noTemperatureModels ? { noTemperatureModels: [...entry.noTemperatureModels] } : {}),
@@ -94,6 +98,8 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
+      ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
+      ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
       ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
       ...(entry.noReasoningModels ? { noReasoningModels: [...entry.noReasoningModels] } : {}),
       ...(entry.noTemperatureModels ? { noTemperatureModels: [...entry.noTemperatureModels] } : {}),

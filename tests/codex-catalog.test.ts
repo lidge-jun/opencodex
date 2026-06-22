@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
+import { providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -201,6 +203,32 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.max_context_window).toBe(262_144);
     expect(routed?.auto_compact_token_limit).toBe(235_929);
     expect(routed?.input_modalities).toEqual(["text", "image"]);
+  });
+
+  test("Umans native registry metadata advertises docs-matched context, vision, and reasoning levels", () => {
+    const entry = getProviderRegistryEntry("umans");
+    expect(entry).toBeDefined();
+    const provider = providerConfigSeed(entry!);
+    const entries = buildCatalogEntries(nativeTemplate(), [], provider.models!.map(id => ({
+      id,
+      provider: "umans",
+      reasoningEfforts: provider.modelReasoningEfforts?.[id],
+      contextWindow: provider.modelContextWindows?.[id],
+      inputModalities: provider.modelInputModalities?.[id],
+    })));
+
+    const glm52 = entries.find(e => e.slug === "umans/umans-glm-5.2");
+    expect(glm52?.context_window).toBe(405_504);
+    expect(glm52?.max_context_window).toBe(405_504);
+    expect(glm52?.input_modalities).toEqual(["text", "image"]);
+    expect((glm52?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual(["high", "xhigh"]);
+    expect(glm52?.default_reasoning_level).toBe("high");
+
+    const coder = entries.find(e => e.slug === "umans/umans-coder");
+    expect(coder?.context_window).toBe(262_144);
+    expect(coder?.input_modalities).toEqual(["text", "image"]);
+    expect(coder?.supported_reasoning_levels).toEqual([]);
+    expect(coder).not.toHaveProperty("default_reasoning_level");
   });
 
   test("unknown routed entries receive conservative strict catalog defaults", () => {

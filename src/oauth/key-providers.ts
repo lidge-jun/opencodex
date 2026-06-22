@@ -24,6 +24,8 @@ export interface KeyLoginProvider {
   modelReasoningEfforts?: Record<string, string[]>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
+  modelContextWindows?: Record<string, number>;
+  modelInputModalities?: Record<string, string[]>;
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
@@ -51,6 +53,8 @@ export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig)
   if (!prov.modelReasoningEfforts && e.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(e.modelReasoningEfforts);
   if (!prov.reasoningEffortMap && e.reasoningEffortMap) prov.reasoningEffortMap = { ...e.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && e.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(e.modelReasoningEffortMap);
+  if (!prov.modelContextWindows && e.modelContextWindows) prov.modelContextWindows = { ...e.modelContextWindows };
+  if (!prov.modelInputModalities && e.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(e.modelInputModalities);
   if (!prov.noVisionModels && e.noVisionModels) prov.noVisionModels = [...e.noVisionModels];
   if (!prov.noReasoningModels && e.noReasoningModels) prov.noReasoningModels = [...e.noReasoningModels];
   if (!prov.noTemperatureModels && e.noTemperatureModels) prov.noTemperatureModels = [...e.noTemperatureModels];

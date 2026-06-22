@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex-catalog";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
@@ -104,6 +106,18 @@ describe("provider-specific reasoning effort mapping", () => {
 
     expect(body.reasoning_effort).toBe("max");
     expect(body.messages[1].reasoning_content).toBe("prior reasoning");
+  });
+
+  test("Umans maps docs reasoning levels to Codex-safe controls", () => {
+    const entry = getProviderRegistryEntry("umans");
+    expect(entry).toBeDefined();
+    const provider = providerConfigSeed(entry!);
+
+    expect(buildBody(provider, "umans-glm-5.2", { reasoning: "xhigh" }).reasoning_effort).toBe("max");
+    expect(buildBody(provider, "umans-glm-5.2", { reasoning: "medium" }).reasoning_effort).toBe("high");
+    expect(buildBody(provider, "umans-glm-5.1", { reasoning: "high" }).reasoning_effort).toBe("medium");
+    expect(buildBody(provider, "umans-flash", { reasoning: "xhigh" }).reasoning_effort).toBe("high");
+    expect(buildBody(provider, "umans-coder", { reasoning: "high" })).not.toHaveProperty("reasoning_effort");
   });
 
   test("Kimi K2.7 Code does not receive unsupported OpenAI reasoning/sampling controls", () => {

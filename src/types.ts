@@ -250,6 +250,10 @@ export interface OcxProviderConfig {
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
+  /** Model-specific context windows used when a provider's `/models` endpoint is sparse. */
+  modelContextWindows?: Record<string, number>;
+  /** Model-specific input modalities used when a provider's `/models` endpoint is sparse. */
+  modelInputModalities?: Record<string, string[]>;
   /**
    * Model ids that do NOT support a reasoning/thinking parameter. The openai-chat adapter drops
    * reasoning_effort for these even when Codex selects a reasoning level (e.g. xAI grok-build-0.1).

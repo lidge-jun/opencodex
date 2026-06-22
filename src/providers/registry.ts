@@ -18,6 +18,8 @@ export interface ProviderRegistryEntry {
   modelReasoningEfforts?: Record<string, string[]>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
+  modelContextWindows?: Record<string, number>;
+  modelInputModalities?: Record<string, string[]>;
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
@@ -36,6 +38,7 @@ export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "adapter" | "baseUrl" | "authMode" | "defaultModel" | "models"
   | "reasoningEfforts" | "modelReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
+  | "modelContextWindows" | "modelInputModalities"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "escapeBuiltinToolNames"
 >;
@@ -60,26 +63,43 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
 ];
 const UMANS_MODELS = [
-  "umans-coder",
-  "umans-kimi-k2.7",
   "umans-kimi-k2.6",
-  "umans-flash",
-  "umans-glm-5.2",
+  "umans-kimi-k2.7",
   "umans-glm-5.1",
+  "umans-glm-5.2",
+  "umans-coder",
+  "umans-flash",
   "umans-qwen3.6-35b-a3b",
 ];
-const UMANS_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
-const UMANS_GLM_REASONING_EFFORTS = ["high", "xhigh"];
-const UMANS_GLM_REASONING_MAP: Record<string, string> = {
-  none: "high",
-  minimal: "high",
+const UMANS_VISION_MODELS = Object.fromEntries(UMANS_MODELS.map(id => [id, ["text", "image"]]));
+const UMANS_REASONING_HISTORY_MODELS = UMANS_MODELS;
+const UMANS_GLM_51_REASONING_MAP: Record<string, string> = {
+  none: "none",
+  minimal: "none",
+  low: "medium",
+  medium: "medium",
+  high: "medium",
+  xhigh: "medium",
+  max: "medium",
+};
+const UMANS_GLM_52_REASONING_MAP: Record<string, string> = {
+  none: "none",
+  minimal: "none",
   low: "high",
   medium: "high",
   high: "high",
   xhigh: "max",
   max: "max",
 };
-const UMANS_TEXT_ONLY_MODELS = ["umans-glm-5.2", "umans-glm-5.1"];
+const UMANS_QWEN_REASONING_MAP: Record<string, string> = {
+  none: "none",
+  minimal: "none",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+};
 
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
@@ -142,33 +162,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "openai-apikey", label: "OpenAI (API key)", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5" },
   {
-    id: "umans",
-    label: "Umans AI Coding Plan",
-    adapter: "anthropic",
-    baseUrl: "https://api.code.umans.ai",
-    authKind: "key",
-    featured: true,
-    dashboardUrl: "https://app.umans.ai/billing",
-    defaultModel: "umans-coder",
-    models: UMANS_MODELS,
-    note: "Coding plan via Anthropic Messages",
-    modelReasoningEfforts: {
-      "umans-coder": UMANS_REASONING_EFFORTS,
-      "umans-kimi-k2.7": UMANS_REASONING_EFFORTS,
-      "umans-kimi-k2.6": UMANS_REASONING_EFFORTS,
-      "umans-flash": ["low", "medium", "high"],
-      "umans-glm-5.2": UMANS_GLM_REASONING_EFFORTS,
-      "umans-glm-5.1": UMANS_GLM_REASONING_EFFORTS,
-      "umans-qwen3.6-35b-a3b": ["low", "medium", "high"],
-    },
-    modelReasoningEffortMap: {
-      "umans-glm-5.2": UMANS_GLM_REASONING_MAP,
-      "umans-glm-5.1": UMANS_GLM_REASONING_MAP,
-    },
-    noVisionModels: UMANS_TEXT_ONLY_MODELS,
-    escapeBuiltinToolNames: true,
-  },
-  {
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
@@ -221,6 +214,44 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: ["kimi-k2.7-code"],
     autoToolChoiceOnlyModels: ["kimi-k2.7-code"],
     preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
+  },
+  {
+    id: "umans",
+    label: "Umans Code",
+    adapter: "openai-chat",
+    baseUrl: "https://api.code.umans.ai/v1",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://app.umans.ai/offers/code",
+    defaultModel: "umans-coder",
+    note: "Kimi K2.7-Code, GLM 5.2, and Qwen Flash via Umans Code",
+    models: UMANS_MODELS,
+    modelContextWindows: {
+      "umans-kimi-k2.6": 262_144,
+      "umans-kimi-k2.7": 262_144,
+      "umans-glm-5.1": 202_752,
+      "umans-glm-5.2": 405_504,
+      "umans-coder": 262_144,
+      "umans-flash": 262_144,
+      "umans-qwen3.6-35b-a3b": 262_144,
+    },
+    modelInputModalities: UMANS_VISION_MODELS,
+    modelReasoningEfforts: {
+      "umans-kimi-k2.6": [],
+      "umans-kimi-k2.7": [],
+      "umans-glm-5.1": ["medium"],
+      "umans-glm-5.2": ["high", "xhigh"],
+      "umans-coder": [],
+      "umans-flash": ["low", "medium", "high"],
+      "umans-qwen3.6-35b-a3b": ["low", "medium", "high"],
+    },
+    modelReasoningEffortMap: {
+      "umans-glm-5.1": UMANS_GLM_51_REASONING_MAP,
+      "umans-glm-5.2": UMANS_GLM_52_REASONING_MAP,
+      "umans-flash": UMANS_QWEN_REASONING_MAP,
+      "umans-qwen3.6-35b-a3b": UMANS_QWEN_REASONING_MAP,
+    },
+    preserveReasoningContentModels: UMANS_REASONING_HISTORY_MODELS,
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter" },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
