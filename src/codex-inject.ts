@@ -71,6 +71,21 @@ function stripRootContextWindowOverrides(content: string): string {
     .join("\n");
 }
 
+function stripRootRoutedModel(content: string): string {
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
+  return lines
+    .filter((line, i) => {
+      const isRoot = firstTable === -1 || i < firstTable;
+      if (!isRoot) return true;
+      const m = line.match(/^\s*model\s*=\s*("(?:\\.|[^"])*"|'[^']*')\s*$/);
+      if (!m) return true;
+      const model = parseTomlString(m[1]);
+      return !model?.includes("/");
+    })
+    .join("\n");
+}
+
 /**
  * Insert `model_provider = "opencodex"` at the document ROOT — immediately before the first table
  * header (TOML root keys must precede all tables). If there are no tables, append it to the root body.
@@ -285,6 +300,7 @@ export function stripOpencodexConfig(content: string): string {
   // must match the detection regex above, or a detected line could survive un-removed.
   out = out.split("\n").filter(l => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l)).join("\n");
   out = stripRootContextWindowOverrides(out);
+  out = stripRootRoutedModel(out);
   out = stripOpencodexCatalogPath(out);
   return out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
@@ -301,7 +317,7 @@ export function removeCodexConfig(): { success: boolean; message: string } {
   const had = hasOpencodexRouting(content);
   if (had) {
     atomicWriteFile(CODEX_CONFIG_PATH, stripOpencodexConfig(content));
-  } else if (stripRootContextWindowOverrides(content) !== content) {
+  } else if (stripOpencodexConfig(content) !== content) {
     atomicWriteFile(CODEX_CONFIG_PATH, stripOpencodexConfig(content));
   }
   if (existsSync(CODEX_PROFILE_PATH)) unlinkSync(CODEX_PROFILE_PATH);
@@ -325,8 +341,8 @@ export function restoreNativeCodex(): { success: boolean; message: string } {
     : cfg.message;
   const historyMsg = history.rows > 0
     ? ` Resume history restored from opencodex backup (${history.rows} thread(s)).`
-    : history.legacyRows
-      ? ` ${history.legacyRows} opencodex interactive thread(s) have no restore backup and were left unchanged; if these came from the old syncResumeHistory remap, run: ocx recover-history --legacy-openai`
+    : history.ejectedRows
+      ? ` ${history.ejectedRows} opencodex history thread(s) were ejected to openai so native Codex can resume them.`
       : "";
   return { success: cfg.success, message: `${msg}${historyMsg}` };
 }

@@ -17,16 +17,13 @@ opencodex는 `~/.opencodex/config.json`으로 설정됩니다. 이 파일은 `oc
 | `subagentModels?` | `string[]` | — | Codex의 서브에이전트 선택기에서 가장 먼저 노출되는 최대 5개의 `provider/model` id. |
 | `disabledModels?` | `string[]` | — | Codex에서 숨겨지는 라우팅된 `provider/model` id (카탈로그와 `/v1/models`에서 제외됨). |
 | `websockets?` | `boolean` | `false` | Codex가 Responses WebSocket 경로를 사용하도록 `supports_websockets`를 광고합니다. 생략하거나 `false`로 두면 HTTP/SSE를 유지합니다. |
-| `syncResumeHistory?` | `boolean` | `false` | Codex App 히스토리 호환 모드. 켜면 opencodex가 원래 Codex thread metadata를 백업하고, 기존 OpenAI interactive row를 `opencodex`로 remap하며, opencodex가 만든 `exec` row를 App에 보이는 source로 임시 승격합니다. `ocx stop` / `ocx restore`는 백업된 row만 원래 값으로 복원합니다. |
+| `syncResumeHistory?` | `boolean` | `false` | Codex App 히스토리 호환 모드. 켜면 opencodex가 원래 Codex thread metadata를 백업하고, 기존 OpenAI interactive row를 `opencodex`로 remap하며, opencodex가 만든 `exec` row를 App에 보이는 source로 임시 승격합니다. `ocx stop` / `ocx restore`는 백업된 OpenAI row를 복원하고, 남은 opencodex user thread는 OpenAI로 eject해서 `config.toml`에서 프록시 provider가 제거된 뒤에도 native Codex가 resume할 수 있게 합니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 프로바이더별 `/models` 캐시의 유효 기간 (5분). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | 웹 검색 사이드카 옵션 (아래 참조). |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | 비전 사이드카 옵션 (아래 참조). |
 
-백업 지원 이전의 개발 빌드에서 이미 `syncResumeHistory`를 실행했다면, `ocx stop`이 백업 없는
-`opencodex` interactive row를 보고할 수 있습니다. opencodex는 이 row를 자동으로 바꾸지 않습니다.
-이전 mutation 이후에는 old OpenAI row와 진짜 opencodex-owned row를 안전하게 구분할 수 없기
-때문입니다. 해당 row가 예전 remap에서 온 것이 확실하면 `ocx recover-history --legacy-openai`로
-명시 복구하세요.
+백업 지원 이전의 개발 빌드에서 이미 `syncResumeHistory`를 실행했다면,
+`ocx recover-history --legacy-openai`로 같은 native-provider 복구를 명시 실행할 수도 있습니다.
 
 ## 프로바이더 (`OcxProviderConfig`)
 

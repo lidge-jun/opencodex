@@ -93,3 +93,36 @@ The fix must not silently rewrite all `opencodex` `cli`/`vscode` rows to `openai
 - normal `ocx stop` detects and reports ambiguous unbacked rows;
 - it leaves them unchanged by default;
 - `ocx recover-history --legacy-openai` is the explicit manual recovery path for users who know those rows came from the old remap.
+
+## 2026-06-22 correction: native restore cannot leave opencodex providers behind
+
+Live local testing showed that the conservative "leave unbacked opencodex rows unchanged" approach
+breaks Codex App after `ocx stop`:
+
+```text
+Codex can't load config.toml, so this thread can't resume.
+Fix config.toml: Model provider `opencodex` not found.
+```
+
+The root cause is straightforward: `ocx stop` removes `[model_providers.opencodex]` from
+`~/.codex/config.toml`. Any remaining `threads.model_provider = 'opencodex'` row can therefore point
+Codex App at a provider id that no longer exists. This applies not only to legacy `cli`/`vscode` rows,
+but also to opencodex-created `exec` rows and subagent rows if the user resumes them directly.
+
+Revised opencodex invariant:
+
+- while opencodex is active, `syncResumeHistory: true` may remap/promote history so the App sidebar is visible;
+- after native restore (`ocx stop`, `ocx restore`, uninstall), no user thread should be left with
+  `model_provider = 'opencodex'` unless the Codex config still contains that provider;
+- backed-up OpenAI rows restore to OpenAI;
+- opencodex-owned user rows are ejected to `openai`, and `exec` source is promoted to `cli`, so native
+  Codex can list/resume them after the proxy provider has been removed;
+- root `model = "provider/model"` values are also stripped on native restore because provider-prefixed
+  routed model ids are invalid without the opencodex provider/catalog.
+
+Local repair evidence after the correction:
+
+- `ocx recover-history --legacy-openai` recovered 218 user thread rows to `openai`;
+- `ocx stop` left zero user rows with `model_provider = 'opencodex'`;
+- `~/.codex/config.toml` no longer contains `[model_providers.opencodex]`, root
+  `model_provider = "opencodex"`, or root `model = "provider/model"`.

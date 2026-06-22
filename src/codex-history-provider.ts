@@ -13,7 +13,7 @@ type CodexHistoryProvider = "openai" | "opencodex";
 export interface CodexHistorySyncResult {
   rows: number;
   files: number;
-  legacyRows?: number;
+  ejectedRows?: number;
 }
 
 interface ThreadRow {
@@ -35,6 +35,12 @@ interface BackupEntry {
 interface BackupManifest {
   version: 1;
   entries: Record<string, BackupEntry>;
+}
+
+interface NativeRestoreTarget {
+  modelProvider: string;
+  source: string;
+  hasUserEvent: number;
 }
 
 function readBackup(path: string): BackupManifest {
@@ -103,6 +109,57 @@ function updateSessionMeta(path: string, patch: { provider?: string; source?: st
   writeFileSync(path, `${JSON.stringify(record)}${rest}`, "utf8");
   utimesSync(path, stat.atime, stat.mtime);
   return true;
+}
+
+function toNativeRestoreTarget(entry: BackupEntry): NativeRestoreTarget {
+  if (entry.modelProvider !== "opencodex") {
+    return {
+      modelProvider: entry.modelProvider,
+      source: entry.source,
+      hasUserEvent: entry.hasUserEvent,
+    };
+  }
+  return {
+    modelProvider: "openai",
+    source: entry.source === "exec" ? "cli" : entry.source,
+    hasUserEvent: 1,
+  };
+}
+
+function ejectRemainingOpencodexHistory(db: Database): { rows: number; files: number } {
+  const rows = db
+    .query<ThreadRow, []>(`
+      SELECT id, rollout_path, model_provider, source, has_user_event
+      FROM threads
+      WHERE model_provider = 'opencodex'
+        AND trim(coalesce(first_user_message, '')) != ''
+    `)
+    .all();
+
+  let files = 0;
+  for (const row of rows) {
+    try {
+      if (updateSessionMeta(row.rollout_path, {
+        provider: "openai",
+        source: row.source === "exec" ? "cli" : undefined,
+      })) files++;
+    } catch {
+      /* native restore should continue even if an old rollout is missing */
+    }
+  }
+
+  const restore = db.transaction(() => {
+    const update = db.query(`
+      UPDATE threads
+      SET model_provider = 'openai',
+          source = CASE WHEN source = 'exec' THEN 'cli' ELSE source END,
+          has_user_event = 1
+      WHERE id = ?
+    `);
+    for (const row of rows) update.run(row.id);
+  });
+  restore();
+  return { rows: rows.length, files };
 }
 
 export function syncCodexHistoryProvider(provider: CodexHistoryProvider, stateDbPath = STATE_DB_PATH, backupPath = HISTORY_BACKUP_PATH): CodexHistorySyncResult {
@@ -180,18 +237,6 @@ export function syncCodexHistoryProvider(provider: CodexHistoryProvider, stateDb
   }
 }
 
-function countAmbiguousOpencodexInteractiveRows(db: Database): number {
-  const placeholders = RESUMABLE_SOURCES.map(() => "?").join(",");
-  const row = db.query<{ n: number }, string[]>(`
-    SELECT COUNT(*) AS n
-    FROM threads
-    WHERE model_provider = 'opencodex'
-      AND source IN (${placeholders})
-      AND trim(coalesce(first_user_message, '')) != ''
-  `).get(...RESUMABLE_SOURCES);
-  return Number(row?.n ?? 0);
-}
-
 function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): CodexHistorySyncResult {
   const manifest = readBackup(backupPath);
   const entries = Object.values(manifest.entries);
@@ -199,14 +244,15 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   const db = new Database(stateDbPath);
   try {
     if (entries.length === 0) {
-      const legacyRows = countAmbiguousOpencodexInteractiveRows(db);
-      return legacyRows > 0 ? { rows: 0, files: 0, legacyRows } : { rows: 0, files: 0 };
+      const ejected = ejectRemainingOpencodexHistory(db);
+      return ejected.rows > 0 ? { rows: 0, files: ejected.files, ejectedRows: ejected.rows } : { rows: 0, files: 0 };
     }
 
     let files = 0;
     for (const entry of entries) {
+      const target = toNativeRestoreTarget(entry);
       try {
-        if (updateSessionMeta(entry.rolloutPath, { provider: entry.modelProvider, source: entry.source })) files++;
+        if (updateSessionMeta(entry.rolloutPath, { provider: target.modelProvider, source: target.source })) files++;
       } catch {
         /* best-effort; keep DB restore moving even if one rollout disappeared */
       }
@@ -221,12 +267,16 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
         WHERE id = ?
       `);
       for (const entry of entries) {
-        update.run(entry.modelProvider, entry.source, entry.hasUserEvent, entry.id);
+        const target = toNativeRestoreTarget(entry);
+        update.run(target.modelProvider, target.source, target.hasUserEvent, entry.id);
       }
     });
     restore();
     writeBackup(backupPath, { version: 1, entries: {} });
-    return { rows: entries.length, files };
+    const ejected = ejectRemainingOpencodexHistory(db);
+    return ejected.rows > 0
+      ? { rows: entries.length, files: files + ejected.files, ejectedRows: ejected.rows }
+      : { rows: entries.length, files };
   } finally {
     db.close();
   }
@@ -236,34 +286,7 @@ export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): { rows:
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
   const db = new Database(stateDbPath);
   try {
-    const placeholders = RESUMABLE_SOURCES.map(() => "?").join(",");
-    const rows = db.query<ThreadRow, string[]>(`
-      SELECT id, rollout_path, model_provider, source, has_user_event
-      FROM threads
-      WHERE model_provider = 'opencodex'
-        AND source IN (${placeholders})
-        AND trim(coalesce(first_user_message, '')) != ''
-    `).all(...RESUMABLE_SOURCES);
-
-    let files = 0;
-    for (const row of rows) {
-      try {
-        if (updateSessionMeta(row.rollout_path, { provider: "openai" })) files++;
-      } catch {
-        /* explicit recovery should continue even if an old rollout is missing */
-      }
-    }
-
-    const restore = db.transaction(() => {
-      const update = db.query(`
-        UPDATE threads
-        SET model_provider = 'openai'
-        WHERE id = ?
-      `);
-      for (const row of rows) update.run(row.id);
-    });
-    restore();
-    return { rows: rows.length, files };
+    return ejectRemainingOpencodexHistory(db);
   } finally {
     db.close();
   }

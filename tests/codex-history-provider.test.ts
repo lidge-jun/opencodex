@@ -122,44 +122,54 @@ describe("Codex history provider sync", () => {
     expect(restore).toEqual({ rows: 2, files: 2 });
     db = new Database(dbPath);
     expect(db.query("SELECT model_provider, source, has_user_event FROM threads WHERE id = 'thread-2'").get()).toEqual({
-      model_provider: "opencodex",
-      source: "exec",
-      has_user_event: 0,
+      model_provider: "openai",
+      source: "cli",
+      has_user_event: 1,
     });
     db.close();
     firstLine = readFileSync(execRollout, "utf8").split("\n")[0];
-    expect(JSON.parse(firstLine).payload.source).toBe("exec");
+    expect(JSON.parse(firstLine).payload.model_provider).toBe("openai");
+    expect(JSON.parse(firstLine).payload.source).toBe("cli");
     expect(existsSync(backupPath)).toBe(false);
   });
 
-  test("leaves ambiguous legacy opencodex interactive rows untouched when no backup exists", () => {
+  test("ejects no-backup opencodex interactive rows to openai during native restore", () => {
     const { dbPath, backupPath } = makeFixture({ includeLegacy: true });
 
     const result = syncCodexHistoryProvider("openai", dbPath, backupPath);
 
-    expect(result).toEqual({ rows: 0, files: 0, legacyRows: 1 });
-    const db = new Database(dbPath);
-    expect(db.query("SELECT model_provider, source FROM threads WHERE id = 'thread-3'").get()).toEqual({
-      model_provider: "opencodex",
-      source: "cli",
-    });
-    db.close();
-    expect(existsSync(backupPath)).toBe(false);
-  });
-
-  test("explicitly recovers legacy opencodex interactive rows to openai", () => {
-    const { dbPath, legacyRollout } = makeFixture({ includeLegacy: true });
-
-    const result = restoreLegacyOpenaiHistory(dbPath);
-
-    expect(result).toEqual({ rows: 1, files: 1 });
+    expect(result).toEqual({ rows: 0, files: 1, ejectedRows: 1 });
     const db = new Database(dbPath);
     expect(db.query("SELECT model_provider, source FROM threads WHERE id = 'thread-3'").get()).toEqual({
       model_provider: "openai",
       source: "cli",
     });
     db.close();
-    const firstLine = readFileSync(legacyRollout, "utf8").split("\n")[0];
+    expect(existsSync(backupPath)).toBe(false);
+  });
+
+  test("explicitly recovers legacy opencodex user rows to openai", () => {
+    const { dbPath, execRollout, legacyRollout } = makeFixture({ includeExec: true, includeLegacy: true });
+
+    const result = restoreLegacyOpenaiHistory(dbPath);
+
+    expect(result).toEqual({ rows: 2, files: 2 });
+    const db = new Database(dbPath);
+    expect(db.query("SELECT model_provider, source FROM threads WHERE id = 'thread-3'").get()).toEqual({
+      model_provider: "openai",
+      source: "cli",
+    });
+    expect(db.query("SELECT model_provider, source, has_user_event FROM threads WHERE id = 'thread-2'").get()).toEqual({
+      model_provider: "openai",
+      source: "cli",
+      has_user_event: 1,
+    });
+    db.close();
+    let firstLine = readFileSync(execRollout, "utf8").split("\n")[0];
+    expect(JSON.parse(firstLine).payload.model_provider).toBe("openai");
+    expect(JSON.parse(firstLine).payload.source).toBe("cli");
+
+    firstLine = readFileSync(legacyRollout, "utf8").split("\n")[0];
     expect(JSON.parse(firstLine).payload.model_provider).toBe("openai");
   });
 });

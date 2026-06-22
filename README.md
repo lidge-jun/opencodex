@@ -248,14 +248,12 @@ local thread index just because the proxy started, but Codex App may hide old Op
 threads and opencodex-created `exec` threads while `opencodex` is the active provider. If you want
 those chats to appear while the proxy is active, enable the reversible compatibility remap with
 `"syncResumeHistory": true`. opencodex records the original provider/source metadata in
-`~/.opencodex/codex-history-backup.json` and `ocx stop` / `ocx restore` restore only those backed-up
-rows.
+`~/.opencodex/codex-history-backup.json`. `ocx stop` / `ocx restore` restores backed-up OpenAI rows
+to OpenAI, and ejects any remaining opencodex user threads to OpenAI as well so native Codex does not
+try to resume a thread whose provider no longer exists in `config.toml`.
 
-If you tested an older development build where `syncResumeHistory` already remapped OpenAI history
-before backup support existed, `ocx stop` may report unbacked `opencodex` interactive rows and leave
-them unchanged. That is intentional: after the old mutation, opencodex cannot safely distinguish old
-OpenAI rows from genuinely opencodex-owned interactive rows. If you know those rows came from the old
-remap, recover them explicitly:
+If you tested an older development build where `syncResumeHistory` already remapped history before
+backup support existed, you can also run the explicit recovery command:
 
 ```bash
 ocx recover-history --legacy-openai

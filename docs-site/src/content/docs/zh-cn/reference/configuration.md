@@ -15,15 +15,13 @@ opencodex 通过 `~/.opencodex/config.json` 进行配置。它由 `ocx init` 和
 | `subagentModels?` | `string[]` | — | 最多 5 个 `provider/model` id,会在 Codex 的 subagent 选择器中优先展示。 |
 | `disabledModels?` | `string[]` | — | 从 Codex 中隐藏的已路由 `provider/model` id(从目录和 `/v1/models` 中排除)。 |
 | `websockets?` | `boolean` | `false` | 广告 `supports_websockets`，让 Codex 使用 Responses WebSocket 路径。省略或设为 `false` 会保持 HTTP/SSE。 |
-| `syncResumeHistory?` | `boolean` | `false` | Codex App 历史兼容模式。启用后,opencodex 会备份原始 Codex thread metadata,把旧的 OpenAI interactive row remap 到 `opencodex`,并临时把 opencodex 创建的 `exec` row 提升为 App 可见的 source。`ocx stop` / `ocx restore` 只恢复备份过的 row。 |
+| `syncResumeHistory?` | `boolean` | `false` | Codex App 历史兼容模式。启用后,opencodex 会备份原始 Codex thread metadata,把旧的 OpenAI interactive row remap 到 `opencodex`,并临时把 opencodex 创建的 `exec` row 提升为 App 可见的 source。`ocx stop` / `ocx restore` 会恢复已备份的 OpenAI row,并把剩余的 opencodex user thread eject 到 OpenAI,这样在 `config.toml` 中移除 proxy provider 后 native Codex 仍可 resume。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存的有效期(5 分钟)。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 开启 | 网络搜索 sidecar 选项(见下文)。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 开启 | 视觉 sidecar 选项(见下文)。 |
 
-如果旧的开发构建在备份支持出现之前已经运行过 `syncResumeHistory`,`ocx stop` 可能会报告没有备份的
-`opencodex` interactive row。opencodex 会保持这些 row 不变,因为旧 mutation 之后无法安全地区分
-旧 OpenAI row 和真正属于 opencodex 的 row。如果你确认这些 row 来自旧 remap,请显式运行
-`ocx recover-history --legacy-openai` 进行恢复。
+如果旧的开发构建在备份支持出现之前已经运行过 `syncResumeHistory`,也可以显式运行
+`ocx recover-history --legacy-openai` 执行同样的 native-provider 恢复。
 
 ## Providers(`OcxProviderConfig`)
 
