@@ -15,6 +15,9 @@ export interface KeyLoginProvider {
   dashboardUrl: string;
   models?: string[];
   defaultModel?: string;
+  contextWindow?: number;
+  modelContextWindows?: Record<string, number>;
+  modelInputModalities?: Record<string, string[]>;
   /**
    * Model ids that do NOT accept image input (the vision sidecar describes images for them) / do NOT
    * accept a reasoning param. Copied into the created provider config by `enrichProviderFromCatalog`,
@@ -31,6 +34,7 @@ export interface KeyLoginProvider {
   noPenaltyModels?: string[];
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  escapeBuiltinToolNames?: boolean;
 }
 
 export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = deriveKeyLoginMap();
@@ -46,6 +50,9 @@ export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig)
   if (!e) return;
   if (!prov.models && e.models) prov.models = [...e.models];
   if (!prov.defaultModel && e.defaultModel) prov.defaultModel = e.defaultModel;
+  if (prov.contextWindow === undefined && e.contextWindow !== undefined) prov.contextWindow = e.contextWindow;
+  if (!prov.modelContextWindows && e.modelContextWindows) prov.modelContextWindows = { ...e.modelContextWindows };
+  if (!prov.modelInputModalities && e.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(e.modelInputModalities);
   if (!prov.reasoningEfforts && e.reasoningEfforts) prov.reasoningEfforts = [...e.reasoningEfforts];
   if (!prov.modelReasoningEfforts && e.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(e.modelReasoningEfforts);
   if (!prov.reasoningEffortMap && e.reasoningEffortMap) prov.reasoningEffortMap = { ...e.reasoningEffortMap };
@@ -57,6 +64,7 @@ export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig)
   if (!prov.noPenaltyModels && e.noPenaltyModels) prov.noPenaltyModels = [...e.noPenaltyModels];
   if (!prov.autoToolChoiceOnlyModels && e.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...e.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && e.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...e.preserveReasoningContentModels];
+  if (prov.escapeBuiltinToolNames === undefined && e.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = e.escapeBuiltinToolNames;
 }
 
 
@@ -76,10 +84,31 @@ export function listKeyLoginProviders(): Array<{ id: string } & KeyLoginProvider
   return Object.entries(KEY_LOGIN_PROVIDERS).map(([id, p]) => ({ id, ...p }));
 }
 
-/** Best-effort key validation: GET {baseUrl}/models with the key. Returns true/false/unknown. */
-export async function validateApiKey(baseUrl: string, key: string): Promise<boolean | "unknown"> {
+/** Best-effort key validation. Returns true/false/unknown; never persists the key itself. */
+export async function validateApiKey(provider: KeyLoginProvider, key: string): Promise<boolean | "unknown"> {
   try {
-    const res = await fetch(`${baseUrl}/models`, {
+    if (provider.adapter === "anthropic") {
+      const base = provider.baseUrl.replace(/\/v1\/?$/, "");
+      const res = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "anthropic-version": "2023-06-01",
+          "x-api-key": key,
+        },
+        body: JSON.stringify({
+          model: provider.defaultModel ?? "claude-sonnet-4-6",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) return true;
+      if (res.status === 401 || res.status === 403) return false;
+      return "unknown";
+    }
+
+    const res = await fetch(`${provider.baseUrl}/models`, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(8000),
     });

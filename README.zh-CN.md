@@ -106,6 +106,7 @@ codex -m "deepseek/deepseek-r1"        "分析这个性能瓶颈"
 |---|---|---|
 | OpenAI（ChatGPT 登录） | `openai-responses` | 转发（无需 key） |
 | OpenAI（API key） | `openai-responses` | key |
+| Umans AI Coding Plan | `anthropic` | key |
 | Anthropic Claude | `anthropic` | oauth / key |
 | xAI Grok | `openai-chat` | oauth / key |
 | Kimi（Moonshot） | `openai-chat` | oauth / key |

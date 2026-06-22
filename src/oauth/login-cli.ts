@@ -2,7 +2,8 @@ import * as readline from "node:readline";
 import { openUrl } from "../open-url";
 import { loadConfig, readPid, saveConfig } from "../config";
 import { OAUTH_PROVIDERS, runLogin } from "./index";
-import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey } from "./key-providers";
+import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
+import type { OcxProviderConfig } from "../types";
 
 /** Push the new provider into a running proxy's live config so it routes without a restart. */
 async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
@@ -51,6 +52,31 @@ async function handleOAuthLogin(name: string): Promise<void> {
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
 }
 
+export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string): OcxProviderConfig {
+  return {
+    adapter: def.adapter,
+    baseUrl: def.baseUrl,
+    apiKey: key,
+    ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
+    ...(def.models ? { models: [...def.models] } : {}),
+    ...(def.contextWindow !== undefined ? { contextWindow: def.contextWindow } : {}),
+    ...(def.modelContextWindows ? { modelContextWindows: { ...def.modelContextWindows } } : {}),
+    ...(def.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(def.modelInputModalities) } : {}),
+    ...(def.reasoningEfforts ? { reasoningEfforts: [...def.reasoningEfforts] } : {}),
+    ...(def.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(def.modelReasoningEfforts) } : {}),
+    ...(def.reasoningEffortMap ? { reasoningEffortMap: { ...def.reasoningEffortMap } } : {}),
+    ...(def.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(def.modelReasoningEffortMap) } : {}),
+    ...(def.noVisionModels ? { noVisionModels: [...def.noVisionModels] } : {}),
+    ...(def.noReasoningModels ? { noReasoningModels: [...def.noReasoningModels] } : {}),
+    ...(def.noTemperatureModels ? { noTemperatureModels: [...def.noTemperatureModels] } : {}),
+    ...(def.noTopPModels ? { noTopPModels: [...def.noTopPModels] } : {}),
+    ...(def.noPenaltyModels ? { noPenaltyModels: [...def.noPenaltyModels] } : {}),
+    ...(def.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...def.autoToolChoiceOnlyModels] } : {}),
+    ...(def.preserveReasoningContentModels ? { preserveReasoningContentModels: [...def.preserveReasoningContentModels] } : {}),
+    ...(def.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: def.escapeBuiltinToolNames } : {}),
+  };
+}
+
 async function handleKeyLogin(name: string): Promise<void> {
   const def = KEY_LOGIN_PROVIDERS[name];
   console.log(`\n🔑 ${def.label} — opening ${def.dashboardUrl} so you can create/copy an API key...`);
@@ -63,22 +89,24 @@ async function handleKeyLogin(name: string): Promise<void> {
     process.exit(1);
   }
   process.stdout.write("   validating… ");
-  const valid = await validateApiKey(def.baseUrl, key);
+  const valid = await validateApiKey(def, key);
   console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
   if (valid === false) {
     console.error("Provider rejected the key. Not saved.");
     process.exit(1);
   }
-  const provider = {
-    adapter: def.adapter,
-    baseUrl: def.baseUrl,
-    apiKey: key,
-    ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
-    ...(def.models ? { models: def.models } : {}),
-  };
+  const provider = providerConfigFromKeyLoginProvider(def, key);
   const config = loadConfig();
   config.providers[name] = provider;
   saveConfig(config);
   await notifyRunningProxy(name, provider);
   console.log(`✅ ${def.label} added. Try: ocx sync`);
+}
+
+function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, [...value]]));
+}
+
+function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
 }

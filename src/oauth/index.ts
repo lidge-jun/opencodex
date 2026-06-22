@@ -129,6 +129,9 @@ function cloneProviderField(value: unknown): unknown {
 
 const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "models",
+  "contextWindow",
+  "modelContextWindows",
+  "modelInputModalities",
   "noReasoningModels",
   "noVisionModels",
   "reasoningEfforts",

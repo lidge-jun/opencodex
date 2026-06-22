@@ -60,6 +60,37 @@ typecheck and GUI build, and `scripts/release.ts` handles version bump, commit/p
 Cross-platform CI, and dispatching the GitHub Release workflow. Docs publishing is separate from npm
 release publishing.
 
+## Release metadata invariants
+
+Every npm release version must map cleanly across four surfaces:
+
+| Surface | Required state |
+| --- | --- |
+| `package.json` | `version` equals the release workflow `version` input. |
+| npm registry | `@bitkyc08/opencodex@<version>` does not exist before publish, then exists after publish with the requested dist-tag. |
+| Git tag | `v<version>` does not exist before publish, then points at the exact release commit. |
+| GitHub Release | `v<version>` does not exist before publish, then is created from the exact release commit. |
+
+The release must fail before `npm publish` if npm, the Git tag, or the GitHub Release already has the
+requested version. This prevents partial releases where npm is published but GitHub Release creation
+fails afterward.
+
+Do not force-move public version tags by default. If release metadata is already inconsistent, treat
+the version as consumed and publish the next unused patch version instead. Only rewrite a public tag
+after an explicit human decision that the public history rewrite is acceptable.
+
+Manual preflight checks when debugging a release:
+
+```bash
+npm view @bitkyc08/opencodex@<version> version
+git ls-remote origin refs/tags/v<version>
+gh release view v<version>
+```
+
+If any of these commands reports an existing artifact for the requested version, stop before
+publishing. For a non-destructive recovery, choose the next unused patch version and release that
+version through `scripts/release.ts`.
+
 ## Cross-platform CI
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. It runs on

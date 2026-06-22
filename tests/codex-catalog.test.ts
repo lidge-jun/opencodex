@@ -1,7 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, gatherRoutedModels, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
 import { clearModelCache, setCached } from "../src/model-cache";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearModelCache();
+});
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -334,6 +341,119 @@ describe("Codex catalog routed normalization", () => {
     expect(resolveJawcodeProvider("nanogpt")).toBeUndefined();
     expect(getJawcodeModelMetadata("moonshot", "kimi-k2.5")?.contextWindow).toBe(262_144);
     expect(getJawcodeModelMetadata("nanogpt", "some-model")).toBeUndefined();
+  });
+
+  test("provider config model metadata reaches Codex catalog for static models", async () => {
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-static",
+      providers: {
+        "meta-static": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-static.test/v1",
+          apiKey: "sk-test",
+          models: ["static-model"],
+          modelContextWindows: { "static-model": 321_000 },
+          modelInputModalities: { "static-model": ["text", "image"] },
+        },
+      },
+    });
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const routed = entries.find(e => e.slug === "meta-static/static-model");
+
+    expect(routed?.context_window).toBe(321_000);
+    expect(routed?.max_context_window).toBe(321_000);
+    expect(routed?.auto_compact_token_limit).toBe(288_900);
+    expect(routed?.input_modalities).toEqual(["text", "image"]);
+  });
+
+  test("provider context-window caps lower live metadata without raising smaller live windows", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        {
+          id: "wide-model",
+          owned_by: "meta-live",
+          metadata: {
+            limits: { max_context_length: 500_000 },
+            capabilities: { vision: true, reasoning_effort: true },
+          },
+        },
+        {
+          id: "small-model",
+          owned_by: "meta-live",
+          metadata: {
+            limits: { max_context_length: 64_000 },
+            capabilities: { vision: true },
+          },
+        },
+      ],
+    }))) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-live",
+      providers: {
+        "meta-live": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-live.test/v1",
+          apiKey: "sk-test",
+          contextWindow: 128_000,
+          modelContextWindows: { "wide-model": 100_000 },
+          modelInputModalities: { "wide-model": ["text"] },
+        },
+      },
+    });
+
+    expect(models.find(m => m.id === "wide-model")).toMatchObject({
+      contextWindow: 100_000,
+      inputModalities: ["text"],
+    });
+    expect(models.find(m => m.id === "small-model")?.contextWindow).toBe(64_000);
+  });
+
+  test("provider context-window caps apply to stale cached metadata", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{
+        id: "cached-model",
+        metadata: {
+          limits: { max_context_length: 500_000 },
+          capabilities: { vision: true },
+        },
+      }],
+    }))) as typeof fetch;
+
+    await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-cache",
+      providers: {
+        "meta-cache": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-cache.test/v1",
+          apiKey: "sk-test",
+          modelContextWindows: { "cached-model": 120_000 },
+        },
+      },
+    });
+
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-cache",
+      modelCacheTtlMs: 0,
+      providers: {
+        "meta-cache": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-cache.test/v1",
+          apiKey: "sk-test",
+          modelContextWindows: { "cached-model": 80_000 },
+        },
+      },
+    });
+
+    expect(models.find(m => m.id === "cached-model")?.contextWindow).toBe(80_000);
   });
 });
 

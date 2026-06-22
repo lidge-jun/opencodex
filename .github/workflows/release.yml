@@ -108,6 +108,51 @@ jobs:
       # the GUI into gui/dist), so even a dry-run fully verifies the build.
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
       # only AFTER the package's first version exists (do the first publish locally, see the runbook).
+      - name: Preflight release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          pkg_name="$(node -p "require('./package.json').name")"
+          release_tag="v${{ inputs.version }}"
+          dry_run="${{ inputs.dry-run }}"
+
+          git fetch --force --tags origin
+
+          existing_tag_sha="$(git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" || true)"
+          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::${release_tag} already points at ${existing_tag_sha}, not ${GITHUB_SHA}"
+            exit 1
+          fi
+
+          if [ -n "$existing_tag_sha" ]; then
+            if [ "$dry_run" = "true" ]; then
+              echo "::notice::${release_tag} already exists at this commit; dry-run only"
+            else
+              echo "::error::${release_tag} already exists. Refusing to publish a version with pre-existing Git metadata."
+              exit 1
+            fi
+          fi
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            if [ "$dry_run" = "true" ]; then
+              echo "::notice::GitHub Release ${release_tag} already exists; dry-run only"
+            else
+              echo "::error::GitHub Release ${release_tag} already exists. Choose the next unused patch version."
+              exit 1
+            fi
+          fi
+
+          if npm view "${pkg_name}@${{ inputs.version }}" version >/dev/null 2>&1; then
+            if [ "$dry_run" = "true" ]; then
+              echo "::notice::${pkg_name}@${{ inputs.version }} already exists on npm; dry-run only"
+            else
+              echo "::error::${pkg_name}@${{ inputs.version }} already exists on npm. Choose the next unused patch version."
+              exit 1
+            fi
+          fi
+
       - name: Publish (or dry-run)
         run: |
           if [ "${{ inputs.dry-run }}" = "true" ]; then

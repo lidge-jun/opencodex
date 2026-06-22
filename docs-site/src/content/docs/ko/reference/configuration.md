@@ -17,9 +17,13 @@ opencodex는 `~/.opencodex/config.json`으로 설정됩니다. 이 파일은 `oc
 | `subagentModels?` | `string[]` | — | Codex의 서브에이전트 선택기에서 가장 먼저 노출되는 최대 5개의 `provider/model` id. |
 | `disabledModels?` | `string[]` | — | Codex에서 숨겨지는 라우팅된 `provider/model` id (카탈로그와 `/v1/models`에서 제외됨). |
 | `websockets?` | `boolean` | `false` | Codex가 Responses WebSocket 경로를 사용하도록 `supports_websockets`를 광고합니다. 생략하거나 `false`로 두면 HTTP/SSE를 유지합니다. |
+| `syncResumeHistory?` | `boolean` | `false` | Codex App 히스토리 호환 모드. 켜면 opencodex가 원래 Codex thread metadata를 백업하고, 기존 OpenAI interactive row를 `opencodex`로 remap하며, opencodex가 만든 `exec` row를 App에 보이는 source로 임시 승격합니다. `ocx stop` / `ocx restore`는 백업된 OpenAI row를 복원하고, 남은 opencodex user thread는 OpenAI로 eject해서 `config.toml`에서 프록시 provider가 제거된 뒤에도 native Codex가 resume할 수 있게 합니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 프로바이더별 `/models` 캐시의 유효 기간 (5분). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | 웹 검색 사이드카 옵션 (아래 참조). |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | 비전 사이드카 옵션 (아래 참조). |
+
+백업 지원 이전의 개발 빌드에서 이미 `syncResumeHistory`를 실행했다면,
+`ocx recover-history --legacy-openai`로 같은 native-provider 복구를 명시 실행할 수도 있습니다.
 
 ## 프로바이더 (`OcxProviderConfig`)
 
@@ -31,10 +35,14 @@ opencodex는 `~/.opencodex/config.json`으로 설정됩니다. 이 파일은 `oc
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더가 선택되었을 때 사용하는 모델. |
 | `models?` | `string[]` | 시드/폴백 모델 목록. `liveModels`가 `false`이면 Codex 카탈로그에 노출할 정확한 allowlist가 됩니다. |
 | `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 `/models` 카탈로그를 가져옵니다(기본 `true`). `false`로 두면 설정된 `models`만 사용합니다. |
+| `contextWindow?` | `number` | routed catalog entry에 표시할 프로바이더 전체 context-window cap. 실시간 metadata가 이보다 작으면 그대로 둡니다. |
+| `modelContextWindows?` | `Record<string,number>` | 모델별 context-window cap. 매칭되는 모델에서는 `contextWindow`보다 우선하며, 더 작은 실시간 metadata를 올리지 않습니다. |
+| `modelInputModalities?` | `Record<string,string[]>` | `["text"]` 또는 `["text", "image"]` 같은 모델별 catalog input hint. |
 | `headers?` | `Record<string,string>` | 업스트림으로 전송되는 추가 HTTP 헤더. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | 인증 방식 (기본 `key`). [프로바이더](/opencodex/ko/guides/providers/#auth-modes) 참조. |
 | `noReasoningModels?` | `string[]` | reasoning/thinking 파라미터를 거부하는 모델 — 어댑터가 이들에 대해 `reasoning_effort`를 제거함. |
 | `noVisionModels?` | `string[]` | 텍스트 전용 모델 — [비전 사이드카](/opencodex/ko/guides/sidecars/)가 이들을 위해 이미지를 설명함. 매칭 시 Ollama의 `:size` 태그를 허용함. |
+| `escapeBuiltinToolNames?` | `boolean` | Umans 같은 Anthropic 호환 게이트웨이가 wire에서 도구명 escape를 요구할 때 사용합니다. opencodex는 Codex에 tool call을 돌려주기 전에 prefix를 제거합니다. |
 
 ## 정적 모델 allowlist
 

@@ -6,7 +6,7 @@ import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readR
 import { DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, setCached } from "./model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "./oauth/index";
 import type { OcxConfig, OcxProviderConfig } from "./types";
-import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, sanitizeCodexReasoningEfforts } from "./reasoning-effort";
+import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "./reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "./generated/jawcode-model-metadata";
 import { shouldCaseFoldMetadataModelId } from "./providers/derive";
 
@@ -341,19 +341,43 @@ type ProviderModelsApiItem = {
   };
 };
 
-function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
+function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
+  const configured = modelRecordValue(prov.modelContextWindows, id) ?? prov.contextWindow;
+  return typeof configured === "number" && configured > 0 ? configured : undefined;
+}
+
+function configuredInputModalities(prov: OcxProviderConfig, id: string): string[] | undefined {
+  const modalities = modelRecordValue(prov.modelInputModalities, id);
+  return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
+}
+
+function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel): CatalogModel {
   void name;
-  const reasoningEfforts = configuredReasoningEfforts(prov, id);
+  const contextCap = configuredContextWindow(prov, model.id);
+  const inputModalities = configuredInputModalities(prov, model.id);
+  const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   return {
+    ...model,
+    ...(contextCap !== undefined
+      ? {
+        contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
+          ? Math.min(model.contextWindow, contextCap)
+          : contextCap,
+      }
+      : {}),
+    ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
   };
 }
 
+function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name });
+  const { provider: _provider, id: _id, ...hints } = hinted;
+  return hints;
+}
+
 function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[]): CatalogModel[] {
-  return models.map(model => ({
-    ...catalogHintsFromProviderConfig(name, prov, model.id),
-    ...model,
-  }));
+  return models.map(model => applyProviderConfigHints(name, prov, model));
 }
 
 function isGlm52ModelId(id: string): boolean {
@@ -413,11 +437,10 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       return stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured;
     }
     const json = await res.json() as { data?: ProviderModelsApiItem[] };
-    const live = (json.data ?? []).map(m => ({
+    const live = (json.data ?? []).map(m => applyProviderConfigHints(name, prov, {
       id: m.id,
       provider: name,
       owned_by: m.owned_by,
-      ...catalogHintsFromProviderConfig(name, prov, m.id),
       ...catalogHintsFromModelsApiItem(name, m),
     }));
     const liveIds = new Set(live.map(m => m.id));

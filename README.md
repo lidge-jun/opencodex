@@ -132,6 +132,7 @@ Routed models also appear in the **Codex App** model picker with per-model reaso
 |---|---|---|
 | OpenAI (ChatGPT login) | `openai-responses` | forward (no key) |
 | OpenAI (API key) | `openai-responses` | key |
+| Umans AI Coding Plan | `anthropic` | key |
 | Anthropic Claude | `anthropic` | oauth / key |
 | xAI Grok | `openai-chat` | oauth / key |
 | Kimi (Moonshot) | `openai-chat` | oauth / key |
@@ -216,6 +217,12 @@ Config lives at `~/.opencodex/config.json`. Here's a typical multi-provider setu
 }
 ```
 
+Provider entries can also annotate routed catalog metadata. Use `contextWindow` for a provider-wide
+Codex-visible context cap, `modelContextWindows` for model-specific caps, and
+`modelInputModalities` for model-specific catalog input hints such as `["text"]` or
+`["text", "image"]`. Context values cap live `/models` metadata; they never raise a smaller live
+context window. See the configuration reference for the full field list.
+
 Local models work too. Point opencodex at any OpenAI-compatible server running on your machine:
 
 ```json
@@ -242,6 +249,22 @@ Local models work too. Point opencodex at any OpenAI-compatible server running o
 ```
 
 WebSocket transport is off by default. Set `"websockets": true` only if you want Codex to advertise and use the Responses WebSocket path instead of HTTP/SSE.
+
+opencodex leaves existing Codex resume history untouched by default. This avoids changing Codex's
+local thread index just because the proxy started, but Codex App may hide old OpenAI-backed project
+threads and opencodex-created `exec` threads while `opencodex` is the active provider. If you want
+those chats to appear while the proxy is active, enable the reversible compatibility remap with
+`"syncResumeHistory": true`. opencodex records the original provider/source metadata in
+`~/.opencodex/codex-history-backup.json`. `ocx stop` / `ocx restore` restores backed-up OpenAI rows
+to OpenAI, and ejects any remaining opencodex user threads to OpenAI as well so native Codex does not
+try to resume a thread whose provider no longer exists in `config.toml`.
+
+If you tested an older development build where `syncResumeHistory` already remapped history before
+backup support existed, you can also run the explicit recovery command:
+
+```bash
+ocx recover-history --legacy-openai
+```
 
 See the **[Configuration reference](https://lidge-jun.github.io/opencodex/reference/configuration/)** for every field.
 
