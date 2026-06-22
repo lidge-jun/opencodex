@@ -10,6 +10,7 @@ import type {
   OcxTextContent,
   OcxThinkingContent,
   OcxToolCall,
+  OcxToolResultMessage,
   OcxUsage,
 } from "../types";
 import { namespacedToolName } from "../types";
@@ -75,6 +76,28 @@ function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: 
   return { toWire: (name) => name, fromWire: (name) => name };
 }
 
+function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknown> {
+  // Anthropic tool_result accepts a string OR content blocks — render images natively
+  // (e.g. Codex view_image output) instead of dropping them.
+  const content = typeof msg.content === "string"
+    ? msg.content
+    : (msg.content as OcxContentPart[]).map(toAnthropicContentPart);
+  return {
+    type: "tool_result",
+    tool_use_id: msg.toolCallId,
+    content,
+    ...(msg.isError ? { is_error: true } : {}),
+  };
+}
+
+function orphanToolResultText(msg: OcxToolResultMessage): string {
+  const label = msg.toolName ? `${msg.toolName} (${msg.toolCallId})` : msg.toolCallId;
+  const content = typeof msg.content === "string"
+    ? msg.content
+    : JSON.stringify(msg.content);
+  return `[tool_result without adjacent tool_use: ${label}]\n${content}`;
+}
+
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
@@ -82,7 +105,8 @@ function messagesToAnthropicFormat(
   const system = parsed.context.systemPrompt?.join("\n\n") || undefined;
   const messages: unknown[] = [];
 
-  for (const msg of parsed.context.messages) {
+  for (let i = 0; i < parsed.context.messages.length; i++) {
+    const msg = parsed.context.messages[i];
     switch (msg.role) {
       case "user":
       case "developer": {
@@ -95,6 +119,7 @@ function messagesToAnthropicFormat(
       case "assistant": {
         const aMsg = msg as OcxAssistantMessage;
         const content: unknown[] = [];
+        const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
             content.push({ type: "text", text: (part as OcxTextContent).text });
@@ -104,26 +129,46 @@ function messagesToAnthropicFormat(
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
+            toolUseIds.push(tc.id);
             content.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
           }
         }
         messages.push({ role: "assistant", content });
+        if (toolUseIds.length > 0) {
+          const requiredIds = new Set(toolUseIds);
+          const resultBlocks: Record<string, unknown>[] = [];
+          const orphanBlocks: Record<string, unknown>[] = [];
+          const seen = new Set<string>();
+          let j = i + 1;
+          while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
+            const tr = parsed.context.messages[j] as OcxToolResultMessage;
+            if (requiredIds.has(tr.toolCallId) && !seen.has(tr.toolCallId)) {
+              resultBlocks.push(toAnthropicToolResult(tr));
+              seen.add(tr.toolCallId);
+            } else {
+              orphanBlocks.push({ type: "text", text: orphanToolResultText(tr) });
+            }
+            j++;
+          }
+          for (const id of toolUseIds) {
+            if (!seen.has(id)) {
+              resultBlocks.push({
+                type: "tool_result",
+                tool_use_id: id,
+                content: "[opencodex: missing tool_result for this tool_use in Codex history]",
+                is_error: true,
+              });
+            }
+          }
+          messages.push({ role: "user", content: [...resultBlocks, ...orphanBlocks] });
+          i = j - 1;
+        }
         break;
       }
       case "toolResult": {
-        // Anthropic tool_result accepts a string OR content blocks — render images natively
-        // (e.g. Codex view_image output) instead of dropping them.
-        const trContent = typeof msg.content === "string"
-          ? msg.content
-          : (msg.content as OcxContentPart[]).map(toAnthropicContentPart);
-        messages.push({
-          role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: msg.toolCallId,
-            content: trContent,
-          }],
-        });
+        // A standalone Anthropic tool_result is invalid unless it immediately follows an
+        // assistant tool_use. Preserve the information as text instead of sending a 400-prone block.
+        messages.push({ role: "user", content: orphanToolResultText(msg as OcxToolResultMessage) });
         break;
       }
     }
