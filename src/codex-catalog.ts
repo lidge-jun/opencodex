@@ -395,13 +395,17 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
   const apiKey = await resolveModelsAuthToken(name, prov);
   if (prov.authMode === "oauth" && !apiKey) return []; // not logged in → skip
-  const fresh = getFreshCached(name, ttlMs);
-  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh); // dedups Codex's frequent /v1/models polling within the TTL
   const configured: CatalogModel[] = (prov.models ?? []).map(id => ({
     id,
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id),
   }));
+  if (prov.liveModels === false) {
+    setCached(name, configured);
+    return configured;
+  }
+  const fresh = getFreshCached(name, ttlMs);
+  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh); // dedups Codex's frequent /v1/models polling within the TTL
   const { url, headers } = buildModelsRequest(prov, apiKey);
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });

@@ -27,11 +27,31 @@ opencodex 通过 `~/.opencodex/config.json` 进行配置。它由 `ocx init` 和
 | `baseUrl` | `string` | 上游 API 的基础 URL。 |
 | `apiKey?` | `string` | API key,或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
 | `defaultModel?` | `string` | 当选中该 provider 但未指定明确模型时使用的模型。 |
-| `models?` | `string[]` | 种子/回退模型列表(当实时 `/models` 可达时优先使用它)。 |
+| `models?` | `string[]` | 种子/回退模型列表。当 `liveModels` 为 `false` 时,它也是 Codex 目录中精确暴露的 allowlist。 |
+| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时 `/models` 目录(默认 `true`)。设为 `false` 时只使用配置的 `models`。 |
 | `headers?` | `Record<string,string>` | 发送到上游的额外 HTTP 头。 |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | 认证方式(默认 `key`)。见 [Providers](/opencodex/zh-cn/guides/providers/#auth-modes)。 |
 | `noReasoningModels?` | `string[]` | 会拒绝 reasoning/thinking 参数的模型 —— adapter 会为它们丢弃 `reasoning_effort`。 |
 | `noVisionModels?` | `string[]` | 纯文本模型 —— [视觉 sidecar](/opencodex/zh-cn/guides/sidecars/) 会为它们描述图像。匹配时可容忍 Ollama 的 `:size` 标签。 |
+
+## 静态模型 allowlist
+
+有些 provider 的实时模型目录非常大或响应较慢。如果只希望 Codex 看到 `models` 中固定的模型,
+可以将 `liveModels` 设为 `false`。
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "liveModels": false,
+      "models": ["deepseek/deepseek-v4-flash", "qwen/qwen3-coder-plus"]
+    }
+  }
+}
+```
 
 ## Sidecars
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, gatherRoutedModels, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
+import { clearModelCache, setCached } from "../src/model-cache";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -131,6 +132,63 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed?.web_search_tool_type).toBe("text_and_image");
     expect(routed?.supports_search_tool).toBe(true);
+  });
+
+  test("liveModels false uses configured provider models without fetching", async () => {
+    clearModelCache("static-provider");
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "static-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["alpha", "beta"],
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(0);
+      expect(models.map(m => `${m.provider}/${m.id}`)).toEqual([
+        "static-provider/alpha",
+        "static-provider/beta",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("static-provider");
+    }
+  });
+
+  test("liveModels false ignores a fresh live-model cache", async () => {
+    setCached("static-cache", [
+      { provider: "static-cache", id: "cached-live-model" },
+    ]);
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "static-cache": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["configured-only"],
+          },
+        },
+      });
+
+      expect(models.map(m => `${m.provider}/${m.id}`)).toEqual([
+        "static-cache/configured-only",
+      ]);
+    } finally {
+      clearModelCache("static-cache");
+    }
   });
 
   test("routed entries receive exact jawcode context metadata", () => {

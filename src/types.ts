@@ -223,6 +223,12 @@ export interface OcxProviderConfig {
   apiKey?: string;
   defaultModel?: string;
   models?: string[];
+  /**
+   * Fetch the provider's live `/models` endpoint. Defaults to true.
+   * Set false when `models` is an intentional allowlist or a provider's live catalog is too large
+   * or too flaky for startup/catalog sync.
+   */
+  liveModels?: boolean;
   headers?: Record<string, string>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.

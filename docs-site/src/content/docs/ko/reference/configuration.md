@@ -29,11 +29,31 @@ opencodex는 `~/.opencodex/config.json`으로 설정됩니다. 이 파일은 `oc
 | `baseUrl` | `string` | 업스트림 API 기본 URL. |
 | `apiKey?` | `string` | API 키, 또는 요청 시점에 해석되는 `${ENV_VAR}` / `$ENV_VAR` 참조. |
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더가 선택되었을 때 사용하는 모델. |
-| `models?` | `string[]` | 시드/폴백 모델 목록 (실시간 `/models`에 접근 가능하면 그쪽이 우선됨). |
+| `models?` | `string[]` | 시드/폴백 모델 목록. `liveModels`가 `false`이면 Codex 카탈로그에 노출할 정확한 allowlist가 됩니다. |
+| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 `/models` 카탈로그를 가져옵니다(기본 `true`). `false`로 두면 설정된 `models`만 사용합니다. |
 | `headers?` | `Record<string,string>` | 업스트림으로 전송되는 추가 HTTP 헤더. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | 인증 방식 (기본 `key`). [프로바이더](/opencodex/ko/guides/providers/#auth-modes) 참조. |
 | `noReasoningModels?` | `string[]` | reasoning/thinking 파라미터를 거부하는 모델 — 어댑터가 이들에 대해 `reasoning_effort`를 제거함. |
 | `noVisionModels?` | `string[]` | 텍스트 전용 모델 — [비전 사이드카](/opencodex/ko/guides/sidecars/)가 이들을 위해 이미지를 설명함. 매칭 시 Ollama의 `:size` 태그를 허용함. |
+
+## 정적 모델 allowlist
+
+일부 프로바이더는 실시간 모델 카탈로그가 매우 크거나 느릴 수 있습니다. Codex에 `models`에
+고정한 모델만 노출하려면 `liveModels`를 `false`로 설정하세요.
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "liveModels": false,
+      "models": ["deepseek/deepseek-v4-flash", "qwen/qwen3-coder-plus"]
+    }
+  }
+}
+```
 
 ## 사이드카
 

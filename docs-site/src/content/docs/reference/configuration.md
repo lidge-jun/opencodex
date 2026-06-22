@@ -29,11 +29,31 @@ default (a single `openai` forward provider).
 | `baseUrl` | `string` | Upstream API base URL. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
-| `models?` | `string[]` | Seed/fallback model list (live `/models` is preferred when reachable). |
+| `models?` | `string[]` | Seed/fallback model list. Also becomes the exact catalog allowlist when `liveModels` is `false`. |
+| `liveModels?` | `boolean` | Fetch the provider's live `/models` catalog on start/sync (default `true`). Set `false` to use only configured `models`. |
 | `headers?` | `Record<string,string>` | Extra HTTP headers sent upstream. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | How to authenticate (default `key`). See [Providers](/opencodex/guides/providers/#auth-modes). |
 | `noReasoningModels?` | `string[]` | Models that reject a reasoning/thinking param — the adapter drops `reasoning_effort` for them. |
 | `noVisionModels?` | `string[]` | Text-only models — the [vision sidecar](/opencodex/guides/sidecars/) describes images for them. Matching tolerates an Ollama `:size` tag. |
+
+## Static model allowlists
+
+Some providers expose very large or slow live model catalogs. Set `liveModels` to `false` when you
+want Codex to see only the models pinned in `models`:
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "liveModels": false,
+      "models": ["deepseek/deepseek-v4-flash", "qwen/qwen3-coder-plus"]
+    }
+  }
+}
+```
 
 ## Sidecars
 
