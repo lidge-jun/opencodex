@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Bake the parent package version into the bundle so the brand badge matches the npm release
-// (built together via `build:gui` in prepublishOnly). Single source = the root package.json.
+// Bake the parent package version into the bundle as a fallback for moments when the runtime
+// `/healthz` version is not reachable yet.
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 
 // https://vite.dev/config/

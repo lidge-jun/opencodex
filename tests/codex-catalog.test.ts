@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, gatherRoutedModels, isMediaGenerationModelId, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
+import { clearModelCache, setCached } from "../src/model-cache";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -131,6 +132,108 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed?.web_search_tool_type).toBe("text_and_image");
     expect(routed?.supports_search_tool).toBe(true);
+  });
+
+  test("provider contextWindow caps live /models metadata instead of overriding it", async () => {
+    clearModelCache("live-cap");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{ id: "large-live", max_model_len: 1_000_000 }],
+    }), { status: 200 })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "live-cap": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            contextWindow: 262_144,
+          },
+        },
+      });
+
+      expect(models.find(m => m.id === "large-live")?.contextWindow).toBe(262_144);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("live-cap");
+    }
+  });
+
+  test("modelContextWindows caps a specific live /models row", async () => {
+    clearModelCache("model-live-cap");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "large-live", max_model_len: 1_000_000 },
+        { id: "uncapped-live", max_model_len: 512_000 },
+      ],
+    }), { status: 200 })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "model-live-cap": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            modelContextWindows: { "large-live": 128_000 },
+          },
+        },
+      });
+
+      expect(models.find(m => m.id === "large-live")?.contextWindow).toBe(128_000);
+      expect(models.find(m => m.id === "uncapped-live")?.contextWindow).toBe(512_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("model-live-cap");
+    }
+  });
+
+  test("configured contextWindow does not raise smaller live metadata", async () => {
+    clearModelCache("small-live-cap");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{ id: "small-live", max_model_len: 128_000 }],
+    }), { status: 200 })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "small-live-cap": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            contextWindow: 262_144,
+          },
+        },
+      });
+
+      expect(models.find(m => m.id === "small-live")?.contextWindow).toBe(128_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("small-live-cap");
+    }
+  });
+
+  test("configured contextWindow caps fresh cached live metadata", async () => {
+    clearModelCache("cached-live-cap");
+    setCached("cached-live-cap", [
+      { provider: "cached-live-cap", id: "cached-large", contextWindow: 1_000_000 },
+    ]);
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "cached-live-cap": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            contextWindow: 262_144,
+          },
+        },
+      });
+
+      expect(models.find(m => m.id === "cached-large")?.contextWindow).toBe(262_144);
+    } finally {
+      clearModelCache("cached-live-cap");
+    }
   });
 
   test("routed entries receive exact jawcode context metadata", () => {

@@ -112,6 +112,7 @@ codex -m "xai/grok-4"                  "이 PR을 리뷰해 줘"
 |---|---|---|
 | OpenAI (ChatGPT 로그인) | `openai-responses` | forward (키 불필요) |
 | OpenAI (API 키) | `openai-responses` | key |
+| Umans AI Coding Plan | `anthropic` | key |
 | Anthropic Claude | `anthropic` | oauth / key |
 | xAI Grok | `openai-chat` | oauth / key |
 | Kimi (Moonshot) | `openai-chat` | oauth / key |

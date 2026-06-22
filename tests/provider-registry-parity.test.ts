@@ -25,7 +25,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "openai-apikey", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "azure-openai",
+  "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -44,6 +44,14 @@ describe("provider registry parity", () => {
     expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M2.5");
+    expect(KEY_LOGIN_PROVIDERS.umans).toMatchObject({
+      label: "Umans AI Coding Plan",
+      adapter: "anthropic",
+      baseUrl: "https://api.code.umans.ai",
+      defaultModel: "umans-coder",
+      escapeBuiltinToolNames: true,
+    });
+    expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
   });
 
   test("CLI init providers are derived from the registry", () => {
@@ -60,7 +68,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "anthropic", "kimi", "openai-apikey", "opencode-go", "openrouter",
+      "openai", "xai", "anthropic", "kimi", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
     ]);
 
@@ -68,6 +76,12 @@ describe("provider registry parity", () => {
     expect(presets.at(-1)?.id).toBe("custom");
     expect(presets.find(p => p.id === "kimi")?.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(presets.find(p => p.id === "anthropic")?.defaultModel).toBe("claude-sonnet-4-6");
+    expect(presets.find(p => p.id === "umans")).toMatchObject({
+      adapter: "anthropic",
+      baseUrl: "https://api.code.umans.ai",
+      auth: "key",
+      defaultModel: "umans-coder",
+    });
     expect(presets.find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
   });
 

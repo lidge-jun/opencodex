@@ -187,6 +187,13 @@ export interface OcxConfig {
   websockets?: boolean;
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
+  /**
+   * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
+   * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default
+   * interactive-source/provider filters. Disabled by default because it mutates Codex's local
+   * thread index; originals are backed up and restored by `ocx stop` / `ocx restore`.
+   */
+  syncResumeHistory?: boolean;
   /** Freshness window (ms) for the per-provider live `/models` cache. Defaults to 5 min. */
   modelCacheTtlMs?: number;
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
@@ -262,6 +269,8 @@ export interface OcxProviderConfig {
   autoToolChoiceOnlyModels?: string[];
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */
   preserveReasoningContentModels?: string[];
+  /** Anthropic-compatible gateways that need custom tool names escaped on the wire. */
+  escapeBuiltinToolNames?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

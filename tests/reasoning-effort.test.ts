@@ -132,6 +132,40 @@ describe("provider-specific reasoning effort mapping", () => {
     expect(body).not.toHaveProperty("top_p");
     expect(body).not.toHaveProperty("presence_penalty");
     expect(body).not.toHaveProperty("frequency_penalty");
+    expect(body).not.toHaveProperty("tool_choice");
+  });
+
+  test("OpenAI-compatible chat omits tool_choice when there are no tools", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.neuralwatt.com/v1",
+    };
+
+    const body = buildBody(provider, "glm-5.2", { toolChoice: "auto" });
+
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+  });
+
+  test("OpenAI-compatible chat keeps tool_choice when tools are present", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.moonshot.ai/v1",
+      autoToolChoiceOnlyModels: ["kimi-k2.7-code"],
+    };
+
+    const req = createOpenAIChatAdapter(provider).buildRequest({
+      modelId: "kimi-k2.7-code",
+      context: {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [{ name: "run_tests", description: "Run tests", parameters: { type: "object", properties: {} } }],
+      },
+      stream: false,
+      options: { toolChoice: { name: "run_tests" } },
+    });
+    const body = JSON.parse(req.body as string) as Record<string, unknown>;
+
+    expect(body).toHaveProperty("tools");
     expect(body.tool_choice).toBe("auto");
   });
 

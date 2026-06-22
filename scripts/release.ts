@@ -26,9 +26,99 @@ interface GhRun {
   url: string;
 }
 
+interface CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
 const CI_WORKFLOW = "ci.yml";
 const CI_WAIT_TIMEOUT_MS = 20 * 60 * 1000;
 const CI_POLL_MS = 10 * 1000;
+
+async function runQuiet(command: string[]): Promise<CommandResult> {
+  const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+async function readPackageName(): Promise<string> {
+  try {
+    const pkg = JSON.parse(await Bun.file("package.json").text()) as { name?: unknown };
+    if (typeof pkg.name !== "string" || !pkg.name) {
+      console.error("✗ package.json is missing a valid name");
+      process.exit(1);
+    }
+    return pkg.name;
+  } catch (error) {
+    console.error(`✗ failed to read package.json: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+async function npmVersionExists(packageName: string, version: string): Promise<boolean> {
+  const result = await runQuiet(["npm", "view", `${packageName}@${version}`, "version"]);
+  if (result.exitCode === 0) return true;
+
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (output.includes("E404") || output.includes("No match found")) return false;
+
+  console.error(`✗ failed to check npm version ${packageName}@${version}`);
+  if (result.stderr) console.error(result.stderr);
+  process.exit(1);
+}
+
+async function remoteTagSha(tagName: string): Promise<string | null> {
+  const result = await runQuiet(["git", "ls-remote", "origin", `refs/tags/${tagName}`, `refs/tags/${tagName}^{}`]);
+  if (result.exitCode !== 0) {
+    console.error(`✗ failed to check remote tag ${tagName}`);
+    if (result.stderr) console.error(result.stderr);
+    process.exit(1);
+  }
+
+  const lines = result.stdout.split("\n").filter(Boolean);
+  const peeled = lines.find(line => line.endsWith(`refs/tags/${tagName}^{}`));
+  const exact = lines.find(line => line.endsWith(`refs/tags/${tagName}`));
+  const selected = peeled ?? exact;
+  return selected ? selected.split(/\s+/)[0] ?? null : null;
+}
+
+async function githubReleaseExists(tagName: string): Promise<boolean> {
+  const result = await runQuiet(["gh", "release", "view", tagName, "--json", "tagName"]);
+  if (result.exitCode === 0) return true;
+
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (output.includes("release not found") || output.includes("not found")) return false;
+
+  console.error(`✗ failed to check GitHub Release ${tagName}`);
+  if (result.stderr) console.error(result.stderr);
+  process.exit(1);
+}
+
+async function assertUnusedReleaseVersion(packageName: string, version: string): Promise<void> {
+  const releaseTag = `v${version}`;
+  const [npmUsed, tagSha, releaseUsed] = await Promise.all([
+    npmVersionExists(packageName, version),
+    remoteTagSha(releaseTag),
+    githubReleaseExists(releaseTag),
+  ]);
+
+  const failures: string[] = [];
+  if (npmUsed) failures.push(`- npm already has ${packageName}@${version}`);
+  if (tagSha) failures.push(`- remote Git tag ${releaseTag} already exists at ${tagSha}`);
+  if (releaseUsed) failures.push(`- GitHub Release ${releaseTag} already exists`);
+
+  if (failures.length > 0) {
+    console.error(`✗ release version ${version} is already partially or fully used:`);
+    console.error(failures.join("\n"));
+    console.error("Choose the next unused patch version, or make an explicit human decision to repair public metadata.");
+    process.exit(1);
+  }
+}
 
 async function watchLatest(): Promise<void> {
   const id = (await $`gh run list --workflow release.yml --limit 1 --json databaseId -q '.[0].databaseId'`.text()).trim();
@@ -99,6 +189,9 @@ const dryRun = !args.includes("--publish");
 const branch = (await $`git rev-parse --abbrev-ref HEAD`.text()).trim();
 if (branch !== "main") { console.error(`✗ must be on main (currently ${branch}).`); process.exit(1); }
 if ((await $`git status --porcelain`.text()).trim()) { console.error("✗ working tree not clean — commit or stash first."); process.exit(1); }
+const packageName = await readPackageName();
+console.log(`→ release metadata preflight (${packageName}@${version})`);
+await assertUnusedReleaseVersion(packageName, version);
 console.log("→ typecheck");
 await $`bun x tsc --noEmit`;
 

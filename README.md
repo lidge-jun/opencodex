@@ -132,6 +132,7 @@ Routed models also appear in the **Codex App** model picker with per-model reaso
 |---|---|---|
 | OpenAI (ChatGPT login) | `openai-responses` | forward (no key) |
 | OpenAI (API key) | `openai-responses` | key |
+| Umans AI Coding Plan | `anthropic` | key |
 | Anthropic Claude | `anthropic` | oauth / key |
 | xAI Grok | `openai-chat` | oauth / key |
 | Kimi (Moonshot) | `openai-chat` | oauth / key |
@@ -261,6 +262,22 @@ history than you want, cap the Codex-visible context window per provider or per 
     }
   }
 }
+```
+
+opencodex leaves existing Codex resume history untouched by default. This avoids changing Codex's
+local thread index just because the proxy started, but Codex App may hide old OpenAI-backed project
+threads and opencodex-created `exec` threads while `opencodex` is the active provider. If you want
+those chats to appear while the proxy is active, enable the reversible compatibility remap with
+`"syncResumeHistory": true`. opencodex records the original provider/source metadata in
+`~/.opencodex/codex-history-backup.json`. `ocx stop` / `ocx restore` restores backed-up OpenAI rows
+to OpenAI, and ejects any remaining opencodex user threads to OpenAI as well so native Codex does not
+try to resume a thread whose provider no longer exists in `config.toml`.
+
+If you tested an older development build where `syncResumeHistory` already remapped history before
+backup support existed, you can also run the explicit recovery command:
+
+```bash
+ocx recover-history --legacy-openai
 ```
 
 See the **[Configuration reference](https://lidge-jun.github.io/opencodex/reference/configuration/)** for every field.

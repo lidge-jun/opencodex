@@ -43,6 +43,20 @@ describe("Codex config injection", () => {
     expect(stripped).not.toContain("model_catalog_json");
   });
 
+  test("removes root routed model names when restoring native Codex", () => {
+    const stripped = stripOpencodexConfig([
+      'model = "opencode-go/minimax-m3"',
+      'model_verbosity = "high"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"));
+
+    expect(stripped).not.toContain('model = "opencode-go/minimax-m3"');
+    expect(stripped).toContain('model_verbosity = "high"');
+  });
+
   test("can build fallback profile without a model catalog path", () => {
     const profile = buildProfileFile(10100, null);
 

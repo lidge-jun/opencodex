@@ -41,6 +41,13 @@ export const zh: Record<TKey, string> = {
   "dash.stopping": "正在停止…",
   "dash.codexAutoStart": "随 Codex 启动 opencodex",
   "dash.codexAutoStartHint": "启用后，Codex shim 会在每次 Codex CLI/App 启动前运行 ocx ensure。关闭后不会改动 Codex。",
+  "dash.searchModel": "搜索附属模型",
+  "dash.searchModelHint": "用于非 OpenAI 路由模型的 web_search 的模型。需要 ChatGPT 登录。",
+  "dash.searchReasoning": "搜索推理强度",
+  "dash.visionModel": "视觉附属模型",
+  "dash.visionModelHint": "为纯文本路由模型描述图像的模型。需要 ChatGPT 登录。",
+  "dash.sidecarSaved": "附属设置已保存。将在下一个请求时生效。",
+  "dash.sidecarSaveFailed": "保存附属设置失败。",
 
   // providers
   "prov.subtitle": "配置 opencodex 路由到 Codex 的上游提供方。使用账户登录、添加提供方，或编辑原始配置。",

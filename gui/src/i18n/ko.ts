@@ -41,6 +41,13 @@ export const ko: Record<TKey, string> = {
   "dash.stopping": "중지 중…",
   "dash.codexAutoStart": "Codex 실행 시 opencodex 시작",
   "dash.codexAutoStartHint": "켜져 있으면 Codex CLI/App 실행 전 shim이 ocx ensure를 실행합니다. 끄면 Codex를 건드리지 않습니다.",
+  "dash.searchModel": "서치 사이드카 모델",
+  "dash.searchModelHint": "비-OpenAI 라우팅 모델의 web_search에 사용되는 모델입니다. ChatGPT 로그인 필요.",
+  "dash.searchReasoning": "서치 추론 강도",
+  "dash.visionModel": "비전 사이드카 모델",
+  "dash.visionModelHint": "텍스트 전용 라우팅 모델에 이미지를 설명하는 데 사용되는 모델입니다. ChatGPT 로그인 필요.",
+  "dash.sidecarSaved": "사이드카 설정이 저장됐습니다. 다음 요청부터 적용됩니다.",
+  "dash.sidecarSaveFailed": "사이드카 설정 저장에 실패했습니다.",
 
   // providers
   "prov.subtitle": "opencodex가 Codex로 라우팅하는 업스트림 프로바이더를 설정합니다. 계정으로 로그인하거나, 프로바이더를 추가하거나, 원본 설정을 편집하세요.",

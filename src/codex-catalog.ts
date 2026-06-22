@@ -347,6 +347,13 @@ function configuredContextWindow(prov: OcxProviderConfig, id: string): number | 
   return typeof prov.contextWindow === "number" && prov.contextWindow > 0 ? prov.contextWindow : undefined;
 }
 
+function cappedContextWindow(reported: unknown, configuredCap: unknown): number | undefined {
+  const live = typeof reported === "number" && reported > 0 ? reported : undefined;
+  const cap = typeof configuredCap === "number" && configuredCap > 0 ? configuredCap : undefined;
+  if (live !== undefined && cap !== undefined) return Math.min(live, cap);
+  return live ?? cap;
+}
+
 function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
   void name;
   const reasoningEfforts = configuredReasoningEfforts(prov, id);
@@ -358,10 +365,15 @@ function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, i
 }
 
 function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[]): CatalogModel[] {
-  return models.map(model => ({
-    ...model,
-    ...catalogHintsFromProviderConfig(name, prov, model.id),
-  }));
+  return models.map(model => {
+    const configHints = catalogHintsFromProviderConfig(name, prov, model.id);
+    const contextWindow = cappedContextWindow(model.contextWindow, configHints.contextWindow);
+    return {
+      ...model,
+      ...configHints,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+  });
 }
 
 function isGlm52ModelId(id: string): boolean {
@@ -418,13 +430,19 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       return stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured;
     }
     const json = await res.json() as { data?: ProviderModelsApiItem[] };
-    const live = (json.data ?? []).map(m => ({
-      id: m.id,
-      provider: name,
-      owned_by: m.owned_by,
-      ...catalogHintsFromModelsApiItem(name, m),
-      ...catalogHintsFromProviderConfig(name, prov, m.id),
-    }));
+    const live = (json.data ?? []).map(m => {
+      const liveHints = catalogHintsFromModelsApiItem(name, m);
+      const configHints = catalogHintsFromProviderConfig(name, prov, m.id);
+      const contextWindow = cappedContextWindow(liveHints.contextWindow, configHints.contextWindow);
+      return {
+        id: m.id,
+        provider: name,
+        owned_by: m.owned_by,
+        ...liveHints,
+        ...configHints,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      };
+    });
     const liveIds = new Set(live.map(m => m.id));
     // Merge explicit config additions (e.g. a model not in the provider's /models, like a new endpoint).
     const merged = [...live, ...configured.filter(m => !liveIds.has(m.id))];

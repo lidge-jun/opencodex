@@ -71,6 +71,21 @@ function stripRootContextWindowOverrides(content: string): string {
     .join("\n");
 }
 
+function stripRootRoutedModel(content: string): string {
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
+  return lines
+    .filter((line, i) => {
+      const isRoot = firstTable === -1 || i < firstTable;
+      if (!isRoot) return true;
+      const m = line.match(/^\s*model\s*=\s*("(?:\\.|[^"])*"|'[^']*')\s*$/);
+      if (!m) return true;
+      const model = parseTomlString(m[1]);
+      return !model?.includes("/");
+    })
+    .join("\n");
+}
+
 /**
  * Insert `model_provider = "opencodex"` at the document ROOT — immediately before the first table
  * header (TOML root keys must precede all tables). If there are no tables, append it to the root body.
@@ -229,14 +244,16 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
 
   writeFileSync(CODEX_CONFIG_PATH, content, "utf-8");
   writeFileSync(CODEX_PROFILE_PATH, buildProfileFile(port, catalogPath), "utf-8");
-  const history = syncCodexHistoryProvider("opencodex");
+  const history = config?.syncResumeHistory === true
+    ? syncCodexHistoryProvider("opencodex")
+    : { rows: 0, files: 0 };
 
   const catalogMessage = catalogPath
     ? `  Codex model catalog: ${catalogPath}\n`
     : `  Codex model catalog not injected because no opencodex catalog file exists yet.\n`;
-  const historyMessage = history.rows > 0
-    ? `  Codex resume history: ${history.rows} thread(s) mapped to opencodex.\n`
-    : "";
+  const historyMessage = config?.syncResumeHistory === true
+    ? `  Codex resume history: ${history.rows} thread(s) made visible for opencodex; originals backed up for restore.\n`
+    : `  Codex resume history: left unchanged. Existing OpenAI and opencodex exec project chats may be hidden while opencodex is active; set syncResumeHistory=true to enable the reversible compatibility remap.\n`;
   return {
     success: true,
     message: `Injected opencodex as default provider into Codex config.\n` +
@@ -283,6 +300,7 @@ export function stripOpencodexConfig(content: string): string {
   // must match the detection regex above, or a detected line could survive un-removed.
   out = out.split("\n").filter(l => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l)).join("\n");
   out = stripRootContextWindowOverrides(out);
+  out = stripRootRoutedModel(out);
   out = stripOpencodexCatalogPath(out);
   return out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
@@ -299,7 +317,7 @@ export function removeCodexConfig(): { success: boolean; message: string } {
   const had = hasOpencodexRouting(content);
   if (had) {
     atomicWriteFile(CODEX_CONFIG_PATH, stripOpencodexConfig(content));
-  } else if (stripRootContextWindowOverrides(content) !== content) {
+  } else if (stripOpencodexConfig(content) !== content) {
     atomicWriteFile(CODEX_CONFIG_PATH, stripOpencodexConfig(content));
   }
   if (existsSync(CODEX_PROFILE_PATH)) unlinkSync(CODEX_PROFILE_PATH);
@@ -321,7 +339,11 @@ export function restoreNativeCodex(): { success: boolean; message: string } {
   const msg = cat.removed > 0
     ? `${cfg.message} Catalog restored to ${cat.kept} native model(s) (dropped ${cat.removed} proxy-routed).`
     : cfg.message;
-  const historyMsg = history.rows > 0 ? ` Resume history restored to openai (${history.rows} thread(s)).` : "";
+  const historyMsg = history.rows > 0
+    ? ` Resume history restored from opencodex backup (${history.rows} thread(s)).`
+    : history.ejectedRows
+      ? ` ${history.ejectedRows} opencodex history thread(s) were ejected to openai so native Codex can resume them.`
+      : "";
   return { success: cfg.success, message: `${msg}${historyMsg}` };
 }
 

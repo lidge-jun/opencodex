@@ -37,6 +37,7 @@ const MIN_THINKING_BUDGET = 1024;
 const OUTPUT_HEADROOM = 8192;
 /** Minimum visible-output room kept below `max_tokens` (so `max_tokens > budget_tokens` always holds). */
 const OUTPUT_FLOOR = 4096;
+const COMPAT_TOOL_PREFIX = "ocx_";
 
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
@@ -61,7 +62,23 @@ function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage
   };
 }
 
-function messagesToAnthropicFormat(parsed: OcxParsedRequest, isOAuth: boolean): { system: string | undefined; messages: unknown[] } {
+function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: string) => string; fromWire: (name: string) => string } {
+  if (provider.authMode === "oauth") {
+    return { toWire: applyClaudeToolPrefix, fromWire: stripClaudeToolPrefix };
+  }
+  if (provider.escapeBuiltinToolNames === true) {
+    return {
+      toWire: (name) => name.startsWith(COMPAT_TOOL_PREFIX) ? name : COMPAT_TOOL_PREFIX + name,
+      fromWire: (name) => name.startsWith(COMPAT_TOOL_PREFIX) ? name.slice(COMPAT_TOOL_PREFIX.length) : name,
+    };
+  }
+  return { toWire: (name) => name, fromWire: (name) => name };
+}
+
+function messagesToAnthropicFormat(
+  parsed: OcxParsedRequest,
+  toolNames: { toWire: (name: string) => string },
+): { system: string | undefined; messages: unknown[] } {
   const system = parsed.context.systemPrompt?.join("\n\n") || undefined;
   const messages: unknown[] = [];
 
@@ -87,7 +104,7 @@ function messagesToAnthropicFormat(parsed: OcxParsedRequest, isOAuth: boolean): 
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
-            content.push({ type: "tool_use", id: tc.id, name: isOAuth ? applyClaudeToolPrefix(flatName) : flatName, input: tc.arguments });
+            content.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
           }
         }
         messages.push({ role: "assistant", content });
@@ -115,10 +132,10 @@ function messagesToAnthropicFormat(parsed: OcxParsedRequest, isOAuth: boolean): 
   return { system, messages };
 }
 
-function toolsToAnthropicFormat(parsed: OcxParsedRequest, isOAuth: boolean): unknown[] | undefined {
+function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
   return parsed.context.tools.map(t => ({
-    name: isOAuth ? applyClaudeToolPrefix(namespacedToolName(t.namespace, t.name)) : namespacedToolName(t.namespace, t.name),
+    name: toolNames.toWire(namespacedToolName(t.namespace, t.name)),
     description: t.description,
     input_schema: t.parameters,
   }));
@@ -126,12 +143,13 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, isOAuth: boolean): unk
 
 export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
+  const toolNames = buildToolNameTransforms(provider);
   return {
     name: "anthropic",
 
     buildRequest(parsed: OcxParsedRequest) {
-      const { system, messages } = messagesToAnthropicFormat(parsed, isOAuth);
-      const tools = toolsToAnthropicFormat(parsed, isOAuth);
+      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      const tools = toolsToAnthropicFormat(parsed, toolNames);
 
       const body: Record<string, unknown> = {
         model: parsed.modelId,
@@ -174,7 +192,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
         if (tc === "auto") body.tool_choice = { type: "auto" };
         else if (tc === "none") body.tool_choice = { type: "none" };
         else if (tc === "required") body.tool_choice = { type: "any" };
-        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: isOAuth ? applyClaudeToolPrefix(tc.name) : tc.name };
+        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(tc.name) };
       }
 
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
@@ -241,7 +259,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
                   currentToolCallId = block.id ?? "";
-                  currentToolCallName = isOAuth ? stripClaudeToolPrefix(block.name ?? "") : (block.name ?? "");
+                  currentToolCallName = toolNames.fromWire(block.name ?? "");
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 break;
@@ -302,7 +320,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
           if (block.type === "text" && block.text) {
             events.push({ type: "text_delta", text: block.text });
           } else if (block.type === "tool_use") {
-            events.push({ type: "tool_call_start", id: block.id ?? "", name: isOAuth ? stripClaudeToolPrefix(block.name ?? "") : (block.name ?? "") });
+            events.push({ type: "tool_call_start", id: block.id ?? "", name: toolNames.fromWire(block.name ?? "") });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(block.input ?? {}) });
             events.push({ type: "tool_call_end" });
           }

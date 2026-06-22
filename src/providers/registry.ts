@@ -25,6 +25,7 @@ export interface ProviderRegistryEntry {
   noPenaltyModels?: string[];
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  escapeBuiltinToolNames?: boolean;
   oauthId?: string;
   jawcodeBundle?: string;
   extraMetadataAliases?: string[];
@@ -36,7 +37,7 @@ export type ProviderConfigSeed = Pick<
   "adapter" | "baseUrl" | "authMode" | "defaultModel" | "models"
   | "reasoningEfforts" | "modelReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "escapeBuiltinToolNames"
 >;
 
 
@@ -58,6 +59,27 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
   "moonshotai/Kimi-K2.5", "kimi-k2.6", "kimi-k2.7-code",
   "qwen3.5-397b", "qwen3.6-35b",
 ];
+const UMANS_MODELS = [
+  "umans-coder",
+  "umans-kimi-k2.7",
+  "umans-kimi-k2.6",
+  "umans-flash",
+  "umans-glm-5.2",
+  "umans-glm-5.1",
+  "umans-qwen3.6-35b-a3b",
+];
+const UMANS_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
+const UMANS_GLM_REASONING_EFFORTS = ["high", "xhigh"];
+const UMANS_GLM_REASONING_MAP: Record<string, string> = {
+  none: "high",
+  minimal: "high",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+};
+const UMANS_TEXT_ONLY_MODELS = ["umans-glm-5.2", "umans-glm-5.1"];
 
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
@@ -119,6 +141,33 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
   },
   { id: "openai-apikey", label: "OpenAI (API key)", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5" },
+  {
+    id: "umans",
+    label: "Umans AI Coding Plan",
+    adapter: "anthropic",
+    baseUrl: "https://api.code.umans.ai",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://app.umans.ai/billing",
+    defaultModel: "umans-coder",
+    models: UMANS_MODELS,
+    note: "Coding plan via Anthropic Messages",
+    modelReasoningEfforts: {
+      "umans-coder": UMANS_REASONING_EFFORTS,
+      "umans-kimi-k2.7": UMANS_REASONING_EFFORTS,
+      "umans-kimi-k2.6": UMANS_REASONING_EFFORTS,
+      "umans-flash": ["low", "medium", "high"],
+      "umans-glm-5.2": UMANS_GLM_REASONING_EFFORTS,
+      "umans-glm-5.1": UMANS_GLM_REASONING_EFFORTS,
+      "umans-qwen3.6-35b-a3b": ["low", "medium", "high"],
+    },
+    modelReasoningEffortMap: {
+      "umans-glm-5.2": UMANS_GLM_REASONING_MAP,
+      "umans-glm-5.1": UMANS_GLM_REASONING_MAP,
+    },
+    noVisionModels: UMANS_TEXT_ONLY_MODELS,
+    escapeBuiltinToolNames: true,
+  },
   {
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",

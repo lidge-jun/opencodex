@@ -186,12 +186,11 @@ async function handleResponses(
     const connectMs = config.connectTimeoutMs ?? 30_000;
     let upstreamResponse: Response;
     try {
-      upstreamResponse = await fetch(request.url, {
+      upstreamResponse = await fetchWithHeaderTimeout(request.url, {
         method: request.method,
         headers: request.headers,
         body: request.body,
-        signal: AbortSignal.any([upstream.signal, AbortSignal.timeout(connectMs)]),
-      });
+      }, upstream.signal, connectMs);
     } catch (err) {
       upstream.abort();
       const msg = err instanceof Error && err.name === "TimeoutError"
@@ -235,10 +234,9 @@ async function handleResponses(
   const request = adapter.buildRequest(parsed, { headers: req.headers });
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(request.url, {
+    upstreamResponse = await fetchWithHeaderTimeout(request.url, {
       method: request.method, headers: request.headers, body: request.body,
-      signal: AbortSignal.any([upstream.signal, AbortSignal.timeout(connectMs)]),
-    });
+    }, upstream.signal, connectMs);
   } catch (err) {
     upstream.abort();
     const msg = err instanceof Error && err.name === "TimeoutError"
@@ -305,6 +303,26 @@ export function linkAbortSignal(upstream: AbortController, signal?: AbortSignal)
     return;
   }
   signal.addEventListener("abort", () => upstream.abort(signal.reason), { once: true });
+}
+
+async function fetchWithHeaderTimeout(
+  url: string,
+  init: Omit<RequestInit, "signal">,
+  abortSignal: AbortSignal,
+  timeoutMs: number,
+): Promise<Response> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => {
+    if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
+  }, timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: AbortSignal.any([abortSignal, timeout.signal]),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const requestLog: { timestamp: number; model: string; provider: string; status: number; durationMs: number }[] = [];
@@ -490,9 +508,39 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
     config.codexAutoStart = body.codexAutoStart;
-    const { saveConfig: save } = await import("./config");
-    save(config);
+    saveConfig(config);
     return jsonResponse({ ok: true, codexAutoStart: codexAutoStartEnabled(config) });
+  }
+
+  if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+    const ws = config.webSearchSidecar ?? {};
+    const vs = config.visionSidecar ?? {};
+    return jsonResponse({
+      webSearch: { model: ws.model ?? "gpt-5.4-mini", reasoning: ws.reasoning ?? "low" },
+      vision: { model: vs.model ?? "gpt-5.4-mini" },
+    });
+  }
+
+  if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+    let body: { webSearch?: { model?: string; reasoning?: string }; vision?: { model?: string } };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (body.webSearch) {
+      config.webSearchSidecar = { ...config.webSearchSidecar };
+      if (typeof body.webSearch.model === "string") config.webSearchSidecar.model = body.webSearch.model;
+      if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
+    }
+    if (body.vision) {
+      config.visionSidecar = { ...config.visionSidecar };
+      if (typeof body.vision.model === "string") config.visionSidecar.model = body.vision.model;
+    }
+    saveConfig(config);
+    const ws = config.webSearchSidecar ?? {};
+    const vs = config.visionSidecar ?? {};
+    return jsonResponse({
+      ok: true,
+      webSearch: { model: ws.model ?? "gpt-5.4-mini", reasoning: ws.reasoning ?? "low" },
+      vision: { model: vs.model ?? "gpt-5.4-mini" },
+    });
   }
 
   if (url.pathname === "/api/logs" && req.method === "GET") {

@@ -211,6 +211,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 textarea.input { resize: vertical; font-family: var(--mono); line-height: 1.55; }
 .field-label { font-size: 12px; color: var(--muted); font-weight: 500; margin-bottom: 5px; display: block; }
 select.input { appearance: none; }
+.select-sm {
+  padding: 5px 8px; border-radius: var(--radius-sm); background: var(--raised); border: 1px solid var(--border);
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer; transition: border-color 0.12s;
+}
+.select-sm:focus { border-color: var(--accent); outline: none; }
+.select-sm:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- switch ---- */
 .switch { width: 34px; height: 19px; border-radius: 99px; border: none; cursor: pointer; background: light-dark(#c5c9d2, #3a3f4b); position: relative; flex-shrink: 0; transition: background 0.15s; padding: 0; }

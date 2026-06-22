@@ -18,6 +18,14 @@ describe("full uninstall command", () => {
     expect(cli).toContain("rmSync(getConfigDir()");
   });
 
+  test("CLI exposes explicit legacy history recovery command", async () => {
+    const cli = await readText("src/cli.ts");
+
+    expect(cli).toContain("ocx recover-history --legacy-openai");
+    expect(cli).toContain("function handleRecoverHistory()");
+    expect(cli).toContain("restoreLegacyOpenaiHistory");
+  });
+
   test("service cleanup has a quiet best-effort helper", async () => {
     const service = await readText("src/service.ts");
 

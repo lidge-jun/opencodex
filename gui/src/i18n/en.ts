@@ -41,6 +41,13 @@ export const en = {
   "dash.stopping": "Stopping…",
   "dash.codexAutoStart": "Start opencodex with Codex",
   "dash.codexAutoStartHint": "When enabled, the Codex shim runs ocx ensure before every Codex CLI/App launch. Disable this to leave Codex untouched.",
+  "dash.searchModel": "Search sidecar model",
+  "dash.searchModelHint": "Model used for web_search on non-OpenAI routed models. Requires ChatGPT login.",
+  "dash.searchReasoning": "Search reasoning effort",
+  "dash.visionModel": "Vision sidecar model",
+  "dash.visionModelHint": "Model used to describe images for text-only routed models. Requires ChatGPT login.",
+  "dash.sidecarSaved": "Sidecar settings saved. Applied on the next request.",
+  "dash.sidecarSaveFailed": "Failed to save sidecar settings.",
 
   // providers
   "prov.subtitle": "Configure the upstream providers opencodex routes into Codex. Log in with an account, add a provider, or edit the raw config.",

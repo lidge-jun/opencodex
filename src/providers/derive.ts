@@ -19,6 +19,7 @@ export interface DerivedKeyLoginProvider {
   noPenaltyModels?: string[];
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  escapeBuiltinToolNames?: boolean;
 }
 
 export interface DerivedInitProvider {
@@ -73,6 +74,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+    ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
   };
 }
 
@@ -99,6 +101,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
       ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
       ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+      ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
     };
   }
   return out;

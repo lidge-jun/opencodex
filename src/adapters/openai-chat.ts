@@ -160,7 +160,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         stream: parsed.stream,
       };
       if (tools) body.tools = tools;
-      if (toolChoice !== undefined) {
+      if (tools && toolChoice !== undefined) {
         body.tool_choice = modelInList(provider.autoToolChoiceOnlyModels, parsed.modelId)
           ? (toolChoice === "none" ? "none" : "auto")
           : toolChoice;

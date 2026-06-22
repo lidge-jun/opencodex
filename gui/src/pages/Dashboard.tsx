@@ -6,6 +6,10 @@ interface HealthData { status: string; version: string; uptime: number }
 interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
 interface ModelInfo { id: string; provider: string; owned_by?: string }
 interface SettingsData { codexAutoStart: boolean; port: number; hostname: string }
+interface SidecarData { webSearch: { model: string; reasoning: string }; vision: { model: string } }
+
+const SIDECAR_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark"];
+const REASONING_LEVELS = ["low", "medium", "high"];
 
 export default function Dashboard({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -13,6 +17,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [sidecar, setSidecar] = useState<SidecarData | null>(null);
+  const [sidecarSaving, setSidecarSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [error, setError] = useState(false);
@@ -20,14 +26,16 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [hRes, pRes, sRes] = await Promise.all([
+        const [hRes, pRes, sRes, scRes] = await Promise.all([
           fetch(`${apiBase}/healthz`),
           fetch(`${apiBase}/api/providers`),
           fetch(`${apiBase}/api/settings`),
+          fetch(`${apiBase}/api/sidecar-settings`),
         ]);
         setHealth(await hRes.json());
         setProviders(await pRes.json());
         setSettings(await sRes.json());
+        setSidecar(await scRes.json());
         setError(false);
       } catch {
         setError(true);
@@ -66,6 +74,30 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
 
   const online = health?.status === "ok";
 
+  const saveSidecar = async (patch: Partial<SidecarData>) => {
+    if (!sidecar || sidecarSaving) return;
+    const next = {
+      webSearch: { ...sidecar.webSearch, ...patch.webSearch },
+      vision: { ...sidecar.vision, ...patch.vision },
+    };
+    setSidecarSaving(true);
+    setSidecar(next);
+    try {
+      const res = await fetch(`${apiBase}/api/sidecar-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) throw new Error("save failed");
+      const data = await res.json();
+      setSidecar({ webSearch: data.webSearch, vision: data.vision });
+    } catch {
+      setSidecar(sidecar);
+    } finally {
+      setSidecarSaving(false);
+    }
+  };
+
   const toggleCodexAutoStart = async () => {
     if (!settings || settingsSaving) return;
     const next = !settings.codexAutoStart;
@@ -82,6 +114,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       setSettings(prev => prev ? { ...prev, codexAutoStart: data.codexAutoStart } : prev);
     } catch {
       setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
+      setError(true);
     } finally {
       setSettingsSaving(false);
     }
@@ -119,6 +152,38 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           >
             <span className="knob" />
           </button>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 12 }}>
+        <div className="spread" style={{ alignItems: "flex-start" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 650 }}>{t("dash.searchModel")}</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.searchModelHint")}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select className="select-sm" value={sidecar?.webSearch.model ?? "gpt-5.4-mini"} disabled={!sidecar || sidecarSaving}
+              onChange={e => saveSidecar({ webSearch: { model: e.target.value, reasoning: sidecar!.webSearch.reasoning } })}>
+              {SIDECAR_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select className="select-sm" value={sidecar?.webSearch.reasoning ?? "low"} disabled={!sidecar || sidecarSaving}
+              onChange={e => saveSidecar({ webSearch: { model: sidecar!.webSearch.model, reasoning: e.target.value } })}>
+              {REASONING_LEVELS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="spread">
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 650 }}>{t("dash.visionModel")}</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.visionModelHint")}</div>
+          </div>
+          <select className="select-sm" value={sidecar?.vision.model ?? "gpt-5.4-mini"} disabled={!sidecar || sidecarSaving}
+            onChange={e => saveSidecar({ vision: { model: e.target.value } })}>
+            {SIDECAR_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
         </div>
       </div>
 
