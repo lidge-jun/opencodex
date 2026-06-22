@@ -191,6 +191,60 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("liveModels false does not poison the live-model cache when toggled back on", async () => {
+    clearModelCache("static-toggle");
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({
+        data: [{ id: "live-after-toggle", owned_by: "provider" }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const staticModels = await gatherRoutedModels({
+        providers: {
+          "static-toggle": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["configured-only"],
+          },
+        },
+      });
+
+      expect(staticModels.map(m => `${m.provider}/${m.id}`)).toEqual([
+        "static-toggle/configured-only",
+      ]);
+      expect(fetchCalls).toBe(0);
+
+      const liveModels = await gatherRoutedModels({
+        providers: {
+          "static-toggle": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: true,
+            models: ["configured-only"],
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(1);
+      expect(new Set(liveModels.map(m => `${m.provider}/${m.id}`))).toEqual(new Set([
+        "static-toggle/live-after-toggle",
+        "static-toggle/configured-only",
+      ]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("static-toggle");
+    }
+  });
+
   test("routed entries receive exact jawcode context metadata", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "opencode-go", id: "deepseek-v4-pro" },

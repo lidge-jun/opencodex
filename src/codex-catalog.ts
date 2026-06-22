@@ -401,7 +401,6 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     ...catalogHintsFromProviderConfig(name, prov, id),
   }));
   if (prov.liveModels === false) {
-    setCached(name, configured);
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
