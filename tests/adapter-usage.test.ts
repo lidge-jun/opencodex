@@ -118,6 +118,44 @@ describe("usage and content retention (F2)", () => {
     expect(events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 5, outputTokens: 1 } });
   });
 
+  test("anthropic stream merges message_start input usage with message_delta output usage", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const response = new Response([
+      'event: message_start\n',
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}}\n\n',
+      'event: content_block_delta\n',
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+      'event: message_delta\n',
+      'data: {"type":"message_delta","usage":{"output_tokens":4}}\n\n',
+      'event: message_stop\n',
+      'data: {"type":"message_stop"}\n\n',
+    ].join(""));
+
+    const events = [];
+    for await (const event of adapter.parseStream(response)) events.push(event);
+    const dones = events.filter(e => e.type === "done");
+    expect(events).toContainEqual({ type: "text_delta", text: "hi" });
+    expect(dones).toHaveLength(1);
+    expect(dones[0]).toEqual({
+      type: "done",
+      usage: { inputTokens: 20, outputTokens: 4, cachedInputTokens: 5 },
+    });
+  });
+
+  test("anthropic stream emits terminal usage on EOF when message_stop is missing", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const response = new Response([
+      'event: message_start\n',
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n',
+      'event: message_delta\n',
+      'data: {"type":"message_delta","usage":{"output_tokens":1}}\n\n',
+    ].join(""));
+
+    const events = [];
+    for await (const event of adapter.parseStream(response)) events.push(event);
+    expect(events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 7, outputTokens: 1 } });
+  });
+
   test("google emits exactly one done carrying usage", async () => {
     const adapter = createGoogleAdapter({ ...provider, adapter: "google" });
     const response = new Response(

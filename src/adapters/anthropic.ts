@@ -63,6 +63,14 @@ function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage
   };
 }
 
+function mergeAnthropicUsage(
+  base: Record<string, number> | undefined,
+  next: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  if (!next) return base;
+  return { ...(base ?? {}), ...next };
+}
+
 function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: string) => string; fromWire: (name: string) => string } {
   if (provider.authMode === "oauth") {
     return { toWire: applyClaudeToolPrefix, fromWire: stripClaudeToolPrefix };
@@ -269,6 +277,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
       let currentBlockType = "";
       let currentToolCallId = "";
       let currentToolCallName = "";
+      let pendingUsage: Record<string, number> | undefined;
+      let emittedDone = false;
+
+      const emitDone = function* (): Generator<AdapterEvent> {
+        if (emittedDone) return;
+        emittedDone = true;
+        yield { type: "done", usage: usageFromAnthropic(pendingUsage) };
+      };
 
       try {
         while (true) {
@@ -298,6 +314,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
             }
 
             switch (currentEventType || data.type) {
+              case "message_start": {
+                const message = data.message as { usage?: Record<string, number> } | undefined;
+                pendingUsage = mergeAnthropicUsage(pendingUsage, message?.usage);
+                break;
+              }
               case "content_block_start": {
                 const block = data.content_block as { type: string; id?: string; name?: string } | undefined;
                 if (!block) break;
@@ -331,15 +352,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
               }
               case "message_delta": {
                 const usage = data.usage as Record<string, number> | undefined;
-                if (usage) {
-                  yield {
-                    type: "done",
-                    usage: usageFromAnthropic(usage),
-                  };
-                }
+                pendingUsage = mergeAnthropicUsage(pendingUsage, usage);
                 break;
               }
               case "message_stop": {
+                yield* emitDone();
                 break;
               }
               case "error": {
@@ -351,6 +368,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
             currentEventType = "";
           }
         }
+        if (pendingUsage && !emittedDone) yield* emitDone();
       } finally {
         reader.releaseLock();
       }
