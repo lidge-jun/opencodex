@@ -298,6 +298,38 @@ describe("Codex catalog routed normalization", () => {
     expect(models.filter(m => `${m.provider}/${m.id}` === "opencode-go/glm-5.2")).toHaveLength(1);
   });
 
+  test("liveModels false disables jawcode metadata augmentation for exact allowlists", async () => {
+    const models = await gatherRoutedModels({
+      providers: {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode-go.test/v1",
+          apiKey: "sk-test",
+          liveModels: false,
+          models: ["glm-5.2"],
+        },
+      },
+    });
+    const slugs = models.map(m => `${m.provider}/${m.id}`);
+
+    expect(slugs).toEqual(["opencode-go/glm-5.2"]);
+  });
+
+  test("liveModels false with no models exposes no augmented provider rows", async () => {
+    const models = await gatherRoutedModels({
+      providers: {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode-go.test/v1",
+          apiKey: "sk-test",
+          liveModels: false,
+        },
+      },
+    });
+
+    expect(models).toEqual([]);
+  });
+
   test("anthropic sonnet 4.6 uses the 200k opencodex catalog cap", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "anthropic", id: "claude-sonnet-4-6" },

@@ -478,6 +478,7 @@ export function augmentRoutedModelsWithJawcodeMetadata(models: CatalogModel[], p
   const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
   for (const provider of providerNames) {
     if (!JAWCODE_CATALOG_AUGMENT_PROVIDERS.has(provider)) continue;
+    if (providers?.[provider]?.liveModels === false) continue;
     const jawcodeProvider = resolveJawcodeProvider(provider);
     if (!jawcodeProvider) continue;
     for (const meta of listJawcodeModelMetadata(jawcodeProvider)) {
