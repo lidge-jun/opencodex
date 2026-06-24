@@ -1,4 +1,4 @@
-import { getValidCodexToken } from "./codex-account-store";
+import { CodexCredentialGenerationConflictError, getValidCodexToken } from "./codex-account-store";
 import { markAccountNeedsReauth } from "./codex-account-runtime-state";
 import { isCodexAccountUsable } from "./codex-account-usability";
 import { resolveCodexAccountForThread } from "./codex-routing";
@@ -43,7 +43,9 @@ export async function resolveCodexAuthContext(headers: Headers, config: OcxConfi
       chatgptAccountId: token.chatgptAccountId,
     };
   } catch (cause) {
-    markAccountNeedsReauth(accountId);
+    if (!(cause instanceof CodexCredentialGenerationConflictError)) {
+      markAccountNeedsReauth(accountId);
+    }
     throw new CodexAuthContextError(accountId, cause);
   }
 }

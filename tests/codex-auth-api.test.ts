@@ -499,6 +499,42 @@ describe("codex-auth API", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("GET /api/codex-auth/accounts does not mark reauth on refresh generation conflict", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "pool-conflict", email: "pool-conflict@example.test", isMain: false }],
+    });
+    saveCodexAccountCredential("pool-conflict", {
+      accessToken: "old",
+      refreshToken: "old-r",
+      expiresAt: 0,
+      chatgptAccountId: "acc-conflict",
+    });
+    const replacement = {
+      accessToken: "replacement",
+      refreshToken: "replacement-r",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acc-conflict",
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      saveCodexAccountCredential("pool-conflict", replacement);
+      return new Response(JSON.stringify({ access_token: "stale", expires_in: 3600 }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(200);
+      const data = await resp!.json() as { accounts: { id: string; needsReauth?: boolean; hasCredential?: boolean }[] };
+      const pool = data.accounts.find(a => a.id === "pool-conflict");
+      expect(pool?.needsReauth).toBe(false);
+      expect(pool?.hasCredential).toBe(true);
+      expect(getCodexAccountCredential("pool-conflict")).toEqual(replacement);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("codex-auth helpers", () => {

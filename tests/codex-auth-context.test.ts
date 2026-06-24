@@ -8,7 +8,7 @@ import {
   resolveCodexAuthContext,
   stripCodexRuntimeProviderFields,
 } from "../src/codex-auth-context";
-import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex-account-store";
+import { getCodexAccountCredential, removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex-account-store";
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex-auth-api";
 import { clearThreadAccountMap } from "../src/codex-routing";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -97,6 +97,35 @@ describe("Codex auth context", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CodexAuthContextError);
       expect((err as Error).message).not.toContain("pool-a");
+    }
+  });
+
+  test("generation conflict does not mark account as reauth-needed", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "old_token",
+      refreshToken: "old_refresh",
+      expiresAt: 0,
+      chatgptAccountId: "pool_acc",
+    });
+    const replacement = {
+      accessToken: "replacement_token",
+      refreshToken: "replacement_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc",
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      saveCodexAccountCredential("pool-a", replacement);
+      return new Response(JSON.stringify({ access_token: "stale_token", expires_in: 3600 }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config()))
+        .rejects.toBeInstanceOf(CodexAuthContextError);
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+      expect(getCodexAccountCredential("pool-a")).toEqual(replacement);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

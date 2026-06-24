@@ -308,3 +308,10 @@ export interface CodexAccountCredentials {
   expiresAt: number;
   chatgptAccountId: string;
 }
+
+export interface CodexAccountCredentialRecord {
+  credential?: CodexAccountCredentials;
+  generation: number;
+  deletedAt?: number;
+  replacedAt?: number;
+}

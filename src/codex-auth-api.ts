@@ -3,6 +3,7 @@ import {
   getCodexAccountCredential,
   getValidCodexToken,
   saveCodexAccountCredential,
+  CodexCredentialGenerationConflictError,
   TokenRefreshError,
 } from "./codex-account-store";
 import { deleteCodexAccount } from "./codex-account-lifecycle";
@@ -136,6 +137,7 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false): P
     );
     return { quota: getAccountQuota(accountId), needsReauth: false };
   } catch (e) {
+    if (e instanceof CodexCredentialGenerationConflictError) return { quota: existing ?? null, needsReauth: false };
     if (e instanceof TokenRefreshError) return { quota: existing ?? null, needsReauth: true };
     return { quota: existing ?? null, needsReauth: false };
   }
