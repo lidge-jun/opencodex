@@ -74,13 +74,23 @@ export default function AddCodexAccountModal({
             <h3 style={{ marginBottom: 4 }}>{t("codexAuth.addTitle")}</h3>
             <p className="modal-desc">{t("codexAuth.addPickDesc")}</p>
 
+            <label className="field-label">{t("codexAuth.addIdLabel")}</label>
+            <input
+              className="input"
+              placeholder="pos090011, work, personal..."
+              value={id}
+              onChange={e => setId(e.target.value)}
+              style={{ marginBottom: 12 }}
+            />
+
             <button className="list-row" onClick={async () => {
               setError("");
               try {
+                const requestedId = id.trim();
                 const resp = await fetch(`${apiBase}/api/codex-auth/login`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({}),
+                  body: JSON.stringify(requestedId ? { id: requestedId } : {}),
                 });
                 const data = await resp.json() as { url?: string; flowId?: string; error?: string; status?: string };
                 if (resp.status === 409) {
@@ -93,7 +103,7 @@ export default function AddCodexAccountModal({
                   if (pollRef.current) clearInterval(pollRef.current);
                   const fid = data.flowId ?? "";
                   const statusUrl = fid
-                    ? `${apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}`
+                    ? `${apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}${requestedId ? `&accountId=${encodeURIComponent(requestedId)}` : ""}`
                     : `${apiBase}/api/codex-auth/login-status`;
                   pollRef.current = setInterval(async () => {
                     try {
@@ -109,7 +119,11 @@ export default function AddCodexAccountModal({
                     } catch { /* ignore network errors during polling */ }
                   }, 2000);
                   setTimeout(() => {
-                    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+                    if (pollRef.current) {
+                      clearInterval(pollRef.current);
+                      pollRef.current = null;
+                      if (aliveRef.current) { setStep("pick"); setError(t("modal.loginTimeout")); }
+                    }
                   }, 300_000);
                 }
                 if (data.error && !data.url) setError(data.error);

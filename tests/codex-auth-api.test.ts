@@ -180,6 +180,65 @@ describe("codex-auth API", () => {
     expect(data.status).toBe("expired");
   });
 
+  test("GET /api/codex-auth/login-status recovers done when a persisted account exists", async () => {
+    const createReq = new Request("http://localhost/api/codex-auth/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "pos090011",
+        email: "pos090011@example.com",
+        accessToken: "tok",
+        refreshToken: "ref",
+        chatgptAccountId: "acc-pos090011",
+      }),
+    });
+    const createResp = await handleCodexAuthAPI(createReq, new URL(createReq.url), {} as any);
+    expect(createResp!.status).toBe(200);
+
+    const req = new Request("http://localhost/api/codex-auth/login-status?flowId=missing&accountId=pos090011", { method: "GET" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
+    const data = await resp!.json() as { status: string; accountId?: string };
+    expect(data).toEqual({ status: "done", accountId: "pos090011" });
+  });
+
+  test("POST /api/codex-auth/login rejects invalid account id before OAuth starts", async () => {
+    const req = new Request("http://localhost/api/codex-auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "bad id" }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
+    expect(resp!.status).toBe(400);
+    const data = await resp!.json() as { error: string };
+    expect(data.error).toContain("Invalid account id");
+  });
+
+  test("POST /api/codex-auth/login rejects duplicate account id before OAuth starts", async () => {
+    const createReq = new Request("http://localhost/api/codex-auth/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "existing",
+        email: "existing@example.com",
+        accessToken: "tok",
+        refreshToken: "ref",
+        chatgptAccountId: "acc-existing",
+      }),
+    });
+    const createResp = await handleCodexAuthAPI(createReq, new URL(createReq.url), {} as any);
+    expect(createResp!.status).toBe(200);
+
+    const req = new Request("http://localhost/api/codex-auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "existing" }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
+    expect(resp!.status).toBe(400);
+    const data = await resp!.json() as { error: string };
+    expect(data.error).toContain("Account id already exists");
+  });
+
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {
     const source = await Bun.file("src/codex-auth-api.ts").text();
     expect(source).toContain("st.done && st.loggedIn");

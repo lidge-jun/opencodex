@@ -26,6 +26,8 @@ const accountQuota = new Map<string, {
   updatedAt: number;
 }>();
 
+const ACCOUNT_ID_RE = /^[a-zA-Z0-9._-]{1,64}$/;
+
 export function updateAccountQuota(accountId: string, weekly: number, fiveHour: number): void {
   accountQuota.set(accountId, { weeklyPercent: weekly, fiveHourPercent: fiveHour, updatedAt: Date.now() });
 }
@@ -197,7 +199,7 @@ export async function handleCodexAuthAPI(
     if (!body.id || !body.email || !body.accessToken || !body.refreshToken || !body.chatgptAccountId) {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
-    if (!/^[a-zA-Z0-9._-]{1,64}$/.test(body.id)) {
+    if (!ACCOUNT_ID_RE.test(body.id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     if (body.accessToken.length > 10_000 || body.refreshToken.length > 10_000) {
@@ -281,7 +283,15 @@ export async function handleCodexAuthAPI(
 
   if (url.pathname === "/api/codex-auth/login" && req.method === "POST") {
     const body = (await req.json().catch(() => ({}))) as { id?: string };
-    const accountId = body.id?.trim() || `chatgpt-${Date.now()}`;
+    const requestedAccountId = body.id?.trim();
+    if (requestedAccountId && !ACCOUNT_ID_RE.test(requestedAccountId)) {
+      return jsonResponse({ error: "Invalid account id format" }, 400);
+    }
+    const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
+    const config = loadConfig();
+    if ((config.codexAccounts ?? []).some(a => a.id === accountId) || getCodexAccountCredential(accountId)) {
+      return jsonResponse({ error: `Account id already exists: ${accountId}` }, 400);
+    }
     const flowId = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       const { startLoginFlow, getLoginStatus } = await import("./oauth/index");
@@ -339,12 +349,12 @@ export async function handleCodexAuthAPI(
               });
               clearAccountNeedsReauth(accountId);
 
-              const config = loadConfig();
-              const accounts = config.codexAccounts ?? [];
+              const latestConfig = loadConfig();
+              const accounts = latestConfig.codexAccounts ?? [];
               if (!accounts.find(a => a.id === accountId)) {
                 accounts.push({ id: accountId, email, plan, isMain: false });
-                config.codexAccounts = accounts;
-                saveConfig(config);
+                latestConfig.codexAccounts = accounts;
+                saveConfig(latestConfig);
               }
               codexAuthLoginState.set(flowId, { status: "done", accountId, email, doneAt: Date.now() });
               completed = true;
@@ -364,8 +374,8 @@ export async function handleCodexAuthAPI(
             doneAt: Date.now(),
           });
         }
-        // TTL: delete flow state 60s after completion
-        setTimeout(() => codexAuthLoginState.delete(flowId), 60_000);
+        // TTL: keep completed flow state available for clients that miss a short polling window.
+        setTimeout(() => codexAuthLoginState.delete(flowId), 300_000);
       })();
 
       codexAuthLoginState.set(flowId, { status: "pending" });
@@ -381,8 +391,12 @@ export async function handleCodexAuthAPI(
 
   if (url.pathname === "/api/codex-auth/login-status" && req.method === "GET") {
     const flowId = url.searchParams.get("flowId");
+    const accountId = url.searchParams.get("accountId")?.trim();
     if (flowId) {
       const st = codexAuthLoginState.get(flowId);
+      if (!st && accountId && getCodexAccountCredential(accountId)) {
+        return jsonResponse({ status: "done", accountId });
+      }
       return jsonResponse(st ?? { status: "expired" });
     }
     // Legacy fallback: return latest pending flow
