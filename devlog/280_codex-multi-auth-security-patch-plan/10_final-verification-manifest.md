@@ -2,7 +2,7 @@
 
 Date: 2026-06-25
 
-Status: Phase 60 implemented; commit hash and post-commit verification still need to be appended after the Phase 60 commit.
+Status: Phase 60 implemented, committed, and post-commit verification passed.
 
 ## Scope
 
@@ -32,6 +32,7 @@ This manifest tracks the implementation evidence for the `280` multi-auth securi
 | Patch 5C - Sidecar outcomes | `cfc6e47` | Vision/web-search sidecar auth outcomes are recorded. |
 | Patch 5D - Cooldown/failure window | `56c9369` | 429 cooldown and transient failure windows are enforced. |
 | Patch 5E - Terminal stream outcomes | `e123339` | SSE/WS terminal failed/incomplete outcomes are recorded after stream completion. |
+| Patch 6 - Privacy labels and redaction | `e752fab` | Codex auth account labels, OAuth status, debug frames, and durable errors avoid raw account identifiers. |
 
 ## Documentation Evidence
 
@@ -71,14 +72,16 @@ This manifest tracks the implementation evidence for the `280` multi-auth securi
 | Privacy scans | Changed-file scan found only `example.test` fixtures, existing placeholder token field names, and historical before/negative-test strings. Source-only scan for ordinal labels, old refresh-error strings, and payload-preview patterns returned no matches. |
 | Diff check | `git diff --check` passed. |
 
-## Phase 60 Post-Commit Evidence To Append
+## Phase 60 Post-Commit Evidence
 
-Record these after the Phase 60 commit:
-
-| Gate | Expected Evidence |
+| Gate | Evidence |
 | --- | --- |
-| Commit | Phase 60 commit hash. |
-| Post-commit checks | Focused privacy tests, typecheck, diff check, and clean `git status --short`. |
+| Commit | `e752fab` (`fix: redact codex auth privacy surfaces`). |
+| Typecheck | `bun run typecheck` passed. |
+| Focused privacy tests | `bun test tests/codex-account-label.test.ts tests/session-affinity.test.ts tests/codex-auth-api.test.ts tests/oauth-status-privacy.test.ts tests/codex-account-store.test.ts tests/debug.test.ts tests/server-auth.test.ts` passed with 90 pass, 0 fail. |
+| Full tests | `bun test tests` passed with 344 pass, 0 fail. |
+| GUI build | `cd gui && bun run build` passed. |
+| Diff/status | `git diff --check` and `git diff --cached --check` passed; `git status --short` was clean immediately after the implementation commit and before this manifest append. |
 
 ## Deferred Cases
 
