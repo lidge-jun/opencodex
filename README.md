@@ -148,7 +148,7 @@ Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging
 
 ```bash
 ocx init                       # interactive setup
-ocx start [--port 10100]       # start the proxy; falls back to a free port if busy
+ocx start [--port 10100] [-b|--background]  # start the proxy; --background detaches from terminal; falls back to a free port if busy
 ocx stop                       # stop + restore native Codex
 ocx restore                    # restore without stopping (alias: ocx eject)
 ocx uninstall                  # remove service/shim/config and restore native Codex

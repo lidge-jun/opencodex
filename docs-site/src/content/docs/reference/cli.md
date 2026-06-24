@@ -13,15 +13,20 @@ Interactive setup wizard. Prompts for a provider (preset or custom), API key (li
 default model, and proxy port; saves `~/.opencodex/config.json`; and optionally injects the proxy into
 `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`).
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [-b|--background]`
 
 Start the proxy server (default port `10100`). Writes a PID file and refuses to start a second
 instance. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
 
+Use `--background` (or `-b`) to detach from the terminal; the proxy keeps running after you close
+the shell. This is useful on remote servers where you do not want to install a full systemd unit.
+
 ```bash
 ocx start
 ocx start --port 8080
+ocx start -b
+ocx start --port 8080 --background
 ```
 
 ### `ocx stop`

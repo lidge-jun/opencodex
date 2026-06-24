@@ -126,7 +126,7 @@ codex -m "xai/grok-4"                  "이 PR을 리뷰해 줘"
 
 ```bash
 ocx init                       # 대화형 설정
-ocx start [--port 10100]       # 프록시 시작; 포트가 사용 중이면 빈 포트로 자동 전환
+ocx start [--port 10100] [-b|--background]  # 프록시 시작; --background로 터미널 분리; 포트가 사용 중이면 빈 포트로 자동 전환
 ocx stop                       # 프록시 중지 + Codex 원래 설정 복원
 ocx restore                    # 중지 없이 복원 (별칭: ocx eject)
 ocx uninstall                  # service/shim/config 제거 + Codex 원본 복원

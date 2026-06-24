@@ -17,7 +17,7 @@ function printUsage() {
 
 Usage:
   ocx init                    Interactive setup (provider + Codex config injection)
-  ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
+  ocx start [--port <port>] [-b|--background]   Start the proxy server (auto-syncs models to Codex)
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx recover-history --legacy-openai
@@ -51,7 +51,7 @@ function printSubcommandUsage(name: string | undefined): void {
       console.log("Usage: ocx init\n\nInteractive setup for providers and Codex config injection.");
       break;
     case "start":
-      console.log("Usage: ocx start [--port <port>]\n\nStart the proxy server and sync models to Codex.");
+      console.log("Usage: ocx start [--port <port>] [-b|--background]\n\nStart the proxy server and sync models to Codex.\nUse --background to detach from the terminal.");
       break;
     case "stop":
       console.log("Usage: ocx stop\n\nStop the proxy and restore native Codex config.");
@@ -141,6 +141,10 @@ function parsePortOption(): number | undefined {
   return port;
 }
 
+function parseBackgroundFlag(): boolean {
+  return args.includes("-b") || args.includes("--background");
+}
+
 function healthHost(hostname?: string): string {
   return !hostname || hostname === "0.0.0.0" || hostname === "::" ? "127.0.0.1" : hostname;
 }
@@ -183,7 +187,7 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
   return selected;
 }
 
-async function handleStart(options: { block?: boolean } = {}) {
+async function handleStart(options: { block?: boolean; background?: boolean } = {}) {
   const existingPid = readPid();
   if (existingPid) {
     const config = loadConfig();
@@ -196,6 +200,30 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   const requestedPort = parsePortOption();
   const port = await chooseListenPort(requestedPort);
+
+  // Avoid recursive background spawns: the detached child just runs foreground.
+  if (options.background && !process.env.OCX_BACKGROUND_SPAWNED) {
+    const spawnArgs = [process.argv[1], "start"];
+    if (requestedPort !== undefined) {
+      spawnArgs.push("--port", String(port));
+    }
+    const child = spawn(process.execPath, spawnArgs, {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, OCX_BACKGROUND_SPAWNED: "1" },
+    });
+    child.unref();
+
+    const healthyPort = await waitForProxy(10_000);
+    if (!healthyPort) {
+      console.error("❌ Proxy did not become healthy in the background.");
+      process.exit(1);
+    }
+    const config = loadConfig();
+    const serverPid = readPid();
+    console.log(`✅ Proxy running in background on port ${config.port ?? healthyPort}${serverPid ? ` (PID ${serverPid})` : ""}.`);
+    return;
+  }
 
   const server = startServer(port);
   writePid(process.pid);
@@ -390,7 +418,7 @@ switch (command) {
     break;
   }
   case "start":
-    await handleStart();
+    await handleStart({ background: parseBackgroundFlag() });
     break;
   case "stop":
     handleStop();

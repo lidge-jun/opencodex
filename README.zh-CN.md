@@ -120,7 +120,7 @@ codex -m "deepseek/deepseek-r1"        "分析这个性能瓶颈"
 
 ```bash
 ocx init                       # 交互式初始化
-ocx start [--port 10100]       # 启动代理
+ocx start [--port 10100] [-b|--background]  # 启动代理；--background 脱离终端
 ocx stop                       # 停止并恢复原生 Codex 配置
 ocx restore                    # 仅恢复，不停止（别名：ocx eject）
 ocx sync                       # 刷新模型列表 + 重新注入 Codex
