@@ -3,17 +3,21 @@ import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, hardenConfigDir, hardenExistingSecret } from "./config";
 import type { CodexAccountCredentials } from "./types";
 
-const CODEX_ACCOUNTS_PATH = join(getConfigDir(), "codex-accounts.json");
 type CodexAccountStore = Record<string, CodexAccountCredentials>;
 
 const REFRESH_SKEW_MS = 60_000;
 
+function getCodexAccountsPath(): string {
+  return join(getConfigDir(), "codex-accounts.json");
+}
+
 export function loadCodexAccountStore(): CodexAccountStore {
+  const path = getCodexAccountsPath();
   hardenConfigDir();
-  hardenExistingSecret(CODEX_ACCOUNTS_PATH);
-  if (!existsSync(CODEX_ACCOUNTS_PATH)) return {};
+  hardenExistingSecret(path);
+  if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(CODEX_ACCOUNTS_PATH, "utf-8")) as CodexAccountStore;
+    return JSON.parse(readFileSync(path, "utf-8")) as CodexAccountStore;
   } catch {
     return {};
   }
@@ -22,7 +26,7 @@ export function loadCodexAccountStore(): CodexAccountStore {
 function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(CODEX_ACCOUNTS_PATH, JSON.stringify(store, null, 2) + "\n");
+  atomicWriteFile(getCodexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
 }
 
 export function getCodexAccountCredential(id: string): CodexAccountCredentials | null {

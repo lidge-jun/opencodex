@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import type { OcxConfig } from "./types";
 
 let _atomicSeq = 0;
@@ -15,8 +16,23 @@ export function atomicWriteFile(path: string, content: string): void {
 }
 
 const OCX_DIR = join(homedir(), ".opencodex");
-const CONFIG_PATH = join(OCX_DIR, "config.json");
-const PID_PATH = join(OCX_DIR, "ocx.pid");
+const CONFIG_FILE = "config.json";
+const PID_FILE = "ocx.pid";
+const warnedConfigFallbacks = new Set<string>();
+
+const providerConfigSchema = z.object({
+  adapter: z.string().min(1),
+  baseUrl: z.string().min(1),
+}).passthrough();
+
+const configSchema = z.object({
+  port: z.number().int().positive().default(10100),
+  providers: z.record(z.string(), providerConfigSchema).refine(
+    providers => Object.keys(providers).length > 0,
+    "providers must contain at least one provider",
+  ),
+  defaultProvider: z.string().min(1),
+}).passthrough();
 
 /**
  * Default featured subagent models (native GPT) seeded on a fresh install and when `subagentModels`
@@ -28,20 +44,22 @@ const PID_PATH = join(OCX_DIR, "ocx.pid");
 export const DEFAULT_SUBAGENT_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
 
 export function getConfigDir(): string {
-  return OCX_DIR;
+  const override = process.env.OPENCODEX_HOME?.trim();
+  return override || OCX_DIR;
 }
 
 export function getConfigPath(): string {
-  return CONFIG_PATH;
+  return join(getConfigDir(), CONFIG_FILE);
 }
 
 export function getPidPath(): string {
-  return PID_PATH;
+  return join(getConfigDir(), PID_FILE);
 }
 
 export function hardenConfigDir(): void {
-  if (existsSync(OCX_DIR)) {
-    try { chmodSync(OCX_DIR, 0o700); } catch { /* best-effort */ }
+  const dir = getConfigDir();
+  if (existsSync(dir)) {
+    try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
   }
 }
 
@@ -52,27 +70,30 @@ export function hardenExistingSecret(path: string): void {
 }
 
 export function loadConfig(): OcxConfig {
+  const configPath = getConfigPath();
   hardenConfigDir();
-  hardenExistingSecret(CONFIG_PATH);
-  hardenExistingSecret(join(OCX_DIR, "auth.json"));
-  if (!existsSync(CONFIG_PATH)) {
+  hardenExistingSecret(configPath);
+  hardenExistingSecret(join(getConfigDir(), "auth.json"));
+  if (!existsSync(configPath)) {
     return getDefaultConfig();
   }
   try {
-    const raw = readFileSync(CONFIG_PATH, "utf-8");
-    return JSON.parse(raw) as OcxConfig;
-  } catch {
+    const raw = readFileSync(configPath, "utf-8");
+    return configSchema.parse(JSON.parse(raw)) as OcxConfig;
+  } catch (error) {
+    warnAndBackupInvalidConfig(configPath, error);
     return getDefaultConfig();
   }
 }
 
 export function saveConfig(config: OcxConfig): void {
-  if (!existsSync(OCX_DIR)) {
-    mkdirSync(OCX_DIR, { recursive: true, mode: 0o700 });
+  const dir = getConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {
-    try { chmodSync(OCX_DIR, 0o700); } catch { /* best-effort on existing dir */ }
+    try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
-  atomicWriteFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+  atomicWriteFile(getConfigPath(), JSON.stringify(config, null, 2) + "\n");
 }
 
 export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolean {
@@ -112,18 +133,20 @@ export function resolveEnvValue(value: string | undefined): string | undefined {
 }
 
 export function writePid(pid: number): void {
-  if (!existsSync(OCX_DIR)) {
-    mkdirSync(OCX_DIR, { recursive: true, mode: 0o700 });
+  const dir = getConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {
     hardenConfigDir();
   }
-  writeFileSync(PID_PATH, String(pid), "utf-8");
+  writeFileSync(getPidPath(), String(pid), "utf-8");
 }
 
 export function readPid(): number | null {
-  if (!existsSync(PID_PATH)) return null;
+  const pidPath = getPidPath();
+  if (!existsSync(pidPath)) return null;
   try {
-    const raw = readFileSync(PID_PATH, "utf-8").trim();
+    const raw = readFileSync(pidPath, "utf-8").trim();
     const pid = parseInt(raw, 10);
     if (isNaN(pid)) return null;
     try {
@@ -141,6 +164,32 @@ export function readPid(): number | null {
 export function removePid(): void {
   try {
     const { unlinkSync } = require("node:fs");
-    unlinkSync(PID_PATH);
+    unlinkSync(getPidPath());
   } catch { /* ignore */ }
+}
+
+function warnAndBackupInvalidConfig(configPath: string, error: unknown): void {
+  const key = configPath;
+  if (warnedConfigFallbacks.has(key)) return;
+  warnedConfigFallbacks.add(key);
+
+  const backupPath = backupInvalidConfig(configPath);
+  const reason = error instanceof z.ZodError
+    ? error.issues.map(issue => `${issue.path.join(".") || "config"}: ${issue.message}`).join("; ")
+    : error instanceof Error ? error.message : String(error);
+  const backupNote = backupPath ? ` A backup was written to ${backupPath}.` : "";
+  console.error(`⚠️  Could not load opencodex config at ${configPath}: ${reason}. Using default config.${backupNote}`);
+}
+
+function backupInvalidConfig(configPath: string): string | null {
+  if (!existsSync(configPath)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${configPath}.invalid-${stamp}`;
+  try {
+    copyFileSync(configPath, backupPath);
+    try { chmodSync(backupPath, 0o600); } catch { /* best-effort */ }
+    return backupPath;
+  } catch {
+    return null;
+  }
 }

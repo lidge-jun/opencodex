@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-accounts-test");
@@ -52,5 +52,22 @@ describe("codex-account-store CRUD", () => {
   test("getValidCodexToken throws when account not found", async () => {
     const { getValidCodexToken } = await import("../src/codex-account-store");
     expect(getValidCodexToken("nonexistent")).rejects.toThrow("not found");
+  });
+
+  test("resolves OPENCODEX_HOME at write time, not import time", async () => {
+    const store = await import("../src/codex-account-store");
+    const otherDir = `${TEST_DIR}-other`;
+    if (existsSync(otherDir)) rmSync(otherDir, { recursive: true });
+    mkdirSync(otherDir, { recursive: true });
+    try {
+      process.env.OPENCODEX_HOME = otherDir;
+
+      store.saveCodexAccountCredential("late", { accessToken: "t", refreshToken: "r", expiresAt: 0, chatgptAccountId: "c" });
+
+      expect(existsSync(join(otherDir, "codex-accounts.json"))).toBe(true);
+      expect(existsSync(ACCOUNTS_PATH)).toBe(false);
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 });

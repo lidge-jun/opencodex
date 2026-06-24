@@ -1,7 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { handleCodexAuthAPI, updateAccountQuota, getAccountQuota } from "../src/codex-auth-api";
 
+const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
+
 describe("codex-auth API", () => {
+  beforeEach(() => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
   test("GET /api/codex-auth/accounts returns array with main", async () => {
     const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
     const url = new URL(req.url);
