@@ -102,7 +102,7 @@ describe("codex-auth API", () => {
     const req = new Request("http://localhost/api/codex-auth/active", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     const data = await resp!.json() as { activeCodexAccountId: string | null; autoSwitchThreshold: number };
-    expect(data).toEqual({ activeCodexAccountId: "pool-live", autoSwitchThreshold: 55 });
+    expect(data).toEqual({ activeCodexAccountId: "pool-live", autoSwitchThreshold: 55, upstreamFailoverThreshold: 3 });
   });
 
   test("GET /api/codex-auth/accounts returns large live pools without dropping entries", async () => {

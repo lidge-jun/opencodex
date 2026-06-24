@@ -1,8 +1,9 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/server";
+import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/codex-routing";
 import { updateAccountQuota, clearAccountQuota } from "../src/codex-auth-api";
+import { saveCodexAccountCredential } from "../src/codex-account-store";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-session-affinity-test");
@@ -16,6 +17,15 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     autoSwitchThreshold: 80,
     ...overrides,
   } as OcxConfig;
+}
+
+function saveTestCredential(id: string): void {
+  saveCodexAccountCredential(id, {
+    accessToken: `access-${id}`,
+    refreshToken: `refresh-${id}`,
+    expiresAt: Date.now() + 60_000,
+    chatgptAccountId: `acct-${id}`,
+  });
 }
 
 describe("resolveCodexAccountForThread", () => {
@@ -76,6 +86,8 @@ describe("resolveCodexAccountForThread", () => {
         { id: "b", email: "b@test", isMain: false },
       ],
     });
+    saveTestCredential("a");
+    saveTestCredential("b");
     updateAccountQuota("a", 85, 10);
     updateAccountQuota("b", 20, 5);
     const result = resolveCodexAccountForThread("new-thread", config);
@@ -91,6 +103,8 @@ describe("resolveCodexAccountForThread", () => {
         { id: "b", email: "b@test", isMain: false },
       ],
     });
+    saveTestCredential("a");
+    saveTestCredential("b");
     updateAccountQuota("a", 90, 10);
     updateAccountQuota("b", 95, 15);
     const result = resolveCodexAccountForThread("new-thread", config);
@@ -106,6 +120,8 @@ describe("resolveCodexAccountForThread", () => {
         { id: "b", email: "b@test", isMain: false },
       ],
     });
+    saveTestCredential("a");
+    saveTestCredential("b");
     updateAccountQuota("a", 99, 50);
     updateAccountQuota("b", 10, 5);
     const result = resolveCodexAccountForThread("t1", config);

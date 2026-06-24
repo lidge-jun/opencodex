@@ -280,7 +280,7 @@ select.input { appearance: none; }
 .section-label { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 .sep-line { flex: 1; height: 1px; background: var(--border); }
 .quota-compact { padding: 2px 16px 12px; display: grid; gap: 4px; }
-.quota-row { display: grid; grid-template-columns: 36px 38px 44px 42px minmax(84px, 1fr) 40px; align-items: center; gap: 8px; min-width: 0; }
+.quota-row { display: grid; grid-template-columns: minmax(36px, max-content) 38px 44px 42px minmax(84px, 1fr) 40px; align-items: center; gap: 8px; min-width: 0; }
 .quota-label { font-size: 11px; color: var(--muted); font-weight: 600; }
 .quota-val { font-size: 11px; font-family: var(--mono); color: var(--text); text-align: right; }
 .quota-reset-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--faint); }

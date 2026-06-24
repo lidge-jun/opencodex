@@ -48,7 +48,7 @@ export function safeResponseHeaders(headers: Headers): Record<string, string> {
     if (
       SAFE_RESPONSE_HEADER_EXACT.has(lower) ||
       lower.startsWith("x-ratelimit-") ||
-      /^x-codex(?:-[a-z0-9-]+)?-(primary|secondary)-(used-percent|window-minutes|reset-at)$/.test(lower) ||
+      /^x-codex(?:-[a-z0-9-]+)?-(primary|secondary|tertiary)-(used-percent|window-minutes|reset-at)$/.test(lower) ||
       /^x-codex(?:-[a-z0-9-]+)?-limit-name$/.test(lower)
     ) {
       out[lower] = value;

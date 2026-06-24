@@ -206,6 +206,8 @@ export interface OcxConfig {
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
   autoSwitchThreshold?: number;
+  /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
+  upstreamFailoverThreshold?: number;
 }
 
 export interface OcxVisionSidecarConfig {

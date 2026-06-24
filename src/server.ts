@@ -33,52 +33,17 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "./oauth/key-pr
 import { deriveProviderPresets } from "./providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "./types";
 import { getValidCodexToken } from "./codex-account-store";
-import { getAccountQuota, markAccountNeedsReauth } from "./codex-auth-api";
-
-const threadAccountMap = new Map<string, string>();
-
-export function clearThreadAccountMap(): void { threadAccountMap.clear(); }
-
-export function resolveCodexAccountForThread(
-  threadId: string | null,
-  config: OcxConfig,
-): string | null {
-  if (threadId && threadAccountMap.has(threadId)) {
-    return threadAccountMap.get(threadId)!;
-  }
-  let active = config.activeCodexAccountId;
-  if (!active) return null;
-
-  const threshold = config.autoSwitchThreshold ?? 80;
-  if (threshold > 0) {
-    const quota = getAccountQuota(active);
-    const activeUsage = quota ? Math.max(quota.weeklyPercent, quota.fiveHourPercent ?? 0) : 0;
-    if (quota && activeUsage >= threshold) {
-      const pool = (config.codexAccounts ?? []).filter(a => !a.isMain && a.id !== active);
-      let best = active;
-      let bestUsage = activeUsage;
-      for (const p of pool) {
-        const pq = getAccountQuota(p.id);
-        const usage = pq ? Math.max(pq.weeklyPercent, pq.fiveHourPercent ?? 0) : 0;
-        if (usage < bestUsage) { best = p.id; bestUsage = usage; }
-      }
-      if (best !== active) {
-        config.activeCodexAccountId = best;
-        saveConfig(config);
-        active = best;
-      }
-    }
-  }
-
-  if (threadId) threadAccountMap.set(threadId, active);
-  return active;
-}
-
-export function formatCodexProviderForLog(providerName: string, accountId: string | null, config: OcxConfig): string {
-  if (!accountId) return providerName;
-  const poolIndex = (config.codexAccounts ?? []).filter(a => !a.isMain).findIndex(a => a.id === accountId);
-  return poolIndex >= 0 ? `${providerName}-${poolIndex + 1}` : providerName;
-}
+import { markAccountNeedsReauth } from "./codex-auth-api";
+export {
+  clearThreadAccountMap,
+  formatCodexProviderForLog,
+  resolveCodexAccountForThread,
+} from "./codex-routing";
+import {
+  formatCodexProviderForLog,
+  recordCodexUpstreamOutcome,
+  resolveCodexAccountForThread,
+} from "./codex-routing";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -215,7 +180,6 @@ async function handleResponses(
         logCtx.provider = formatCodexProviderForLog(route.providerName, selectedCodexAccountId, config);
       } catch (e) {
         console.error(`[codex-auth] Pool account ${selectedCodexAccountId} token failed:`, e instanceof Error ? e.message : e);
-        if (threadId) threadAccountMap.delete(threadId);
         markAccountNeedsReauth(selectedCodexAccountId);
         selectedCodexAccountId = null;
       }
@@ -269,10 +233,23 @@ async function handleResponses(
     if (selectedCodexAccountId) {
       const weeklyRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
       const fiveHourRaw = upstreamResponse.headers.get("x-codex-primary-used-percent");
-      if (weeklyRaw || fiveHourRaw) {
+      const monthlyRaw = upstreamResponse.headers.get("x-codex-tertiary-used-percent");
+      const weeklyResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
+      const fiveHourResetRaw = upstreamResponse.headers.get("x-codex-primary-reset-at");
+      const monthlyResetRaw = upstreamResponse.headers.get("x-codex-tertiary-reset-at");
+      if (weeklyRaw || fiveHourRaw || monthlyRaw) {
         const { updateAccountQuota } = await import("./codex-auth-api");
-        updateAccountQuota(selectedCodexAccountId, parseFloat(weeklyRaw ?? "0"), parseFloat(fiveHourRaw ?? "0"));
+        updateAccountQuota(
+          selectedCodexAccountId,
+          parseFloat(weeklyRaw ?? "0"),
+          parseFloat(fiveHourRaw ?? "0"),
+          weeklyResetRaw ? parseFloat(weeklyResetRaw) : undefined,
+          fiveHourResetRaw ? parseFloat(fiveHourResetRaw) : undefined,
+          monthlyRaw ? parseFloat(monthlyRaw) : undefined,
+          monthlyResetRaw ? parseFloat(monthlyResetRaw) : undefined,
+        );
       }
+      recordCodexUpstreamOutcome(config, selectedCodexAccountId, upstreamResponse.status);
     }
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);

@@ -96,7 +96,7 @@ export default function App() {
         </div>
         <nav>
           {NAV.map(({ id, tkey, Icon }) => (
-            <button key={id} className={`nav-item${page === id ? " active" : ""}`} onClick={() => setPage(id)}
+            <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id} onClick={() => setPage(id)}
               aria-current={page === id ? "page" : undefined}>
               <Icon /> {t(tkey)}
             </button>
