@@ -32,7 +32,8 @@ ocx start --port 8080
 
 ### `ocx status`
 
-打印代理是否正在运行(及其 PID)。
+打印只读诊断摘要: 代理 PID、`/healthz` 可达性、仪表盘 URL、配置文件路径、默认
+provider、Codex 自动启动设置、服务状态和 shim 状态。
 
 ## 模型与 Codex
 

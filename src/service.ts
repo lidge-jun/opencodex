@@ -283,6 +283,26 @@ export function uninstallServiceIfInstalled(): boolean {
   return false;
 }
 
+export function serviceStatusSummary(): string {
+  if (process.platform === "darwin") {
+    if (!existsSync(plistPath())) return "not installed";
+    const status = statusLaunchd();
+    return status ? "installed (launchd)" : "installed, not loaded";
+  }
+  if (process.platform === "win32") {
+    const status = statusWindows();
+    return status ? "installed (Task Scheduler)" : "not installed";
+  }
+  if (process.platform === "linux") {
+    if (existsSync("/.dockerenv")) return "unsupported in Docker";
+    if (!isSystemd()) return "unsupported: systemd not found";
+    if (!existsSync(unitPath())) return "not installed";
+    const status = statusSystemd();
+    return status ? "installed (systemd user)" : "installed, not running";
+  }
+  return `unsupported on ${process.platform}`;
+}
+
 export function serviceCommand(sub?: string): void {
   const ops = platformOps();
   if (!ops) {

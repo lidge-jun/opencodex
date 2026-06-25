@@ -9,6 +9,43 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 const cliPath = join(repoRoot, "src", "cli.ts");
 
 describe("CLI subcommand help", () => {
+  test("status prints diagnostics without starting the proxy", () => {
+    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-"));
+    try {
+      const configPath = join(opencodexHome, "config.json");
+      writeFileSync(configPath, JSON.stringify({
+        port: 9,
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+          },
+        },
+        defaultProvider: "openai",
+        codexAutoStart: false,
+      }), "utf8");
+
+      const result = spawnSync(process.execPath, [cliPath, "status"], {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCODEX_HOME: opencodexHome },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Proxy:");
+      expect(result.stdout).toContain("Health: http://127.0.0.1:9/healthz");
+      expect(result.stdout).toContain("Dashboard: http://localhost:9/");
+      expect(result.stdout).toContain(`Config: ${configPath}`);
+      expect(result.stdout).toContain("Default provider: openai");
+      expect(result.stdout).toContain("Codex autostart: disabled");
+      expect(result.stdout).toContain("Service:");
+      expect(result.stdout).toContain("Codex autostart shim");
+    } finally {
+      rmSync(opencodexHome, { recursive: true, force: true });
+    }
+  });
+
   test("restore --help prints usage without mutating Codex config", () => {
     const codexHome = mkdtempSync(join(tmpdir(), "ocx-help-"));
     try {

@@ -37,7 +37,8 @@ catalog entries so plain `codex` works natively again. `eject` is an alias of `r
 
 ### `ocx status`
 
-Print whether the proxy is running (and its PID) or not.
+Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL,
+config path, default provider, Codex autostart setting, service state, and shim state.
 
 ## Models & Codex
 

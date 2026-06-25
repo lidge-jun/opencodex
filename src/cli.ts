@@ -3,9 +3,9 @@ import { execFileSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { restoreNativeCodex } from "./codex-inject";
 import { restoreLegacyOpenaiHistory } from "./codex-history-provider";
-import { codexAutoStartEnabled, getConfigDir, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
+import { codexAutoStartEnabled, getConfigDir, getConfigPath, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
 import { findAvailablePort } from "./ports";
-import { serviceCommand, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
+import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
 import { drainAndShutdown, startServer } from "./server";
 import { maybeShowStarPrompt } from "./star-prompt";
 
@@ -365,13 +365,56 @@ async function handleUninstall() {
   console.log("\n✅ opencodex local state removed. Remove the package with: npm uninstall -g @bitkyc08/opencodex");
 }
 
-function handleStatus() {
-  const pid = readPid();
-  if (pid) {
-    console.log(`✅ Proxy running (PID ${pid})`);
-  } else {
-    console.log("❌ Proxy not running");
+type HealthCheck = {
+  ok: boolean;
+  label: string;
+};
+
+async function checkProxyHealth(port: number, hostname?: string): Promise<HealthCheck> {
+  const url = `http://${healthHost(hostname)}:${port}/healthz`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 800);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return { ok: false, label: `${url} returned HTTP ${response.status}` };
+    const body = await response.json().catch(() => null) as { version?: unknown; uptime?: unknown } | null;
+    const version = typeof body?.version === "string" ? ` v${body.version}` : "";
+    const uptime = typeof body?.uptime === "number" ? `, uptime ${Math.round(body.uptime)}s` : "";
+    return { ok: true, label: `${url} ok${version}${uptime}` };
+  } catch (error) {
+    const reason = error instanceof Error && error.name === "AbortError" ? "timed out" : "unreachable";
+    return { ok: false, label: `${url} ${reason}` };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function handleStatus() {
+  const config = loadConfig();
+  const port = config.port ?? 10100;
+  const pid = readPid();
+  const health = await checkProxyHealth(port, config.hostname);
+  const proxyLabel = pid && health.ok
+    ? `running (PID ${pid})`
+    : pid
+      ? `PID file points to PID ${pid}, but health check failed`
+      : health.ok
+        ? "reachable, but PID file is missing or stale"
+        : "not running";
+
+  if (pid || health.ok) {
+    console.log(`✅ Proxy: ${proxyLabel}`);
+  } else {
+    console.log(`❌ Proxy: ${proxyLabel}`);
+  }
+  console.log(`   Health: ${health.label}`);
+  console.log(`   Dashboard: http://localhost:${port}/`);
+  console.log(`   Config: ${getConfigPath()}`);
+  console.log(`   Default provider: ${config.defaultProvider}`);
+  console.log(`   Codex autostart: ${codexAutoStartEnabled(config) ? "enabled" : "disabled"}`);
+  console.log(`   Service: ${serviceStatusSummary()}`);
+  const { codexShimStatus } = await import("./codex-shim");
+  console.log(`   ${codexShimStatus()}`);
 }
 
 function handleRecoverHistory() {
@@ -411,7 +454,7 @@ switch (command) {
     await handleUninstall();
     break;
   case "status":
-    handleStatus();
+    await handleStatus();
     break;
   case "ensure":
     await handleEnsure();
