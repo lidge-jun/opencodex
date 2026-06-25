@@ -1,5 +1,6 @@
 import type { OcxConfig, OcxProviderConfig } from "./types";
 import { resolveEnvValue } from "./config";
+import { PROVIDER_REGISTRY } from "./providers/registry";
 
 interface RouteResult {
   providerName: string;
@@ -19,6 +20,42 @@ const MODEL_PROVIDER_PATTERNS: Record<string, string[]> = {
   ],
 };
 
+// Merge registry-default effort maps under user values so persisted built-in provider configs
+// that predate reasoningEffortMap/modelReasoningEffortMap still get correct wire translations
+// (e.g. ollama-cloud xhigh -> max) without a disk migration. User overrides win per-key.
+function mergeRecord(
+  seed: Record<string, string> | undefined,
+  user: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!seed && !user) return undefined;
+  return { ...(seed ?? {}), ...(user ?? {}) };
+}
+
+function mergeNestedRecord(
+  seed: Record<string, Record<string, string>> | undefined,
+  user: Record<string, Record<string, string>> | undefined,
+): Record<string, Record<string, string>> | undefined {
+  if (!seed && !user) return undefined;
+  const out: Record<string, Record<string, string>> = {};
+  for (const [key, value] of Object.entries(seed ?? {})) out[key] = { ...value };
+  for (const [key, value] of Object.entries(user ?? {})) out[key] = { ...(out[key] ?? {}), ...value };
+  return out;
+}
+
+function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
+  const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  if (!registryEntry) return { ...provider, apiKey: resolveEnvValue(provider.apiKey) };
+  const reasoningEffortMap = mergeRecord(registryEntry.reasoningEffortMap, provider.reasoningEffortMap);
+  const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
+
+  return {
+    ...provider,
+    apiKey: resolveEnvValue(provider.apiKey),
+    ...(reasoningEffortMap ? { reasoningEffortMap } : {}),
+    ...(modelReasoningEffortMap ? { modelReasoningEffortMap } : {}),
+  };
+}
+
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
@@ -31,7 +68,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     if (prov) {
       return {
         providerName: provName,
-        provider: { ...prov, apiKey: resolveEnvValue(prov.apiKey) },
+        provider: routedProviderConfig(provName, prov),
         modelId: modelId.slice(slash + 1),
       };
     }
@@ -41,7 +78,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     if (prov.defaultModel === modelId) {
       return {
         providerName: provName,
-        provider: { ...prov, apiKey: resolveEnvValue(prov.apiKey) },
+        provider: routedProviderConfig(provName, prov),
         modelId,
       };
     }
@@ -51,7 +88,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     if (prov.models && Array.isArray(prov.models) && (prov.models as string[]).includes(modelId)) {
       return {
         providerName: provName,
-        provider: { ...prov, apiKey: resolveEnvValue(prov.apiKey) },
+        provider: routedProviderConfig(provName, prov),
         modelId,
       };
     }
@@ -64,11 +101,11 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
       );
       if (matchingProvider) {
         const [provName, prov] = matchingProvider;
-        return {
-          providerName: provName,
-          provider: { ...prov, apiKey: resolveEnvValue(prov.apiKey) },
-          modelId,
-        };
+       return {
+         providerName: provName,
+         provider: routedProviderConfig(provName, prov),
+         modelId,
+       };
       }
     }
   }
@@ -77,7 +114,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   if (defaultProv) {
     return {
       providerName: config.defaultProvider,
-      provider: { ...defaultProv, apiKey: resolveEnvValue(defaultProv.apiKey) },
+      provider: routedProviderConfig(config.defaultProvider, defaultProv),
       modelId,
     };
   }
