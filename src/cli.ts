@@ -201,18 +201,27 @@ async function handleStart(options: { block?: boolean } = {}) {
   writePid(process.pid);
 
   const config = loadConfig();
+
+  let cleaned = false;
+  const syncCleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    removePid(process.pid);
+    if (!process.env.OCX_SERVICE) { try { restoreNativeCodex(); } catch { /* best-effort restore */ } }
+  };
+
   const shutdown = () => {
     console.log("\n🛑 Shutting down opencodex proxy...");
     void (async () => {
       await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
-      removePid(process.pid);
-      if (!process.env.OCX_SERVICE) { try { restoreNativeCodex(); } catch { /* best-effort restore */ } }
+      syncCleanup();
       process.exit(0);
     })();
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  process.on("exit", syncCleanup);
 
   await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
