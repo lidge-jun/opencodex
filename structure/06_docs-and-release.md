@@ -31,7 +31,7 @@ bun run build
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, or manual dispatch when runtime/package paths change | Short Linux + Windows quality gate for runtime and release-helper changes. |
+| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Short Linux + Windows quality gate. `test` job (Bun) runs typecheck/tests/GUI build; `npm-global-smoke` job (Node only, **no setup-bun**) packs and `npm install -g`s the tarball, then runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
 | `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
@@ -52,6 +52,26 @@ invariants belong in `structure/`, not the README.
 `docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
 manual. When an investigation graduates into a maintained invariant, summarize it here under
 `structure/` and link public workflows from `docs-site/`.
+
+## Package runtime (bundled Bun)
+
+The source runs on Bun, but the published package does **not** require a user-installed Bun.
+`package.json` `bin` points at `bin/ocx.mjs` (a Node shim), and the Bun runtime ships as the `bun`
+npm dependency (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
+`optionalDependencies`, finalized by the dependency's own `postinstall: node install.js`).
+
+Invariants:
+
+- `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
+  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
+  lazy-runs `install.js` and execs `src/cli.ts` under Bun, propagating exit code and signal.
+- `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
+  postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
+- `src/service.ts` and `src/codex-shim.ts` bake `durableBunPath()` (the bundled binary, stable under
+  the npm global prefix) into launchd/systemd/Task Scheduler and the Codex autostart shim, so those
+  durable artifacts keep resolving across `ocx update`.
+- Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
+  prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for npm users.
 
 ## Release workflow
 

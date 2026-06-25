@@ -4,7 +4,9 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `src/cli.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. |
+| `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled Bun binary (`bun` dependency), lazy-runs its `install.js` if only the placeholder stub is present, then execs `src/cli.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. |
+| `src/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, `durableBunPath()` (path baked into service/shim artifacts). |
+| `src/cli.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli.ts`). |
 | `src/server.ts` | Bun server for `/v1/responses`, `/v1/models`, static GUI, and `/api/*` management endpoints. |
 | `src/config.ts` | `~/.opencodex/config.json`, defaults, PID path, env-value resolution, `websocketsEnabled()`. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
