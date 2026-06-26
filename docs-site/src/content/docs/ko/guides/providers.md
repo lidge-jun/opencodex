@@ -97,8 +97,10 @@ Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ocx init`과 dashboard Add
 Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static public model catalog
 metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
-사용하고 native read/write/delete/shell 요청을 로컬에서 처리합니다. Cursor OAuth와 live model
-discovery는 별도 후속 단계이며, Cursor는 여전히 key-login 또는 OAuth login 목록에는 표시되지 않습니다.
+사용하고 native read/write/delete/ls/grep/shell/fetch 요청을 로컬에서 처리합니다. MCP, 화면 녹화,
+computer-use는 executor hook으로 열려 있으며, 로컬 executor가 없으면 정책 차단이 아니라 typed
+no-executor 결과를 반환합니다. Cursor OAuth와 live model discovery는 별도 후속 단계이며, Cursor는
+여전히 key-login 또는 OAuth login 목록에는 표시되지 않습니다.
 :::
 
 ### Ollama Cloud

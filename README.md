@@ -185,8 +185,10 @@ Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging
 Cursor support is a staged experimental bridge: it appears in `ocx init` and the dashboard Add
 Provider picker as a local config with Cursor's static public model catalog. Live
 HTTP/2 transport is enabled when a Cursor access token is configured, and Cursor native
-read/write/delete/shell requests are handled by opencodex. Cursor OAuth and live model discovery
-remain separate future phases.
+read/write/delete/ls/grep/shell/fetch requests are handled by opencodex. MCP, screen recording,
+and computer-use are exposed through executor hooks; when no local executor is configured,
+opencodex returns typed no-executor results instead of policy-blocking the request. Cursor OAuth
+and live model discovery remain separate future phases.
 
 ## CLI
 

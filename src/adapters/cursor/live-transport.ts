@@ -148,7 +148,9 @@ class LiveCursorTransport implements CursorTransport {
             fail(connectError(frame.payload));
             continue;
           }
-          this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push);
+          void this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push).catch(err => {
+            fail(err instanceof Error ? err : new Error(String(err)));
+          });
         }
       } catch (err) {
         fail(err instanceof Error ? err : new Error(String(err)));
@@ -174,18 +176,18 @@ class LiveCursorTransport implements CursorTransport {
     }, HEARTBEAT_MS);
   }
 
-  private handleServerMessage(
+  private async handleServerMessage(
     message: AgentServerMessage,
     state: ReturnType<typeof createCursorProtobufEventState>,
     push: (message: CursorServerMessage) => void,
-  ): void {
+  ): Promise<void> {
     if (!this.stream) return;
     if (message.message.case === "kvServerMessage") {
       this.stream.write(encodeConnectFrame(handleCursorNativeKv(message.message.value)));
       return;
     }
     if (message.message.case === "execServerMessage") {
-      const replies = handleCursorNativeExec(message.message.value);
+      const replies = await handleCursorNativeExec(message.message.value);
       for (const reply of replies) this.stream.write(encodeConnectFrame(reply));
       return;
     }

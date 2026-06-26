@@ -20,9 +20,9 @@ export type CursorDeniedExecCase = (typeof CURSOR_EXEC_CASES_DENIED)[number];
 
 export function cursorExecDeniedMessage(execCase: string): string {
   return [
-    `Cursor exec request denied (${execCase}).`,
-    "The legacy mock Cursor transport denied this exec request.",
-    "No read, write, delete, shell, diagnostics, MCP, fetch, screen, or computer-use command was executed.",
+    `Cursor legacy mock transport cannot execute ${execCase}.`,
+    "Production Cursor requests use the live protobuf native exec bridge.",
+    "The legacy mock path returns a non-executing placeholder for tests only.",
   ].join(" ");
 }
 

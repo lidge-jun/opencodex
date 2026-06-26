@@ -50,7 +50,7 @@ describe("Cursor OAuth shell", () => {
     });
   });
 
-  test("OAuth shell has no live transport or local file execution path", async () => {
+  test("OAuth shell remains separate from live transport and native exec", async () => {
     const source = await Bun.file("src/oauth/cursor.ts").text();
 
     expect(source).not.toContain("fetch(");

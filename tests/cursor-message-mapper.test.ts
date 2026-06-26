@@ -32,7 +32,7 @@ describe("Cursor message mapper", () => {
     expect(writes[2]).toMatchObject({ type: "kv_value", key: "next" });
   });
 
-  test("answers requestContextArgs and denies native tool cases internally", () => {
+  test("answers requestContextArgs and returns legacy mock placeholders for native tool cases", () => {
     const writes: CursorClientMessage[] = [];
     const state = { kv: createCursorKvStore(), writeClient: (message: CursorClientMessage) => writes.push(message) };
 

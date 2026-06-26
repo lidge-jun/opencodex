@@ -114,8 +114,8 @@ describe("Cursor adapter live transport", () => {
     ]);
   });
 
-  test("denied exec message names the blocked case", () => {
+  test("legacy mock exec message names the unavailable case", () => {
     expect(cursorExecDeniedMessage("shellArgs")).toContain("shellArgs");
-    expect(cursorExecDeniedMessage("shellArgs")).toContain("No read, write, delete, shell");
+    expect(cursorExecDeniedMessage("shellArgs")).toContain("legacy mock transport cannot execute");
   });
 });
