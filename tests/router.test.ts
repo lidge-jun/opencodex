@@ -4,6 +4,34 @@ import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 describe("routeModel registry effort defaults", () => {
+  test("routes bare OpenAI/Codex model ids to OpenAI before adopted Cursor model lists", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        cursor: {
+          adapter: "cursor",
+          baseUrl: "https://api2.cursor.sh",
+          defaultModel: "auto",
+          models: ["auto", "gpt-5.5", "claude-4.6-opus"],
+        },
+      },
+    };
+
+    expect(routeModel(config, "gpt-5.5")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.5",
+    });
+    expect(routeModel(config, "cursor/gpt-5.5")).toMatchObject({
+      providerName: "cursor",
+      modelId: "gpt-5.5",
+    });
+  });
+
   test("hydrates registry reasoning effort maps for stale persisted ollama-cloud configs", () => {
     const config: OcxConfig = {
       port: 10100,

@@ -8,17 +8,26 @@ interface RouteResult {
   modelId: string;
 }
 
-const MODEL_PROVIDER_PATTERNS: Record<string, string[]> = {
-  anthropic: [
+const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string[] }> = [
+  {
+    providerNames: ["anthropic"],
+    prefixes: [
     "claude-", "claude-sonnet-", "claude-opus-", "claude-haiku-",
-  ],
-  chatgpt: [
+    ],
+  },
+  {
+    providerNames: ["openai", "chatgpt", "openai-apikey"],
+    prefixes: [
     "gpt-", "o1-", "o3-", "o4-",
-  ],
-  groq: [
+    ],
+  },
+  {
+    providerNames: ["groq"],
+    prefixes: [
     "llama-", "mixtral-", "gemma-",
-  ],
-};
+    ],
+  },
+];
 
 // Merge registry-default effort maps under user values so persisted built-in provider configs
 // that predate reasoningEffortMap/modelReasoningEffortMap still get correct wire translations
@@ -130,6 +139,9 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     }
   }
 
+  const patternRoute = routeByKnownModelPattern(config, modelId);
+  if (patternRoute) return patternRoute;
+
   for (const [provName, prov] of Object.entries(config.providers)) {
     if (prov.defaultModel === modelId) {
       return {
@@ -150,21 +162,8 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     }
   }
 
-  for (const [patternKey, prefixes] of Object.entries(MODEL_PROVIDER_PATTERNS)) {
-    if (prefixes.some(prefix => modelId.startsWith(prefix))) {
-      const matchingProvider = Object.entries(config.providers).find(
-        ([name]) => name === patternKey || name.startsWith(patternKey)
-      );
-      if (matchingProvider) {
-        const [provName, prov] = matchingProvider;
-        return {
-          providerName: provName,
-          provider: routedProviderConfig(provName, prov),
-          modelId,
-        };
-      }
-    }
-  }
+  const fallbackPatternRoute = routeByKnownModelPattern(config, modelId);
+  if (fallbackPatternRoute) return fallbackPatternRoute;
 
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
@@ -176,4 +175,23 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
+}
+
+function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {
+  for (const { providerNames, prefixes } of MODEL_PROVIDER_PATTERNS) {
+    if (prefixes.some(prefix => modelId.startsWith(prefix))) {
+      const matchingProvider = Object.entries(config.providers).find(
+        ([name]) => providerNames.some(providerName => name === providerName || name.startsWith(`${providerName}-`))
+      );
+      if (matchingProvider) {
+        const [provName, prov] = matchingProvider;
+        return {
+          providerName: provName,
+          provider: routedProviderConfig(provName, prov),
+          modelId,
+        };
+      }
+    }
+  }
+  return undefined;
 }
