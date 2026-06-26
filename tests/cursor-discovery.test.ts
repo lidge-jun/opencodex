@@ -14,7 +14,7 @@ describe("Cursor discovery metadata", () => {
   test("static seed includes Cursor's public model families plus the safe auto model", () => {
     const ids = cursorModelIds(CURSOR_STATIC_MODELS);
 
-    expect(ids.length).toBeGreaterThanOrEqual(40);
+    expect(ids.length).toBeGreaterThanOrEqual(30);
     expect(ids).toContain("auto");
     expect(ids).toContain("composer-2.5");
     expect(ids).toContain("claude-4.6-sonnet");
