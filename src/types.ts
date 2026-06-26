@@ -328,6 +328,12 @@ export interface OcxProviderConfig {
    * stream; their tools are advertised to the Cursor server and executed against the live server.
    */
   mcpServers?: Record<string, import("./adapters/cursor/mcp-config").CursorMcpServerConfig>;
+  /**
+   * Cursor adapter only: opt-in external executor for computer-use / record-screen. opencodex is
+   * headless and cannot control a screen itself; provide commands here only when running on a host
+   * that can. With no executor, these tools honestly report "not supported".
+   */
+  desktopExecutor?: import("./adapters/cursor/native-exec-desktop").DesktopExecutorConfig;
 }
 
 export interface CodexAccount {

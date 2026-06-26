@@ -77,7 +77,7 @@ export async function computerUseExec(execMsg: ExecServerMessage, deps: CursorNa
     const result = deps.computerUse
       ? await deps.computerUse(args)
       : create(ComputerUseResultSchema, {
-        result: { case: "error", value: create(ComputerUseErrorSchema, { error: "No local computer-use executor is configured inside opencodex.", actionCount: args.actions.length, durationMs: 0 }) },
+        result: { case: "error", value: create(ComputerUseErrorSchema, { error: "computer-use is not supported in this headless opencodex proxy. Configure provider.desktopExecutor.computerUseCommand to enable it.", actionCount: args.actions.length, durationMs: 0 }) },
       });
     return execBytes(execMsg, "computerUseResult", result);
   } catch (err) {
@@ -90,10 +90,16 @@ export async function computerUseExec(execMsg: ExecServerMessage, deps: CursorNa
 export async function recordScreenExec(execMsg: ExecServerMessage, deps: CursorNativeToolDeps): Promise<Uint8Array> {
   if (execMsg.message.case !== "recordScreenArgs") throw new Error("invalid record screen exec");
   const args = execMsg.message.value;
-  const result = deps.recordScreen
-    ? await deps.recordScreen(args)
-    : create(RecordScreenResultSchema, {
-      result: { case: "failure", value: create(RecordScreenFailureSchema, { error: "No local record-screen executor is configured inside opencodex." }) },
-    });
-  return execBytes(execMsg, "recordScreenResult", result);
+  try {
+    const result = deps.recordScreen
+      ? await deps.recordScreen(args)
+      : create(RecordScreenResultSchema, {
+        result: { case: "failure", value: create(RecordScreenFailureSchema, { error: "record-screen is not supported in this headless opencodex proxy. Configure provider.desktopExecutor.recordScreenCommand to enable it." }) },
+      });
+    return execBytes(execMsg, "recordScreenResult", result);
+  } catch (err) {
+    return execBytes(execMsg, "recordScreenResult", create(RecordScreenResultSchema, {
+      result: { case: "failure", value: create(RecordScreenFailureSchema, { error: errorText(err) }) },
+    }));
+  }
 }

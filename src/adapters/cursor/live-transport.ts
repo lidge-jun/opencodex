@@ -14,6 +14,8 @@ import { handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecCont
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
+import { desktopDepsFromConfig } from "./native-exec-desktop";
+import type { CursorNativeToolDeps } from "./native-exec-tools";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
 
@@ -70,11 +72,15 @@ class LiveCursorTransport implements CursorTransport {
   private heartbeat?: ReturnType<typeof setInterval>;
   private readonly token: string;
   private readonly mcpManager?: CursorMcpManager;
+  private readonly desktopDeps: CursorNativeToolDeps;
   private execContext: CursorNativeExecContext = {};
   private mcpPrepared?: Promise<void>;
 
   constructor(private readonly input: CursorTransportFactoryInput) {
     this.token = resolveCursorToken(input.provider, input.headers);
+    // Desktop (computer-use / record-screen) executors are available even with no MCP servers.
+    this.desktopDeps = desktopDepsFromConfig(input.provider.desktopExecutor);
+    this.execContext = { ...this.desktopDeps };
     const servers = resolveMcpServers(input.provider);
     if (servers.length > 0) {
       this.mcpManager = new CursorMcpManager(servers, {
@@ -95,10 +101,10 @@ class LiveCursorTransport implements CursorTransport {
       this.mcpPrepared = (async () => {
         try {
           const mcpToolDefs = await buildMcpToolDefinitions(this.mcpManager!);
-          this.execContext = { ...mcpDepsFromManager(this.mcpManager!), mcpToolDefs };
+          this.execContext = { ...this.desktopDeps, ...mcpDepsFromManager(this.mcpManager!), mcpToolDefs };
         } catch (err) {
           console.warn(`[cursor-mcp] preparation failed, MCP disabled for this stream: ${err instanceof Error ? err.message : String(err)}`);
-          this.execContext = {};
+          this.execContext = { ...this.desktopDeps };
         }
       })();
     }
