@@ -27,7 +27,7 @@ export class CursorMissingCredentialError extends Error {
   }
 }
 
-function resolveCursorToken(provider: OcxProviderConfig, headers?: Headers): string {
+export function resolveCursorToken(provider: OcxProviderConfig, headers?: Headers): string {
   const providerKey = provider.apiKey?.trim();
   if (providerKey) return providerKey;
 

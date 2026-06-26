@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createLiveCursorTransport, CursorMissingCredentialError, parseConnectEndStreamError } from "../src/adapters/cursor/live-transport";
+import { createLiveCursorTransport, CursorMissingCredentialError, parseConnectEndStreamError, resolveCursorToken } from "../src/adapters/cursor/live-transport";
 
 describe("Cursor live transport", () => {
   test("fails before network when no Cursor credential is configured", () => {
@@ -48,5 +48,37 @@ describe("Cursor end-stream classification", () => {
 
   test("malformed payload is treated as an error, not a silent success", () => {
     expect(parseConnectEndStreamError(enc("not json"))).toBeInstanceOf(Error);
+  });
+});
+
+describe("Cursor token precedence (R2 gap-close guard)", () => {
+  test("managed apiKey beats a forwarded Authorization header", () => {
+    // The unauthenticated gap (devlog 350.98/99) reopens if this ever returns the client token.
+    const token = resolveCursorToken(
+      { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "managed-oauth-token" },
+      new Headers({ authorization: "Bearer client-forwarded-token" }),
+    );
+    expect(token).toBe("managed-oauth-token");
+  });
+
+  test("falls back to the forwarded Bearer header when no apiKey is configured", () => {
+    const token = resolveCursorToken(
+      { adapter: "cursor", baseUrl: "https://api2.cursor.sh" },
+      new Headers({ authorization: "Bearer client-forwarded-token" }),
+    );
+    expect(token).toBe("client-forwarded-token");
+  });
+
+  test("throws CursorMissingCredentialError when no apiKey, no header, and no env token", () => {
+    const prev = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    try {
+      expect(() =>
+        resolveCursorToken({ adapter: "cursor", baseUrl: "https://api2.cursor.sh" }, new Headers()),
+      ).toThrow(CursorMissingCredentialError);
+    } finally {
+      if (prev === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+      else process.env.OPENCODEX_CURSOR_TEST_TOKEN = prev;
+    }
   });
 });
