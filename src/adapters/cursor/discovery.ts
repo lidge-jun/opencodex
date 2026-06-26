@@ -76,7 +76,8 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
 
   { id: "gpt-5-mini" },
   { id: "gpt-5.1", supportsReasoningEffort: true },
-  { id: "gpt-5.1-codex", supportsReasoningEffort: true },
+  { id: "gpt-5.1-codex-max", supportsReasoningEffort: true },
+  { id: "gpt-5.1-codex-mini", supportsReasoningEffort: true },
   { id: "gpt-5.2", supportsReasoningEffort: true },
   { id: "gpt-5.2-codex", supportsReasoningEffort: true },
   { id: "gpt-5.3-codex", supportsReasoningEffort: true },

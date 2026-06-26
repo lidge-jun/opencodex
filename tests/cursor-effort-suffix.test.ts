@@ -32,7 +32,7 @@ describe("Cursor per-model reasoning-effort suffix", () => {
   });
 
   test("single-tier models always use their one tier", () => {
-    expect(modelIdFor("cursor/gpt-5.1-codex", "low")).toBe("gpt-5.1-codex-max");
+    expect(modelIdFor("cursor/gpt-5.5-extra", "low")).toBe("gpt-5.5-extra-high");
     expect(modelIdFor("cursor/claude-4.6-sonnet", "high")).toBe("claude-4.6-sonnet-medium");
     expect(modelIdFor("cursor/claude-4.5-opus", "low")).toBe("claude-4.5-opus-high");
   });
