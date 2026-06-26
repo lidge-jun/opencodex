@@ -250,4 +250,17 @@ describe("Cursor MCP deps via native-exec dispatcher", () => {
     expect(["success", "error"]).toContain(reply.message.value.result.case);
     await manager.dispose();
   });
+
+  test("listMcpResources with no executor wired returns a typed error, not empty success", async () => {
+    // No deps => genuinely unconfigured (or prepareMcp stripped deps after a failure).
+    const reply = decode((await handleCursorNativeExec(
+      execMessage({ case: "listMcpResourcesExecArgs", value: create(ListMcpResourcesExecArgsSchema, {}) }),
+      {},
+    ))[0]);
+    expect(reply.message.case).toBe("listMcpResourcesExecResult");
+    expect(reply.message.value.result.case).toBe("error");
+    if (reply.message.value.result.case === "error") {
+      expect(reply.message.value.result.value.error).toContain("No local MCP resource executor");
+    }
+  });
 });

@@ -2,8 +2,8 @@ import { create } from "@bufbuild/protobuf";
 import {
   ComputerUseErrorSchema,
   ComputerUseResultSchema,
+  ListMcpResourcesErrorSchema,
   ListMcpResourcesExecResultSchema,
-  ListMcpResourcesSuccessSchema,
   McpErrorSchema,
   McpResultSchema,
   ReadMcpResourceErrorSchema,
@@ -47,9 +47,16 @@ export async function mcpExec(execMsg: ExecServerMessage, deps: CursorNativeTool
 
 export async function listMcpResourcesExec(execMsg: ExecServerMessage, deps: CursorNativeToolDeps): Promise<Uint8Array> {
   if (execMsg.message.case !== "listMcpResourcesExecArgs") throw new Error("invalid list mcp resources exec");
+  // No executor wired (no MCP configured, or prepareMcp() stripped deps after a setup
+  // failure): return a typed error, symmetric with readMcpResource. An empty-success here
+  // would falsely imply "connected, zero resources" and mask a misconfiguration.
   const result = deps.listMcpResources
     ? await deps.listMcpResources()
-    : create(ListMcpResourcesExecResultSchema, { result: { case: "success", value: create(ListMcpResourcesSuccessSchema, { resources: [] }) } });
+    : create(ListMcpResourcesExecResultSchema, {
+        result: { case: "error", value: create(ListMcpResourcesErrorSchema, {
+          error: "No local MCP resource executor is configured inside opencodex.",
+        }) },
+      });
   return execBytes(execMsg, "listMcpResourcesExecResult", result);
 }
 
