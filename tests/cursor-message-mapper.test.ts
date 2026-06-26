@@ -45,7 +45,7 @@ describe("Cursor message mapper", () => {
       type: "exec_result",
       requestId: "ctx",
       ok: true,
-      message: "Cursor request context is empty in safe scaffold mode.",
+      message: "Cursor request context is empty in legacy mock transport mode.",
     });
     expect(writes.slice(1).every(message => message.type === "exec_result" && message.ok === false)).toBe(true);
     expect(writes[1]?.message).toContain("shellArgs");

@@ -4,6 +4,7 @@ import { cursorExecDeniedMessage } from "./cursor/exec-policy";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import { createCursorRequest } from "./cursor/request-builder";
+import { createLiveCursorTransport, CursorMissingCredentialError } from "./cursor/live-transport";
 import {
   createDisabledCursorTransport,
   CursorTransportDisabledError,
@@ -19,9 +20,8 @@ export {
 } from "./cursor/exec-policy";
 
 const CURSOR_TRANSPORT_DISABLED_MESSAGE = [
-  "Cursor adapter scaffold is installed, but live Cursor transport is disabled in this build.",
-  "This prevents accidental file writes or shell execution while the exec bridge is not audited.",
-  "Manual config may use adapter=\"cursor\", but all Cursor read/write/shell/delete/MCP requests remain denied.",
+  "An explicit disabled Cursor transport was injected.",
+  "Production Cursor requests use live transport when a Cursor access token is configured.",
 ].join(" ");
 
 export interface CursorAdapterDeps {
@@ -31,6 +31,9 @@ export interface CursorAdapterDeps {
 
 function safeCursorTransportError(err: unknown): string {
   if (err instanceof CursorTransportDisabledError) return CURSOR_TRANSPORT_DISABLED_MESSAGE;
+  if (err instanceof CursorMissingCredentialError) {
+    return "Cursor live transport is enabled, but no Cursor access token is configured. Set provider.apiKey or OPENCODEX_CURSOR_TEST_TOKEN.";
+  }
   return [
     "Cursor transport failed before completion.",
     "No Cursor native file, shell, MCP, fetch, screen, or computer-use command was executed.",
@@ -62,11 +65,13 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         emit({ type: "error", message: "Cursor turn was aborted before start." });
         return;
       }
-      const transport = (deps.createTransport ?? createDisabledCursorTransport)(provider);
-      const kv = deps.kv ?? createCursorKvStore();
-      const request = createCursorRequest(_parsed);
+      let transport: ReturnType<CursorTransportFactory> | undefined;
       try {
-        for await (const message of transport.run(request, incoming.abortSignal)) {
+        transport = (deps.createTransport ?? createLiveCursorTransport)({ provider, headers: incoming.headers });
+        const activeTransport = transport;
+        const kv = deps.kv ?? createCursorKvStore();
+        const request = createCursorRequest(_parsed);
+        for await (const message of activeTransport.run(request, incoming.abortSignal)) {
           if (incoming.abortSignal?.aborted) {
             emit({ type: "error", message: "Cursor turn was aborted." });
             return;
@@ -74,7 +79,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           const events = mapCursorServerMessage(message, {
             kv,
             writeClient: clientMessage => {
-              void transport.writeClient(clientMessage);
+              void activeTransport.writeClient(clientMessage);
             },
           });
           for (const event of events) emit(event);
@@ -82,7 +87,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       } catch (err) {
         emit({ type: "error", message: safeCursorTransportError(err) });
       } finally {
-        await transport.close?.();
+        await transport?.close?.();
       }
     },
   };

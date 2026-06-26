@@ -65,7 +65,7 @@ describe("provider registry parity", () => {
     expect(buildInitProviders().find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
   });
 
-  test("Cursor registry exposure is dashboard/local and fail-closed", () => {
+  test("Cursor registry exposure is dashboard/local with live native exec", () => {
     const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
 
     expect(cursor).toMatchObject({
@@ -77,7 +77,8 @@ describe("provider registry parity", () => {
       defaultModel: "auto",
       liveModels: false,
     });
-    expect(cursor?.note).toContain("disabled");
+    expect(cursor?.note).toContain("Live transport");
+    expect(cursor?.note).toContain("native read/write/delete/shell");
     expect(cursor?.models).toContain("auto");
     expect(cursor?.models?.length).toBeGreaterThanOrEqual(45);
     expect(cursor?.models).toContain("composer-2.5");

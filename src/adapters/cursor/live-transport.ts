@@ -1,0 +1,205 @@
+import http2 from "node:http2";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import type { OcxProviderConfig } from "../../types";
+import { CONNECT_FLAG_END_STREAM, decodeConnectFrames, encodeConnectFrame } from "./framing";
+import { encodeCursorRunRequest } from "./protobuf-request";
+import { createCursorProtobufEventState, mapCursorProtobufServerMessage } from "./protobuf-events";
+import {
+  AgentClientMessageSchema,
+  AgentServerMessageSchema,
+  ClientHeartbeatSchema,
+  type AgentServerMessage,
+} from "./gen/agent_pb";
+import { handleCursorNativeExec, handleCursorNativeKv } from "./native-exec";
+import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
+import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
+
+const CURSOR_RUN_PATH = "/agent.v1.AgentService/Run";
+const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
+const HEARTBEAT_MS = 5_000;
+
+export class CursorMissingCredentialError extends Error {
+  readonly code = "cursor_missing_credential";
+
+  constructor() {
+    super("Cursor live transport requires a Cursor access token in provider.apiKey, Authorization, or OPENCODEX_CURSOR_TEST_TOKEN.");
+    this.name = "CursorMissingCredentialError";
+  }
+}
+
+function resolveCursorToken(provider: OcxProviderConfig, headers?: Headers): string {
+  const providerKey = provider.apiKey?.trim();
+  if (providerKey) return providerKey;
+
+  const forwarded = headers?.get("authorization") ?? headers?.get("Authorization");
+  if (forwarded?.toLowerCase().startsWith("bearer ")) return forwarded.slice("bearer ".length).trim();
+
+  const envToken = process.env.OPENCODEX_CURSOR_TEST_TOKEN?.trim();
+  if (envToken) return envToken;
+  throw new CursorMissingCredentialError();
+}
+
+function connectError(payload: Uint8Array): Error {
+  try {
+    const text = new TextDecoder().decode(payload);
+    const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+    return new Error(`Cursor Connect error ${parsed.error?.code ?? "unknown"}: ${parsed.error?.message ?? text}`);
+  } catch {
+    return new Error("Cursor Connect end-stream error");
+  }
+}
+
+function encodeClientMessage(message: Parameters<typeof create<typeof AgentClientMessageSchema>>[1]): Uint8Array {
+  return encodeConnectFrame(toBinary(AgentClientMessageSchema, create(AgentClientMessageSchema, message)));
+}
+
+class LiveCursorTransport implements CursorTransport {
+  private session?: http2.ClientHttp2Session;
+  private stream?: http2.ClientHttp2Stream;
+  private heartbeat?: ReturnType<typeof setInterval>;
+  private readonly token: string;
+
+  constructor(private readonly input: CursorTransportFactoryInput) {
+    this.token = resolveCursorToken(input.provider, input.headers);
+  }
+
+  toJSON(): Record<string, string> {
+    return { type: "LiveCursorTransport", credential: "redacted" };
+  }
+
+  async *run(request: CursorRunRequest, signal?: AbortSignal): AsyncIterable<CursorServerMessage> {
+    const queue: CursorServerMessage[] = [];
+    let notify: (() => void) | undefined;
+    let done = false;
+    let failure: Error | undefined;
+    const state = createCursorProtobufEventState();
+    const wake = () => {
+      const fn = notify;
+      notify = undefined;
+      fn?.();
+    };
+
+    const push = (message: CursorServerMessage) => {
+      queue.push(message);
+      wake();
+    };
+
+    this.open(request, signal, state, push, err => {
+      failure = err;
+      wake();
+    }, () => {
+      done = true;
+      wake();
+    });
+
+    while (!done || queue.length > 0) {
+      while (queue.length > 0) {
+        const message = queue.shift();
+        if (message) yield message;
+      }
+      if (failure) throw failure;
+      if (done) break;
+      await new Promise<void>(resolve => {
+        notify = resolve;
+      });
+    }
+    if (failure) throw failure;
+  }
+
+  writeClient(_message: CursorClientMessage): void {}
+
+  close(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.stream?.close();
+    this.session?.close();
+  }
+
+  private open(
+    request: CursorRunRequest,
+    signal: AbortSignal | undefined,
+    state: ReturnType<typeof createCursorProtobufEventState>,
+    push: (message: CursorServerMessage) => void,
+    fail: (error: Error) => void,
+    finish: () => void,
+  ): void {
+    this.session = http2.connect(this.input.provider.baseUrl || "https://api2.cursor.sh");
+    this.stream = this.session.request({
+      ":method": "POST",
+      ":path": CURSOR_RUN_PATH,
+      "content-type": "application/connect+proto",
+      "connect-protocol-version": "1",
+      te: "trailers",
+      authorization: `Bearer ${this.token}`,
+      "x-ghost-mode": "true",
+      "x-cursor-client-version": CURSOR_CLIENT_VERSION,
+      "x-cursor-client-type": "cli",
+      "x-request-id": crypto.randomUUID(),
+    });
+
+    let pending: Uint8Array<ArrayBufferLike> = new Uint8Array();
+    this.stream.on("data", chunk => {
+      const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+      pending = concatBytes(pending, bytes);
+      try {
+        const frames = decodeConnectFrames(pending);
+        pending = new Uint8Array();
+        for (const frame of frames) {
+          if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
+            fail(connectError(frame.payload));
+            continue;
+          }
+          this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push);
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+    this.stream.on("trailers", trailers => {
+      const status = trailers["grpc-status"];
+      if (status && status !== "0") fail(new Error(`Cursor gRPC error ${status}`));
+    });
+    this.stream.on("error", err => fail(err instanceof Error ? err : new Error(String(err))));
+    this.stream.on("end", finish);
+
+    signal?.addEventListener("abort", () => {
+      this.close();
+      fail(new Error("Cursor request was aborted"));
+    }, { once: true });
+
+    this.stream.write(encodeConnectFrame(encodeCursorRunRequest(request)));
+    this.heartbeat = setInterval(() => {
+      this.stream?.write(encodeClientMessage({
+        message: { case: "clientHeartbeat", value: create(ClientHeartbeatSchema, {}) },
+      }));
+    }, HEARTBEAT_MS);
+  }
+
+  private handleServerMessage(
+    message: AgentServerMessage,
+    state: ReturnType<typeof createCursorProtobufEventState>,
+    push: (message: CursorServerMessage) => void,
+  ): void {
+    if (!this.stream) return;
+    if (message.message.case === "kvServerMessage") {
+      this.stream.write(encodeConnectFrame(handleCursorNativeKv(message.message.value)));
+      return;
+    }
+    if (message.message.case === "execServerMessage") {
+      const replies = handleCursorNativeExec(message.message.value);
+      for (const reply of replies) this.stream.write(encodeConnectFrame(reply));
+      return;
+    }
+    for (const event of mapCursorProtobufServerMessage(message, state)) push(event);
+  }
+}
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}
+
+export function createLiveCursorTransport(input: CursorTransportFactoryInput): CursorTransport {
+  return new LiveCursorTransport(input);
+}

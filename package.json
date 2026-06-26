@@ -48,6 +48,7 @@
     "release:watch": "bun scripts/release.ts watch"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
     "bun": "1.3.14",
     "zod": "4.4.3"
   },

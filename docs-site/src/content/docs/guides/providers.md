@@ -94,12 +94,12 @@ OpenAI-compatible endpoint; they authenticate with a Bearer **subscription token
 key), and Copilot may need a `User-Agent` header set via the provider's `headers`. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
-Cursor is tracked separately as an experimental adapter scaffold. `adapter: "cursor"` exists in
-source, but live OAuth, live model discovery, HTTP/2 transport, and native tool execution are
-disabled until the bridge is audited. Cursor is shown in `ocx init` and the dashboard Add Provider
-picker as an experimental local config entry with Cursor's static public model catalog metadata; it
-is not shown in key-login or OAuth login lists. A Cursor config still fails closed with a
-disabled-transport error until live transport is explicitly enabled in a later audited phase.
+Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`
+and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
+public model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
+live HTTP/2 transport and handles native read/write/delete/shell requests locally. Cursor OAuth and
+live model discovery remain separate future phases; Cursor is still not shown in key-login or OAuth
+login lists.
 :::
 
 ### Ollama Cloud

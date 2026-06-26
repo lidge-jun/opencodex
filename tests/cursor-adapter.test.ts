@@ -24,8 +24,8 @@ async function collect(gen: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[
   return events;
 }
 
-describe("Cursor adapter safe scaffold", () => {
-  test("runTurn emits disabled transport error without live network", async () => {
+describe("Cursor adapter live transport", () => {
+  test("runTurn emits a missing-token error before live network", async () => {
     const adapter = createCursorAdapter(provider);
     const events: AdapterEvent[] = [];
 
@@ -34,7 +34,7 @@ describe("Cursor adapter safe scaffold", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "error",
-      message: expect.stringContaining("live Cursor transport is disabled"),
+      message: expect.stringContaining("no Cursor access token is configured"),
     });
   });
 

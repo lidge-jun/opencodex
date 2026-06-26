@@ -7,7 +7,12 @@ export interface CursorTransport {
   close?(): void | Promise<void>;
 }
 
-export type CursorTransportFactory = (provider: OcxProviderConfig) => CursorTransport;
+export interface CursorTransportFactoryInput {
+  provider: OcxProviderConfig;
+  headers?: Headers;
+}
+
+export type CursorTransportFactory = (input: CursorTransportFactoryInput) => CursorTransport;
 
 export class CursorTransportDisabledError extends Error {
   readonly code = "cursor_transport_disabled";

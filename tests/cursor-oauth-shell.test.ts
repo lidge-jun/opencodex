@@ -21,7 +21,7 @@ async function expectCursorDisabled(promise: Promise<unknown>): Promise<void> {
   throw new Error("Expected CursorOAuthDisabledError");
 }
 
-describe("Cursor disabled OAuth shell", () => {
+describe("Cursor OAuth shell", () => {
   test("login and refresh fail closed", async () => {
     await expectCursorDisabled(loginCursor({}));
     await expectCursorDisabled(refreshCursorToken("refresh-token"));
@@ -50,7 +50,7 @@ describe("Cursor disabled OAuth shell", () => {
     });
   });
 
-  test("disabled shell has no live transport or local file execution path", async () => {
+  test("OAuth shell has no live transport or local file execution path", async () => {
     const source = await Bun.file("src/oauth/cursor.ts").text();
 
     expect(source).not.toContain("fetch(");

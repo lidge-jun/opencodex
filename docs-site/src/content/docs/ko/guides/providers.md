@@ -94,12 +94,11 @@ Anthropic 호환입니다). 대시보드의 **Add provider** 선택기는 해당
 Copilot은 프로바이더의 `headers`를 통해 `User-Agent` 헤더 설정이 필요할 수 있습니다. **Cloudflare AI
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
-Cursor는 별도의 실험적 어댑터 scaffold로 추적합니다. source에는 `adapter: "cursor"`가 있지만,
-live OAuth, live 모델 discovery, HTTP/2 transport, native tool 실행은 bridge 감사가 끝날 때까지
-비활성화되어 있습니다. Cursor는 `ocx init`과 dashboard Add Provider picker에 실험적 local config
-항목으로 표시되며, Cursor의 static public model catalog metadata를 저장합니다. key-login 또는 OAuth
-login 목록에는 표시되지 않습니다. Cursor config는 live transport가 별도 감사 단계에서 명시적으로 열릴
-때까지 disabled-transport error로 fail-closed 처리됩니다.
+Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ocx init`과 dashboard Add
+Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static public model catalog
+metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
+사용하고 native read/write/delete/shell 요청을 로컬에서 처리합니다. Cursor OAuth와 live model
+discovery는 별도 후속 단계이며, Cursor는 여전히 key-login 또는 OAuth login 목록에는 표시되지 않습니다.
 :::
 
 ### Ollama Cloud
