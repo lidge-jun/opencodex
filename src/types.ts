@@ -322,6 +322,12 @@ export interface OcxProviderConfig {
    * attached images are described by a gpt vision model and replaced with text before the call.
    */
   noVisionModels?: string[];
+  /**
+   * Cursor adapter only: MCP servers opencodex starts/connects and exposes to the Cursor agent
+   * as callable tools. Each entry is spawned (stdio `command`) or connected (`url`) lazily per
+   * stream; their tools are advertised to the Cursor server and executed against the live server.
+   */
+  mcpServers?: Record<string, import("./adapters/cursor/mcp-config").CursorMcpServerConfig>;
 }
 
 export interface CodexAccount {

@@ -1,0 +1,189 @@
+import { fromBinary } from "@bufbuild/protobuf";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { z } from "zod";
+import { create } from "@bufbuild/protobuf";
+import {
+  ExecServerMessageSchema,
+  AgentClientMessageSchema,
+  ListMcpResourcesExecArgsSchema,
+  McpArgsSchema,
+  ReadMcpResourceExecArgsSchema,
+} from "../src/adapters/cursor/gen/agent_pb";
+import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import { resolveMcpServers } from "../src/adapters/cursor/mcp-config";
+import { CursorMcpManager } from "../src/adapters/cursor/mcp-manager";
+import { buildMcpToolDefinitions, mcpDepsFromManager } from "../src/adapters/cursor/native-exec-mcp";
+import type { OcxProviderConfig } from "../src/types";
+
+const textEncoder = new TextEncoder();
+
+function buildFixtureServer(): { server: McpServer; clientTransport: InMemoryTransport } {
+  const server = new McpServer({ name: "fixture", version: "1.0.0" });
+
+  server.registerTool(
+    "echo",
+    { description: "Echoes the input text", inputSchema: { text: z.string() } },
+    async ({ text }) => ({ content: [{ type: "text", text: `echo:${text}` }] }),
+  );
+
+  server.registerTool(
+    "boom",
+    { description: "Always errors", inputSchema: {} },
+    async () => ({ isError: true, content: [{ type: "text", text: "tool failed" }] }),
+  );
+
+  server.registerResource(
+    "doc",
+    "memory://doc",
+    { description: "A demo resource", mimeType: "text/plain" },
+    async uri => ({ contents: [{ uri: uri.href, mimeType: "text/plain", text: "resource-body" }] }),
+  );
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  void server.connect(serverTransport);
+  return { server, clientTransport };
+}
+
+function makeManager(clientTransport: InMemoryTransport): CursorMcpManager {
+  return new CursorMcpManager(
+    [{ serverName: "fixture", command: "noop" }],
+    { transportFactory: () => clientTransport },
+  );
+}
+
+function execMessage(message: Parameters<typeof create<typeof ExecServerMessageSchema>>[1]["message"]) {
+  return create(ExecServerMessageSchema, { id: 1, execId: "exec-test", message });
+}
+
+function decode(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  expect(msg.message.case).toBe("execClientMessage");
+  return msg.message.value;
+}
+
+describe("Cursor MCP manager", () => {
+  let manager: CursorMcpManager;
+  let clientTransport: InMemoryTransport;
+
+  beforeEach(() => {
+    ({ clientTransport } = buildFixtureServer());
+    manager = makeManager(clientTransport);
+  });
+
+  afterEach(async () => {
+    await manager.dispose();
+  });
+
+  test("resolveMcpServers filters disabled and url-less/command-less entries", () => {
+    const provider = {
+      adapter: "cursor",
+      baseUrl: "x",
+      mcpServers: {
+        ok: { command: "node" },
+        remote: { url: "https://mcp.test" },
+        disabled: { command: "node", enabled: false },
+        empty: {},
+      },
+    } as unknown as OcxProviderConfig;
+    const names = resolveMcpServers(provider).map(s => s.serverName).sort();
+    expect(names).toEqual(["ok", "remote"]);
+  });
+
+  test("discovers tools with handles", async () => {
+    const handles = await manager.listToolHandles();
+    const names = handles.map(h => h.advertisedName).sort();
+    expect(names).toEqual(["boom", "echo"]);
+    const echo = handles.find(h => h.advertisedName === "echo");
+    expect(echo?.description).toBe("Echoes the input text");
+  });
+
+  test("callTool returns success content", async () => {
+    const result = await manager.callTool("echo", { text: "hi" });
+    expect(result.isError).toBe(false);
+    expect(result.content[0]?.text).toBe("echo:hi");
+  });
+
+  test("callTool propagates tool-level isError without throwing", async () => {
+    const result = await manager.callTool("boom", {});
+    expect(result.isError).toBe(true);
+  });
+
+  test("resolveTool returns undefined for unknown tool", async () => {
+    expect(await manager.resolveTool("nope")).toBeUndefined();
+  });
+
+  test("listResources and readResource map content", async () => {
+    const resources = await manager.listResources();
+    expect(resources.map(r => r.uri)).toContain("memory://doc");
+    const content = await manager.readResource("fixture", "memory://doc");
+    expect(content.text).toBe("resource-body");
+    expect(content.mimeType).toBe("text/plain");
+  });
+
+  test("buildMcpToolDefinitions emits valid definitions with JSON input schema", async () => {
+    const defs = await buildMcpToolDefinitions(manager);
+    const echo = defs.find(d => d.toolName === "echo");
+    expect(echo).toBeDefined();
+    expect(echo?.providerIdentifier).toBe("opencodex");
+    const schema = JSON.parse(new TextDecoder().decode(echo!.inputSchema));
+    expect(schema.type).toBe("object");
+  });
+});
+
+describe("Cursor MCP deps via native-exec dispatcher", () => {
+  test("mcpArgs executes against live server through the dispatcher", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const args = create(McpArgsSchema, { name: "echo", toolName: "echo", providerIdentifier: "opencodex" });
+    args.args = { text: textEncoder.encode(JSON.stringify("world")) };
+
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
+    expect(reply.message.case).toBe("mcpResult");
+    expect(reply.message.value.result.case).toBe("success");
+    if (reply.message.value.result.case === "success") {
+      const content = reply.message.value.result.value.content[0];
+      expect(content?.content.case).toBe("text");
+      if (content?.content.case === "text") expect(content.content.value.text).toBe("echo:world");
+    }
+    await manager.dispose();
+  });
+
+  test("unknown mcp tool returns typed toolNotFound, not error", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const args = create(McpArgsSchema, { name: "ghost", toolName: "ghost", providerIdentifier: "opencodex" });
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
+    expect(reply.message.case).toBe("mcpResult");
+    expect(reply.message.value.result.case).toBe("toolNotFound");
+    await manager.dispose();
+  });
+
+  test("readMcpResource executes against live server", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const args = create(ReadMcpResourceExecArgsSchema, { server: "fixture", uri: "memory://doc" });
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "readMcpResourceExecArgs", value: args }), deps))[0]);
+    expect(reply.message.case).toBe("readMcpResourceExecResult");
+    expect(reply.message.value.result.case).toBe("success");
+    await manager.dispose();
+  });
+
+  test("listMcpResources never throws and returns success", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "listMcpResourcesExecArgs", value: create(ListMcpResourcesExecArgsSchema, {}) }), deps))[0]);
+    expect(reply.message.case).toBe("listMcpResourcesExecResult");
+    expect(["success", "error"]).toContain(reply.message.value.result.case);
+    await manager.dispose();
+  });
+});

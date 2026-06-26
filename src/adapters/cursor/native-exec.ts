@@ -24,8 +24,18 @@ import {
   type CursorNativeToolDeps,
 } from "./native-exec-tools";
 import { clientBytes, execBytes } from "./native-exec-common";
+import type { McpToolDefinition } from "./gen/agent_pb";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
+
+/**
+ * Execution context for a Cursor stream: the per-call executors plus the MCP tool definitions
+ * advertised to the server via `requestContextResult`. Without `mcpToolDefs`, the server is
+ * never told any MCP tools exist, so it never sends `mcpArgs`.
+ */
+export interface CursorNativeExecContext extends CursorNativeExecDeps {
+  mcpToolDefs?: McpToolDefinition[];
+}
 
 const blobs = new Map<string, Uint8Array>();
 
@@ -44,11 +54,11 @@ export function storeCursorBlob(data: Uint8Array): Uint8Array {
   return blobId;
 }
 
-export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: CursorNativeExecDeps = {}): Promise<Uint8Array[]> {
+export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: CursorNativeExecContext = {}): Promise<Uint8Array[]> {
   const execCase = execMsg.message.case;
   if (execCase === "requestContextArgs") {
     return [execBytes(execMsg, "requestContextResult", create(RequestContextResultSchema, {
-      result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext: create(RequestContextSchema, {}) }) },
+      result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext: create(RequestContextSchema, { tools: deps.mcpToolDefs ?? [] }) }) },
     }))];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];

@@ -10,7 +10,10 @@ import {
   ClientHeartbeatSchema,
   type AgentServerMessage,
 } from "./gen/agent_pb";
-import { handleCursorNativeExec, handleCursorNativeKv } from "./native-exec";
+import { handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";
+import { resolveMcpServers } from "./mcp-config";
+import { CursorMcpManager } from "./mcp-manager";
+import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
 
@@ -66,9 +69,40 @@ class LiveCursorTransport implements CursorTransport {
   private stream?: http2.ClientHttp2Stream;
   private heartbeat?: ReturnType<typeof setInterval>;
   private readonly token: string;
+  private readonly mcpManager?: CursorMcpManager;
+  private execContext: CursorNativeExecContext = {};
+  private mcpPrepared?: Promise<void>;
 
   constructor(private readonly input: CursorTransportFactoryInput) {
     this.token = resolveCursorToken(input.provider, input.headers);
+    const servers = resolveMcpServers(input.provider);
+    if (servers.length > 0) {
+      this.mcpManager = new CursorMcpManager(servers, {
+        log: message => console.warn(message),
+      });
+    }
+  }
+
+  /**
+   * Connect MCP servers and compute the tool definitions advertised to the Cursor server.
+   * MUST complete before the first `requestContextArgs` (the server only calls MCP tools it was
+   * told about), so `run()` awaits this before opening the stream. Best-effort: any failure
+   * leaves an empty tool list and MCP disabled for the stream, never blocking the conversation.
+   */
+  private prepareMcp(): Promise<void> {
+    if (!this.mcpManager) return Promise.resolve();
+    if (!this.mcpPrepared) {
+      this.mcpPrepared = (async () => {
+        try {
+          const mcpToolDefs = await buildMcpToolDefinitions(this.mcpManager!);
+          this.execContext = { ...mcpDepsFromManager(this.mcpManager!), mcpToolDefs };
+        } catch (err) {
+          console.warn(`[cursor-mcp] preparation failed, MCP disabled for this stream: ${err instanceof Error ? err.message : String(err)}`);
+          this.execContext = {};
+        }
+      })();
+    }
+    return this.mcpPrepared;
   }
 
   toJSON(): Record<string, string> {
@@ -91,6 +125,9 @@ class LiveCursorTransport implements CursorTransport {
       queue.push(message);
       wake();
     };
+
+    // Advertise MCP tools before the stream opens — the server only calls tools it was told about.
+    await this.prepareMcp();
 
     this.open(request, signal, state, push, err => {
       failure = err;
@@ -120,6 +157,7 @@ class LiveCursorTransport implements CursorTransport {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.stream?.close();
     this.session?.close();
+    void this.mcpManager?.dispose();
   }
 
   private open(
@@ -197,7 +235,7 @@ class LiveCursorTransport implements CursorTransport {
       return;
     }
     if (message.message.case === "execServerMessage") {
-      const replies = await handleCursorNativeExec(message.message.value);
+      const replies = await handleCursorNativeExec(message.message.value, this.execContext);
       for (const reply of replies) this.stream.write(encodeConnectFrame(reply));
       return;
     }
