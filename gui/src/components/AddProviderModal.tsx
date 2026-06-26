@@ -259,7 +259,7 @@ export default function AddProviderModal({
                 </div>
               ) : form.authMode === "local" ? (
                 <div style={{ fontSize: 12, color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px", lineHeight: 1.55 }}>
-                  No API key is stored. This adds Cursor's static <code className="chip">cursor/auto</code> catalog entry for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                  No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
                 </div>
               ) : (
                 <>

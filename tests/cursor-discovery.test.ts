@@ -11,8 +11,17 @@ import {
 } from "../src/adapters/cursor/discovery";
 
 describe("Cursor discovery metadata", () => {
-  test("static seed includes the safe auto model", () => {
-    expect(cursorModelIds(CURSOR_STATIC_MODELS)).toContain("auto");
+  test("static seed includes Cursor's public model families plus the safe auto model", () => {
+    const ids = cursorModelIds(CURSOR_STATIC_MODELS);
+
+    expect(ids.length).toBeGreaterThanOrEqual(45);
+    expect(ids).toContain("auto");
+    expect(ids).toContain("composer-2.5");
+    expect(ids).toContain("claude-4.6-sonnet");
+    expect(ids).toContain("gemini-3.5-flash");
+    expect(ids).toContain("gpt-5.5");
+    expect(ids).toContain("grok-4.3");
+    expect(ids).toContain("kimi-k2.5");
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS).auto).toBe(CURSOR_DEFAULT_CONTEXT_WINDOW);
   });
 
@@ -33,6 +42,10 @@ describe("Cursor discovery metadata", () => {
   test("context-window inference uses conservative defaults", () => {
     expect(inferCursorContextWindow("unknown-model")).toBe(CURSOR_DEFAULT_CONTEXT_WINDOW);
     expect(inferCursorContextWindow("claude-4.5-sonnet")).toBe(200_000);
+    expect(inferCursorContextWindow("claude-opus-4.8")).toBe(200_000);
+    expect(inferCursorContextWindow("gemini-3.5-flash")).toBe(1_000_000);
+    expect(inferCursorContextWindow("glm-5.2")).toBe(1_000_000);
+    expect(inferCursorContextWindow("grok-4.3")).toBe(256_000);
     expect(inferCursorContextWindow("gpt-5.5")).toBe(400_000);
   });
 
@@ -48,9 +61,13 @@ describe("Cursor discovery metadata", () => {
     const efforts = cursorModelReasoningEfforts([
       { id: "auto", supportsReasoningEffort: false },
       { id: "gpt-5.5", supportsReasoningEffort: true },
+      { id: "grok-4.3", supportsReasoningEffort: true },
+      { id: "composer-2.5", supportsReasoningEffort: false },
     ]);
 
     expect(efforts.auto).toEqual([]);
     expect(efforts["gpt-5.5"]).toEqual(["low", "medium", "high"]);
+    expect(efforts["grok-4.3"]).toEqual(["low", "medium", "high"]);
+    expect(efforts["composer-2.5"]).toEqual([]);
   });
 });

@@ -79,6 +79,10 @@ describe("provider registry parity", () => {
     });
     expect(cursor?.note).toContain("disabled");
     expect(cursor?.models).toContain("auto");
+    expect(cursor?.models?.length).toBeGreaterThanOrEqual(45);
+    expect(cursor?.models).toContain("composer-2.5");
+    expect(cursor?.models).toContain("gemini-3.5-flash");
+    expect(cursor?.models).toContain("grok-4.3");
     expect(deriveFeaturedProviderIds()).not.toContain("cursor");
     expect(Object.keys(deriveKeyLoginMap())).not.toContain("cursor");
     expect(deriveProviderPresets().find(preset => preset.id === "cursor")).toMatchObject({
@@ -95,7 +99,12 @@ describe("provider registry parity", () => {
       defaultModel: "auto",
     });
     expect(seed.models).toContain("auto");
+    expect(seed.models).toContain("composer-2.5");
+    expect(seed.models).toContain("gpt-5.5");
+    expect(seed.models).toContain("kimi-k2.5");
     expect(seed.modelContextWindows?.auto).toBe(128_000);
+    expect(seed.modelContextWindows?.["gemini-3.5-flash"]).toBe(1_000_000);
+    expect(seed.modelReasoningEfforts?.["grok-4.3"]).toEqual(["low", "medium", "high"]);
 
     const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
     enrichProviderFromCatalog("cursor", savedCursor);
@@ -104,6 +113,8 @@ describe("provider registry parity", () => {
       defaultModel: "auto",
     });
     expect(savedCursor.models).toContain("auto");
+    expect(savedCursor.models).toContain("composer-2.5");
+    expect(savedCursor.models).toContain("grok-4.3");
 
     const initCursor = buildInitProviders().find(provider => provider.id === "cursor");
     expect(initCursor).toMatchObject({

@@ -97,9 +97,9 @@ Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 Cursor는 별도의 실험적 어댑터 scaffold로 추적합니다. source에는 `adapter: "cursor"`가 있지만,
 live OAuth, live 모델 discovery, HTTP/2 transport, native tool 실행은 bridge 감사가 끝날 때까지
 비활성화되어 있습니다. Cursor는 `ocx init`과 dashboard Add Provider picker에 실험적 local config
-항목으로 표시되며, static `cursor/auto` catalog metadata를 저장합니다. key-login 또는 OAuth login
-목록에는 표시되지 않습니다. Cursor config는 live transport가 별도 감사 단계에서 명시적으로 열릴 때까지
-disabled-transport error로 fail-closed 처리됩니다.
+항목으로 표시되며, Cursor의 static public model catalog metadata를 저장합니다. key-login 또는 OAuth
+login 목록에는 표시되지 않습니다. Cursor config는 live transport가 별도 감사 단계에서 명시적으로 열릴
+때까지 disabled-transport error로 fail-closed 처리됩니다.
 :::
 
 ### Ollama Cloud

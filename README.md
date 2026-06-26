@@ -183,7 +183,7 @@ next Codex session. opencodex keeps two separate behaviors:
 Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Portal, and more. See the full list with `ocx init` or in the [provider docs](https://lidge-jun.github.io/opencodex/reference/configuration/).
 
 Cursor support is a staged experimental bridge: it appears in `ocx init` and the dashboard Add
-Provider picker as a local scaffold with static `cursor/auto` catalog plumbing, but live
+Provider picker as a local scaffold with Cursor's static public model catalog, but live
 transport/OAuth and native write/shell/delete/MCP/computer-use execution remain disabled.
 
 ## CLI

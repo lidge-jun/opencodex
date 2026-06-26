@@ -9,11 +9,19 @@ export const CURSOR_DEFAULT_CONTEXT_WINDOW = 128_000;
 
 const CURSOR_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 const CURSOR_DEFAULT_INPUT_MODALITIES = ["text", "image"] as const;
+const CONTEXT_1M = 1_000_000;
+const CONTEXT_400K = 400_000;
+const CONTEXT_256K = 256_000;
+const CONTEXT_200K = 200_000;
 
 export function inferCursorContextWindow(modelId: string): number {
   const id = modelId.trim().toLowerCase();
-  if (id === "gpt-5.5") return 400_000;
-  if (id.includes("claude") && id.includes("sonnet")) return 200_000;
+  if (id.includes("1m")) return CONTEXT_1M;
+  if (id.startsWith("gemini-")) return CONTEXT_1M;
+  if (id === "glm-5.2") return CONTEXT_1M;
+  if (id.startsWith("gpt-5.4") || id === "gpt-5.5") return CONTEXT_400K;
+  if (id.startsWith("grok-")) return CONTEXT_256K;
+  if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
 }
 
@@ -43,8 +51,62 @@ export function normalizeCursorModels(models: readonly CursorModelInfo[]): Curso
 
 export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorModels([
   { id: "auto", contextWindow: CURSOR_DEFAULT_CONTEXT_WINDOW, supportsReasoningEffort: false },
-  { id: "claude-4.5-sonnet", contextWindow: 200_000, supportsReasoningEffort: false },
-  { id: "gpt-5.5", contextWindow: 400_000, supportsReasoningEffort: true },
+
+  // Cursor public Models & Pricing reference. Live discovery stays disabled;
+  // these ids only seed the routed Codex catalog.
+  { id: "claude-4-sonnet", contextWindow: CONTEXT_200K },
+  { id: "claude-4-sonnet-1m", contextWindow: CONTEXT_1M },
+  { id: "claude-4.5-haiku", contextWindow: CONTEXT_200K },
+  { id: "claude-4.5-opus", contextWindow: CONTEXT_200K },
+  { id: "claude-4.5-sonnet", contextWindow: CONTEXT_200K },
+  { id: "claude-4.6-opus", contextWindow: CONTEXT_200K },
+  { id: "claude-4.6-opus-fast", contextWindow: CONTEXT_200K },
+  { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K },
+  { id: "claude-4.7-opus", contextWindow: CONTEXT_200K },
+  { id: "claude-fable-5", contextWindow: CONTEXT_200K },
+  { id: "claude-opus-4.7-fast", contextWindow: CONTEXT_200K },
+  { id: "claude-opus-4.8", contextWindow: CONTEXT_200K },
+  { id: "claude-opus-4.8-fast", contextWindow: CONTEXT_200K },
+
+  { id: "composer-1" },
+  { id: "composer-1.5" },
+  { id: "composer-2" },
+  { id: "composer-2.5" },
+
+  { id: "gemini-2.5-flash", contextWindow: CONTEXT_1M },
+  { id: "gemini-3-flash", contextWindow: CONTEXT_1M },
+  { id: "gemini-3-pro", contextWindow: CONTEXT_1M },
+  { id: "gemini-3-pro-image-preview", contextWindow: CONTEXT_1M },
+  { id: "gemini-3.1-pro", contextWindow: CONTEXT_1M },
+  { id: "gemini-3.5-flash", contextWindow: CONTEXT_1M },
+
+  { id: "glm-5.2", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+
+  { id: "gpt-5", supportsReasoningEffort: true },
+  { id: "gpt-5-high", supportsReasoningEffort: true },
+  { id: "gpt-5-fast", supportsReasoningEffort: true },
+  { id: "gpt-5-high-fast", supportsReasoningEffort: true },
+  { id: "gpt-5-low-fast", supportsReasoningEffort: true },
+  { id: "gpt-5-mini" },
+  { id: "gpt-5-codex", supportsReasoningEffort: true },
+  { id: "gpt-5.1-codex", supportsReasoningEffort: true },
+  { id: "gpt-5.1-codex-max", supportsReasoningEffort: true },
+  { id: "gpt-5.1-codex-mini", supportsReasoningEffort: true },
+  { id: "gpt-5.2", supportsReasoningEffort: true },
+  { id: "gpt-5.2-high", supportsReasoningEffort: true },
+  { id: "gpt-5.2-codex", supportsReasoningEffort: true },
+  { id: "gpt-5.3-codex", supportsReasoningEffort: true },
+  { id: "gpt-5.3-codex-high", supportsReasoningEffort: true },
+  { id: "gpt-5.4", contextWindow: CONTEXT_400K, supportsReasoningEffort: true },
+  { id: "gpt-5.4-mini", contextWindow: CONTEXT_400K },
+  { id: "gpt-5.4-nano", contextWindow: CONTEXT_400K },
+  { id: "gpt-5.5", contextWindow: CONTEXT_400K, supportsReasoningEffort: true },
+
+  { id: "grok-4.20", contextWindow: CONTEXT_256K, supportsReasoningEffort: true },
+  { id: "grok-4.3", contextWindow: CONTEXT_256K, supportsReasoningEffort: true },
+  { id: "grok-build-0.1", contextWindow: CONTEXT_256K },
+
+  { id: "kimi-k2.5" },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {
