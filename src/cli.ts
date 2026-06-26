@@ -342,6 +342,11 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}`);
   console.log(`   Service: ${status.json.service.summary}`);
   console.log(`   ${status.json.codexShim.summary}`);
+  const { oauthLoginSummary } = await import("./oauth/index");
+  console.log(`   OAuth logins:`);
+  for (const e of oauthLoginSummary()) {
+    console.log(`     ${e.provider.padEnd(10)} ${e.loggedIn ? `✓ logged in${e.email ? ` (${e.email})` : ""}` : "✗ not logged in"}`);
+  }
 }
 
 function handleRecoverHistory() {

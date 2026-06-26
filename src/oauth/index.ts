@@ -281,6 +281,14 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   return { loggedIn: !!cred, email: maskEmail(cred?.email) ?? undefined, source: cred?.source, error: st?.error, done: st?.done ?? false };
 }
 
+/** Token-safe per-provider login state for the CLI `ocx status` logins section (no tokens, masked email). */
+export function oauthLoginSummary(): Array<{ provider: string; loggedIn: boolean; email?: string }> {
+  return listOAuthProviders().map(provider => {
+    const status = getLoginStatus(provider);
+    return { provider, loggedIn: status.loggedIn, ...(status.email ? { email: status.email } : {}) };
+  });
+}
+
 export function clearLoginState(provider: string): void {
   loginAbort.get(provider)?.abort("cleared");
   loginAbort.delete(provider);
