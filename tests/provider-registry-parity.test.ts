@@ -80,7 +80,7 @@ describe("provider registry parity", () => {
     expect(cursor?.note).toContain("Live transport");
     expect(cursor?.note).toContain("native read/write/delete/shell");
     expect(cursor?.models).toContain("auto");
-    expect(cursor?.models?.length).toBeGreaterThanOrEqual(45);
+    expect(cursor?.models?.length).toBeGreaterThanOrEqual(40);
     expect(cursor?.models).toContain("composer-2.5");
     expect(cursor?.models).toContain("gemini-3.5-flash");
     expect(cursor?.models).toContain("grok-4.3");

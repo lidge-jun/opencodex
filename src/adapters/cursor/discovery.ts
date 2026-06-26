@@ -54,19 +54,16 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
 
   // Cursor public Models & Pricing reference. Live discovery stays disabled;
   // these ids only seed the routed Codex catalog.
+  // Cursor base ids (the request builder appends the per-model effort suffix, see effort-map.ts).
+  // Reasoning models advertise effort so Codex exposes the tier picker.
   { id: "claude-4-sonnet", contextWindow: CONTEXT_200K },
-  { id: "claude-4-sonnet-1m", contextWindow: CONTEXT_1M },
-  { id: "claude-4.5-haiku", contextWindow: CONTEXT_200K },
-  { id: "claude-4.5-opus", contextWindow: CONTEXT_200K },
   { id: "claude-4.5-sonnet", contextWindow: CONTEXT_200K },
-  { id: "claude-4.6-opus", contextWindow: CONTEXT_200K },
-  { id: "claude-4.6-opus-fast", contextWindow: CONTEXT_200K },
-  { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K },
-  { id: "claude-4.7-opus", contextWindow: CONTEXT_200K },
-  { id: "claude-fable-5", contextWindow: CONTEXT_200K },
-  { id: "claude-opus-4.7-fast", contextWindow: CONTEXT_200K },
-  { id: "claude-opus-4.8", contextWindow: CONTEXT_200K },
-  { id: "claude-opus-4.8-fast", contextWindow: CONTEXT_200K },
+  { id: "claude-4.5-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-4.6-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-4-7", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-4-8", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-fable-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
 
   { id: "composer-1" },
   { id: "composer-1.5" },
