@@ -21,6 +21,11 @@ export interface DecodedConnectFrame {
   readBytes: number;
 }
 
+export interface DecodedConnectFrames {
+  frames: ConnectFrame[];
+  remainder: Uint8Array;
+}
+
 export class ConnectFrameError extends Error {
   constructor(
     public readonly code: ConnectFrameErrorCode,
@@ -101,6 +106,21 @@ export function decodeConnectFrames(input: Uint8Array): ConnectFrame[] {
     offset += decoded.readBytes;
   }
   return frames;
+}
+
+export function decodeAvailableConnectFrames(input: Uint8Array): DecodedConnectFrames {
+  const frames: ConnectFrame[] = [];
+  let offset = 0;
+  while (offset < input.length) {
+    const decoded = tryDecodeConnectFrame(input, offset);
+    if (!decoded) break;
+    frames.push(decoded.frame);
+    offset += decoded.readBytes;
+  }
+  return {
+    frames,
+    remainder: offset === input.length ? new Uint8Array() : input.slice(offset),
+  };
 }
 
 function assertOffset(input: Uint8Array, offset: number): void {

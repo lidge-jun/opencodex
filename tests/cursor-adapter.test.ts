@@ -86,7 +86,7 @@ describe("Cursor adapter live transport", () => {
     const adapter = createCursorAdapter(provider, {
       createTransport: () => ({
         async *run() {
-          throw new Error("secret-token-123");
+          throw new Error("gRPC error 16: Bearer secret-token-123 authorization=secret-token-123");
         },
         writeClient() {},
       }),
@@ -98,7 +98,7 @@ describe("Cursor adapter live transport", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "error",
-      message: expect.stringContaining("Cursor transport failed before completion."),
+      message: expect.stringContaining("Cursor transport failed before completion (gRPC error 16: Bearer [redacted] authorization=[redacted])."),
     });
     expect(JSON.stringify(events).includes("secret-token-123")).toBe(false);
   });

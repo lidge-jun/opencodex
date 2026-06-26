@@ -34,10 +34,26 @@ function safeCursorTransportError(err: unknown): string {
   if (err instanceof CursorMissingCredentialError) {
     return "Cursor live transport is enabled, but no Cursor access token is configured. Set provider.apiKey or OPENCODEX_CURSOR_TEST_TOKEN.";
   }
+  const cause = sanitizeCursorTransportCause(err);
+  if (cause) {
+    return [
+      `Cursor transport failed before completion (${cause}).`,
+      "No Cursor native file, shell, MCP, fetch, screen, or computer-use command was executed.",
+    ].join(" ");
+  }
   return [
     "Cursor transport failed before completion.",
     "No Cursor native file, shell, MCP, fetch, screen, or computer-use command was executed.",
   ].join(" ");
+}
+
+function sanitizeCursorTransportCause(err: unknown): string | undefined {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+  if (!message) return undefined;
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/(access[_-]?token|api[_-]?key|authorization)=([^&\s]+)/gi, "$1=[redacted]")
+    .slice(0, 220);
 }
 
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {

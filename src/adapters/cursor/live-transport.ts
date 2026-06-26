@@ -1,7 +1,7 @@
 import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { OcxProviderConfig } from "../../types";
-import { CONNECT_FLAG_END_STREAM, decodeConnectFrames, encodeConnectFrame } from "./framing";
+import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
 import { encodeCursorRunRequest } from "./protobuf-request";
 import { createCursorProtobufEventState, mapCursorProtobufServerMessage } from "./protobuf-events";
 import {
@@ -141,8 +141,9 @@ class LiveCursorTransport implements CursorTransport {
       const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
       pending = concatBytes(pending, bytes);
       try {
-        const frames = decodeConnectFrames(pending);
-        pending = new Uint8Array();
+        const decoded = decodeAvailableConnectFrames(pending);
+        pending = decoded.remainder;
+        const frames = decoded.frames;
         for (const frame of frames) {
           if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
             fail(connectError(frame.payload));

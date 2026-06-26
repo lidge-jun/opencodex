@@ -3,6 +3,7 @@ import {
   CONNECT_FLAG_COMPRESSED,
   CONNECT_FLAG_END_STREAM,
   ConnectFrameError,
+  decodeAvailableConnectFrames,
   decodeConnectFrame,
   decodeConnectFrames,
   encodeConnectFrame,
@@ -85,6 +86,18 @@ describe("Cursor Connect envelope framing", () => {
     combined.set(incomplete, complete.length);
 
     expectFrameError(() => decodeConnectFrames(combined), "frame_incomplete");
+  });
+
+  test("decodes available frames and preserves trailing partial frame", () => {
+    const complete = encodeConnectFrame(bytes(0x01));
+    const partial = encodeConnectFrame(bytes(0x02, 0x03)).slice(0, 6);
+    const combined = new Uint8Array(complete.length + partial.length);
+    combined.set(complete, 0);
+    combined.set(partial, complete.length);
+
+    const decoded = decodeAvailableConnectFrames(combined);
+    expect(decoded.frames.map(frame => Array.from(frame.payload))).toEqual([[0x01]]);
+    expect(Array.from(decoded.remainder)).toEqual(Array.from(partial));
   });
 
   test("throws payload_too_large before allocating oversized frames", () => {
