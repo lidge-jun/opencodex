@@ -87,6 +87,20 @@ describe("Cursor desktop executor hooks", () => {
     expect(reply.message.value.result.case).toBe("failure");
   });
 
+  test("a throwing recordScreen dep is contained as RecordScreenFailure (dispatcher boundary)", async () => {
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "recordScreenArgs",
+      value: create(RecordScreenArgsSchema, { mode: 1, toolCallId: "rs-throw" }),
+    }), {
+      recordScreen: () => { throw new Error("executor exploded"); },
+    }))[0]);
+    expect(reply.message.case).toBe("recordScreenResult");
+    expect(reply.message.value.result.case).toBe("failure");
+    if (reply.message.value.result.case === "failure") {
+      expect(reply.message.value.result.value.error).toBe("executor exploded");
+    }
+  });
+
   test("honest not-supported defaults when no executor configured", async () => {
     const computer = decode((await handleCursorNativeExec(execMessage({
       case: "computerUseArgs",
