@@ -10,6 +10,7 @@ import {
   ListMcpResourcesExecArgsSchema,
   McpArgsSchema,
   ReadMcpResourceExecArgsSchema,
+  RequestContextArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
 import { resolveMcpServers } from "../src/adapters/cursor/mcp-config";
@@ -161,6 +162,39 @@ describe("Cursor MCP deps via native-exec dispatcher", () => {
     const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
     expect(reply.message.case).toBe("mcpResult");
     expect(reply.message.value.result.case).toBe("toolNotFound");
+    await manager.dispose();
+  });
+
+  test("tool-level isError propagates through the dispatcher as McpSuccess{isError:true}", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const args = create(McpArgsSchema, { name: "boom", toolName: "boom", providerIdentifier: "opencodex" });
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
+    expect(reply.message.case).toBe("mcpResult");
+    expect(reply.message.value.result.case).toBe("success");
+    if (reply.message.value.result.case === "success") {
+      expect(reply.message.value.result.value.isError).toBe(true);
+    }
+    await manager.dispose();
+  });
+
+  test("requestContextArgs advertises MCP tools in RequestContext.tools", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const mcpToolDefs = await buildMcpToolDefinitions(manager);
+    const reply = decode((await handleCursorNativeExec(
+      execMessage({ case: "requestContextArgs", value: create(RequestContextArgsSchema, {}) }),
+      { mcpToolDefs },
+    ))[0]);
+    expect(reply.message.case).toBe("requestContextResult");
+    if (reply.message.case === "requestContextResult" && reply.message.value.result.case === "success") {
+      const tools = reply.message.value.result.value.requestContext?.tools ?? [];
+      expect(tools.map(t => t.toolName).sort()).toEqual(["boom", "echo"]);
+    } else {
+      throw new Error("expected requestContextResult success");
+    }
     await manager.dispose();
   });
 
