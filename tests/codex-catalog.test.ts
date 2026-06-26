@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -179,6 +179,40 @@ describe("Codex catalog routed normalization", () => {
     expect(native?.supports_search_tool).toBe(true);
     expect(native?.service_tier).toBe("priority");
     expect(native?.service_tiers).toEqual([{ id: "priority" }]);
+  });
+
+  test("catalog sync keeps native OpenAI rows when adopted providers expose matching ids", () => {
+    const native = nativeTemplate();
+    const nativeMini = {
+      ...nativeTemplate(),
+      slug: "gpt-5.4-mini",
+      display_name: "gpt-5.4-mini",
+      priority: 6,
+    };
+    const routedCursorRows = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "cursor", id: "gpt-5.5", owned_by: "cursor" },
+      { provider: "cursor", id: "gpt-5.4-mini", owned_by: "cursor" },
+    ]);
+
+    const merged = mergeCatalogEntriesForSync(
+      [native, nativeMini, { slug: "cursor/old", visibility: "list" }],
+      routedCursorRows,
+      new Map([
+        ["gpt-5.5", 9],
+        ["gpt-5.4-mini", 10],
+      ]),
+      [],
+      false,
+    );
+    const slugs = merged.map(entry => entry.slug);
+
+    expect(slugs).toContain("gpt-5.5");
+    expect(slugs).toContain("gpt-5.4-mini");
+    expect(slugs).toContain("cursor/gpt-5.5");
+    expect(slugs).toContain("cursor/gpt-5.4-mini");
+    expect(slugs).not.toContain("cursor/old");
+    expect(merged.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(9);
+    expect(merged.find(entry => entry.slug === "gpt-5.4-mini")?.priority).toBe(10);
   });
 
   test("buildCatalogEntries advertises supports_websockets only on explicit opt-in", () => {

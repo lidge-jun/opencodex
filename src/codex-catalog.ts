@@ -739,6 +739,64 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
   });
 }
 
+export function mergeCatalogEntriesForSync(
+  catalogModels: RawEntry[],
+  routedEntries: RawEntry[],
+  baseline: Map<string, number>,
+  featured: string[],
+  wsEnabled: boolean,
+  goIds: Set<string> = new Set(),
+  template: RawEntry | null = null,
+): RawEntry[] {
+  const rank = new Map(featured.map((slug, i) => [slug, i] as const));
+  const native = catalogModels
+    .filter(m => typeof m.slug === "string"
+      && !(m.slug as string).includes("/")
+      && !goIds.has(m.slug as string)
+      && !isUnsupportedOpenAiNativeSlug(m.slug as string))
+    .map(m => {
+      const slug = m.slug as string;
+      // Featured models rank first (rank order); non-featured natives are pushed below the featured
+      // block when any model is featured, else keep their pristine baseline priority.
+      const baselinePriority = baseline.get(slug) ?? (m.priority as number);
+      const priority = rank.has(slug)
+        ? rank.get(slug)!
+        : featured.length > 0
+          ? Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featured.length + 100)
+          : baselinePriority;
+      return normalizeServiceTiers({ ...m, priority });
+    });
+
+  // Backfill any native OpenAI slug that the on-disk catalog is missing (e.g. gpt-5.5), so a
+  // routed provider exposing the same id can never delete the native OpenAI/Codex base row.
+  const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
+  for (const slug of nativeOpenAiSlugs()) {
+    if (nativeSlugs.has(slug)) continue;
+    nativeSlugs.add(slug);
+    const priority = rank.has(slug)
+      ? rank.get(slug)!
+      : featured.length > 0
+        ? featured.length + 100
+        : 9;
+    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
+  }
+
+  let finalRoutedEntries = routedEntries;
+  if (routedEntries.length === 0 && catalogModels.some(m => typeof m.slug === "string" && (m.slug as string).includes("/"))) {
+    finalRoutedEntries = catalogModels.filter(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
+    console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
+  }
+
+  return [...native, ...finalRoutedEntries].map(m => {
+    const normalized = normalizeServiceTiers(m);
+    applyNativeOpenAiContextOverride(normalized);
+    const e = ensureStrictCatalogFields(normalized);
+    if (wsEnabled) e.supports_websockets = true;
+    else delete e.supports_websockets;
+    return e;
+  });
+}
+
 /**
  * Merge namespaced routed-model entries into the on-disk Codex catalog.
  * Idempotent + non-destructive:
@@ -767,64 +825,18 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   const disabled = new Set(config.disabledModels ?? []);
   const enabledGo = goModels.filter(m => !disabled.has(`${m.provider}/${m.id}`));
   const featured = config.subagentModels ?? [];
-  const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
   const goEntries = buildCatalogEntries(template ? JSON.parse(JSON.stringify(template)) : null, [], orderedGoModels, featured, websocketsEnabled(config));
-  // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields, but drop bare
-  // duplicates of routed models (replaced by namespaced entries) + any prior "/" entries. Re-derive
-  // each native's priority from the pristine baseline so featuring a native is reversible.
+  // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
+  // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
+  // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
   const baseline = readNativeBaseline(catalogPath);
   const goIds = new Set(enabledGo.map(m => m.id));
-  const native = (catalog.models ?? [])
-    .filter(m => typeof m.slug === "string"
-      && !(m.slug as string).includes("/")
-      && !goIds.has(m.slug as string)
-      // Gap B: drop legacy/internal OpenAI-family natives (gpt-5.2, gpt-5.3-codex,
-      // codex-auto-review, …) from the on-disk catalog too, matching the live /v1/models
-      // allowlist. Genuine user-added natives (non gpt-/codex- slugs) are preserved.
-      && !isUnsupportedOpenAiNativeSlug(m.slug as string))
-    .map(m => {
-      const slug = m.slug as string;
-      const baselinePriority = baseline.get(slug) ?? (m.priority as number);
-      const priority = rank.has(slug)
-        ? rank.get(slug)!
-        : featured.length > 0
-          ? Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featured.length + 100)
-          : baselinePriority;
-      return normalizeServiceTiers({ ...m, priority });
-    });
-  const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
-  for (const slug of nativeOpenAiSlugs()) {
-    if (nativeSlugs.has(slug)) continue;
-    nativeSlugs.add(slug);
-    const priority = rank.has(slug)
-      ? rank.get(slug)!
-      : featured.length > 0
-        ? featured.length + 100
-        : 9;
-    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
-  }
   // Central WS capability override on the FINAL on-disk catalog (the file Codex reads). Applies to
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
-  // Gap A: never let a transient EMPTY routed fetch wipe routed entries that were on disk. If
-  // gatherRoutedModels returned nothing (provider down / flaky / cache miss) but the pre-sync
-  // catalog DID carry routed entries, preserve those prior routed entries instead of overwriting
-  // them with an empty set — otherwise the Codex picker silently loses kiro/opencode-go models.
-  let routedEntries = goEntries;
-  if (goEntries.length === 0 && catalogHasRoutedEntries(catalog)) {
-    routedEntries = (catalog.models ?? []).filter(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
-    console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${routedEntries.length} existing routed entr${routedEntries.length === 1 ? "y" : "ies"} on disk.`);
-  }
-  catalog.models = [...native, ...routedEntries].map(m => {
-    const normalized = normalizeServiceTiers(m);
-    applyNativeOpenAiContextOverride(normalized);
-    const e = ensureStrictCatalogFields(normalized);
-    if (wsEnabled) e.supports_websockets = true;
-    else delete e.supports_websockets;
-    return e;
-  });
+  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
   return { added: goEntries.length, path: catalogPath };
