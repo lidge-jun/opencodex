@@ -3,10 +3,12 @@ import { timingSafeEqual } from "node:crypto";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createAnthropicAdapter } from "./adapters/anthropic";
 import { createAzureAdapter } from "./adapters/azure";
+import { createCursorAdapter } from "./adapters/cursor";
 import { createGoogleAdapter } from "./adapters/google";
 import { createKiroAdapter } from "./adapters/kiro";
 import { createOpenAIChatAdapter } from "./adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
+import { createAdapterEventQueue } from "./adapters/run-turn-queue";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "./bridge";
 import { markActivity } from "./sidecar-tracker";
 import {
@@ -46,7 +48,7 @@ import { describeImagesInPlace, planVisionSidecar } from "./vision";
 import { removeCredential } from "./oauth/store";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "./oauth/key-providers";
 import { deriveProviderPresets } from "./providers/derive";
-import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "./types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "./types";
 import type { OcxUsage } from "./types";
 import {
   appendUsageEntry,
@@ -301,9 +303,27 @@ export function resolveAdapter(providerConfig: OcxProviderConfig) {
     case "azure":
     case "azure-openai":
       return createAzureAdapter(providerConfig);
+    case "cursor":
+      return createCursorAdapter(providerConfig);
     default:
       throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
   }
+}
+
+function buildToolBridgeMaps(parsed: OcxParsedRequest): {
+  toolNsMap: Map<string, { namespace: string; name: string }>;
+  freeformToolNames: Set<string>;
+  toolSearchToolNames: Set<string>;
+} {
+  const toolNsMap = new Map<string, { namespace: string; name: string }>();
+  const freeformToolNames = new Set<string>();
+  const toolSearchToolNames = new Set<string>();
+  for (const t of parsed.context.tools ?? []) {
+    if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
+    if (t.freeform) freeformToolNames.add(t.name);
+    if (t.toolSearch) toolSearchToolNames.add(t.name);
+  }
+  return { toolNsMap, freeformToolNames, toolSearchToolNames };
 }
 
 function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthContext): ((outcome: CodexUpstreamOutcome) => void) | undefined {
@@ -565,6 +585,60 @@ async function handleResponses(
     });
   }
 
+  if (adapter.runTurn) {
+    const runTurnAbort = new AbortController();
+    linkAbortSignal(runTurnAbort, options.abortSignal);
+    const queue = createAdapterEventQueue();
+    const runTurn = async (): Promise<void> => {
+      try {
+        await adapter.runTurn?.(
+          parsed,
+          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal },
+          queue.push,
+        );
+      } catch (err) {
+        queue.push({
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        queue.close();
+      }
+    };
+
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
+    if (parsed.stream) {
+      void runTurn();
+      const sseStream = bridgeToResponsesSSE(
+        queue.stream(), parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        () => {
+          runTurnAbort.abort();
+          queue.close();
+        }, 2_000,
+        {
+          ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
+          stallTimeoutSec: config.stallTimeoutSec,
+          hideThinkingSummary: parsed.options.hideThinkingSummary,
+        },
+      );
+      const bridgeTurnAc = new AbortController();
+      const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc);
+      return new Response(trackedSse, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
+      });
+    }
+
+    await runTurn();
+    const events = await queue.collect();
+    const json = buildResponseJSON(events, parsed.modelId, {
+      hideThinkingSummary: parsed.options.hideThinkingSummary,
+      toolNsMap,
+      freeformToolNames,
+      toolSearchToolNames,
+    });
+    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+  }
+
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
   // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
   // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
@@ -616,14 +690,7 @@ async function handleResponses(
 
   if (parsed.stream) {
     const eventStream = adapter.parseStream(upstreamResponse);
-    const toolNsMap = new Map<string, { namespace: string; name: string }>();
-    const freeformToolNames = new Set<string>();
-    const toolSearchToolNames = new Set<string>();
-    for (const t of parsed.context.tools ?? []) {
-      if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
-      if (t.freeform) freeformToolNames.add(t.name);
-      if (t.toolSearch) toolSearchToolNames.add(t.name);
-    }
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
     const sseStream = bridgeToResponsesSSE(
       eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
@@ -647,14 +714,7 @@ async function handleResponses(
     } finally {
       cleanupUpstreamAbort();
     }
-    const toolNsMap = new Map<string, { namespace: string; name: string }>();
-    const freeformToolNames = new Set<string>();
-    const toolSearchToolNames = new Set<string>();
-    for (const t of parsed.context.tools ?? []) {
-      if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
-      if (t.freeform) freeformToolNames.add(t.name);
-      if (t.toolSearch) toolSearchToolNames.add(t.name);
-    }
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
     const json = buildResponseJSON(events, parsed.modelId, {
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,

@@ -3,6 +3,7 @@ import type { AdapterEvent, OcxParsedRequest } from "../types";
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
+  abortSignal?: AbortSignal;
 }
 
 export interface ProviderAdapter {
@@ -14,6 +15,11 @@ export interface ProviderAdapter {
 
   parseStream(response: Response): AsyncGenerator<AdapterEvent>;
   parseResponse?(response: Response): Promise<AdapterEvent[]>;
+  runTurn?(
+    parsed: OcxParsedRequest,
+    incoming: IncomingMeta,
+    emit: (event: AdapterEvent) => void,
+  ): Promise<void>;
 }
 
 export interface AdapterRequest {
