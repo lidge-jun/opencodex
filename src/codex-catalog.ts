@@ -110,6 +110,11 @@ export function isMediaGenerationModelId(id: string): boolean {
   return MEDIA_GEN_ID_RE.test(id);
 }
 
+function shouldExposeRoutedModel(model: CatalogModel): boolean {
+  if (model.provider === "cursor" && model.id === "gemini-3-pro-image-preview") return true;
+  return !isMediaGenerationModelId(model.id);
+}
+
 /** Resolve the `model_catalog_json` path from Codex config.toml, else the default. */
 export function readCodexCatalogPath(): string {
   try {
@@ -692,9 +697,9 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     Object.entries(config.providers).map(([name, prov]) => fetchProviderModels(name, prov, ttlMs)),
   );
   const all = augmentRoutedModelsWithJawcodeMetadata(lists.flat(), Object.keys(config.providers), config.providers)
-    // Drop image/video generation models (e.g. Grok image/video) — they are not usable by Codex and
-    // must not surface in the dashboard, /v1/models, or the routed catalog. Single choke point.
-    .filter(m => !isMediaGenerationModelId(m.id));
+    // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
+    // intentionally mirrors Cursor's public model table, including Gemini image preview.
+    .filter(shouldExposeRoutedModel);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   return all;
 }
