@@ -8,6 +8,7 @@ import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./a
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
+import { loginCursor, refreshCursorToken } from "./cursor";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 
 const REFRESH_SKEW_MS = 60_000;
@@ -59,6 +60,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: (rt, signal) => refreshKiroToken(rt, signal),
     providerConfig: oauthConfig("kiro"),
     defaultModel: oauthDefaultModel("kiro"),
+  },
+  cursor: {
+    login: (ctrl) => loginCursor(ctrl),
+    refresh: refreshCursorToken,
+    providerConfig: oauthConfig("cursor"),
+    defaultModel: oauthDefaultModel("cursor"),
   },
   chatgpt: {
     login: loginChatGPT,
