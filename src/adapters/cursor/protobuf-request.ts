@@ -1,5 +1,6 @@
 import { create, toBinary } from "@bufbuild/protobuf";
 import type { CursorRunRequest } from "./types";
+import { storeCursorBlob } from "./native-exec";
 import {
   AgentClientMessageSchema,
   AgentRunRequestSchema,
@@ -18,14 +19,15 @@ function jsonBlob(value: unknown): Uint8Array {
 }
 
 function rootPromptMessages(request: CursorRunRequest): Uint8Array[] {
+  // Each entry is a SHA-256 blob ID (not inline JSON); Cursor fetches the bytes back via getBlobArgs.
   const roots = request.system.length > 0
-    ? request.system.map(content => jsonBlob({ role: "system", content }))
-    : [jsonBlob({ role: "system", content: "You are a helpful assistant." })];
+    ? request.system.map(content => storeCursorBlob(jsonBlob({ role: "system", content })))
+    : [storeCursorBlob(jsonBlob({ role: "system", content: "You are a helpful assistant." }))];
 
-  const prior = request.messages.slice(0, -1).map(message => jsonBlob({
+  const prior = request.messages.slice(0, -1).map(message => storeCursorBlob(jsonBlob({
     role: message.role === "developer" ? "user" : message.role,
     content: [{ type: "text", text: message.content }],
-  }));
+  })));
 
   return [...roots, ...prior];
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { create } from "@bufbuild/protobuf";
 import {
   DiagnosticsResultSchema,
@@ -30,6 +31,17 @@ const blobs = new Map<string, Uint8Array>();
 
 function key(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
+}
+
+/**
+ * Store a blob (SHA-256 keyed) in the shared map that `handleCursorNativeKv` serves, and return its
+ * blob id. Cursor's `rootPromptMessagesJson`/turn entries are blob IDS, not inline content — the
+ * server fetches the bytes back via `getBlobArgs`. Mirrors jawcode `createBlobId`/`storeCursorBlob`.
+ */
+export function storeCursorBlob(data: Uint8Array): Uint8Array {
+  const blobId = new Uint8Array(createHash("sha256").update(data).digest());
+  blobs.set(key(blobId), data);
+  return blobId;
 }
 
 export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: CursorNativeExecDeps = {}): Promise<Uint8Array[]> {
