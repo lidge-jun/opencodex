@@ -88,11 +88,16 @@ Anthropic 호환입니다). 대시보드의 **Add provider** 선택기는 해당
 프로바이더는 opencodex가 프록시할 수 있는 표준 streaming API를 사용하는 경우 포함됩니다
 (`openai-completions`, `anthropic-messages`, `openai-responses`, Azure, 또는 Gemini) — "에이전트"
 제품인지 여부는 **기준이 아닙니다**. opencodex 어댑터가 없는 독자 프로토콜의 프로바이더는
-제외됩니다: Cursor, Gemini CLI / Antigravity, Vertex AI, Amazon Bedrock, 그리고 Codex 백엔드 자체.
+제외됩니다: Gemini CLI / Antigravity, Vertex AI, Amazon Bedrock, 그리고 Codex 백엔드 자체.
 **GitHub Copilot**과 **GitLab Duo**는 자신의 범용 OpenAI 호환 엔드포인트에 매핑된 멀티 모델
 게이트웨이입니다. 이들은 Bearer **구독 토큰**(일반 API 키가 아님)으로 인증하며,
 Copilot은 프로바이더의 `headers`를 통해 `User-Agent` 헤더 설정이 필요할 수 있습니다. **Cloudflare AI
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
+
+Cursor는 별도의 실험적 어댑터 scaffold로 추적합니다. source에는 `adapter: "cursor"`가 있지만,
+live OAuth, 모델 discovery, HTTP/2 transport, native tool 실행은 bridge 감사가 끝날 때까지
+비활성화되어 있습니다. 아직 provider picker나 OAuth login 목록에는 표시되지 않으며, 수동 Cursor
+config도 disabled-transport error로 fail-closed 처리됩니다.
 :::
 
 ### Ollama Cloud

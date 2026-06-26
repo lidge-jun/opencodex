@@ -77,7 +77,12 @@ opencodex 内置了一个基于密钥的提供商目录（大多数兼容 OpenAI
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
 
 :::note[gateway 与订阅 proxy]
-只要某个提供商使用 opencodex 能够 proxy 的标准 streaming API（`openai-completions`、`anthropic-messages`、`openai-responses`、Azure 或 Gemini），它就会被收录——而**不是**根据它是否是一款"agent"产品来判断。使用专有协议、没有对应 opencodex adapter 的提供商会被排除：Cursor、Gemini CLI / Antigravity、Vertex AI、Amazon Bedrock，以及 Codex 后端本身。**GitHub Copilot** 和 **GitLab Duo** 是多模型 gateway，映射到它们通用的 OpenAI 兼容端点；它们使用 Bearer **订阅令牌**（而非普通 API 密钥）进行认证，并且 Copilot 可能需要通过该提供商的 `headers` 设置 `User-Agent` 请求头。**Cloudflare AI Gateway** 需要将你的 account 和 gateway id 填入 URL。
+只要某个提供商使用 opencodex 能够 proxy 的标准 streaming API（`openai-completions`、`anthropic-messages`、`openai-responses`、Azure 或 Gemini），它就会被收录——而**不是**根据它是否是一款"agent"产品来判断。使用专有协议、没有对应 opencodex adapter 的提供商会被排除：Gemini CLI / Antigravity、Vertex AI、Amazon Bedrock，以及 Codex 后端本身。**GitHub Copilot** 和 **GitLab Duo** 是多模型 gateway，映射到它们通用的 OpenAI 兼容端点；它们使用 Bearer **订阅令牌**（而非普通 API 密钥）进行认证，并且 Copilot 可能需要通过该提供商的 `headers` 设置 `User-Agent` 请求头。**Cloudflare AI Gateway** 需要将你的 account 和 gateway id 填入 URL。
+
+Cursor 作为单独的实验性 adapter scaffold 进行跟踪。源码中已经存在 `adapter: "cursor"`，但 live
+OAuth、模型 discovery、HTTP/2 transport 和 native tool 执行在 bridge 审计完成前都保持禁用。Cursor
+目前不会出现在 provider picker 或 OAuth login 列表中；手动 Cursor 配置也会以 disabled-transport
+错误 fail-closed。
 :::
 
 ### Ollama Cloud
