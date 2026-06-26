@@ -10,6 +10,7 @@ import type { OcxConfig, OcxProviderConfig } from "./types";
 import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "./reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "./generated/jawcode-model-metadata";
 import { shouldCaseFoldMetadataModelId } from "./providers/derive";
+import { fetchCursorUsableModels } from "./adapters/cursor/live-models";
 
 const BUNDLED_CATALOG_CACHE_MS = 60_000;
 let bundledCatalogCache: { expiresAt: number; value: RawCatalog | null } | null = null;
@@ -655,6 +656,23 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id),
   }));
+  if (prov.adapter === "cursor" && apiKey) {
+    // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
+    // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
+    // suffix) but filter the static seed to the bases the account actually has — so models not on the
+    // plan (e.g. claude-fable-5) drop out instead of failing ERROR_BAD_MODEL_NAME. Fall back to the seed.
+    const cachedCursor = getFreshCached(name, ttlMs);
+    if (cachedCursor) return applyConfigHintsToCachedModels(name, prov, cachedCursor);
+    const liveIds = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    if (liveIds) {
+      const available = configured.filter(m => liveIds.some(id => id === m.id || id.startsWith(`${m.id}-`)));
+      const result = available.length > 0 ? available : configured;
+      setCached(name, result);
+      return result;
+    }
+    const staleCursor = getStaleCached(name);
+    return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
+  }
   if (prov.liveModels === false) {
     return configured;
   }
