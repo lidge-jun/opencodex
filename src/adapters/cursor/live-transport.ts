@@ -39,11 +39,19 @@ function resolveCursorToken(provider: OcxProviderConfig, headers?: Headers): str
   throw new CursorMissingCredentialError();
 }
 
-function connectError(payload: Uint8Array): Error {
+/**
+ * Classify a Connect end-stream (trailer) frame. Cursor terminates EVERY stream with this
+ * frame; success is signalled by the ABSENCE of an `error` field (typically `{}`), not by the
+ * absence of the frame. Returns null on success, an Error only on a real Connect error.
+ * Mirrors jawcode `parseConnectEndStream` (see devlog 350.98). Exported for unit testing.
+ */
+export function parseConnectEndStreamError(payload: Uint8Array): Error | null {
   try {
-    const text = new TextDecoder().decode(payload);
-    const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
-    return new Error(`Cursor Connect error ${parsed.error?.code ?? "unknown"}: ${parsed.error?.message ?? text}`);
+    const parsed = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string; message?: string } };
+    if (parsed?.error) {
+      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${parsed.error.message ?? "Unknown error"}`);
+    }
+    return null;
   } catch {
     return new Error("Cursor Connect end-stream error");
   }
@@ -146,7 +154,8 @@ class LiveCursorTransport implements CursorTransport {
         const frames = decoded.frames;
         for (const frame of frames) {
           if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
-            fail(connectError(frame.payload));
+            const endError = parseConnectEndStreamError(frame.payload);
+            if (endError) fail(endError);
             continue;
           }
           void this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push).catch(err => {
