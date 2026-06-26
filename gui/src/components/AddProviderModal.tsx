@@ -15,8 +15,8 @@ interface Preset {
   adapter: string;
   baseUrl: string;
   defaultModel?: string;
-  /** "oauth": real account login · "forward": gpt ChatGPT passthrough · "key": API key. */
-  auth: "oauth" | "forward" | "key";
+  /** "oauth": account login · "forward": ChatGPT passthrough · "key": API key · "local": local scaffold. */
+  auth: "oauth" | "forward" | "key" | "local";
   /** OAuth registry id (for auth === "oauth"). */
   oauthProvider?: string;
   /** Where to create/copy the API key (for auth === "key" catalog providers). */
@@ -32,7 +32,7 @@ interface FormState {
   name: string;
   adapter: string;
   baseUrl: string;
-  authMode: "key" | "forward" | "oauth";
+  authMode: "key" | "forward" | "oauth" | "local";
   apiKey: string;
   defaultModel: string;
 }
@@ -167,6 +167,7 @@ export default function AddProviderModal({
 
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
   const isCustom = preset?.id === "custom";
+  const isLocal = form?.authMode === "local";
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Add provider" className="modal-overlay" onClick={onClose}>
@@ -196,7 +197,9 @@ export default function AddProviderModal({
                     ? <span className="badge badge-accent">OAuth</span>
                     : p.auth === "forward"
                       ? <span className="badge badge-green">Codex login</span>
-                      : <span className="badge badge-muted">API key</span>}
+                      : p.auth === "local"
+                        ? <span className="badge badge-amber">Local</span>
+                        : <span className="badge badge-muted">API key</span>}
                 </button>
               ))}
               {filtered.length === 0 && <div className="muted" style={{ fontSize: 13, padding: 8 }}>No match.</div>}
@@ -227,7 +230,7 @@ export default function AddProviderModal({
           ) : (
             // API key / Codex-forward form
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {!isCustom && preset.note && (
+              {!isCustom && !isLocal && preset.note && (
                 <details className="setup-guide">
                   <summary>Setup guide</summary>
                   <ol style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
@@ -244,7 +247,7 @@ export default function AddProviderModal({
               {dup && <div style={{ fontSize: 12, color: "var(--amber)" }}>Provider "{form.name.trim()}" exists and will be overwritten.</div>}
               <Field label="Adapter">
                 <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
-                  {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai"].map(a => <option key={a} value={a}>{a}</option>)}
+                  {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
               </Field>
               <Field label="Base URL">
@@ -253,6 +256,10 @@ export default function AddProviderModal({
               {form.authMode === "forward" ? (
                 <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
                   No key needed — the proxy forwards your <code className="chip">codex login</code> credentials to this provider.
+                </div>
+              ) : form.authMode === "local" ? (
+                <div style={{ fontSize: 12, color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px", lineHeight: 1.55 }}>
+                  No API key is stored. This adds Cursor's static <code className="chip">cursor/auto</code> catalog entry for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
                 </div>
               ) : (
                 <>

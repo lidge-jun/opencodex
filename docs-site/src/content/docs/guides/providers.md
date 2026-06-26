@@ -96,10 +96,10 @@ Gateway** needs your account + gateway ids filled into the URL.
 
 Cursor is tracked separately as an experimental adapter scaffold. `adapter: "cursor"` exists in
 source, but live OAuth, live model discovery, HTTP/2 transport, and native tool execution are
-disabled until the bridge is audited. Cursor is shown only in `ocx init` as an experimental
-local/manual config entry with static catalog metadata; it is not shown in the dashboard Add Provider,
-key-login, or OAuth login lists yet. A manual Cursor config still fails closed with a
-disabled-transport error.
+disabled until the bridge is audited. Cursor is shown in `ocx init` and the dashboard Add Provider
+picker as an experimental local config entry with static `cursor/auto` catalog metadata; it is not
+shown in key-login or OAuth login lists. A Cursor config still fails closed with a disabled-transport
+error until live transport is explicitly enabled in a later audited phase.
 :::
 
 ### Ollama Cloud

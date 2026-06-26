@@ -3,16 +3,18 @@ import { buildCatalogEntries } from "../src/codex-catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
 import { buildInitProviders } from "../src/init";
 import { OAUTH_PROVIDERS } from "../src/oauth";
-import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
+import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import {
   deriveFeaturedProviderIds,
   deriveInitProviders,
   deriveJawcodeAliases,
   deriveKeyLoginMap,
   deriveProviderPresets,
+  providerConfigSeed,
 } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { resolveAdapter } from "../src/server";
+import type { OcxProviderConfig } from "../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -63,7 +65,7 @@ describe("provider registry parity", () => {
     expect(buildInitProviders().find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
   });
 
-  test("Cursor registry exposure is init-only and fail-closed", () => {
+  test("Cursor registry exposure is dashboard/local and fail-closed", () => {
     const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
 
     expect(cursor).toMatchObject({
@@ -71,13 +73,37 @@ describe("provider registry parity", () => {
       adapter: "cursor",
       authKind: "local",
       featured: false,
+      dashboardPreset: true,
       defaultModel: "auto",
+      liveModels: false,
     });
     expect(cursor?.note).toContain("disabled");
     expect(cursor?.models).toContain("auto");
     expect(deriveFeaturedProviderIds()).not.toContain("cursor");
     expect(Object.keys(deriveKeyLoginMap())).not.toContain("cursor");
-    expect(deriveProviderPresets().some(preset => preset.id === "cursor")).toBe(false);
+    expect(deriveProviderPresets().find(preset => preset.id === "cursor")).toMatchObject({
+      id: "cursor",
+      adapter: "cursor",
+      auth: "local",
+      defaultModel: "auto",
+    });
+    const seed = providerConfigSeed(cursor!);
+    expect(seed).toMatchObject({
+      adapter: "cursor",
+      baseUrl: "https://api2.cursor.sh",
+      liveModels: false,
+      defaultModel: "auto",
+    });
+    expect(seed.models).toContain("auto");
+    expect(seed.modelContextWindows?.auto).toBe(128_000);
+
+    const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
+    enrichProviderFromCatalog("cursor", savedCursor);
+    expect(savedCursor).toMatchObject({
+      liveModels: false,
+      defaultModel: "auto",
+    });
+    expect(savedCursor.models).toContain("auto");
 
     const initCursor = buildInitProviders().find(provider => provider.id === "cursor");
     expect(initCursor).toMatchObject({
@@ -109,6 +135,11 @@ describe("provider registry parity", () => {
 
     const presets = deriveProviderPresets();
     expect(presets.at(-1)?.id).toBe("custom");
+    expect(presets.find(p => p.id === "cursor")).toMatchObject({
+      adapter: "cursor",
+      auth: "local",
+      defaultModel: "auto",
+    });
     expect(presets.find(p => p.id === "kimi")?.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(presets.find(p => p.id === "anthropic")?.defaultModel).toBe("claude-sonnet-4-6");
     expect(presets.find(p => p.id === "umans")).toMatchObject({

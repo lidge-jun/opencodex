@@ -1,5 +1,5 @@
 import type { OcxProviderConfig } from "../types";
-import { deriveKeyLoginMap } from "../providers/derive";
+import { deriveKeyLoginMap, enrichProviderFromRegistry } from "../providers/derive";
 
 /**
  * API-key "login" providers: not OAuth — the flow opens the provider's dashboard so the user can
@@ -14,6 +14,7 @@ export interface KeyLoginProvider {
   /** Where the user creates/copies the API key. */
   dashboardUrl: string;
   models?: string[];
+  liveModels?: boolean;
   defaultModel?: string;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -40,40 +41,13 @@ export interface KeyLoginProvider {
 export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = deriveKeyLoginMap();
 
 /**
- * Copy a key-login catalog entry's seed/classification (`models`, `noVisionModels`,
- * `noReasoningModels`, `defaultModel`) onto a provider config being created, for any field the caller
- * didn't already supply. Lets the vision/reasoning classification actually reach the saved config
- * (the GUI/API only send adapter/baseUrl/apiKey/defaultModel). No-op for non-catalog provider names.
+ * Copy a registry entry's seed/classification (`models`, `liveModels`, `noVisionModels`,
+ * `noReasoningModels`, `defaultModel`) onto a provider config being created, for any field the
+ * caller didn't already supply. Lets the vision/reasoning classification actually reach the saved
+ * config (the GUI/API only send adapter/baseUrl/apiKey/defaultModel). No-op for unknown names.
  */
 export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig): void {
-  const e = KEY_LOGIN_PROVIDERS[name];
-  if (!e) return;
-  if (!prov.models && e.models) prov.models = [...e.models];
-  if (!prov.defaultModel && e.defaultModel) prov.defaultModel = e.defaultModel;
-  if (prov.contextWindow === undefined && e.contextWindow !== undefined) prov.contextWindow = e.contextWindow;
-  if (!prov.modelContextWindows && e.modelContextWindows) prov.modelContextWindows = { ...e.modelContextWindows };
-  if (!prov.modelInputModalities && e.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(e.modelInputModalities);
-  if (!prov.reasoningEfforts && e.reasoningEfforts) prov.reasoningEfforts = [...e.reasoningEfforts];
-  if (!prov.modelReasoningEfforts && e.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(e.modelReasoningEfforts);
-  if (!prov.reasoningEffortMap && e.reasoningEffortMap) prov.reasoningEffortMap = { ...e.reasoningEffortMap };
-  if (!prov.modelReasoningEffortMap && e.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(e.modelReasoningEffortMap);
-  if (!prov.noVisionModels && e.noVisionModels) prov.noVisionModels = [...e.noVisionModels];
-  if (!prov.noReasoningModels && e.noReasoningModels) prov.noReasoningModels = [...e.noReasoningModels];
-  if (!prov.noTemperatureModels && e.noTemperatureModels) prov.noTemperatureModels = [...e.noTemperatureModels];
-  if (!prov.noTopPModels && e.noTopPModels) prov.noTopPModels = [...e.noTopPModels];
-  if (!prov.noPenaltyModels && e.noPenaltyModels) prov.noPenaltyModels = [...e.noPenaltyModels];
-  if (!prov.autoToolChoiceOnlyModels && e.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...e.autoToolChoiceOnlyModels];
-  if (!prov.preserveReasoningContentModels && e.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...e.preserveReasoningContentModels];
-  if (prov.escapeBuiltinToolNames === undefined && e.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = e.escapeBuiltinToolNames;
-}
-
-
-function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, string[]> {
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, [...value]]));
-}
-
-function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
+  enrichProviderFromRegistry(name, prov);
 }
 
 export function isKeyLoginProvider(name: string): boolean {

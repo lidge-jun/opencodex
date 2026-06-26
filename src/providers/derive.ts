@@ -7,6 +7,7 @@ export interface DerivedKeyLoginProvider {
   adapter: string;
   dashboardUrl: string;
   models?: string[];
+  liveModels?: boolean;
   defaultModel?: string;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -41,7 +42,7 @@ export interface DerivedProviderPreset {
   adapter: string;
   baseUrl: string;
   defaultModel?: string;
-  auth: "oauth" | "forward" | "key";
+  auth: "oauth" | "forward" | "key" | "local";
   oauthProvider?: string;
   dashboardUrl?: string;
   note?: string;
@@ -66,6 +67,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.models ? { models: [...entry.models] } : {}),
+    ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
     ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
     ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
@@ -95,6 +97,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       adapter: entry.adapter,
       dashboardUrl: entry.dashboardUrl,
       ...(entry.models ? { models: [...entry.models] } : {}),
+      ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
       ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
@@ -143,9 +146,33 @@ export function deriveOAuthIds(): string[] {
 
 export function deriveProviderPresets(): DerivedProviderPreset[] {
   const presets = PROVIDER_REGISTRY
-    .filter(entry => entry.featured || entry.authKind === "key")
+    .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset)
     .map(entryToPreset);
   return [...dedupePresets(presets), customPreset()];
+}
+
+export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === name);
+  if (!entry) return;
+  const seed = providerConfigSeed(entry);
+  if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
+  if (!prov.models && seed.models) prov.models = [...seed.models];
+  if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
+  if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
+  if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
+  if (!prov.modelInputModalities && seed.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(seed.modelInputModalities);
+  if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
+  if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
+  if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
+  if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
+  if (!prov.noVisionModels && seed.noVisionModels) prov.noVisionModels = [...seed.noVisionModels];
+  if (!prov.noReasoningModels && seed.noReasoningModels) prov.noReasoningModels = [...seed.noReasoningModels];
+  if (!prov.noTemperatureModels && seed.noTemperatureModels) prov.noTemperatureModels = [...seed.noTemperatureModels];
+  if (!prov.noTopPModels && seed.noTopPModels) prov.noTopPModels = [...seed.noTopPModels];
+  if (!prov.noPenaltyModels && seed.noPenaltyModels) prov.noPenaltyModels = [...seed.noPenaltyModels];
+  if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
+  if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
+  if (prov.escapeBuiltinToolNames === undefined && seed.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = seed.escapeBuiltinToolNames;
 }
 
 export function deriveFeaturedProviderIds(): string[] {
@@ -175,7 +202,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     label: entry.label,
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
-    auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : "key",
+    auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.authKind === "oauth" ? { oauthProvider: entry.oauthId ?? entry.id } : {}),
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),

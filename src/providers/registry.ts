@@ -18,10 +18,12 @@ export interface ProviderRegistryEntry {
   baseUrl: string;
   authKind: ProviderAuthKind;
   featured?: boolean;
+  dashboardPreset?: boolean;
   note?: string;
   dashboardUrl?: string;
   defaultModel?: string;
   models?: string[];
+  liveModels?: boolean;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
@@ -46,7 +48,7 @@ export interface ProviderRegistryEntry {
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "adapter" | "baseUrl" | "authMode" | "defaultModel" | "models"
-  | "contextWindow" | "modelContextWindows" | "modelInputModalities"
+  | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "reasoningEfforts" | "modelReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "escapeBuiltinToolNames"
@@ -124,8 +126,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api2.cursor.sh",
     authKind: "local",
     featured: false,
+    dashboardPreset: true,
     note: "Experimental Cursor bridge. Live transport/OAuth and native write/shell/delete/MCP/computer-use are disabled until audited.",
     models: cursorModelIds(CURSOR_STATIC_MODELS),
+    liveModels: false,
     defaultModel: "auto",
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),

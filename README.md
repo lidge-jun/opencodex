@@ -175,16 +175,16 @@ next Codex session. opencodex keeps two separate behaviors:
 | Kimi (Moonshot) | `openai-chat` | oauth / key |
 | Google Gemini | `google` | key |
 | Azure OpenAI | `azure-openai` | key |
-| Cursor (experimental) | `cursor` | local/manual config only; live transport disabled |
+| Cursor (experimental) | `cursor` | dashboard/local config; live transport disabled |
 | Ollama Cloud + 17-provider catalog | `openai-chat` | key |
 | Ollama / vLLM / LM Studio (local) | `openai-chat` | key (usually blank) |
 | Any OpenAI-compatible endpoint | `openai-chat` | key |
 
 Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Portal, and more. See the full list with `ocx init` or in the [provider docs](https://lidge-jun.github.io/opencodex/reference/configuration/).
 
-Cursor support is a staged experimental bridge: it can appear in `ocx init` for manual config and
-static catalog plumbing, but live transport/OAuth and native write/shell/delete/MCP/computer-use
-execution remain disabled. It is not advertised in the dashboard Add Provider picker yet.
+Cursor support is a staged experimental bridge: it appears in `ocx init` and the dashboard Add
+Provider picker as a local scaffold with static `cursor/auto` catalog plumbing, but live
+transport/OAuth and native write/shell/delete/MCP/computer-use execution remain disabled.
 
 ## CLI
 

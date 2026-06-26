@@ -32,7 +32,7 @@ describe("Cursor disabled OAuth shell", () => {
     expect(listOAuthProviders()).not.toContain("cursor");
   });
 
-  test("cursor is exposed only through init as an experimental local provider", () => {
+  test("cursor is exposed through init and dashboard preset as an experimental local provider", () => {
     const cursor = buildInitProviders().find(provider => provider.id === "cursor");
 
     expect(cursor).toMatchObject({
@@ -42,7 +42,12 @@ describe("Cursor disabled OAuth shell", () => {
       defaultModel: "auto",
     });
     expect(cursor?.label.toLowerCase()).toContain("experimental");
-    expect(deriveProviderPresets().some(preset => preset.id === "cursor")).toBe(false);
+    expect(deriveProviderPresets().find(preset => preset.id === "cursor")).toMatchObject({
+      id: "cursor",
+      adapter: "cursor",
+      auth: "local",
+      defaultModel: "auto",
+    });
   });
 
   test("disabled shell has no live transport or local file execution path", async () => {
