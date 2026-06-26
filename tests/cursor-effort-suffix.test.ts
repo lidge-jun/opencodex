@@ -1,36 +1,46 @@
 import { describe, expect, test } from "bun:test";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
+import { cursorEffortSuffix } from "../src/adapters/cursor/effort-map";
 import type { OcxParsedRequest } from "../src/types";
 
-function req(modelId: string, reasoning?: string): OcxParsedRequest {
-  return {
+function modelIdFor(modelId: string, reasoning?: string): string {
+  const parsed: OcxParsedRequest = {
     modelId,
     context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
     stream: false,
     options: reasoning ? { reasoning } : {},
   };
+  return createCursorRequest(parsed).modelId;
 }
 
-describe("Cursor model-id reasoning-effort suffix", () => {
-  test("appends the mapped effort suffix to a bare reasoning model", () => {
-    expect(createCursorRequest(req("cursor/claude-4.6-opus", "high")).modelId).toBe("claude-4.6-opus-high");
-    expect(createCursorRequest(req("cursor/claude-4.6-opus", "medium")).modelId).toBe("claude-4.6-opus-medium");
-    expect(createCursorRequest(req("cursor/claude-4.6-opus", "minimal")).modelId).toBe("claude-4.6-opus-low");
-    expect(createCursorRequest(req("cursor/claude-4.6-opus", "xhigh")).modelId).toBe("claude-4.6-opus-max");
+describe("Cursor per-model reasoning-effort suffix", () => {
+  test("Codex top effort maps to the model's top tier (max-models -> max)", () => {
+    expect(modelIdFor("cursor/claude-4.6-opus", "high")).toBe("claude-4.6-opus-max");
+    expect(cursorEffortSuffix("claude-4.6-opus", "high")).toBe("max");
   });
 
-  test("defaults to -high when effort is none/absent (bare ids are rejected by Cursor)", () => {
-    expect(createCursorRequest(req("cursor/claude-4.6-opus")).modelId).toBe("claude-4.6-opus-high");
-    expect(createCursorRequest(req("cursor/claude-4.6-opus", "none")).modelId).toBe("claude-4.6-opus-high");
+  test("xhigh-models map the top effort to xhigh", () => {
+    expect(modelIdFor("cursor/claude-opus-4-8", "high")).toBe("claude-opus-4-8-xhigh");
+    expect(modelIdFor("cursor/claude-opus-4-8", "low")).toBe("claude-opus-4-8-low");
+    expect(modelIdFor("cursor/claude-opus-4-8", "medium")).toBe("claude-opus-4-8-high");
   });
 
-  test("leaves an already effort-suffixed id unchanged", () => {
-    expect(createCursorRequest(req("cursor/claude-4.6-opus-max", "low")).modelId).toBe("claude-4.6-opus-max");
-    expect(createCursorRequest(req("cursor/claude-4.6-opus-high-thinking")).modelId).toBe("claude-4.6-opus-high-thinking");
+  test("lower Codex efforts clamp to the model's lower tiers", () => {
+    expect(modelIdFor("cursor/claude-4.6-opus", "low")).toBe("claude-4.6-opus-high"); // tiers[0]
+    expect(modelIdFor("cursor/claude-4.6-opus", "medium")).toBe("claude-4.6-opus-high");
+    expect(modelIdFor("cursor/claude-4.6-opus", "none")).toBe("claude-4.6-opus-high");
   });
 
-  test("does not add a suffix to Cursor's non-reasoning models", () => {
-    expect(createCursorRequest(req("cursor/composer-2.5", "high")).modelId).toBe("composer-2.5");
-    expect(createCursorRequest(req("cursor/auto")).modelId).toBe("auto");
+  test("single-tier models always use their one tier", () => {
+    expect(modelIdFor("cursor/gpt-5.1-codex", "low")).toBe("gpt-5.1-codex-max");
+    expect(modelIdFor("cursor/claude-4.6-sonnet", "high")).toBe("claude-4.6-sonnet-medium");
+    expect(modelIdFor("cursor/claude-4.5-opus", "low")).toBe("claude-4.5-opus-high");
+  });
+
+  test("non-reasoning models and already-qualified ids are left bare", () => {
+    expect(modelIdFor("cursor/composer-2.5", "high")).toBe("composer-2.5");
+    expect(modelIdFor("cursor/grok-4.3", "high")).toBe("grok-4.3");
+    expect(modelIdFor("cursor/claude-4.6-opus-max", "low")).toBe("claude-4.6-opus-max");
+    expect(cursorEffortSuffix("composer-2.5", "high")).toBeUndefined();
   });
 });

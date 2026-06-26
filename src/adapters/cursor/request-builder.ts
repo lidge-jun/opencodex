@@ -5,49 +5,19 @@ import type {
   OcxParsedRequest,
 } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
-
-const CURSOR_EFFORT_SUFFIXES = ["low", "medium", "high", "max", "xhigh"] as const;
-
-/** Map a Codex reasoning effort label to Cursor's model-id effort suffix. */
-function mapReasoningToCursorEffort(reasoning: string | undefined): string {
-  switch ((reasoning ?? "").toLowerCase()) {
-    case "minimal":
-    case "low":
-      return "low";
-    case "medium":
-      return "medium";
-    case "max":
-    case "xhigh":
-      return "max";
-    // "high"/"none"/unknown → high: a bare reasoning-model id is rejected (ERROR_BAD_MODEL_NAME) and
-    // `-high` is the broadly-available variant (e.g. claude-4.6-opus ships only -high/-max).
-    default:
-      return "high";
-  }
-}
-
-function hasCursorEffortSuffix(id: string): boolean {
-  return CURSOR_EFFORT_SUFFIXES.some(s => id.endsWith(`-${s}`) || id.includes(`-${s}-`));
-}
-
-// Cursor's own non-reasoning models take NO effort suffix (e.g. `composer-2.5`, `cursor-small`); a
-// `-high` on these is rejected. Only reasoning families (claude/gpt/gemini/grok/…) carry the suffix.
-const CURSOR_NO_EFFORT_PREFIXES = ["composer", "cursor-", "cheetah", "code-supernova", "auto"];
-
-function cursorModelTakesEffortSuffix(id: string): boolean {
-  return !CURSOR_NO_EFFORT_PREFIXES.some(p => id === p || id.startsWith(p));
-}
+import { cursorEffortSuffix } from "./effort-map";
 
 /**
- * Cursor model ids encode the reasoning effort as a suffix (`claude-4.6-opus-high`); a bare id is
- * rejected `ERROR_BAD_MODEL_NAME`. Append the mapped effort suffix when the id doesn't already carry
- * one. (Per-model suffix availability varies; this maps the common reasoning families — a user can
- * always pass a fully-qualified id like `cursor/claude-4.6-opus-max` to bypass the mapping.)
+ * Resolve a `cursor/<model>` selection + Codex reasoning effort to the actual Cursor model id. Cursor
+ * encodes the effort as a per-model suffix (`claude-4.6-opus-high`); `cursorEffortSuffix` picks the
+ * right tier for that specific model (top effort → the model's top tier, e.g. `-max`/`-xhigh`) or
+ * `undefined` for non-reasoning models like `composer-2.5`. A fully-qualified id (one that isn't a
+ * known effort base) passes through unchanged.
  */
 function normalizeCursorModelId(modelId: string, reasoning?: string): string {
   const id = modelId.startsWith("cursor/") ? modelId.slice("cursor/".length) : modelId;
-  if (hasCursorEffortSuffix(id) || !cursorModelTakesEffortSuffix(id)) return id;
-  return `${id}-${mapReasoningToCursorEffort(reasoning)}`;
+  const suffix = cursorEffortSuffix(id, reasoning);
+  return suffix ? `${id}-${suffix}` : id;
 }
 
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
