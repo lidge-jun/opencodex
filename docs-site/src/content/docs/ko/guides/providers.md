@@ -95,9 +95,10 @@ Copilot은 프로바이더의 `headers`를 통해 `User-Agent` 헤더 설정이 
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
 Cursor는 별도의 실험적 어댑터 scaffold로 추적합니다. source에는 `adapter: "cursor"`가 있지만,
-live OAuth, 모델 discovery, HTTP/2 transport, native tool 실행은 bridge 감사가 끝날 때까지
-비활성화되어 있습니다. 아직 provider picker나 OAuth login 목록에는 표시되지 않으며, 수동 Cursor
-config도 disabled-transport error로 fail-closed 처리됩니다.
+live OAuth, live 모델 discovery, HTTP/2 transport, native tool 실행은 bridge 감사가 끝날 때까지
+비활성화되어 있습니다. Cursor는 `ocx init`에만 실험적 local/manual config 항목과 static catalog
+metadata로 표시되며, dashboard Add Provider, key-login, OAuth login 목록에는 아직 표시되지 않습니다.
+수동 Cursor config도 disabled-transport error로 fail-closed 처리됩니다.
 :::
 
 ### Ollama Cloud

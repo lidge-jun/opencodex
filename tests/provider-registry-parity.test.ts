@@ -63,6 +63,36 @@ describe("provider registry parity", () => {
     expect(buildInitProviders().find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
   });
 
+  test("Cursor registry exposure is init-only and fail-closed", () => {
+    const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
+
+    expect(cursor).toMatchObject({
+      id: "cursor",
+      adapter: "cursor",
+      authKind: "local",
+      featured: false,
+      defaultModel: "auto",
+    });
+    expect(cursor?.note).toContain("disabled");
+    expect(cursor?.models).toContain("auto");
+    expect(deriveFeaturedProviderIds()).not.toContain("cursor");
+    expect(Object.keys(deriveKeyLoginMap())).not.toContain("cursor");
+    expect(deriveProviderPresets().some(preset => preset.id === "cursor")).toBe(false);
+
+    const initCursor = buildInitProviders().find(provider => provider.id === "cursor");
+    expect(initCursor).toMatchObject({
+      id: "cursor",
+      adapter: "cursor",
+      kind: "local",
+      defaultModel: "auto",
+    });
+    expect(initCursor?.label.toLowerCase()).toContain("experimental");
+    expect(resolveAdapter({
+      adapter: "cursor",
+      baseUrl: "https://api2.cursor.sh",
+    }).name).toBe("cursor");
+  });
+
   test("OAuth provider configs use canonical registry values", () => {
     expect(OAUTH_PROVIDERS.kimi.providerConfig.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.defaultModel).toBe("claude-sonnet-4-6");

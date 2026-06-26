@@ -3,6 +3,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
+import {
+  CURSOR_STATIC_MODELS,
+  cursorModelContextWindows,
+  cursorModelIds,
+  cursorModelInputModalities,
+  cursorModelReasoningEfforts,
+} from "../src/adapters/cursor/discovery";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
 import { clearModelCache, setCached } from "../src/model-cache";
 
@@ -229,6 +236,52 @@ describe("Codex catalog routed normalization", () => {
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
+    }
+  });
+
+  test("Cursor static metadata routes into catalog entries without live fetch", async () => {
+    clearModelCache("cursor");
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          cursor: {
+            baseUrl: "https://api2.cursor.sh",
+            adapter: "cursor",
+            liveModels: false,
+            models: cursorModelIds(CURSOR_STATIC_MODELS),
+            defaultModel: "auto",
+            modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
+            modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
+            modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(0);
+      const auto = models.find(model => model.provider === "cursor" && model.id === "auto");
+      expect(auto).toMatchObject({
+        provider: "cursor",
+        id: "auto",
+        contextWindow: 128_000,
+        inputModalities: ["text", "image"],
+        reasoningEfforts: [],
+      });
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const entry = entries.find(item => item.slug === "cursor/auto");
+      expect(entry?.context_window).toBe(128_000);
+      expect(entry?.input_modalities).toEqual(["text", "image"]);
+      expect(entry?.supported_reasoning_levels).toEqual([]);
+      expect(entry).not.toHaveProperty("default_reasoning_level");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("cursor");
     }
   });
 

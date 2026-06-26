@@ -32,8 +32,16 @@ describe("Cursor disabled OAuth shell", () => {
     expect(listOAuthProviders()).not.toContain("cursor");
   });
 
-  test("cursor is not exposed through init or dashboard provider presets yet", () => {
-    expect(buildInitProviders().some(provider => provider.id === "cursor")).toBe(false);
+  test("cursor is exposed only through init as an experimental local provider", () => {
+    const cursor = buildInitProviders().find(provider => provider.id === "cursor");
+
+    expect(cursor).toMatchObject({
+      id: "cursor",
+      adapter: "cursor",
+      kind: "local",
+      defaultModel: "auto",
+    });
+    expect(cursor?.label.toLowerCase()).toContain("experimental");
     expect(deriveProviderPresets().some(preset => preset.id === "cursor")).toBe(false);
   });
 

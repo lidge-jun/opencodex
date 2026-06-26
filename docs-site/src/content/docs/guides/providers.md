@@ -95,9 +95,11 @@ key), and Copilot may need a `User-Agent` header set via the provider's `headers
 Gateway** needs your account + gateway ids filled into the URL.
 
 Cursor is tracked separately as an experimental adapter scaffold. `adapter: "cursor"` exists in
-source, but live OAuth, model discovery, HTTP/2 transport, and native tool execution are disabled
-until the bridge is audited. Cursor is not shown in the provider picker or OAuth login list yet; a
-manual Cursor config fails closed with a disabled-transport error.
+source, but live OAuth, live model discovery, HTTP/2 transport, and native tool execution are
+disabled until the bridge is audited. Cursor is shown only in `ocx init` as an experimental
+local/manual config entry with static catalog metadata; it is not shown in the dashboard Add Provider,
+key-login, or OAuth login lists yet. A manual Cursor config still fails closed with a
+disabled-transport error.
 :::
 
 ### Ollama Cloud

@@ -1,5 +1,12 @@
 import type { OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
+import {
+  CURSOR_STATIC_MODELS,
+  cursorModelContextWindows,
+  cursorModelIds,
+  cursorModelInputModalities,
+  cursorModelReasoningEfforts,
+} from "../adapters/cursor/discovery";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -109,6 +116,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "forward",
     featured: true,
     note: "Uses your codex login — no API key",
+  },
+  {
+    id: "cursor",
+    label: "Cursor (experimental, native exec disabled)",
+    adapter: "cursor",
+    baseUrl: "https://api2.cursor.sh",
+    authKind: "local",
+    featured: false,
+    note: "Experimental Cursor bridge. Live transport/OAuth and native write/shell/delete/MCP/computer-use are disabled until audited.",
+    models: cursorModelIds(CURSOR_STATIC_MODELS),
+    defaultModel: "auto",
+    modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
+    modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
+    modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
   },
   {
     id: "xai",
