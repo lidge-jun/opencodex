@@ -5,6 +5,7 @@ import {
   ListMcpResourcesExecResult_McpResourceSchema,
   ListMcpResourcesSuccessSchema,
   McpErrorSchema,
+  McpImageContentSchema,
   McpResultSchema,
   McpSuccessSchema,
   McpTextContentSchema,
@@ -119,9 +120,36 @@ function decodeMcpArgs(raw: { [key: string]: Uint8Array }): Record<string, unkno
 }
 
 function toContentItems(result: McpCallResult): McpToolResultContentItem[] {
-  return result.content.map(block => create(McpToolResultContentItemSchema, {
-    content: { case: "text", value: create(McpTextContentSchema, { text: block.text ?? renderNonText(block) }) },
-  }));
+  return result.content.map(block => {
+    // Promote real image payloads to McpImageContent so the model receives the actual bytes,
+    // not a "[image]" placeholder. Non-text, non-image blocks (audio/resource) still degrade
+    // to a text placeholder via renderNonText.
+    if (block.type === "image" && typeof block.data === "string") {
+      const bytes = base64ToBytes(block.data);
+      if (bytes) {
+        return create(McpToolResultContentItemSchema, {
+          content: { case: "image", value: create(McpImageContentSchema, {
+            data: bytes,
+            mimeType: block.mimeType ?? "application/octet-stream",
+          }) },
+        });
+      }
+    }
+    return create(McpToolResultContentItemSchema, {
+      content: { case: "text", value: create(McpTextContentSchema, { text: block.text ?? renderNonText(block) }) },
+    });
+  });
+}
+
+/** Decode base64 image data to bytes; returns undefined on malformed input so we fall back to text. */
+function base64ToBytes(b64: string): Uint8Array | undefined {
+  if (b64.length === 0) return undefined;
+  try {
+    const bytes = Uint8Array.from(Buffer.from(b64, "base64"));
+    return bytes.length > 0 ? bytes : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function renderNonText(block: { type: string; data?: string; mimeType?: string }): string {

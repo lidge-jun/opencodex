@@ -35,6 +35,14 @@ function buildFixtureServer(): { server: McpServer; clientTransport: InMemoryTra
     async () => ({ isError: true, content: [{ type: "text", text: "tool failed" }] }),
   );
 
+  // 1x1 transparent PNG, base64 — exercises real image-content fidelity (not a placeholder).
+  const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  server.registerTool(
+    "shot",
+    { description: "Returns an image", inputSchema: {} },
+    async () => ({ content: [{ type: "image", data: PNG_1PX, mimeType: "image/png" }] }),
+  );
+
   server.registerResource(
     "doc",
     "memory://doc",
@@ -95,7 +103,7 @@ describe("Cursor MCP manager", () => {
   test("discovers tools with handles", async () => {
     const handles = await manager.listToolHandles();
     const names = handles.map(h => h.advertisedName).sort();
-    expect(names).toEqual(["boom", "echo"]);
+    expect(names).toEqual(["boom", "echo", "shot"]);
     const echo = handles.find(h => h.advertisedName === "echo");
     expect(echo?.description).toBe("Echoes the input text");
   });
@@ -153,6 +161,28 @@ describe("Cursor MCP deps via native-exec dispatcher", () => {
     await manager.dispose();
   });
 
+  test("image content round-trips as McpImageContent with real bytes (not a placeholder)", async () => {
+    const { clientTransport } = buildFixtureServer();
+    const manager = makeManager(clientTransport);
+    const deps = mcpDepsFromManager(manager);
+
+    const args = create(McpArgsSchema, { name: "shot", toolName: "shot", providerIdentifier: "opencodex" });
+    const reply = decode((await handleCursorNativeExec(execMessage({ case: "mcpArgs", value: args }), deps))[0]);
+    expect(reply.message.case).toBe("mcpResult");
+    expect(reply.message.value.result.case).toBe("success");
+    if (reply.message.value.result.case === "success") {
+      const content = reply.message.value.result.value.content[0];
+      expect(content?.content.case).toBe("image");
+      if (content?.content.case === "image") {
+        expect(content.content.value.mimeType).toBe("image/png");
+        expect(content.content.value.data.length).toBeGreaterThan(0);
+        // PNG magic bytes prove the base64 was decoded, not echoed as text.
+        expect(Array.from(content.content.value.data.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      }
+    }
+    await manager.dispose();
+  });
+
   test("unknown mcp tool returns typed toolNotFound, not error", async () => {
     const { clientTransport } = buildFixtureServer();
     const manager = makeManager(clientTransport);
@@ -191,7 +221,7 @@ describe("Cursor MCP deps via native-exec dispatcher", () => {
     expect(reply.message.case).toBe("requestContextResult");
     if (reply.message.case === "requestContextResult" && reply.message.value.result.case === "success") {
       const tools = reply.message.value.result.value.requestContext?.tools ?? [];
-      expect(tools.map(t => t.toolName).sort()).toEqual(["boom", "echo"]);
+      expect(tools.map(t => t.toolName).sort()).toEqual(["boom", "echo", "shot"]);
     } else {
       throw new Error("expected requestContextResult success");
     }
