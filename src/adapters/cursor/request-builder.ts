@@ -3,7 +3,10 @@ import type {
   OcxContentPart,
   OcxMessage,
   OcxParsedRequest,
+  OcxToolCall,
+  OcxToolResultMessage,
 } from "../../types";
+import { namespacedToolName } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
 import { cursorEffortSuffix } from "./effort-map";
 
@@ -29,8 +32,28 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "image":
       return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
     case "toolCall":
-      return undefined;
+      return toolCallToText(part);
   }
+}
+
+function toolCallToText(part: OcxToolCall): string {
+  return [
+    "[tool_call]",
+    `id: ${part.id}`,
+    `name: ${namespacedToolName(part.namespace, part.name)}`,
+    `arguments: ${JSON.stringify(part.arguments ?? {})}`,
+  ].join("\n");
+}
+
+function toolResultToText(message: OcxToolResultMessage): string {
+  return [
+    "[tool_result]",
+    `call_id: ${message.toolCallId}`,
+    `name: ${namespacedToolName(message.toolNamespace, message.toolName)}`,
+    `is_error: ${message.isError}`,
+    "output:",
+    contentToText(message.content),
+  ].join("\n");
 }
 
 function contentToText(content: string | readonly (OcxContentPart | OcxAssistantContentPart)[]): string {
@@ -51,7 +74,7 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
     case "toolResult":
       return {
         role: "tool",
-        content: contentToText(message.content),
+        content: toolResultToText(message),
       };
   }
 }
@@ -70,5 +93,6 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
       .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0),
     ...(parsed.context.tools?.length ? { tools: parsed.context.tools } : {}),
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
+    ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
 }

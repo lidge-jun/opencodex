@@ -388,6 +388,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   }
   const tc = mapToolChoice(data.tool_choice);
   if (tc !== undefined) options.toolChoice = tc;
+  if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   if (data.reasoning?.effort && REASONING_EFFORTS.has(data.reasoning.effort)) {
     options.reasoning = data.reasoning.effort;
   }

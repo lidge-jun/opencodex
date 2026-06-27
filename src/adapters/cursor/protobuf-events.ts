@@ -8,13 +8,17 @@ export interface CursorProtobufEventState {
   usage: OcxUsage;
   openToolCalls: Map<string, { name: string; args: string }>;
   clientToolNames?: Set<string>;
+  parallelToolCalls?: boolean;
+  startedClientToolCalls: number;
 }
 
-export function createCursorProtobufEventState(options: { clientToolNames?: Iterable<string> } = {}): CursorProtobufEventState {
+export function createCursorProtobufEventState(options: { clientToolNames?: Iterable<string>; parallelToolCalls?: boolean } = {}): CursorProtobufEventState {
   return {
     usage: { inputTokens: 0, outputTokens: 0 },
     openToolCalls: new Map(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
+    ...(options.parallelToolCalls !== undefined ? { parallelToolCalls: options.parallelToolCalls } : {}),
+    startedClientToolCalls: 0,
   };
 }
 
@@ -48,7 +52,11 @@ function startToolCall(state: CursorProtobufEventState, callId: string, name: st
   if (state.clientToolNames && !state.clientToolNames.has(name)) {
     return [{ type: "error", message: `Cursor requested unknown Responses tool: ${name}` }];
   }
+  if (state.parallelToolCalls === false && state.startedClientToolCalls > 0) {
+    return [{ type: "error", message: "Cursor requested multiple parallel Responses tool calls but parallel_tool_calls is false" }];
+  }
   state.openToolCalls.set(callId, { name, args: "" });
+  state.startedClientToolCalls++;
   return [{ type: "tool_call_start", id: callId, name }];
 }
 

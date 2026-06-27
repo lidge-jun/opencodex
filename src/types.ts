@@ -166,6 +166,7 @@ export interface OcxRequestOptions {
   topP?: number;
   stopSequences?: string[];
   toolChoice?: OcxToolChoice;
+  parallelToolCalls?: boolean;
   reasoning?: string;
   hideThinkingSummary?: boolean;
   serviceTier?: string;

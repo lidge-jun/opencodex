@@ -8,6 +8,7 @@ export interface CursorRunRequest {
   messages: CursorRequestMessage[];
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
+  parallelToolCalls?: boolean;
 }
 
 export interface CursorRequestMessage {

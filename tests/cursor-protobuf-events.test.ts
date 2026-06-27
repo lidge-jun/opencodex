@@ -109,6 +109,28 @@ describe("Cursor protobuf tool-call events", () => {
     }), guarded)).toEqual([{ type: "error", message: "Cursor requested unknown Responses tool: mcp__fs__write_file" }]);
   });
 
+  test("rejects a second synthetic tool call when parallel tool calls are disabled", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["mcp__fs__read_file", "mcp__fs__write_file"],
+      parallelToolCalls: false,
+    });
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall: mcpToolCall("mcp__fs__read_file", {}) }),
+    }), state)).toEqual([{ type: "tool_call_start", id: "call_1", name: "mcp__fs__read_file" }]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall: mcpToolCall("mcp__fs__read_file", {}), argsTextDelta: "{}" }),
+    }), state)).toEqual([{ type: "tool_call_delta", arguments: "{}" }]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_2", modelCallId: "model_2", toolCall: mcpToolCall("mcp__fs__write_file", {}) }),
+    }), state)).toEqual([{ type: "error", message: "Cursor requested multiple parallel Responses tool calls but parallel_tool_calls is false" }]);
+  });
+
   test("uses completed MCP args when no partial args arrived", () => {
     const state = createCursorProtobufEventState();
     const toolCall = mcpToolCall("mcp__fs__read_file", { path: "a.txt" });

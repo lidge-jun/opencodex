@@ -34,6 +34,8 @@ describe("Cursor tool definitions", () => {
     expect(buildCursorToolDefinitions(tools, "none")).toEqual([]);
     expect(buildCursorToolDefinitions(tools, { name: "write_file" }).map(tool => tool.toolName)).toEqual(["mcp__fs__write_file"]);
     expect(buildCursorToolDefinitions(tools, { name: "mcp__fs__read_file" }).map(tool => tool.toolName)).toEqual(["mcp__fs__read_file"]);
+    expect(buildCursorToolDefinitions(tools, { mode: "auto", allowedTools: ["write_file"] }).map(tool => tool.toolName)).toEqual(["mcp__fs__write_file"]);
+    expect(buildCursorToolDefinitions(tools, { mode: "required", allowedTools: ["mcp__fs__read_file"] }).map(tool => tool.toolName)).toEqual(["mcp__fs__read_file"]);
     expect(buildCursorToolDefinitions(tools, "required").map(tool => tool.toolName)).toEqual(["mcp__fs__read_file", "mcp__fs__write_file"]);
   });
 });

@@ -35,7 +35,7 @@ function rootPromptMessages(request: CursorRunRequest): Uint8Array[] {
 function lastUserText(request: CursorRunRequest): string {
   for (let i = request.messages.length - 1; i >= 0; i--) {
     const message = request.messages[i];
-    if (message.role === "user" || message.role === "developer") return message.content;
+    if (message.role === "user" || message.role === "developer" || message.role === "tool") return message.content;
   }
   return "";
 }

@@ -13,6 +13,9 @@ export function cursorToolWireName(tool: OcxTool): string {
 function toolChoiceAllows(tool: OcxTool, toolChoice: OcxRequestOptions["toolChoice"] | undefined): boolean {
   if (!toolChoice || toolChoice === "auto" || toolChoice === "required") return true;
   if (toolChoice === "none") return false;
+  if ("allowedTools" in toolChoice) {
+    return toolChoice.allowedTools.includes(tool.name) || toolChoice.allowedTools.includes(cursorToolWireName(tool));
+  }
   return tool.name === toolChoice.name || cursorToolWireName(tool) === toolChoice.name;
 }
 

@@ -137,7 +137,10 @@ class LiveCursorTransport implements CursorTransport {
     await this.prepareMcp();
     const clientToolDefs = buildCursorToolDefinitions(request.tools, request.toolChoice);
     this.execContext = { ...this.execContext, clientToolDefs };
-    state = createCursorProtobufEventState({ clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name) });
+    state = createCursorProtobufEventState({
+      clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name),
+      parallelToolCalls: request.parallelToolCalls,
+    });
 
     this.open(request, signal, state, push, err => {
       failure = err;

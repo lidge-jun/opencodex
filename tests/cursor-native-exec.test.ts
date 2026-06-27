@@ -44,6 +44,30 @@ function decode(bytes: Uint8Array) {
 }
 
 describe("Cursor native exec bridge", () => {
+  test("fails closed if synthetic Responses client tools arrive on native MCP exec channel", async () => {
+    let called = false;
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "mcpArgs",
+      value: create(McpArgsSchema, {
+        name: "mcp__fs__read_file",
+        toolName: "mcp__fs__read_file",
+        providerIdentifier: "opencodex-responses",
+      }),
+    }), {
+      mcp: () => {
+        called = true;
+        return create(McpResultSchema, { result: { case: "success", value: create(McpSuccessSchema, { isError: false, content: [] }) } });
+      },
+    }))[0]);
+
+    expect(called).toBe(false);
+    expect(reply.message.case).toBe("mcpResult");
+    expect(reply.message.value.result.case).toBe("error");
+    if (reply.message.value.result.case === "error") {
+      expect(reply.message.value.result.value.error).toContain("native exec channel");
+    }
+  });
+
   test("advertises client tool definitions in request context", async () => {
     const clientTool = create(McpToolDefinitionSchema, {
       name: "mcp__fs__read_file",
