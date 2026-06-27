@@ -3,7 +3,7 @@ import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { OcxProviderConfig } from "../../types";
 import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
 import { encodeCursorRunRequest } from "./protobuf-request";
-import { createCursorProtobufEventState, mapCursorProtobufServerMessage } from "./protobuf-events";
+import { createCursorProtobufEventState, mapCursorProtobufServerMessage, mapSyntheticMcpExecToToolEvents } from "./protobuf-events";
 import {
   AgentClientMessageSchema,
   AgentServerMessageSchema,
@@ -248,6 +248,21 @@ class LiveCursorTransport implements CursorTransport {
       return;
     }
     if (message.message.case === "execServerMessage") {
+      const execMsg = message.message.value;
+      if (execMsg.message.case === "mcpArgs") {
+        const callId = execMsg.message.value.toolCallId || `exec_${execMsg.id}`;
+        const clientToolEvents = mapSyntheticMcpExecToToolEvents(execMsg.message.value, `exec_${execMsg.id}`, {
+          allowEmptyArgs: false,
+          state,
+          suppressStart: state.openToolCalls.has(callId),
+        });
+        if (clientToolEvents.length > 0) {
+          for (const event of clientToolEvents) push(event);
+          push({ type: "done", usage: { ...state.usage } });
+          this.close();
+          return;
+        }
+      }
       const replies = await handleCursorNativeExec(message.message.value, this.execContext);
       for (const reply of replies) this.stream.write(encodeConnectFrame(reply));
       return;

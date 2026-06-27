@@ -1,6 +1,6 @@
 import type { OcxUsage } from "../../types";
 import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
-import { textDecoder } from "./native-exec-common";
+import { decodeCursorArgsMap } from "./arg-codec";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import type { CursorServerMessage } from "./types";
 
@@ -35,16 +35,36 @@ function mcpToolName(toolCall: ToolCall | undefined): string | undefined {
 }
 
 function decodeMcpArgs(args: McpArgs | undefined): string {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args?.args ?? {})) {
-    const text = textDecoder.decode(value);
-    try {
-      out[key] = JSON.parse(text);
-    } catch {
-      out[key] = text;
-    }
+  return JSON.stringify(decodeCursorArgsMap(args?.args));
+}
+
+function hasMcpArgBytes(args: McpArgs | undefined): boolean {
+  return Object.keys(args?.args ?? {}).length > 0;
+}
+
+export function mapSyntheticMcpExecToToolEvents(
+  args: McpArgs,
+  fallbackCallId = "cursor_mcp_exec",
+  options: { allowEmptyArgs?: boolean; suppressStart?: boolean; state?: CursorProtobufEventState } = {},
+): CursorServerMessage[] {
+  if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
+  if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
+  const name = args.toolName || args.name;
+  if (!name) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
+  const callId = args.toolCallId || fallbackCallId;
+  if (options.state) {
+    const out: CursorServerMessage[] = [];
+    if (options.suppressStart !== true) out.push(...startToolCall(options.state, callId, name));
+    if (out.some(event => event.type === "error")) return out;
+    out.push(...appendToolArgs(options.state, callId, decodeMcpArgs(args)));
+    out.push(...endToolCall(options.state, callId));
+    return out;
   }
-  return JSON.stringify(out);
+  const out: CursorServerMessage[] = [];
+  if (options.suppressStart !== true) out.push({ type: "tool_call_start", id: callId, name });
+  out.push({ type: "tool_call_delta", arguments: decodeMcpArgs(args) });
+  out.push({ type: "tool_call_end", id: callId });
+  return out;
 }
 
 function startToolCall(state: CursorProtobufEventState, callId: string, name: string): CursorServerMessage[] {
@@ -118,9 +138,11 @@ export function mapCursorProtobufServerMessage(
     case "toolCallCompleted": {
       const out: CursorServerMessage[] = [];
       const name = mcpToolName(update.value.toolCall);
+      const args = mcpArgsFromToolCall(update.value.toolCall);
+      const openBeforeStart = state.openToolCalls.get(update.value.callId);
+      if (name && !hasMcpArgBytes(args) && (!openBeforeStart || openBeforeStart.args.length === 0)) return [];
       if (name) out.push(...startToolCall(state, update.value.callId, name));
       const open = state.openToolCalls.get(update.value.callId);
-      const args = mcpArgsFromToolCall(update.value.toolCall);
       if (open && args) {
         out.push(...appendToolArgs(state, update.value.callId, decodeMcpArgs(args)));
       }

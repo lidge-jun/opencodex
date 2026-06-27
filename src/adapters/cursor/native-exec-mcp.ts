@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import { decodeCursorArgsMap } from "./arg-codec";
 import {
   ListMcpResourcesErrorSchema,
   ListMcpResourcesExecResultSchema,
@@ -22,8 +23,9 @@ import {
 } from "./gen/agent_pb";
 import type { McpCallResult } from "./mcp-manager";
 import { CursorMcpManager } from "./mcp-manager";
-import { errorText, textEncoder } from "./native-exec-common";
+import { errorText } from "./native-exec-common";
 import type { CursorNativeToolDeps } from "./native-exec-tools";
+import { encodeCursorInputSchema } from "./tool-definitions";
 
 /**
  * Build the `McpToolDefinition[]` advertised to the Cursor agent via `requestContextResult`.
@@ -36,7 +38,7 @@ export async function buildMcpToolDefinitions(manager: CursorMcpManager): Promis
     toolName: handle.advertisedName,
     providerIdentifier: "opencodex",
     description: handle.description,
-    inputSchema: textEncoder.encode(JSON.stringify(handle.inputSchema ?? {})),
+    inputSchema: encodeCursorInputSchema(handle.inputSchema ?? {}),
   }));
 }
 
@@ -107,16 +109,7 @@ export function mcpDepsFromManager(manager: CursorMcpManager): CursorNativeToolD
 
 /** Decode the wire `map<string, bytes>` MCP args into JSON values. */
 function decodeMcpArgs(raw: { [key: string]: Uint8Array }): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw ?? {})) {
-    const text = new TextDecoder().decode(value);
-    try {
-      out[key] = JSON.parse(text);
-    } catch {
-      out[key] = text;
-    }
-  }
-  return out;
+  return decodeCursorArgsMap(raw);
 }
 
 function toContentItems(result: McpCallResult): McpToolResultContentItem[] {

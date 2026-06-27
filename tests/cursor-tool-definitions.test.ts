@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { fromBinary, toJson } from "@bufbuild/protobuf";
+import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { buildCursorToolDefinitions, cursorToolWireName } from "../src/adapters/cursor/tool-definitions";
 import type { OcxTool } from "../src/types";
-
-const decoder = new TextDecoder();
 
 describe("Cursor tool definitions", () => {
   test("converts Responses tools to Cursor request context definitions", () => {
@@ -22,7 +22,7 @@ describe("Cursor tool definitions", () => {
     expect(defs[0]?.toolName).toBe("mcp__fs__read_file");
     expect(defs[0]?.providerIdentifier).toBe("opencodex-responses");
     expect(defs[0]?.description).toBe("Read a file");
-    expect(JSON.parse(decoder.decode(defs[0]?.inputSchema))).toEqual(tool.parameters);
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(tool.parameters);
   });
 
   test("applies Responses tool_choice to advertised Cursor tool definitions", () => {

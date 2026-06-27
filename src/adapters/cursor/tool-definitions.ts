@@ -1,8 +1,8 @@
-import { create } from "@bufbuild/protobuf";
+import { create, fromJson, toBinary, type JsonValue } from "@bufbuild/protobuf";
+import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { OcxRequestOptions, OcxTool } from "../../types";
 import { namespacedToolName } from "../../types";
 import { McpToolDefinitionSchema, type McpToolDefinition } from "./gen/agent_pb";
-import { textEncoder } from "./native-exec-common";
 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 
@@ -19,6 +19,13 @@ function toolChoiceAllows(tool: OcxTool, toolChoice: OcxRequestOptions["toolChoi
   return tool.name === toolChoice.name || cursorToolWireName(tool) === toolChoice.name;
 }
 
+export function encodeCursorInputSchema(schema: unknown): Uint8Array {
+  const value: JsonValue = schema && typeof schema === "object"
+    ? schema as JsonValue
+    : { type: "object", properties: {}, required: [] };
+  return toBinary(ValueSchema, fromJson(ValueSchema, value));
+}
+
 export function buildCursorToolDefinitions(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
@@ -31,7 +38,7 @@ export function buildCursorToolDefinitions(
       toolName: wireName,
       providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
       description: tool.description,
-      inputSchema: textEncoder.encode(JSON.stringify(tool.parameters ?? {})),
+      inputSchema: encodeCursorInputSchema(tool.parameters ?? {}),
     });
   });
 }

@@ -1,9 +1,9 @@
-import { fromBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toJson } from "@bufbuild/protobuf";
+import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { create } from "@bufbuild/protobuf";
 import {
   ExecServerMessageSchema,
   AgentClientMessageSchema,
@@ -131,12 +131,12 @@ describe("Cursor MCP manager", () => {
     expect(content.mimeType).toBe("text/plain");
   });
 
-  test("buildMcpToolDefinitions emits valid definitions with JSON input schema", async () => {
+  test("buildMcpToolDefinitions emits valid protobuf Value input schema", async () => {
     const defs = await buildMcpToolDefinitions(manager);
     const echo = defs.find(d => d.toolName === "echo");
     expect(echo).toBeDefined();
     expect(echo?.providerIdentifier).toBe("opencodex");
-    const schema = JSON.parse(new TextDecoder().decode(echo!.inputSchema));
+    const schema = toJson(ValueSchema, fromBinary(ValueSchema, echo!.inputSchema)) as { type?: string };
     expect(schema.type).toBe("object");
   });
 });
