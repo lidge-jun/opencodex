@@ -222,4 +222,24 @@ describe("Cursor Responses tool argument decoding", () => {
       { type: "error", message: "Cursor requested multiple parallel Responses tool calls but parallel_tool_calls is false" },
     ]);
   });
+
+  test("duplicate synthetic native mcp exec after completed update is ignored by call id", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["mcp__fs__read_file"] });
+    const wireArgs = { value: valueBytes("hello") };
+    const completedMessage = completed(wireArgs);
+    const syntheticArgs = create(McpArgsSchema, {
+      name: "mcp__fs__read_file",
+      toolName: "mcp__fs__read_file",
+      toolCallId: "call_1",
+      providerIdentifier: "opencodex-responses",
+      args: wireArgs,
+    });
+
+    expect(mapCursorProtobufServerMessage(completedMessage, state)).toEqual([
+      { type: "tool_call_start", id: "call_1", name: "mcp__fs__read_file" },
+      { type: "tool_call_delta", arguments: "{\"value\":\"hello\"}" },
+      { type: "tool_call_end", id: "call_1" },
+    ]);
+    expect(mapSyntheticMcpExecToToolEvents(syntheticArgs, "fallback", { allowEmptyArgs: false, state })).toEqual([]);
+  });
 });

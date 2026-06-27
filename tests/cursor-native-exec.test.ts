@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
 import { describe, expect, test } from "bun:test";
-import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import { handleCursorNativeExec, syntheticResponsesToolAck } from "../src/adapters/cursor/native-exec";
 import {
   AgentClientMessageSchema,
   BackgroundShellSpawnArgsSchema,
@@ -88,6 +88,24 @@ describe("Cursor native exec bridge", () => {
     expect(context.message.value.result.case).toBe("success");
     if (context.message.value.result.case === "success") {
       expect(context.message.value.result.value.requestContext?.tools.map(tool => tool.toolName)).toEqual(["mcp__fs__read_file"]);
+    }
+  });
+
+  test("synthetic Responses tool ack is success without local MCP execution", () => {
+    const ack = decode(syntheticResponsesToolAck(execMessage({
+      case: "mcpArgs",
+      value: create(McpArgsSchema, {
+        name: "mcp__fs__read_file",
+        toolName: "mcp__fs__read_file",
+        providerIdentifier: "opencodex-responses",
+      }),
+    })));
+
+    expect(ack.message.case).toBe("mcpResult");
+    expect(ack.message.value.result.case).toBe("success");
+    if (ack.message.value.result.case === "success") {
+      expect(ack.message.value.result.value.isError).toBe(false);
+      expect(ack.message.value.result.value.content).toEqual([]);
     }
   });
 

@@ -7,6 +7,7 @@ import {
   KvClientMessageSchema,
   McpErrorSchema,
   McpResultSchema,
+  McpSuccessSchema,
   RequestContextResultSchema,
   RequestContextSchema,
   RequestContextSuccessSchema,
@@ -96,6 +97,12 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     }))];
   }
   return [];
+}
+
+export function syntheticResponsesToolAck(execMsg: ExecServerMessage): Uint8Array {
+  return execBytes(execMsg, "mcpResult", create(McpResultSchema, {
+    result: { case: "success", value: create(McpSuccessSchema, { isError: false, content: [] }) },
+  }));
 }
 
 export function handleCursorNativeKv(kvMsg: KvServerMessage): Uint8Array {

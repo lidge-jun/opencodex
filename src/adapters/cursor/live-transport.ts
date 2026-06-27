@@ -10,7 +10,7 @@ import {
   ClientHeartbeatSchema,
   type AgentServerMessage,
 } from "./gen/agent_pb";
-import { handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";
+import { handleCursorNativeExec, handleCursorNativeKv, syntheticResponsesToolAck, type CursorNativeExecContext } from "./native-exec";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
@@ -258,8 +258,12 @@ class LiveCursorTransport implements CursorTransport {
         });
         if (clientToolEvents.length > 0) {
           for (const event of clientToolEvents) push(event);
-          push({ type: "done", usage: { ...state.usage } });
-          this.close();
+          if (clientToolEvents.some(event => event.type === "error")) {
+            push({ type: "done", usage: { ...state.usage } });
+            this.close();
+            return;
+          }
+          this.stream.write(encodeConnectFrame(syntheticResponsesToolAck(execMsg)));
           return;
         }
       }

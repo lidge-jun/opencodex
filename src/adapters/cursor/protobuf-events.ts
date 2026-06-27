@@ -7,6 +7,7 @@ import type { CursorServerMessage } from "./types";
 export interface CursorProtobufEventState {
   usage: OcxUsage;
   openToolCalls: Map<string, { name: string; args: string }>;
+  completedToolCalls: Set<string>;
   clientToolNames?: Set<string>;
   parallelToolCalls?: boolean;
   startedClientToolCalls: number;
@@ -16,6 +17,7 @@ export function createCursorProtobufEventState(options: { clientToolNames?: Iter
   return {
     usage: { inputTokens: 0, outputTokens: 0 },
     openToolCalls: new Map(),
+    completedToolCalls: new Set(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
     ...(options.parallelToolCalls !== undefined ? { parallelToolCalls: options.parallelToolCalls } : {}),
     startedClientToolCalls: 0,
@@ -52,6 +54,7 @@ export function mapSyntheticMcpExecToToolEvents(
   const name = args.toolName || args.name;
   if (!name) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
   const callId = args.toolCallId || fallbackCallId;
+  if (options.state?.completedToolCalls.has(callId)) return [];
   if (options.state) {
     const out: CursorServerMessage[] = [];
     if (options.suppressStart !== true) out.push(...startToolCall(options.state, callId, name));
@@ -68,6 +71,7 @@ export function mapSyntheticMcpExecToToolEvents(
 }
 
 function startToolCall(state: CursorProtobufEventState, callId: string, name: string): CursorServerMessage[] {
+  if (state.completedToolCalls.has(callId)) return [];
   if (state.openToolCalls.has(callId)) return [];
   if (state.clientToolNames && !state.clientToolNames.has(name)) {
     return [{ type: "error", message: `Cursor requested unknown Responses tool: ${name}` }];
@@ -98,6 +102,7 @@ function appendToolArgs(state: CursorProtobufEventState, callId: string, nextArg
 function endToolCall(state: CursorProtobufEventState, callId: string): CursorServerMessage[] {
   if (!state.openToolCalls.has(callId)) return [];
   state.openToolCalls.delete(callId);
+  state.completedToolCalls.add(callId);
   return [{ type: "tool_call_end", id: callId }];
 }
 
@@ -137,6 +142,7 @@ export function mapCursorProtobufServerMessage(
       return [];
     case "toolCallCompleted": {
       const out: CursorServerMessage[] = [];
+      if (state.completedToolCalls.has(update.value.callId)) return [];
       const name = mcpToolName(update.value.toolCall);
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
