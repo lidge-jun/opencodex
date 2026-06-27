@@ -799,25 +799,43 @@ function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): 
   if (usage) logCtx.usage = usage;
 }
 
-function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined {
+export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined {
   if (!usage || typeof usage !== "object") return undefined;
   const raw = usage as {
     input_tokens?: unknown;
     output_tokens?: unknown;
     input_tokens_details?: { cached_tokens?: unknown };
     output_tokens_details?: { reasoning_tokens?: unknown };
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    prompt_tokens_details?: { cached_tokens?: unknown };
+    completion_tokens_details?: { reasoning_tokens?: unknown };
   };
-  if (typeof raw.input_tokens !== "number" || typeof raw.output_tokens !== "number") return undefined;
-  return {
-    inputTokens: raw.input_tokens,
-    outputTokens: raw.output_tokens,
-    ...(typeof raw.input_tokens_details?.cached_tokens === "number"
-      ? { cachedInputTokens: raw.input_tokens_details.cached_tokens }
-      : {}),
-    ...(typeof raw.output_tokens_details?.reasoning_tokens === "number"
-      ? { reasoningOutputTokens: raw.output_tokens_details.reasoning_tokens }
-      : {}),
-  };
+  if (typeof raw.input_tokens === "number" && typeof raw.output_tokens === "number") {
+    return {
+      inputTokens: raw.input_tokens,
+      outputTokens: raw.output_tokens,
+      ...(typeof raw.input_tokens_details?.cached_tokens === "number"
+        ? { cachedInputTokens: raw.input_tokens_details.cached_tokens }
+        : {}),
+      ...(typeof raw.output_tokens_details?.reasoning_tokens === "number"
+        ? { reasoningOutputTokens: raw.output_tokens_details.reasoning_tokens }
+        : {}),
+    };
+  }
+  if (typeof raw.prompt_tokens === "number" && typeof raw.completion_tokens === "number") {
+    return {
+      inputTokens: raw.prompt_tokens,
+      outputTokens: raw.completion_tokens,
+      ...(typeof raw.prompt_tokens_details?.cached_tokens === "number"
+        ? { cachedInputTokens: raw.prompt_tokens_details.cached_tokens }
+        : {}),
+      ...(typeof raw.completion_tokens_details?.reasoning_tokens === "number"
+        ? { reasoningOutputTokens: raw.completion_tokens_details.reasoning_tokens }
+        : {}),
+    };
+  }
+  return undefined;
 }
 
 function inspectResponseLogJson(logCtx: RequestLogContext, text: string): void {

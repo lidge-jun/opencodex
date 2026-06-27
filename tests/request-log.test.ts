@@ -136,6 +136,27 @@ describe("request log metadata", () => {
     });
   });
 
+  test("deferred JSON logging accepts ChatCompletions-shape usage", async () => {
+    const entries: RequestLogEntry[] = [];
+    const response = responseWithDeferredRequestLog(
+      new Response(JSON.stringify({
+        model: "gpt-5.5",
+        usage: { prompt_tokens: 42, completion_tokens: 7 },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+      "ocx-test-json-chat-completions",
+      Date.now(),
+      { model: "gpt-5.5", provider: "chatgpt" },
+      entry => entries.push(entry),
+    );
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      usageStatus: "reported",
+      totalTokens: 49,
+      usage: { inputTokens: 42, outputTokens: 7 },
+    });
+  });
+
   test("deferred SSE logging captures terminal reported usage", async () => {
     const entries: RequestLogEntry[] = [];
     const body = new ReadableStream<Uint8Array>({
