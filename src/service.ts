@@ -332,6 +332,10 @@ function uninstallWindows(): void {
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
 }
 
+function serviceDiagnosticsSummary(): string {
+  return `logs: ${serviceLogPath()}`;
+}
+
 // ── Linux (systemd user unit) ──
 function unitDir(): string {
   return join(homedir(), ".config", "systemd", "user");
@@ -489,21 +493,22 @@ export function isServiceInstalled(): boolean {
 }
 
 export function serviceStatusSummary(): string {
+  const diagnostics = serviceDiagnosticsSummary();
   if (process.platform === "darwin") {
-    if (!existsSync(plistPath())) return "not installed";
+    if (!existsSync(plistPath())) return `not installed (${diagnostics})`;
     const status = statusLaunchd();
-    return status ? "installed (launchd)" : "installed, not loaded";
+    return status ? `installed (launchd; ${diagnostics})` : `installed, not loaded (${diagnostics})`;
   }
   if (process.platform === "win32") {
     const status = statusWindows();
-    return status ? "installed (Task Scheduler)" : "not installed";
+    return status ? `installed (Task Scheduler; ${diagnostics})` : `not installed (${diagnostics})`;
   }
   if (process.platform === "linux") {
     if (existsSync("/.dockerenv")) return "unsupported in Docker";
     if (!isSystemd()) return "unsupported: systemd not found";
-    if (!existsSync(unitPath())) return "not installed";
+    if (!existsSync(unitPath())) return `not installed (${diagnostics})`;
     const status = statusSystemd();
-    return status ? "installed (systemd user)" : "installed, not running";
+    return status ? `installed (systemd user; ${diagnostics})` : `installed, not running (${diagnostics})`;
   }
   return `unsupported on ${process.platform}`;
 }
@@ -536,6 +541,7 @@ export function serviceCommand(sub?: string): void {
     case "status": {
       const s = ops.status();
       console.log(s ? `✅ running:\n${s}` : "❌ service not installed/running.");
+      console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
       break;
     }
     case "uninstall":

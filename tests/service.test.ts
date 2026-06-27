@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, serviceLogPath } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, serviceLogPath, serviceStatusSummary } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -272,5 +272,21 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain("catch (err)");
     expect(service).toContain("Failed to stop proxy");
     expect(service).toContain("return false;");
+  });
+});
+
+describe("service diagnostics", () => {
+  test("status summary exposes the service log path", () => {
+    const summary = serviceStatusSummary();
+
+    expectTextToContainPath(summary, serviceLogPath());
+  });
+
+  test("direct service status prints the diagnostics line", async () => {
+    const service = await readText("src/service.ts");
+    const statusCase = service.slice(service.indexOf('case "status":'), service.indexOf('case "uninstall":'));
+
+    expect(statusCase).toContain("Diagnostics:");
+    expect(statusCase).toContain("serviceDiagnosticsSummary()");
   });
 });

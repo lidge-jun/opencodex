@@ -40,6 +40,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("Default provider: openai");
       expect(result.stdout).toContain("Codex autostart: disabled");
       expect(result.stdout).toContain("Service:");
+      expect(result.stdout).toContain(join(opencodexHome, "service.log"));
       expect(result.stdout).toContain("Codex autostart shim");
     } finally {
       rmSync(opencodexHome, { recursive: true, force: true });
