@@ -27,6 +27,8 @@ export const zh: Record<TKey, string> = {
   "dash.version": "版本",
   "dash.uptime": "运行时间",
   "dash.providers": "提供方",
+  "dash.tokens30d": "Token (30 天)",
+  "dash.coverage": "覆盖率 {pct}",
   "dash.activeProviders": "活跃提供方",
   "dash.noProviders": "尚未配置提供方。请运行 {cmd}。",
   "dash.col.name": "名称",

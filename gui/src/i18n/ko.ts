@@ -27,6 +27,8 @@ export const ko: Record<TKey, string> = {
   "dash.version": "버전",
   "dash.uptime": "가동 시간",
   "dash.providers": "프로바이더",
+  "dash.tokens30d": "토큰 (30일)",
+  "dash.coverage": "커버리지 {pct}",
   "dash.activeProviders": "활성 프로바이더",
   "dash.noProviders": "설정된 프로바이더가 없습니다. {cmd} 를 실행하세요.",
   "dash.col.name": "이름",

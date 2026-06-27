@@ -27,6 +27,8 @@ export const en = {
   "dash.version": "Version",
   "dash.uptime": "Uptime",
   "dash.providers": "Providers",
+  "dash.tokens30d": "Tokens (30d)",
+  "dash.coverage": "{pct} coverage",
   "dash.activeProviders": "Active providers",
   "dash.noProviders": "No providers configured. Run {cmd}.",
   "dash.col.name": "Name",

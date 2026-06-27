@@ -7,6 +7,13 @@ interface ProviderInfo { name: string; adapter: string; baseUrl: string; default
 interface ModelInfo { id: string; provider: string; owned_by?: string }
 interface SettingsData { codexAutoStart: boolean; port: number; hostname: string }
 interface SidecarData { webSearch: { model: string; reasoning: string }; vision: { model: string } }
+interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
+
+function formatTokens(n: number): string {
+  if (n < 10_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
 
 const SIDECAR_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark"];
 const REASONING_LEVELS = ["low", "medium", "high"];
@@ -18,6 +25,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [sidecar, setSidecar] = useState<SidecarData | null>(null);
+  const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(null);
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -26,16 +34,18 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [hRes, pRes, sRes, scRes] = await Promise.all([
+        const [hRes, pRes, sRes, scRes, uRes] = await Promise.all([
           fetch(`${apiBase}/healthz`),
           fetch(`${apiBase}/api/providers`),
           fetch(`${apiBase}/api/settings`),
           fetch(`${apiBase}/api/sidecar-settings`),
+          fetch(`${apiBase}/api/usage?range=30d`),
         ]);
         setHealth(await hRes.json());
         setProviders(await pRes.json());
         setSettings(await sRes.json());
         setSidecar(await scRes.json());
+        try { setUsage30d(uRes.ok ? await uRes.json() : null); } catch { setUsage30d(null); }
         setError(false);
       } catch {
         setError(true);
@@ -135,6 +145,15 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         <div className="stat"><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
         <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? `${Math.floor(health.uptime)}s` : "—"}</div></div>
         <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
+        <div className="stat">
+          <div className="label">{t("dash.tokens30d")}</div>
+          <div className="value mono">{usage30d && usage30d.summary.requests > 0 ? formatTokens(usage30d.summary.totalTokens) : "—"}</div>
+          {usage30d && usage30d.summary.requests > 0 && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              {t("dash.coverage").replace("{pct}", `${Math.round(usage30d.summary.coverageRatio * 100)}%`)}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="panel" style={{ marginBottom: 24 }}>
