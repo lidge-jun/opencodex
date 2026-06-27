@@ -19,6 +19,8 @@ C2 product slice:
 Planned changes:
 
 - Add package version loading from the repository/package runtime metadata.
+  - Do not use a JSON import unless `tsconfig.json` already supports it.
+  - Preferred implementation: read and parse `package.json` through `node:fs` / `node:path` from the CLI module, with a narrow fallback string if the file is unavailable in an unusual packaged environment.
 - Support these version forms:
   - `ocx --version`
   - `ocx -v`
@@ -86,4 +88,3 @@ bun run typecheck
 ```text
 feat(cli): add friendly help and version output
 ```
-
