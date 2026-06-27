@@ -34,6 +34,7 @@ import {
   websocketsEnabled,
 } from "./config";
 import { parseRequest } from "./responses/parser";
+import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "./responses/state";
 import { routeModel } from "./router";
 import { namespacedToolName } from "./types";
 import {
@@ -375,10 +376,12 @@ async function handleResponses(
   } catch {
     return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
   }
+  body = expandPreviousResponseInput(body);
 
   let parsed;
   try {
     parsed = parseRequest(body);
+    parsed._cursorConversationId = previousResponseConversationId(parsed.previousResponseId);
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
@@ -619,6 +622,7 @@ async function handleResponses(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          onCompletedResponse: response => rememberResponseState(parsed._rawBody, response, parsed._cursorConversationId),
         },
       );
       const bridgeTurnAc = new AbortController();
@@ -636,6 +640,7 @@ async function handleResponses(
       freeformToolNames,
       toolSearchToolNames,
     });
+    rememberResponseState(parsed._rawBody, json, parsed._cursorConversationId);
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 
@@ -698,6 +703,7 @@ async function handleResponses(
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        onCompletedResponse: response => rememberResponseState(parsed._rawBody, response, parsed._cursorConversationId),
       },
     );
     const bridgeTurnAc = new AbortController();
@@ -721,6 +727,7 @@ async function handleResponses(
       freeformToolNames,
       toolSearchToolNames,
     });
+    rememberResponseState(parsed._rawBody, json, parsed._cursorConversationId);
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 

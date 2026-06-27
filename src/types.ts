@@ -5,6 +5,8 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
+  _cursorConversationId?: string;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and

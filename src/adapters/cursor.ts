@@ -3,7 +3,7 @@ import type { ProviderAdapter } from "./base";
 import { cursorExecDeniedMessage } from "./cursor/exec-policy";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
-import { createCursorRequest } from "./cursor/request-builder";
+import { createCursorRequest, generatedCursorConversationId } from "./cursor/request-builder";
 import { createLiveCursorTransport, CursorMissingCredentialError } from "./cursor/live-transport";
 import {
   createDisabledCursorTransport,
@@ -86,6 +86,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         transport = (deps.createTransport ?? createLiveCursorTransport)({ provider, headers: incoming.headers });
         const activeTransport = transport;
         const kv = deps.kv ?? createCursorKvStore();
+        _parsed._cursorConversationId ??= generatedCursorConversationId();
         const request = createCursorRequest(_parsed);
         for await (const message of activeTransport.run(request, incoming.abortSignal)) {
           if (incoming.abortSignal?.aborted) {

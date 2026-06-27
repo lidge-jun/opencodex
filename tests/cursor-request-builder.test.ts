@@ -18,6 +18,16 @@ describe("Cursor request builder", () => {
     expect(request.conversationId).toBe("resp_123");
   });
 
+  test("uses resolved Cursor conversation id ahead of Responses response id", () => {
+    const request = createCursorRequest({
+      ...base,
+      previousResponseId: "resp_123",
+      _cursorConversationId: "cursor_stable",
+    });
+
+    expect(request.conversationId).toBe("cursor_stable");
+  });
+
   test("maps system, developer, user, assistant, and tool result text", () => {
     const request = createCursorRequest({
       ...base,
@@ -80,7 +90,7 @@ describe("Cursor request builder", () => {
     expect(request.toolChoice).toBe("required");
   });
 
-  test("serializes prior tool calls and tool results with pairing metadata", () => {
+  test("serializes prior tool results without leaking assistant tool-call markers as text", () => {
     const request = createCursorRequest({
       ...base,
       context: {
@@ -105,14 +115,10 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.parallelToolCalls).toBe(false);
-    expect(request.messages[0]).toEqual({
-      role: "assistant",
-      content: "[tool_call]\nid: call_1\nname: mcp__fs__read_file\narguments: {\"path\":\"a.txt\"}",
-    });
-    expect(request.messages[1]).toEqual({
+    expect(request.messages).toEqual([{
       role: "tool",
       content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nfile contents",
-    });
+    }]);
   });
 
   test("preserves Responses allowed_tools and parallel_tool_calls controls from parser", () => {

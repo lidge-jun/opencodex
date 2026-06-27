@@ -1,12 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { fromBinary } from "@bufbuild/protobuf";
-import { storeCursorBlob } from "../src/adapters/cursor/native-exec";
+import { create, fromBinary } from "@bufbuild/protobuf";
+import { handleCursorNativeKv, storeCursorBlob } from "../src/adapters/cursor/native-exec";
 import { encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
-import { AgentClientMessageSchema } from "../src/adapters/cursor/gen/agent_pb";
+import {
+  AgentClientMessageSchema,
+  ConversationStepSchema,
+  ConversationTurnStructureSchema,
+  GetBlobArgsSchema,
+  KvServerMessageSchema,
+} from "../src/adapters/cursor/gen/agent_pb";
 
 function sha256(data: Uint8Array): Uint8Array {
   return new Uint8Array(createHash("sha256").update(data).digest());
+}
+
+function blobData(blobId: Uint8Array): Uint8Array {
+  const reply = fromBinary(AgentClientMessageSchema, handleCursorNativeKv(create(KvServerMessageSchema, {
+    id: 1,
+    message: { case: "getBlobArgs", value: create(GetBlobArgsSchema, { blobId }) },
+  })));
+  expect(reply.message.case).toBe("kvClientMessage");
+  const kv = reply.message.value;
+  expect(kv.message.case).toBe("getBlobResult");
+  return kv.message.value.blobData;
 }
 
 describe("Cursor blob handshake", () => {
@@ -47,7 +64,6 @@ describe("Cursor blob handshake", () => {
       conversationId: "c1",
       system: ["You are helpful."],
       messages: [
-        { role: "assistant", content: "[tool_call]\nid: call_1\nname: read_file\narguments: {\"path\":\"a.txt\"}" },
         { role: "tool", content: "[tool_result]\ncall_id: call_1\nname: read_file\nis_error: false\noutput:\ncontents" },
       ],
     });
@@ -60,5 +76,46 @@ describe("Cursor blob handshake", () => {
       expect(action.value.userMessage?.text).toContain("[tool_result]");
       expect(action.value.userMessage?.text).toContain("call_id: call_1");
     }
+  });
+
+  test("encodeCursorRunRequest preserves prior assistant tool calls with tool results in turn steps", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: read_file\nis_error: false\noutput:\ncontents" }],
+      rawMessages: [
+        { role: "user", content: "read a file", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/auto",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+        },
+        { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
+      ],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const turnIds = run?.conversationState?.turns ?? [];
+    expect(turnIds).toHaveLength(1);
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnIds[0]!));
+    expect(turn.turn.case).toBe("agentConversationTurn");
+    const steps = turn.turn.value.steps;
+    expect(steps).toHaveLength(1);
+    const step = fromBinary(ConversationStepSchema, blobData(steps[0]!));
+    expect(step.message.case).toBe("toolCall");
+    const tool = step.message.value.tool;
+    expect(tool.case).toBe("mcpToolCall");
+    if (tool.case === "mcpToolCall") {
+      expect(tool.value.args?.toolCallId).toBe("call_1");
+      expect(tool.value.result?.result.case).toBe("success");
+      if (tool.value.result?.result.case === "success") {
+        const content = tool.value.result.result.value.content[0]?.content;
+        expect(content?.case).toBe("text");
+        if (content?.case === "text") expect(content.value.text).toBe("contents");
+      }
+    }
+    expect(run?.action?.action.case).toBe("userMessageAction");
   });
 });

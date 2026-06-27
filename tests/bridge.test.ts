@@ -123,6 +123,25 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(output[1]).toMatchObject({ name: "read_file", arguments: "{\"path\":\"README.md\"}" });
   });
 
+  test("streaming bridge exposes completed response to state callbacks", async () => {
+    let completed: Record<string, unknown> | undefined;
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"README.md\"}" },
+      { type: "tool_call_end", id: "call_1" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onCompletedResponse: response => {
+        completed = response;
+      },
+    }));
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      output: [{ type: "function_call", name: "read_file", arguments: "{\"path\":\"README.md\"}" }],
+    });
+  });
+
   test("non-streaming JSON includes raw reasoning item and usage details", () => {
     const json = buildResponseJSON([
       { type: "reasoning_raw_delta", text: "raw json" },

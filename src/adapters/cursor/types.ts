@@ -1,11 +1,12 @@
 import type { OcxUsage } from "../../types";
-import type { OcxRequestOptions, OcxTool } from "../../types";
+import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
 
 export interface CursorRunRequest {
   modelId: string;
   conversationId: string;
   system: string[];
   messages: CursorRequestMessage[];
+  rawMessages?: OcxMessage[];
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;

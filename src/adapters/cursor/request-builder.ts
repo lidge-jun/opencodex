@@ -32,17 +32,12 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "image":
       return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
     case "toolCall":
-      return toolCallToText(part);
+      // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
+      // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into
+      // model output and can halt multi-tool continuations. The paired tool result carries the
+      // call id/name/output Cursor needs for the next action.
+      return undefined;
   }
-}
-
-function toolCallToText(part: OcxToolCall): string {
-  return [
-    "[tool_call]",
-    `id: ${part.id}`,
-    `name: ${namespacedToolName(part.namespace, part.name)}`,
-    `arguments: ${JSON.stringify(part.arguments ?? {})}`,
-  ].join("\n");
 }
 
 function toolResultToText(message: OcxToolResultMessage): string {
@@ -79,18 +74,19 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
   }
 }
 
-function generatedConversationId(): string {
+export function generatedCursorConversationId(): string {
   return `cursor_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
 export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest {
   return {
     modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
-    conversationId: parsed.previousResponseId ?? generatedConversationId(),
+    conversationId: parsed._cursorConversationId ?? parsed.previousResponseId ?? generatedCursorConversationId(),
     system: [...(parsed.context.systemPrompt ?? [])],
     messages: parsed.context.messages
       .map(requestMessage)
       .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0),
+    rawMessages: parsed.context.messages,
     ...(parsed.context.tools?.length ? { tools: parsed.context.tools } : {}),
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
