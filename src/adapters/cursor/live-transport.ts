@@ -15,6 +15,7 @@ import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
 import { desktopDepsFromConfig } from "./native-exec-desktop";
+import { buildCursorToolDefinitions } from "./tool-definitions";
 import type { CursorNativeToolDeps } from "./native-exec-tools";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
@@ -120,7 +121,7 @@ class LiveCursorTransport implements CursorTransport {
     let notify: (() => void) | undefined;
     let done = false;
     let failure: Error | undefined;
-    const state = createCursorProtobufEventState();
+    let state = createCursorProtobufEventState();
     const wake = () => {
       const fn = notify;
       notify = undefined;
@@ -134,6 +135,9 @@ class LiveCursorTransport implements CursorTransport {
 
     // Advertise MCP tools before the stream opens — the server only calls tools it was told about.
     await this.prepareMcp();
+    const clientToolDefs = buildCursorToolDefinitions(request.tools, request.toolChoice);
+    this.execContext = { ...this.execContext, clientToolDefs };
+    state = createCursorProtobufEventState({ clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name) });
 
     this.open(request, signal, state, push, err => {
       failure = err;

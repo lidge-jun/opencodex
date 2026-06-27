@@ -17,6 +17,12 @@ export function mapCursorServerMessage(
       return [{ type: "text_delta", text: message.text }];
     case "thinking":
       return [{ type: "thinking_delta", thinking: message.thinking }];
+    case "tool_call_start":
+      return [{ type: "tool_call_start", id: message.id, name: message.name }];
+    case "tool_call_delta":
+      return [{ type: "tool_call_delta", arguments: message.arguments }];
+    case "tool_call_end":
+      return [{ type: "tool_call_end" }];
     case "done":
       return [{ type: "done", usage: message.usage }];
     case "error":

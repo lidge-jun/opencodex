@@ -61,4 +61,21 @@ describe("Cursor request builder", () => {
     expect(request.messages[0]?.content).toContain("image input unsupported");
     expect(request.messages[0]?.content).toContain("high");
   });
+
+  test("preserves Responses tools and tool choice for Cursor request context", () => {
+    const tool = {
+      name: "read_file",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      namespace: "mcp__fs",
+    };
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "use a tool", timestamp: 1 }], tools: [tool] },
+      options: { toolChoice: "required" },
+    });
+
+    expect(request.tools).toEqual([tool]);
+    expect(request.toolChoice).toBe("required");
+  });
 });

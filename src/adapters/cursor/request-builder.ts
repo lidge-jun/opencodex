@@ -68,5 +68,7 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
     messages: parsed.context.messages
       .map(requestMessage)
       .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0),
+    ...(parsed.context.tools?.length ? { tools: parsed.context.tools } : {}),
+    ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
   };
 }

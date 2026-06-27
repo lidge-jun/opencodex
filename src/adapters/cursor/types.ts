@@ -1,10 +1,13 @@
 import type { OcxUsage } from "../../types";
+import type { OcxRequestOptions, OcxTool } from "../../types";
 
 export interface CursorRunRequest {
   modelId: string;
   conversationId: string;
   system: string[];
   messages: CursorRequestMessage[];
+  tools?: OcxTool[];
+  toolChoice?: OcxRequestOptions["toolChoice"];
 }
 
 export interface CursorRequestMessage {
@@ -15,6 +18,9 @@ export interface CursorRequestMessage {
 export type CursorServerMessage =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
+  | { type: "tool_call_start"; id: string; name: string }
+  | { type: "tool_call_delta"; arguments: string }
+  | { type: "tool_call_end"; id?: string }
   | { type: "done"; usage?: OcxUsage }
   | { type: "error"; message: string }
   | { type: "kv_get"; key: string }

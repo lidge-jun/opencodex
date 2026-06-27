@@ -5,6 +5,8 @@ import {
   DiagnosticsSuccessSchema,
   GetBlobResultSchema,
   KvClientMessageSchema,
+  McpErrorSchema,
+  McpResultSchema,
   RequestContextResultSchema,
   RequestContextSchema,
   RequestContextSuccessSchema,
@@ -25,6 +27,7 @@ import {
 } from "./native-exec-tools";
 import { clientBytes, execBytes } from "./native-exec-common";
 import type { McpToolDefinition } from "./gen/agent_pb";
+import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
 
@@ -35,6 +38,7 @@ export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDep
  */
 export interface CursorNativeExecContext extends CursorNativeExecDeps {
   mcpToolDefs?: McpToolDefinition[];
+  clientToolDefs?: McpToolDefinition[];
 }
 
 const blobs = new Map<string, Uint8Array>();
@@ -57,8 +61,9 @@ export function storeCursorBlob(data: Uint8Array): Uint8Array {
 export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: CursorNativeExecContext = {}): Promise<Uint8Array[]> {
   const execCase = execMsg.message.case;
   if (execCase === "requestContextArgs") {
+    const tools = [...(deps.mcpToolDefs ?? []), ...(deps.clientToolDefs ?? [])];
     return [execBytes(execMsg, "requestContextResult", create(RequestContextResultSchema, {
-      result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext: create(RequestContextSchema, { tools: deps.mcpToolDefs ?? [] }) }) },
+      result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext: create(RequestContextSchema, { tools }) }) },
     }))];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
@@ -71,6 +76,14 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
   if (execCase === "backgroundShellSpawnArgs") return [backgroundShellSpawnExec(execMsg)];
   if (execCase === "writeShellStdinArgs") return [writeShellStdinExec(execMsg)];
   if (execCase === "fetchArgs") return [await fetchExec(execMsg, deps)];
+  if (execCase === "mcpArgs" && execMsg.message.value.providerIdentifier === OCX_RESPONSES_TOOL_PROVIDER) {
+    return [execBytes(execMsg, "mcpResult", create(McpResultSchema, {
+      result: {
+        case: "error",
+        value: create(McpErrorSchema, { error: "Cursor requested a client Responses tool through the native exec channel; bridge suspension is not implemented." }),
+      },
+    }))];
+  }
   if (execCase === "mcpArgs") return [await mcpExec(execMsg, deps)];
   if (execCase === "listMcpResourcesExecArgs") return [await listMcpResourcesExec(execMsg, deps)];
   if (execCase === "readMcpResourceExecArgs") return [await readMcpResourceExec(execMsg, deps)];

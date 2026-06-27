@@ -32,6 +32,22 @@ describe("Cursor message mapper", () => {
     expect(writes[2]).toMatchObject({ type: "kv_value", key: "next" });
   });
 
+  test("maps tool call messages to AdapterEvents", () => {
+    const writes: CursorClientMessage[] = [];
+    const state = { kv: createCursorKvStore(), writeClient: (message: CursorClientMessage) => writes.push(message) };
+
+    expect(mapCursorServerMessage({ type: "tool_call_start", id: "call_1", name: "read_file" }, state)).toEqual([
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+    ]);
+    expect(mapCursorServerMessage({ type: "tool_call_delta", arguments: "{\"path\":\"a.txt\"}" }, state)).toEqual([
+      { type: "tool_call_delta", arguments: "{\"path\":\"a.txt\"}" },
+    ]);
+    expect(mapCursorServerMessage({ type: "tool_call_end", id: "call_1" }, state)).toEqual([
+      { type: "tool_call_end" },
+    ]);
+    expect(writes).toEqual([]);
+  });
+
   test("answers requestContextArgs and returns legacy mock placeholders for native tool cases", () => {
     const writes: CursorClientMessage[] = [];
     const state = { kv: createCursorKvStore(), writeClient: (message: CursorClientMessage) => writes.push(message) };

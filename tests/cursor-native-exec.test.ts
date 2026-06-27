@@ -14,6 +14,7 @@ import {
   ExecServerMessageSchema,
   FetchArgsSchema,
   GrepArgsSchema,
+  McpToolDefinitionSchema,
   McpArgsSchema,
   McpResultSchema,
   McpSuccessSchema,
@@ -22,6 +23,7 @@ import {
   ReadArgsSchema,
   ReadMcpResourceExecArgsSchema,
   RecordScreenArgsSchema,
+  RequestContextArgsSchema,
   ShellArgsSchema,
   WriteShellStdinArgsSchema,
   WriteArgsSchema,
@@ -42,6 +44,29 @@ function decode(bytes: Uint8Array) {
 }
 
 describe("Cursor native exec bridge", () => {
+  test("advertises client tool definitions in request context", async () => {
+    const clientTool = create(McpToolDefinitionSchema, {
+      name: "mcp__fs__read_file",
+      toolName: "mcp__fs__read_file",
+      providerIdentifier: "opencodex-responses",
+      description: "Read a file",
+      inputSchema: new TextEncoder().encode("{}"),
+    });
+
+    const context = decode((await handleCursorNativeExec(execMessage({
+      case: "requestContextArgs",
+      value: create(RequestContextArgsSchema, {}),
+    }), {
+      clientToolDefs: [clientTool],
+    }))[0]);
+
+    expect(context.message.case).toBe("requestContextResult");
+    expect(context.message.value.result.case).toBe("success");
+    if (context.message.value.result.case === "success") {
+      expect(context.message.value.result.value.requestContext?.tools.map(tool => tool.toolName)).toEqual(["mcp__fs__read_file"]);
+    }
+  });
+
   test("writes and reads files in a temp directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-exec-"));
     const path = join(dir, "note.txt");
@@ -162,6 +187,17 @@ describe("Cursor native exec bridge", () => {
   });
 
   test("opens MCP and computer-use through executor hooks", async () => {
+    const synthetic = decode((await handleCursorNativeExec(execMessage({
+      case: "mcpArgs",
+      value: create(McpArgsSchema, { name: "read_file", toolName: "read_file", providerIdentifier: "opencodex-responses" }),
+    }), {
+      mcp: async () => {
+        throw new Error("synthetic Responses tools must not execute through local MCP");
+      },
+    }))[0]);
+    expect(synthetic.message.case).toBe("mcpResult");
+    expect(synthetic.message.value.result.case).toBe("error");
+
     const mcp = decode((await handleCursorNativeExec(execMessage({
       case: "mcpArgs",
       value: create(McpArgsSchema, { name: "demo", toolName: "demo", providerIdentifier: "local" }),
