@@ -830,10 +830,12 @@ describe("server local API auth", () => {
         consecutiveFailures: 3,
         lastFailureStatus: 502,
       });
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{ status: number; errorCode?: string }>;
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{ status: number; errorCode?: string; terminalStatus?: string; closeReason?: string }>;
       expect(logs.at(-1)).toMatchObject({
         status: 502,
         errorCode: "upstream_server_error",
+        terminalStatus: "failed",
+        closeReason: "terminal",
       });
     } finally {
       await server.stop(true);
@@ -907,11 +909,13 @@ describe("server local API auth", () => {
         upstreamAborted,
         new Promise((_, reject) => setTimeout(() => reject(new Error("upstream was not aborted")), 500)),
       ]);
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{ status: number; errorCode?: string }>;
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{ status: number; errorCode?: string; terminalStatus?: string; closeReason?: string }>;
       expect(logs.at(-1)).toMatchObject({
         status: 499,
         errorCode: "client_closed_request",
+        closeReason: "client_cancel",
       });
+      expect(logs.at(-1)).not.toHaveProperty("terminalStatus");
     } finally {
       globalThis.fetch = originalFetch;
       await server.stop(true);

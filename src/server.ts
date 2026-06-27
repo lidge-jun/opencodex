@@ -620,6 +620,8 @@ export interface RequestLogEntry {
   status: number;
   durationMs: number;
   errorCode?: string;
+  terminalStatus?: ResponsesTerminalStatus;
+  closeReason?: "terminal" | "client_cancel" | "non_stream";
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -656,6 +658,7 @@ function addFinalRequestLog(
   start: number,
   logCtx: { model: string; provider: string },
   status: number,
+  meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
 ): void {
   const errorCode = requestLogErrorCode(status);
   addRequestLog({
@@ -666,6 +669,8 @@ function addFinalRequestLog(
     status,
     durationMs: Date.now() - start,
     ...(errorCode ? { errorCode } : {}),
+    ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
+    ...(meta?.closeReason ? { closeReason: meta.closeReason } : {}),
   });
 }
 
@@ -822,20 +827,26 @@ function responseWithDeferredRequestLog(
 ): Response {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body || !contentType.includes("text/event-stream")) {
-    addFinalRequestLog(requestId, start, logCtx, response.status);
+    addFinalRequestLog(requestId, start, logCtx, response.status, { closeReason: "non_stream" });
     return response;
   }
 
   let logged = false;
-  const finalize = (status: number) => {
-    if (logged) return;
-    logged = true;
-    addFinalRequestLog(requestId, start, logCtx, status);
-  };
   const body = trackSseForRequestLog(
     response.body,
-    status => finalize(httpStatusForTerminalStatus(status)),
-    () => finalize(499),
+    status => {
+      if (logged) return;
+      logged = true;
+      addFinalRequestLog(requestId, start, logCtx, httpStatusForTerminalStatus(status), {
+        terminalStatus: status,
+        closeReason: "terminal",
+      });
+    },
+    () => {
+      if (logged) return;
+      logged = true;
+      addFinalRequestLog(requestId, start, logCtx, 499, { closeReason: "client_cancel" });
+    },
   );
   return new Response(body, {
     status: response.status,
