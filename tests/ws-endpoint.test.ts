@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import {
   buildWarmupCompletionFrames,
@@ -35,6 +36,13 @@ function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint
 }
 
 describe("WS endpoint re-framer (120/132)", () => {
+  test("server config declares explicit websocket idle timeout policy", () => {
+    const source = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
+    expect(source).toContain("const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;");
+    expect(source).toContain("websocket: {");
+    expect(source).toContain("idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,");
+  });
+
   test("generate=false warmup completes locally without upstream and forces full next request", () => {
     const frames = buildWarmupCompletionFrames({ model: "gpt-5.5", generate: false }).map(f => JSON.parse(f));
 

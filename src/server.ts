@@ -72,6 +72,7 @@ import { registerCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketA
 const activeTurns = new Set<AbortController>();
 let draining = false;
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
+const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 const nativePassthroughSseResponses = new WeakSet<Response>();
 
 export function registerTurn(ac: AbortController): void { activeTurns.add(ac); }
@@ -1675,6 +1676,7 @@ export function startServer(port?: number) {
       return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
     },
     websocket: {
+      idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,
       // Responses WebSocket data plane (phase 120.2). Re-frames the same SSE pipeline onto the
       // socket: parse response.create → run handleResponses unchanged → pump its SSE body as WS
       // Text frames. response.processed is a no-op ack. close() aborts the upstream (RC2 parity).
