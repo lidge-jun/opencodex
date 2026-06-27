@@ -5,7 +5,7 @@ import { durableBunPath } from "./bun-runtime";
 import { restoreNativeCodex } from "./codex-inject";
 import { restoreLegacyOpenaiHistory } from "./codex-history-provider";
 import { writeJournal, reconcileJournal } from "./codex-journal";
-import { codexAutoStartEnabled, getConfigDir, getConfigPath, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
+import { codexAutoStartEnabled, getConfigDir, getConfigPath, getPidPath, loadConfig, readPid, removePid, saveConfig, writePid } from "./config";
 import { findAvailablePort, shouldPersistSelectedPort } from "./ports";
 import { killProxy } from "./process-control";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
@@ -394,6 +394,7 @@ async function handleStatus() {
   console.log(`   Health: ${health.label}`);
   console.log(`   Dashboard: http://localhost:${port}/`);
   console.log(`   Config: ${getConfigPath()}`);
+  console.log(`   PID file: ${getPidPath()}`);
   console.log(`   Runtime: ${durableBunPath()}`);
   console.log(`   Default provider: ${config.defaultProvider}`);
   console.log(`   Codex autostart: ${codexAutoStartEnabled(config) ? "enabled" : "disabled"}`);

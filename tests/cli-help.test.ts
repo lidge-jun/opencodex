@@ -37,6 +37,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("Health: http://127.0.0.1:9/healthz");
       expect(result.stdout).toContain("Dashboard: http://localhost:9/");
       expect(result.stdout).toContain(`Config: ${configPath}`);
+      expect(result.stdout).toContain(`PID file: ${join(opencodexHome, "ocx.pid")}`);
       expect(result.stdout).toContain("Runtime:");
       expect(result.stdout).toContain("Default provider: openai");
       expect(result.stdout).toContain("Codex autostart: disabled");
