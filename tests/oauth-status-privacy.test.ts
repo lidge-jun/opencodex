@@ -97,13 +97,13 @@ describe("OAuth status privacy", () => {
   });
 
   test("stale credentials for removed OAuth providers fail as unsupported provider config", async () => {
-    saveCredential("cursor", {
+    saveCredential("removed-provider", {
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
     });
 
-    await expect(getValidAccessToken("cursor")).rejects.toBeInstanceOf(UnsupportedOAuthProviderError);
+    await expect(getValidAccessToken("removed-provider")).rejects.toBeInstanceOf(UnsupportedOAuthProviderError);
   });
 
   test("malformed oauth token store is backed up before a new credential save overwrites it", () => {
