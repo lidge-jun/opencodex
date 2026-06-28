@@ -471,7 +471,7 @@ async function handleResponses(
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   if ("passthrough" in adapter && adapter.passthrough) {
-    const request = adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+    const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
     // Abort the upstream if the client disconnects. A directly-relayed body does not propagate the
     // consumer's cancel to a signalled fetch, so we pass the signal and relay through relayWithAbort,
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
@@ -667,7 +667,7 @@ async function handleResponses(
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   const connectMs = config.connectTimeoutMs ?? 30_000;
 
-  const request = adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+  const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
   if (typeof request.usageLog?.inputTokens === "number") {
     logCtx.usageLogInputTokens = request.usageLog.inputTokens;
   }

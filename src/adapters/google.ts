@@ -12,6 +12,13 @@ import type {
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, toolAllowedByChoice } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
+import { getVertexAccessToken } from "../lib/gcp-adc";
+
+/** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
+function resolveVertexApiKey(optKey?: string): string | undefined {
+  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
+  return realKey || process.env.GOOGLE_CLOUD_API_KEY;
+}
 
 /**
  * Inline image parts (Gemini `inline_data`) extracted from tool-result content. Only base64 data URLs
@@ -119,7 +126,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   return {
     name: "google",
 
-    buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest) {
       const { systemInstruction, contents } = messagesToGeminiFormat(parsed);
       const tools = toolsToGeminiFormat(parsed);
 
@@ -136,11 +143,31 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const method = parsed.stream ? "streamGenerateContent" : "generateContent";
       const streamParam = parsed.stream ? "?alt=sse" : "";
-      const url = `${provider.baseUrl}/v1beta/models/${parsed.modelId}:${method}${streamParam}`;
-
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (provider.apiKey) headers["x-goog-api-key"] = provider.apiKey;
       if (provider.headers) Object.assign(headers, provider.headers);
+
+      if (provider.googleMode === "vertex") {
+        // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
+        const apiKey = resolveVertexApiKey(provider.apiKey);
+        if (apiKey) {
+          const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
+          headers["x-goog-api-key"] = apiKey;
+          return { url, method: "POST", headers, body: JSON.stringify(body) };
+        }
+        const project = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+        if (!project) throw new Error("Vertex AI requires a project id (provider.project or GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT).");
+        const location = provider.location || process.env.GOOGLE_CLOUD_LOCATION;
+        if (!location) throw new Error("Vertex AI requires a location (provider.location or GOOGLE_CLOUD_LOCATION).");
+        const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+        const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
+        const token = await getVertexAccessToken();
+        headers["Authorization"] = `Bearer ${token}`;
+        return { url, method: "POST", headers, body: JSON.stringify(body) };
+      }
+
+      // ai-studio (default): Generative Language API + x-goog-api-key.
+      const url = `${provider.baseUrl}/v1beta/models/${parsed.modelId}:${method}${streamParam}`;
+      if (provider.apiKey) headers["x-goog-api-key"] = provider.apiKey;
 
       return { url, method: "POST", headers, body: JSON.stringify(body) };
     },

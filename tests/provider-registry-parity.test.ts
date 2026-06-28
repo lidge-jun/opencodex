@@ -27,7 +27,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "azure-openai",
+  "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -199,6 +199,8 @@ describe("provider registry parity", () => {
       openrouter: "openrouter",
       google: "google",
       gemini: "google",
+      "google-vertex": "google",
+      "gemini-vertex": "google",
       moonshot: "moonshot",
       minimax: "minimax",
       "minimax-cn": "minimax",

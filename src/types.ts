@@ -337,6 +337,15 @@ export interface OcxProviderConfig {
    * that can. With no executor, these tools honestly report "not supported".
    */
   desktopExecutor?: import("./adapters/cursor/native-exec-desktop").DesktopExecutorConfig;
+  /**
+   * Google adapter mode. "ai-studio" (default) = Generative Language API + x-goog-api-key.
+   * "vertex" = Vertex AI project/location endpoints with GCP ADC (or x-goog-api-key).
+   */
+  googleMode?: "ai-studio" | "vertex";
+  /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
+  project?: string;
+  /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */
+  location?: string;
 }
 
 export interface CodexAccount {
