@@ -46,8 +46,9 @@ export function formatCrashEntry(kind: string, err: unknown): string {
 /**
  * Bun surfaces some request-time stream/abort errors with only native frames
  * (`at <anonymous> (native:1:11)`), so `err.stack` alone cannot locate the
- * fault. Capture extra shape (constructor, own keys, cause/code) plus a FRESH
- * stack taken from the handler tick so the next occurrence is pinpointable.
+ * fault. JSC still records the true throw site on hidden own properties
+ * (`sourceURL` / `originalLine` / `originalColumn`) and `Bun.inspect` renders a
+ * code snippet from them — capture both so the next occurrence is pinpointable.
  */
 function diagnose(err: unknown): string {
   const lines: string[] = [];
@@ -55,26 +56,44 @@ function diagnose(err: unknown): string {
     const ctor = (err as { constructor?: { name?: string } } | null)?.constructor?.name;
     if (ctor && ctor !== "Error" && ctor !== "Object") lines.push(`  ctor: ${ctor}`);
     if (err && typeof err === "object") {
-      const keys = Object.keys(err as object);
-      if (keys.length) lines.push(`  keys: ${keys.join(", ")}`);
-      const cause = (err as { cause?: unknown }).cause;
+      const e = err as Record<string, unknown>;
+      const cause = e.cause;
       if (cause !== undefined) {
         lines.push(`  cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
       }
-      const code = (err as { code?: unknown }).code;
-      if (code !== undefined) lines.push(`  code: ${String(code)}`);
+      if (e.code !== undefined) lines.push(`  code: ${String(e.code)}`);
+      // JSC hidden throw-site fields survive even when the stack is native-only.
+      const sourceURL = e.sourceURL;
+      const line = e.line ?? e.originalLine;
+      const column = e.column ?? e.originalColumn;
+      if (typeof sourceURL === "string" && sourceURL) {
+        lines.push(`  origin: ${sourceURL}${line !== undefined ? `:${String(line)}` : ""}${column !== undefined ? `:${String(column)}` : ""}`);
+      }
     }
     const stack = err instanceof Error ? err.stack ?? "" : "";
     const hasUsableStack = /\((?!native:)[^)]*:\d+:\d+\)/.test(stack);
     if (!hasUsableStack) {
-      const here = new Error("crash-guard handler trace").stack ?? "";
-      const frames = here.split("\n").slice(1).map(l => `    ${l.trim()}`).join("\n");
-      if (frames) lines.push(`  handler-stack:\n${frames}`);
+      const snippet = inspectErr(err);
+      if (snippet) lines.push(`  inspect:\n${snippet.split("\n").map(l => `    ${l}`).join("\n")}`);
     }
   } catch {
     /* diagnosis must never throw */
   }
   return lines.length ? `\n${lines.join("\n")}` : "";
+}
+
+/**
+ * Bun.inspect renders the JSC source snippet (with the offending line + caret)
+ * for errors whose throw site is otherwise lost to native frames.
+ */
+function inspectErr(err: unknown): string {
+  try {
+    const bun = (globalThis as { Bun?: { inspect?: (v: unknown, o?: unknown) => string } }).Bun;
+    if (!bun?.inspect) return "";
+    return bun.inspect(err, { depth: 2 }).trim();
+  } catch {
+    return "";
+  }
 }
 
 function safeStringify(value: unknown): string {
