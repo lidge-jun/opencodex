@@ -8,6 +8,7 @@ import { createKiroAdapter } from "./adapters/kiro";
 import { createOpenAIChatAdapter } from "./adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "./bridge";
+import { markActivity } from "./sidecar-tracker";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -1910,6 +1911,7 @@ export function startServer(port?: number) {
     idleTimeout: 255,
     async fetch(req, requestServer): Promise<Response> {
       const url = new URL(req.url);
+      markActivity(`${req.method} ${url.pathname}`);
 
       if (req.method === "OPTIONS") {
         if (!isAllowedRequestOrigin(req, config)) {
@@ -2063,6 +2065,7 @@ export function startServer(port?: number) {
         }
         if (frame.type === "response.processed") return; // ack — no-op
         if (frame.type !== "response.create") return;
+        markActivity("ws response.create");
 
         ws.data.cancel?.();
         const turnId = (ws.data.turnId ?? 0) + 1;

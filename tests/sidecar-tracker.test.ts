@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { sidecarEnter, sidecarBreadcrumb } from "../src/sidecar-tracker";
+import { sidecarEnter, sidecarBreadcrumb, markActivity, activityBreadcrumb } from "../src/sidecar-tracker";
 
 // Drain any leftover in-flight counters between tests (defensive; each test balances its own).
 afterEach(() => {
@@ -27,5 +27,14 @@ describe("sidecar breadcrumb", () => {
     exit();
     exit();
     expect(sidecarBreadcrumb().inFlight).toBe(0);
+  });
+});
+
+describe("activity breadcrumb", () => {
+  test("records the most recent activity note", () => {
+    markActivity("POST /v1/responses");
+    const a = activityBreadcrumb();
+    expect(a.note).toBe("POST /v1/responses");
+    expect(a.sinceMs).toBeGreaterThanOrEqual(0);
   });
 });

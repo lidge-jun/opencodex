@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config";
-import { sidecarBreadcrumb } from "./sidecar-tracker";
+import { sidecarBreadcrumb, activityBreadcrumb } from "./sidecar-tracker";
 
 /**
  * Process-level safety net for the long-running proxy daemon.
@@ -120,9 +120,14 @@ function diagnosePromise(promise: unknown): string {
  */
 function breadcrumb(): string {
   try {
+    const lines: string[] = [];
     const b = sidecarBreadcrumb();
-    if (b.inFlight <= 0 && !b.lastLabel) return "";
-    return `\n  sidecar: inFlight=${b.inFlight} last=${b.lastLabel || "-"} sinceMs=${b.sinceMs}`;
+    if (b.inFlight > 0 || b.lastLabel) {
+      lines.push(`  sidecar: inFlight=${b.inFlight} last=${b.lastLabel || "-"} sinceMs=${b.sinceMs}`);
+    }
+    const a = activityBreadcrumb();
+    if (a.note) lines.push(`  activity: ${a.note} sinceMs=${a.sinceMs}`);
+    return lines.length ? `\n${lines.join("\n")}` : "";
   } catch {
     return "";
   }

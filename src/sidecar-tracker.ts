@@ -30,3 +30,20 @@ export function sidecarBreadcrumb(): { inFlight: number; lastLabel: string; sinc
     sinceMs: lastEnterAt ? Date.now() - lastEnterAt : 0,
   };
 }
+
+/**
+ * Generic last-activity breadcrumb (any code path, not just sidecars). The proxy's native-only
+ * rejections carry no source location, so we record the most recent meaningful activity —
+ * request path + a short note — to correlate the next fault with what the daemon was doing.
+ */
+let lastActivity = "";
+let lastActivityAt = 0;
+
+export function markActivity(note: string): void {
+  lastActivity = note;
+  lastActivityAt = Date.now();
+}
+
+export function activityBreadcrumb(): { note: string; sinceMs: number } {
+  return { note: lastActivity, sinceMs: lastActivityAt ? Date.now() - lastActivityAt : 0 };
+}
