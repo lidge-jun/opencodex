@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { formatUptime } from "../formatUptime";
 import { IconAlert } from "../icons";
-import { useT, Trans } from "../i18n";
+import { useI18n, Trans } from "../i18n";
 
 interface HealthData { status: string; version: string; uptime: number }
 interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
@@ -19,7 +20,7 @@ const SIDECAR_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spa
 const REASONING_LEVELS = ["low", "medium", "high"];
 
 export default function Dashboard({ apiBase }: { apiBase: string }) {
-  const t = useT();
+  const { locale, t } = useI18n();
   const [health, setHealth] = useState<HealthData | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -143,7 +144,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           </div>
         </div>
         <div className="stat"><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
-        <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? `${Math.floor(health.uptime)}s` : "—"}</div></div>
+        <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
         <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
         <div className="stat">
           <div className="label">{t("dash.tokens30d")}</div>
