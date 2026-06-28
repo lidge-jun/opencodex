@@ -17,6 +17,7 @@ import {
   writeRuntimePort,
 } from "./config";
 import { collectStatus } from "./cli-status";
+import { installCrashGuards } from "./crash-guard";
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./cli-help";
 import { findAvailablePort, shouldPersistSelectedPort } from "./ports";
 import { killProxy } from "./process-control";
@@ -136,6 +137,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   const port = await chooseListenPort(requestedPort);
 
   const server = startServer(port);
+  // A single request's streaming error must never crash the daemon serving every
+  // other Codex session — capture the full stack to crash.log and stay up.
+  installCrashGuards();
   writePid(process.pid);
 
   const config = loadConfig();
