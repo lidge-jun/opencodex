@@ -86,7 +86,38 @@ export async function loginKiro(ctrl: OAuthController): Promise<OAuthCredentials
   );
 }
 
-/** Refresh via the Kiro desktop endpoint. Region from KIRO_REGION or default us-east-1. */
+/** Region precedence: KIRO_REGION → default us-east-1. */
+export function resolveKiroRegion(): string {
+  return process.env.KIRO_REGION || DEFAULT_REGION;
+}
+
+/**
+ * Resolve the CodeWhisperer profileArn for request-time use by the adapter.
+ * KIRO_PROFILE_ARN env → kiro-cli SQLite `profile_arn`. Returns undefined if absent
+ * (the adapter decides whether that is fatal).
+ */
+export function resolveKiroProfileArn(): string | undefined {
+  const env = process.env.KIRO_PROFILE_ARN;
+  if (env) return env;
+  for (const dbPath of dbPaths()) {
+    if (!existsSync(dbPath)) continue;
+    let db: Database | undefined;
+    try {
+      db = new Database(dbPath, { readonly: true });
+      for (const key of TOKEN_KEYS) {
+        const row = db.query("SELECT value FROM auth_kv WHERE key = ?").get(key) as { value: string } | null;
+        if (!row) continue;
+        const data = JSON.parse(row.value) as { profile_arn?: string };
+        if (data.profile_arn) return data.profile_arn;
+      }
+    } catch {
+      // try next path
+    } finally {
+      db?.close();
+    }
+  }
+  return undefined;
+}
 export async function refreshKiroToken(refresh: string, signal?: AbortSignal): Promise<OAuthCredentials> {
   if (!refresh) throw new Error("Kiro: no refresh token available (re-run `kiro-cli login`).");
   const region = process.env.KIRO_REGION || DEFAULT_REGION;

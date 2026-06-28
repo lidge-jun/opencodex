@@ -4,6 +4,7 @@ import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createAnthropicAdapter } from "./adapters/anthropic";
 import { createAzureAdapter } from "./adapters/azure";
 import { createGoogleAdapter } from "./adapters/google";
+import { createKiroAdapter } from "./adapters/kiro";
 import { createOpenAIChatAdapter } from "./adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "./bridge";
@@ -289,6 +290,8 @@ export function resolveAdapter(providerConfig: OcxProviderConfig) {
       return createResponsesPassthroughAdapter(providerConfig);
     case "google":
       return createGoogleAdapter(providerConfig);
+    case "kiro":
+      return createKiroAdapter(providerConfig);
     case "azure":
     case "azure-openai":
       return createAzureAdapter(providerConfig);
