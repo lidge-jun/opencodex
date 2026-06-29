@@ -99,6 +99,7 @@ const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
+  contextCapValue: z.number().int().positive().optional(),
 }).passthrough().superRefine((config, ctx) => {
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {

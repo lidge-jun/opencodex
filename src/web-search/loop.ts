@@ -130,7 +130,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...parsed, stream: false,
       context: { ...parsed.context, messages, tools: forceAnswer ? toolsNoWebSearch : allTools },
     };
-    const request = adapter.buildRequest(iterParsed, { headers: selectedForwardHeaders });
+    const request = await adapter.buildRequest(iterParsed, { headers: selectedForwardHeaders });
     let resp: Response;
     try {
       resp = adapter.fetchResponse

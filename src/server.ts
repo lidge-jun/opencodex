@@ -35,7 +35,7 @@ import { parseRequest } from "./responses/parser";
 import { routeModel } from "./router";
 import { namespacedToolName } from "./types";
 import {
-  clearLoginState, getLoginStatus, getValidAccessToken, isOAuthProvider,
+  clearLoginState, getLoginStatus, getOAuthCredentialProjectId, getValidAccessToken, isOAuthProvider,
   listOAuthProviders, reconcileOAuthProviders, startLoginFlow, UnsupportedOAuthProviderError, upsertOAuthProvider,
 } from "./oauth/index";
 import type { CatalogModel } from "./codex-catalog";
@@ -48,7 +48,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "./oauth/key-pr
 import { deriveProviderPresets } from "./providers/derive";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "./types";
 import type { OcxUsage } from "./types";
-import { DEFAULT_PROVIDER_CONTEXT_CAP, providerContextCap, providerContextCaps, setProviderContextCap } from "./provider-context-cap";
+import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "./provider-context-cap";
 import {
   appendUsageEntry,
   readUsageEntries,
@@ -423,6 +423,12 @@ async function handleResponses(
   if (route.provider.authMode === "oauth") {
     try {
       route.provider = { ...route.provider, apiKey: await getValidAccessToken(route.providerName) };
+      // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
+      // CCA envelope; the server injects only the bare token, so pull project from the credential.
+      if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
+        const projectId = getOAuthCredentialProjectId(route.providerName);
+        if (projectId) route.provider = { ...route.provider, project: projectId };
+      }
     } catch (err) {
       if (err instanceof UnsupportedOAuthProviderError) {
         return formatErrorResponse(
@@ -449,7 +455,7 @@ async function handleResponses(
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   if ("passthrough" in adapter && adapter.passthrough) {
-    const request = adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+    const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
     // Abort the upstream if the client disconnects. A directly-relayed body does not propagate the
     // consumer's cancel to a signalled fetch, so we pass the signal and relay through relayWithAbort,
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
@@ -589,7 +595,7 @@ async function handleResponses(
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   const connectMs = config.connectTimeoutMs ?? 100_000;
 
-  const request = adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+  const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
   if (typeof request.usageLog?.inputTokens === "number") {
     logCtx.usageLogInputTokens = request.usageLog.inputTokens;
   }
@@ -1802,12 +1808,44 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
-    return jsonResponse({ cap: DEFAULT_PROVIDER_CONTEXT_CAP, caps: providerContextCaps(config) });
+    return jsonResponse({ cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
-    let body: { provider?: unknown; enabled?: unknown };
+    let body: { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const { saveConfig: save } = await import("./config");
+    const { clearModelCache } = await import("./model-cache");
+    const respond = () => jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
+
+    // Branch 1: set the global cap value and re-point every enabled provider to it.
+    if (body.value !== undefined) {
+      if (typeof body.value !== "number" || !Number.isFinite(body.value) || body.value <= 0) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      const affected = Object.keys(providerContextCaps(config));
+      setGlobalContextCapValue(config, body.value);
+      save(config);
+      for (const provider of affected) clearModelCache(provider);
+      await refreshCodexCatalogBestEffort();
+      return respond();
+    }
+
+    // Branch 2: enable/clear the cap for every provider at once.
+    if (body.setAll !== undefined) {
+      if (typeof body.setAll !== "boolean") {
+        return jsonResponse({ error: "setAll must be a boolean" }, 400);
+      }
+      const before = Object.keys(providerContextCaps(config));
+      const names = Object.keys(config.providers);
+      setAllProviderContextCaps(config, names, body.setAll);
+      save(config);
+      for (const provider of new Set([...before, ...names])) clearModelCache(provider);
+      await refreshCodexCatalogBestEffort();
+      return respond();
+    }
+
+    // Branch 3: existing per-provider toggle (enable writes the current global value).
     if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
     }
@@ -1819,12 +1857,10 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
       return jsonResponse({ error: "unknown provider" }, 404);
     }
     setProviderContextCap(config, provider, body.enabled);
-    const { saveConfig: save } = await import("./config");
     save(config);
-    const { clearModelCache } = await import("./model-cache");
     clearModelCache(provider);
     await refreshCodexCatalogBestEffort();
-    return jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, caps: providerContextCaps(config) });
+    return respond();
   }
 
   // Enable/disable models: which routed models Codex sees. PUT hides them from the catalog +

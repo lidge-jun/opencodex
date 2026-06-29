@@ -3,18 +3,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const PKG = "@bitkyc08/opencodex";
+export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src
 
-type Installer = "bun" | "npm" | "source";
+export type Installer = "bun" | "npm" | "source";
+export type Channel = "latest" | "preview";
 
 /** Infer how opencodex is installed from the running module's path. */
-function detectInstall(): Installer {
+export function detectInstall(): Installer {
   if (!HERE.includes("node_modules")) return "source"; // a git checkout, not a global install
   return HERE.includes(".bun") ? "bun" : "npm";
 }
 
-function currentVersion(): string {
+export function currentVersion(): string {
   try {
     return (JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8")).version as string) ?? "?";
   } catch {
@@ -22,16 +23,32 @@ function currentVersion(): string {
   }
 }
 
-function updateTag(current: string): string {
+export function updateTag(current: string): Channel {
   const tagIndex = process.argv.indexOf("--tag");
-  if (tagIndex !== -1 && process.argv[tagIndex + 1]) return process.argv[tagIndex + 1];
+  const explicit = tagIndex !== -1 ? process.argv[tagIndex + 1] : undefined;
+  if (explicit === "preview" || explicit === "latest") return explicit;
   return current.includes("-preview.") ? "preview" : "latest";
 }
 
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
-function latestVersion(tag: string): string | null {
+export function latestVersion(tag: string): string | null {
   const r = spawnSync("npm", ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true });
   return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/** The global-install command opencodex would run to update on this channel. */
+export function updateCommand(installer: Installer, tag: Channel): { bin: string; args: string[] } {
+  const bin = installer === "bun" ? "bun" : "npm";
+  const args = installer === "bun"
+    ? ["add", "-g", `${PKG}@${tag}`]
+    : ["install", "-g", `${PKG}@${tag}`];
+  return { bin, args };
+}
+
+/** Human-readable form of {@link updateCommand}, used in the update prompt label. */
+export function updateCommandStr(installer: Installer, tag: Channel): string {
+  const { bin, args } = updateCommand(installer, tag);
+  return `${bin} ${args.join(" ")}`;
 }
 
 /**
@@ -55,10 +72,7 @@ export async function runUpdate(): Promise<void> {
     return;
   }
 
-  const bin = installer === "bun" ? "bun" : "npm";
-  const cmdArgs = installer === "bun"
-    ? ["add", "-g", `${PKG}@${tag}`]
-    : ["install", "-g", `${PKG}@${tag}`];
+  const { bin, args: cmdArgs } = updateCommand(installer, tag);
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
   const r = spawnSync(bin, cmdArgs, { stdio: "inherit", timeout: 180000, windowsHide: true });

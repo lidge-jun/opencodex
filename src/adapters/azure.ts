@@ -12,8 +12,8 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
     ...inner,
     name: "azure-openai",
 
-    buildRequest(parsed: OcxParsedRequest) {
-      const request = inner.buildRequest(parsed);
+    async buildRequest(parsed: OcxParsedRequest) {
+      const request = await inner.buildRequest(parsed);
       const headers = { ...request.headers };
       if (provider.apiKey) {
         headers["api-key"] = provider.apiKey;

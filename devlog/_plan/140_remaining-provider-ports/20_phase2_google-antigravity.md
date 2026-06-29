@@ -2,6 +2,9 @@
 
 > One PABCD pass. Reuses Phase 10's `googleMode` hook; adds OAuth + the Cloud-Code-Assist (CCA)
 > envelope. Grounded in jawcode (cites are jawcode paths).
+>
+> External cross-check: `router-for-me/CLIProxyAPI` antigravity auth/executor/translator + the
+> thoughtSignature reasoning-replay quirk — see `05_reference-repos.md`.
 
 ---
 

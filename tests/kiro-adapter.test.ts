@@ -233,6 +233,67 @@ describe("kiro adapter — buildRequest", () => {
    expect(schema.properties.options.additionalProperties).toBeUndefined();
  });
 
+  test("memory-style validation constraints are stripped but property names are preserved", () => {
+    // Mirrors codex-rs memories tools (add_ad_hoc_note/read/search): schemars emits
+    // pattern/length/range keywords that Kiro's runtimeservice rejects as "Invalid tool use format".
+    const parameters = {
+      type: "object",
+      properties: {
+        filename: { type: "string", pattern: "^\\d{4}.*\\.md$", minLength: 24, maxLength: 128 },
+        note: { type: "string", minLength: 1 },
+        max_lines: { type: "integer", minimum: 1 },
+        queries: { type: "array", items: { type: "string" }, minItems: 1 },
+        // A property literally named "pattern"/"format" must survive untouched.
+        pattern: { type: "string", format: "uuid" },
+        format: { type: "string" },
+      },
+      required: ["filename", "note"],
+    };
+    const { body } = createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__add_ad_hoc_note", description: "Remember", parameters }]),
+    );
+    const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
+
+    expect(schema.properties.filename.pattern).toBeUndefined();
+    expect(schema.properties.filename.minLength).toBeUndefined();
+    expect(schema.properties.filename.maxLength).toBeUndefined();
+    expect(schema.properties.filename.type).toBe("string");
+    expect(schema.properties.note.minLength).toBeUndefined();
+    expect(schema.properties.max_lines.minimum).toBeUndefined();
+    expect(schema.properties.queries.minItems).toBeUndefined();
+    expect(schema.properties.queries.items).toEqual({ type: "string" });
+    // Property names that collide with schema keywords must be kept as properties.
+    expect(schema.properties.pattern).toBeDefined();
+    expect(schema.properties.pattern.format).toBeUndefined();
+    expect(schema.properties.format).toBeDefined();
+    expect(schema.required).toEqual(["filename", "note"]);
+  });
+
+  test("validation-only applicator keywords are dropped while $defs are preserved", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        ref_field: { $ref: "#/$defs/Inner" },
+        tags: { type: "object", patternProperties: { "^x-": { type: "string" } } },
+      },
+      patternProperties: { "^meta_": { type: "string", pattern: "^v" } },
+      propertyNames: { pattern: "^[a-z]+$" },
+      $defs: { Inner: { type: "object", properties: { id: { type: "string" } } } },
+    };
+    const { body } = createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__read", description: "Read", parameters }]),
+    );
+    const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
+
+    // Validation-only applicator keywords Bedrock/Kiro reject must be gone everywhere.
+    expect(schema.patternProperties).toBeUndefined();
+    expect(schema.propertyNames).toBeUndefined();
+    expect(schema.properties.tags.patternProperties).toBeUndefined();
+    // $ref + $defs (real reuse, supported) survive, and the inner schema is sanitized too.
+    expect(schema.properties.ref_field).toEqual({ $ref: "#/$defs/Inner" });
+    expect(schema.$defs.Inner.properties.id).toEqual({ type: "string" });
+  });
+
   test("root inputSchema always declares type:object (Bedrock requires it)", () => {
     // Empty parameters (e.g. some MCP/Computer Use tools) must still surface type:"object" or
     // Bedrock rejects with "toolSpec.inputSchema.json.type must be one of the following: object".

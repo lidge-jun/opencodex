@@ -1,5 +1,6 @@
 import { durableBunRuntime } from "./bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "./config";
+import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "./codex-plugins-doctor";
 import type { OcxConfig } from "./types";
 import { serviceStatusSummary } from "./service";
 
@@ -44,6 +45,7 @@ export type CliStatusJson = {
   };
   service: { summary: string };
   codexShim: { summary: string };
+  codexPlugins: CodexPluginsDiagnostic;
 };
 
 export type CliStatusView = {
@@ -114,6 +116,7 @@ export async function collectStatus(): Promise<CliStatusView> {
   const serviceSummary = serviceStatusSummary();
   const { codexShimStatus } = await import("./codex-shim");
   const codexShimSummary = codexShimStatus();
+  const codexPlugins = diagnoseCodexBundledPlugins();
   const proxyLabel = pid && health.ok
     ? `running (PID ${pid})`
     : pid
@@ -159,6 +162,7 @@ export async function collectStatus(): Promise<CliStatusView> {
       },
       service: { summary: serviceSummary },
       codexShim: { summary: codexShimSummary },
+      codexPlugins,
     },
   };
 }

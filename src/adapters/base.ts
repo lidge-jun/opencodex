@@ -8,7 +8,12 @@ export interface IncomingMeta {
 export interface ProviderAdapter {
   name: string;
 
-  buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta): AdapterRequest;
+  /**
+   * Build the upstream request. May be async: adapters that resolve a short-lived credential
+   * (e.g. Vertex AI ADC token) return a Promise. Sync adapters return the object directly; callers
+   * must `await` the result (awaiting a non-Promise is a no-op).
+   */
+  buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
 
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
 

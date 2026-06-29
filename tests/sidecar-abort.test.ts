@@ -67,6 +67,9 @@ describe("sidecar abort propagation", () => {
       abortSignal: turn.signal,
     });
 
+    // buildRequest is now async-capable (Vertex ADC), so the loop yields once before dispatching
+    // fetch; flush the microtask/timer queue so the routed fetch is observed.
+    await new Promise((r) => setTimeout(r, 0));
     const signal = getSignal();
     expect(signal).toBe(turn.signal);
     expect(signal.aborted).toBe(false);

@@ -5,6 +5,9 @@
 - **Type:** Feature request (read-only diagnostics, optional repair) — Windows
 - **Severity:** Low-Medium — usability/diagnostics; no proxy malfunction.
 - **Status:** Scoping recommendation below (NOT implemented — documentation phase).
+- **Next:** see `10_plan.md` for the audited implementation plan (Phase 1
+  read-only diagnostic + deferred opt-in Phase 2 repair), with codex-rs and
+  opencodex file:line evidence.
 
 ## Report summary
 

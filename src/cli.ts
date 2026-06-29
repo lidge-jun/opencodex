@@ -24,6 +24,7 @@ import { killProxy } from "./process-control";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
 import { drainAndShutdown, startServer } from "./server";
 import { maybeShowStarPrompt } from "./star-prompt";
+import { maybeShowUpdatePrompt } from "./update-notify";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -133,6 +134,11 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     removePid(existingPid);
   }
+
+  // Interactive-only update prompt. Must run BEFORE we bind a port / write a
+  // PID: choosing "Update now" installs globally and exits, so we never want a
+  // live daemon holding resources while it overwrites its own binary.
+  await maybeShowUpdatePrompt();
 
   const port = await chooseListenPort(requestedPort);
 
@@ -342,6 +348,13 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}`);
   console.log(`   Service: ${status.json.service.summary}`);
   console.log(`   ${status.json.codexShim.summary}`);
+  if (status.json.codexPlugins.applicable) {
+    const icon = status.json.codexPlugins.stale ? "⚠️ " : "✅";
+    console.log(`   ${icon} Codex bundled plugins: ${status.json.codexPlugins.summary}`);
+    if (status.json.codexPlugins.suggestedRepair) {
+      console.log(`      Suggested: ${status.json.codexPlugins.suggestedRepair}`);
+    }
+  }
 }
 
 function handleRecoverHistory() {
@@ -460,6 +473,14 @@ switch (command) {
   case "update": {
     const { runUpdate } = await import("./update");
     await runUpdate();
+    break;
+  }
+  case "__refresh-version": {
+    // Hidden, detached helper spawned by the update prompt to refresh the
+    // cached latest version without blocking the foreground start. Not in help.
+    const { refreshVersionCache } = await import("./update-notify");
+    const channel = args[1] === "preview" ? "preview" : "latest";
+    await refreshVersionCache(channel);
     break;
   }
   case "help":

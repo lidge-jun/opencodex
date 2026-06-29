@@ -22,6 +22,14 @@ export interface UsageDay {
   requests: number;
   reportedRequests: number;
   totalTokens: number;
+  models: UsageDayModel[];
+}
+
+export interface UsageDayModel {
+  model: string;
+  provider: string;
+  requests: number;
+  totalTokens: number;
 }
 
 export interface UsageModel {
@@ -124,24 +132,43 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
   const window = rangeWindow(range, now);
   const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
   const grid = new Map<string, UsageDay>();
+  // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
+  // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
+  const dayModels = new Map<string, Map<string, UsageDayModel>>();
+  const bumpDayModel = (dayKey: string, entry: PersistedUsageEntry): void => {
+    let models = dayModels.get(dayKey);
+    if (!models) { models = new Map(); dayModels.set(dayKey, models); }
+    const mKey = `${entry.provider}/${entry.model}`;
+    let m = models.get(mKey);
+    if (!m) { m = { model: entry.model, provider: entry.provider, requests: 0, totalTokens: 0 }; models.set(mKey, m); }
+    m.requests += 1;
+    if (typeof entry.totalTokens === "number") m.totalTokens += entry.totalTokens;
+    else if (entry.usage) m.totalTokens += entry.usage.inputTokens + entry.usage.outputTokens;
+  };
   for (let i = days - 1; i >= 0; i--) {
     const key = localDateKey(now - i * DAY_MS);
-    grid.set(key, { date: key, requests: 0, reportedRequests: 0, totalTokens: 0 });
+    grid.set(key, { date: key, requests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const entry of entries) {
     const key = localDateKey(entry.timestamp);
     let day = grid.get(key);
     if (!day) {
-      day = { date: key, requests: 0, reportedRequests: 0, totalTokens: 0 };
+      day = { date: key, requests: 0, reportedRequests: 0, totalTokens: 0, models: [] };
       grid.set(key, day);
     }
     day.requests += 1;
     if (entry.usageStatus === "reported") day.reportedRequests += 1;
     if (typeof entry.totalTokens === "number") day.totalTokens += entry.totalTokens;
     else if (entry.usage) day.totalTokens += entry.usage.inputTokens + entry.usage.outputTokens;
+    bumpDayModel(key, entry);
   }
   void since;
-  return [...grid.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const out = [...grid.values()].sort((a, b) => a.date.localeCompare(b.date));
+  for (const day of out) {
+    const models = dayModels.get(day.date);
+    if (models) day.models = [...models.values()].sort((a, b) => b.requests - a.requests);
+  }
+  return out;
 }
 
 function buildModels(entries: PersistedUsageEntry[], totalRequests: number): UsageModel[] {

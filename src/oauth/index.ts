@@ -8,6 +8,7 @@ import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./a
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
+import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 
 const REFRESH_SKEW_MS = 60_000;
@@ -60,6 +61,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: oauthConfig("kiro"),
     defaultModel: oauthDefaultModel("kiro"),
   },
+  "google-antigravity": {
+    login: (ctrl) => loginAntigravity(ctrl),
+    refresh: refreshAntigravityToken,
+    providerConfig: oauthConfig("google-antigravity"),
+    defaultModel: oauthDefaultModel("google-antigravity"),
+  },
   chatgpt: {
     login: loginChatGPT,
     refresh: (rt) => refreshChatGPTToken(rt),
@@ -70,6 +77,11 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
 
 export function isOAuthProvider(name: string): boolean {
   return name in OAUTH_PROVIDERS;
+}
+
+/** The discovered project id stored on an OAuth credential (Antigravity CCA), if any. */
+export function getOAuthCredentialProjectId(provider: string): string | undefined {
+  return getCredential(provider)?.projectId;
 }
 
 /** Provider ids that support real OAuth login (drives the GUI's "Log in with …" buttons). */
@@ -127,7 +139,13 @@ async function refreshAndPersistAccessToken(
   }
   try {
     const fresh = await def.refresh(cred.refresh);
-    saveCredential(provider, { ...fresh, source: fresh.source ?? cred.source ?? "oauth" });
+    saveCredential(provider, {
+      ...fresh,
+      source: fresh.source ?? cred.source ?? "oauth",
+      // Preserve a previously-discovered project id when a refresh-time re-discovery comes back empty
+      // (e.g. a transient network blip), so Antigravity does not lose its CCA project across refresh.
+      ...(fresh.projectId === undefined && cred.projectId ? { projectId: cred.projectId } : {}),
+    });
     return fresh.access;
   } catch (err) {
     if (provider === "kiro") {

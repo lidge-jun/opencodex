@@ -8,6 +8,8 @@ export type OAuthCredentials = {
   email?: string;
   accountId?: string;
   source?: OAuthCredentialSource;
+  /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
+  projectId?: string;
 };
 
 export interface OAuthController {

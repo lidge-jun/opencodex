@@ -390,3 +390,25 @@ select.input { appearance: none; }
 .heatmap-legend .heatmap-cell { width: 10px; height: 10px; aspect-ratio: auto; }
 .usage-bar { width: 100%; height: 6px; background: var(--border); border-radius: 999px; overflow: hidden; min-width: 60px; }
 .usage-bar-fill { height: 100%; background: var(--green); border-radius: 999px; }
+
+/* 7d view: per-day request bar chart (replaces the year heatmap on the 7d toggle). */
+.daybars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; align-items: end; height: 180px; padding-top: 8px; }
+.daybar { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+.daybar-track { width: 100%; max-width: 48px; flex: 1; display: flex; align-items: flex-end; background: var(--border); border-radius: 6px; overflow: hidden; }
+.daybar-stack { width: 100%; display: flex; flex-direction: column-reverse; border-radius: 6px 6px 0 0; overflow: hidden; min-height: 2px; transition: height 0.2s ease; }
+.daybar-seg { width: 100%; min-height: 1px; }
+.daybar-count { font-size: 12px; font-weight: 600; color: var(--text); }
+.daybar-label { font-size: 11px; white-space: nowrap; }
+.daybar:hover .daybar-track { outline: 1px solid var(--border); }
+.daybar-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  min-width: 160px; box-shadow: 0 6px 20px rgba(0,0,0,0.35); pointer-events: none; }
+.daybar-tip-date { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; white-space: nowrap; }
+.daybar-tip-row { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.7; }
+.daybar-tip-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.daybar-tip-name { color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.daybar-tip-val { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Model / provider tables: cap height and scroll inside the box instead of growing unbounded. */
+.usage-scroll { max-height: 360px; overflow-y: auto; }
+.usage-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }

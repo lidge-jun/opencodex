@@ -8,6 +8,19 @@ const REPO = "lidge-jun/opencodex";
 /** Fires exactly once from the first interactive `ocx start`. */
 const MARKER = ".star-prompted";
 
+/**
+ * True once the one-time star prompt has already fired (marker written). The
+ * update prompt uses this to yield on a user's very first run so two prompts
+ * never stack on a fresh install.
+ */
+export function hasStarPromptRun(): boolean {
+  try {
+    return existsSync(join(getConfigDir(), MARKER));
+  } catch {
+    return false;
+  }
+}
+
 function ghAvailable(): boolean {
   const r = spawnSync("gh", ["--version"], { stdio: "ignore", timeout: 3000, windowsHide: true });
   return !r.error && r.status === 0;

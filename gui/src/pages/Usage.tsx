@@ -22,6 +22,14 @@ interface UsageDay {
   requests: number;
   reportedRequests: number;
   totalTokens: number;
+  models: UsageDayModel[];
+}
+
+interface UsageDayModel {
+  model: string;
+  provider: string;
+  requests: number;
+  totalTokens: number;
 }
 
 interface UsageModel {
@@ -62,8 +70,53 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+// Total-tokens card only: Western locales extend K/M with B (billion) and T (trillion); CJK locales
+// (ko/zh) use the myriad (1e4) scale — ko 만/억/조/경, zh 万/亿/兆/京 — which reads naturally there.
+function formatTotalTokens(n: number, locale: string): string {
+  if (locale === "ko" || locale === "zh") {
+    const units = locale === "ko"
+      ? [{ v: 1e16, s: "경" }, { v: 1e12, s: "조" }, { v: 1e8, s: "억" }, { v: 1e4, s: "만" }]
+      : [{ v: 1e16, s: "京" }, { v: 1e12, s: "兆" }, { v: 1e8, s: "亿" }, { v: 1e4, s: "万" }];
+    for (const u of units) {
+      if (n >= u.v) return `${(n / u.v).toFixed(2)}${u.s}`;
+    }
+    return String(n);
+  }
+  if (n < 10_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n < 1_000_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  return `${(n / 1_000_000_000_000).toFixed(2)}T`;
+}
+
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+// Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
+// across days and renders. Saturation/lightness are fixed for a cohesive palette on the dark chart.
+function modelColor(model: string, provider: string): string {
+  const key = `${provider}/${model}`;
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 55% 55%)`;
+}
+
+// Last 7 calendar days (oldest → newest), zero-filled, for the 7d bar chart. The API's `days` only
+// carries dates with activity, so missing days are backfilled to 0 to keep a stable 7-bar axis.
+function lastSevenDays(days: UsageDay[]): UsageDay[] {
+  const byDate = new Map(days.map(d => [d.date, d]));
+  const out: UsageDay[] = [];
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+  cursor.setDate(cursor.getDate() - 6);
+  for (let i = 0; i < 7; i++) {
+    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+    const d = byDate.get(iso);
+    out.push({ date: iso, requests: d?.requests ?? 0, reportedRequests: d?.reportedRequests ?? 0, totalTokens: d?.totalTokens ?? 0, models: d?.models ?? [] });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
 }
 
 function quantileBuckets(values: number[]): number[] {
@@ -140,11 +193,12 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
 }
 
 export default function Usage({ apiBase }: { apiBase: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [modelQuery, setModelQuery] = useState("");
+  const [hoverDay, setHoverDay] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +220,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   }, [apiBase, range]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
+  const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
@@ -203,13 +258,56 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           <div className="usage-cards">
             <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{data.summary.requests}</div></div>
             <div className="stat"><div className="muted">{t("usage.card.reported")}</div><div className="stat-value">{data.summary.reportedRequests}</div></div>
-            <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(data.summary.totalTokens)}</div></div>
+            <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTotalTokens(data.summary.totalTokens, locale)}</div></div>
             <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(data.summary.coverageRatio)}</div></div>
             <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
           </div>
 
           <section className="panel" style={{ marginTop: 16 }}>
             <h3 className="panel-title">{t("usage.section.heatmap")}</h3>
+            {range === "7d" ? (
+              <div className="daybars">
+                {weekBars.map((d, i) => {
+                  const max = Math.max(1, ...weekBars.map(x => x.requests));
+                  const pct = Math.round((d.requests / max) * 100);
+                  const label = d.date.slice(5);
+                  return (
+                    <div key={i} className="daybar"
+                      onMouseEnter={() => setHoverDay(i)}
+                      onMouseLeave={() => setHoverDay(h => (h === i ? null : h))}>
+                      <div className="daybar-track">
+                        <div className="daybar-stack" style={{ height: `${pct}%` }}>
+                          {d.models.map(m => (
+                            <div key={`${m.provider}/${m.model}`} className="daybar-seg"
+                              style={{
+                                flexGrow: m.requests,
+                                background: modelColor(m.model, m.provider),
+                              }} />
+                          ))}
+                          {d.models.length === 0 && d.requests > 0 && (
+                            <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
+                          )}
+                        </div>
+                      </div>
+                      {hoverDay === i && d.requests > 0 && (
+                        <div className="daybar-tip">
+                          <div className="daybar-tip-date">{d.date}</div>
+                          {d.models.slice(0, 8).map(m => (
+                            <div key={`${m.provider}/${m.model}`} className="daybar-tip-row">
+                              <span className="daybar-tip-swatch" style={{ background: modelColor(m.model, m.provider) }} />
+                              <span className="daybar-tip-name">{m.model}</span>
+                              <span className="daybar-tip-val">{m.requests}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <span className="daybar-count">{d.requests}</span>
+                      <span className="daybar-label muted">{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
             <div className="heatmap">
               <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, 1fr)` }}>
                 <span className="heatmap-day-spacer" />
@@ -239,6 +337,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
                 <span>{t("usage.heatmap.more")}</span>
               </div>
             </div>
+            )}
           </section>
 
           <section className="panel" style={{ marginTop: 16 }}>
@@ -247,7 +346,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
               <input className="input" placeholder={t("usage.search.models")}
                 value={modelQuery} onChange={e => setModelQuery(e.target.value)} />
             </div>
-            <div className="tbl-wrap">
+            <div className="tbl-wrap usage-scroll">
               <table className="tbl">
                 <thead>
                   <tr>
@@ -277,7 +376,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
 
           <section className="panel" style={{ marginTop: 16 }}>
             <h3 className="panel-title">{t("usage.section.providers")}</h3>
-            <div className="tbl-wrap">
+            <div className="tbl-wrap usage-scroll">
               <table className="tbl">
                 <thead>
                   <tr>

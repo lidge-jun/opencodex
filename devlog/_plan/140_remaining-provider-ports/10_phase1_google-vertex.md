@@ -2,6 +2,8 @@
 
 > One PABCD pass. Extends the existing `google` adapter — **no new adapter id**. Establishes the
 > `googleMode` config-branch hook reused by Phase 20. Grounded in jawcode (cites are jawcode paths).
+>
+> External cross-check: `router-for-me/CLIProxyAPI` Vertex executor/auth — see `05_reference-repos.md`.
 
 ---
 

@@ -207,6 +207,8 @@ export interface OcxConfig {
   disabledModels?: string[];
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
+  /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
+  contextCapValue?: number;
   /** Bind hostname. Default "127.0.0.1" (loopback only). Set "0.0.0.0" to expose on all interfaces. */
   hostname?: string;
   /** Upstream stall timeout (seconds). After this many seconds of no upstream data, emits response.incomplete. Default 90. Min 1. */
@@ -326,6 +328,16 @@ export interface OcxProviderConfig {
    * attached images are described by a gpt vision model and replaced with text before the call.
    */
   noVisionModels?: string[];
+  /**
+   * Google adapter mode. "ai-studio" (default) = Generative Language API + x-goog-api-key.
+   * "vertex" = Vertex AI project/location endpoints with GCP ADC (or x-goog-api-key).
+   * "cloud-code-assist" = Google Antigravity (Cloud Code Assist) OAuth + CCA envelope.
+   */
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
+  project?: string;
+  /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */
+  location?: string;
 }
 
 export interface CodexAccount {

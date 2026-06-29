@@ -636,6 +636,93 @@ describe("server local API auth", () => {
     }
   });
 
+  test("provider context-cap API supports global value and set-all toggles", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+          liveModels: false,
+          models: ["wide-model"],
+          modelContextWindows: { "wide-model": 800_000 },
+        },
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://api2.example.test/v1",
+          apiKey: "sk-secret-value-2",
+          liveModels: false,
+          models: ["other-model"],
+          modelContextWindows: { "other-model": 800_000 },
+        },
+      },
+    });
+
+    const server = startServer(0);
+    try {
+      const initial = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await initial.json()).toMatchObject({ cap: 350_000, value: 350_000, caps: {} });
+
+      // Enable one provider, then change the global value: the enabled provider re-points.
+      await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "openai", enabled: true }),
+      });
+      const valued = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 500_000 }),
+      });
+      expect(valued.status).toBe(200);
+      expect(await valued.json()).toMatchObject({ ok: true, value: 500_000, caps: { openai: 500_000 } });
+
+      // Enabling another provider now uses the current global value, not the constant.
+      const enabledAfter = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "other", enabled: true }),
+      });
+      expect(await enabledAfter.json()).toMatchObject({ caps: { openai: 500_000, other: 500_000 } });
+
+      // Catalog reflects the global value.
+      const models = await fetch(new URL("/api/models", server.url));
+      const body = await models.json() as Array<{ id: string; contextWindow?: number; contextCap?: number }>;
+      expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 500_000, contextCap: 500_000 });
+
+      // Set-all off clears every cap.
+      const cleared = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setAll: false }),
+      });
+      expect(await cleared.json()).toMatchObject({ ok: true, value: 500_000, caps: {} });
+
+      // Set-all on caps every provider at the current value.
+      const all = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setAll: true }),
+      });
+      expect(await all.json()).toMatchObject({ ok: true, caps: { openai: 500_000, other: 500_000 } });
+
+      // Invalid global value is rejected.
+      const bad = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 0 }),
+      });
+      expect(bad.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("management GET rejects non-local Origin even with a valid API key", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
