@@ -54,3 +54,29 @@ Implemented per `10_implementation.md` with O1/O2/O3 as resolved in
   contained future option; current code reuses `npm view`.
 - No automated test exercises the live readline prompt / `process.exit` path;
   decision logic is covered by pure-function tests instead.
+
+## Independent verification (worker subagent)
+
+An independent verifier reran the gates and audited the 6 design intents:
+
+- `bun x tsc --noEmit`: clean. `bun test tests/update-notify.test.ts`:
+  19 pass / 0 fail. Full suite: 1458 pass / 71 fail / 13 errors, identical to
+  the pre-existing baseline (no new failures attributable to this change).
+- All six intents confirmed with file:line evidence: interactive/service
+  gating, prompt-before-port/PID ordering, channel-aware `isNewer` incl. the O3
+  edges, dismiss suppression, detached non-blocking refresh, and a silent
+  `ensure`/`gui` path. Verdict: PASS, "ships safely".
+
+Findings recorded (no code change; left as intended behavior):
+
+- Low: a bare Enter defaults to "Update now", which installs globally and
+  exits. This matches codex-rs (Update now is the default highlight) and the
+  prompt label states `(default 1)`, but in a plain readline context an
+  accidental Enter is more consequential than in a TUI. Kept for parity; revisit
+  if users report surprise dismissals.
+- Low: forcing `--tag preview` on a stable build (current has no `-preview.`)
+  is a quiet no-op in `isNewer` rather than a wrong prompt. Only reachable via
+  an unusual manual flag combination.
+- Informational: by design the current run reads the pre-refresh cache and the
+  freshly fetched version surfaces on the next start (codex-rs parity,
+  non-blocking).
