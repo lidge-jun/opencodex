@@ -80,7 +80,7 @@ describe("kiro adapter — parseStream", () => {
       else if (e.type === "tool_call_delta") { args += e.arguments; events.push("delta"); }
       else events.push(e.type);
     }
-    expect(events).toEqual(["text:Hi ", "text:there", "start:t1:bash", "delta", "delta", "tool_call_end", "done"]);
+    expect(events).toEqual(["text:Hi ", "text:there", "heartbeat", "heartbeat", "heartbeat", "start:t1:bash", "delta", "delta", "tool_call_end", "done"]);
     expect(JSON.parse(args)).toEqual({ command: "echo hi" });
   });
 
@@ -113,8 +113,66 @@ describe("kiro adapter — parseStream", () => {
     for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(start, errFrame, tail)))) {
       out.push(e.type === "error" ? `error:${e.message}` : e.type);
     }
-    expect(out).toEqual(["tool_call_start", "tool_call_end", "error:Kiro upstream error: InternalServerException: boom"]);
+    expect(out).toEqual(["heartbeat", "error:Kiro upstream error: InternalServerException: boom"]);
+    expect(out).not.toContain("tool_call_start");
+    expect(out).not.toContain("tool_call_end");
     expect(out).not.toContain("done");
+  });
+
+  test("open tool input at EOF fails closed instead of emitting partial JSON", async () => {
+    const frames = [
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ input: '{"command":"ec', name: "bash", toolUseId: "t1" }),
+    ];
+    const out: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(...frames)))) {
+      if (e.type === "error") out.push(`error:${e.message}`);
+      else if (e.type === "tool_call_delta") out.push(`delta:${e.arguments}`);
+      else out.push(e.type);
+    }
+    expect(out).toEqual(["heartbeat", "heartbeat", "error:Kiro response truncated upstream before the tool call completed (stream ended before tool stop)"]);
+    expect(out.some(item => item.startsWith("delta:"))).toBe(false);
+    expect(out).not.toContain("done");
+  });
+
+  test("open tool with complete JSON but no stop is still truncation", async () => {
+    const frames = [
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ input: '{"command":"pwd"}', name: "bash", toolUseId: "t1" }),
+    ];
+    const out: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(...frames)))) {
+      out.push(e.type === "error" ? `error:${e.message}` : e.type);
+    }
+    expect(out).toEqual(["heartbeat", "heartbeat", "error:Kiro response truncated upstream before the tool call completed (stream ended before tool stop)"]);
+    expect(out).not.toContain("tool_call_start");
+  });
+
+  test("explicit Kiro truncation marker fails without done", async () => {
+    const frame = eventFrame({ finish_reason: "max_tokens" });
+    const out: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(frame)))) {
+      out.push(e.type === "error" ? `error:${e.message}` : e.type);
+    }
+    expect(out).toEqual(["error:Kiro response truncated upstream before the tool call completed (max_tokens)"]);
+    expect(out).not.toContain("done");
+  });
+
+  test("duplicate tool name starts before input do not create duplicate tool calls", async () => {
+    const frames = [
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ input: '{"command":"pwd"}', name: "bash", toolUseId: "t1" }),
+      eventFrame({ name: "bash", stop: true, toolUseId: "t1" }),
+    ];
+    const starts: string[] = [];
+    const events: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(...frames)))) {
+      if (e.type === "tool_call_start") starts.push(e.name);
+      events.push(e.type);
+    }
+    expect(starts).toEqual(["bash"]);
+    expect(events).toEqual(["heartbeat", "heartbeat", "heartbeat", "tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
   });
 
   test("exception payload errors redact secrets, profile ARNs, raw JSON, and local paths", async () => {
@@ -347,7 +405,7 @@ describe("kiro adapter — parseResponse (web-search sidecar non-streaming path)
     ];
     const events = await createKiroAdapter(provider).parseResponse!(new Response(streamOf(...frames)));
     expect(events.map(e => e.type)).toEqual([
-      "text_delta", "text_delta", "tool_call_start", "tool_call_delta", "tool_call_end", "done",
+      "text_delta", "text_delta", "heartbeat", "heartbeat", "tool_call_start", "tool_call_delta", "tool_call_end", "done",
     ]);
     const start = events.find(e => e.type === "tool_call_start") as { id: string; name: string };
     expect(start).toMatchObject({ id: "t1", name: "bash" });

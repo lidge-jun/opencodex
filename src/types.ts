@@ -175,6 +175,7 @@ export interface OcxRequestOptions {
 }
 
 export type AdapterEvent =
+  | { type: "heartbeat" }
   | { type: "text_delta"; text: string }
   | { type: "thinking_delta"; thinking: string }
   | { type: "reasoning_raw_delta"; text: string }

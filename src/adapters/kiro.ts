@@ -13,9 +13,11 @@
 import { decodeEventStream } from "../lib/eventstream-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { resolveKiroApiRegion, resolveKiroProfileArn } from "../oauth/kiro";
+import { parseKiroEvent } from "./kiro-events";
 import { safeKiroErrorMessage } from "./kiro-errors";
 import { appendFallbackText, toolCallFallbackText, toolResultFallbackText } from "./kiro-tool-fallback";
 import { KiroThinkingParser } from "./kiro-thinking";
+import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "./kiro-truncation";
 import { fallbackToolUseId, fingerprint, invocationId, mapModelId, normalizeToolId, osTag, stableConversationId } from "./kiro-wire";
 import type {
   AdapterEvent,
@@ -290,45 +292,6 @@ export function buildKiroPayload(parsed: OcxParsedRequest, profileArn: string | 
   return payload;
 }
 
-// Stream event parsing: discriminate stop/input/name (NOT name alone)
-interface ParsedKiroEvent {
-  type: "content" | "tool_start" | "tool_input" | "tool_stop";
-  data?: string;
-  name?: string;
-  toolUseId?: string;
-  input?: string;
-}
-export function parseKiroEvent(payload: Uint8Array): ParsedKiroEvent | null {
-  let text: string;
-  try {
-    text = new TextDecoder().decode(payload).trim();
-  } catch {
-    return null;
-  }
-  if (!text.startsWith("{")) return null;
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if ("content" in parsed && typeof parsed.content === "string") return { type: "content", data: parsed.content };
-  const toolUseId = typeof parsed.toolUseId === "string" ? parsed.toolUseId : undefined;
-  const name = typeof parsed.name === "string" ? parsed.name : undefined;
-  if (parsed.stop === true) return { type: "tool_stop", toolUseId };
-  if ("input" in parsed) {
-    const input =
-      typeof parsed.input === "object" && parsed.input !== null
-        ? JSON.stringify(parsed.input)
-        : typeof parsed.input === "string"
-          ? parsed.input
-          : "";
-    return { type: "tool_input", input, name, toolUseId };
-  }
-  if (name !== undefined) return { type: "tool_start", name, toolUseId: toolUseId || fallbackToolUseId() };
-  return null;
-}
-
 // Stream parsing (shared by parseStream + parseResponse)
 // CodeWhisperer GenerateAssistantResponse ALWAYS returns an AWS eventstream body (there is no
 // non-streaming mode), so both the streaming bridge and the non-streaming web-search sidecar loop
@@ -342,7 +305,7 @@ export async function* parseKiroStream(
     yield { type: "error", message: "Kiro response has no body" };
     return;
   }
-  let open: { id: string; name: string } | null = null;
+  let open: { id: string; name: string; chunks: string[] } | null = null;
   // CW provides no usage; accumulate output chars and emit a heuristic estimate on done so Codex's
   // usage display + auto-compact engage (see src/lib/token-estimate.ts).
   let outputChars = "";
@@ -350,15 +313,20 @@ export async function* parseKiroStream(
   const trackContent = (event: AdapterEvent): void => {
     if ("text" in event) outputChars += event.text;
   };
+  function* flushTool(): Generator<AdapterEvent> {
+    if (!open) return;
+    const tool = open;
+    open = null;
+    yield { type: "tool_call_start", id: tool.id, name: tool.name };
+    for (const chunk of tool.chunks) if (chunk) yield { type: "tool_call_delta", arguments: chunk };
+    yield { type: "tool_call_end" };
+  }
   try {
     for await (const msg of decodeEventStream(response.body)) {
       const mt = msg.headers[":message-type"];
       if (mt === "exception" || mt === "error") {
         // Terminal: surface the upstream error and never emit a trailing success-shaped `done`.
-        if (open) {
-          yield { type: "tool_call_end" };
-          open = null;
-        }
+        open = null;
         yield { type: "error", message: safeKiroErrorMessage(msg.headers, new TextDecoder().decode(msg.payload)) };
         return;
       }
@@ -367,6 +335,11 @@ export async function* parseKiroStream(
       if (!ev) continue;
       switch (ev.type) {
         case "content":
+          if (open) {
+            open = null;
+            yield { type: "error", message: kiroTruncationErrorMessage("content arrived before tool stop") };
+            return;
+          }
           if (ev.data) {
             for (const contentEvent of thinking.feed(ev.data)) {
               trackContent(contentEvent);
@@ -379,9 +352,18 @@ export async function* parseKiroStream(
             trackContent(contentEvent);
             yield contentEvent;
           }
-          if (open) yield { type: "tool_call_end" };
-          open = { id: ev.toolUseId!, name: ev.name || "unknown" };
-          yield { type: "tool_call_start", id: open.id, name: open.name };
+          const id = ev.toolUseId || fallbackToolUseId();
+          const name = ev.name || "unknown";
+          if (open) {
+            if (open.id !== id || open.name !== name) {
+              open = null;
+              yield { type: "error", message: kiroTruncationErrorMessage("new tool started before previous tool stop") };
+              return;
+            }
+          } else {
+            open = { id, name, chunks: [] };
+          }
+          yield { type: "heartbeat" };
           break;
         }
         case "tool_input": {
@@ -389,29 +371,44 @@ export async function* parseKiroStream(
             trackContent(contentEvent);
             yield contentEvent;
           }
-          if (!open && ev.toolUseId) {
-            open = { id: ev.toolUseId, name: ev.name || "unknown" };
-            yield { type: "tool_call_start", id: open.id, name: open.name };
+          if (!open) {
+            open = { id: ev.toolUseId || fallbackToolUseId(), name: ev.name || "unknown", chunks: [] };
           }
           if (open && ev.input) {
+            if (open.name === "unknown" && ev.name) open.name = ev.name;
+            open.chunks.push(ev.input);
             outputChars += ev.input;
-            yield { type: "tool_call_delta", arguments: ev.input };
+          }
+          yield { type: "heartbeat" };
+          break;
+        }
+        case "tool_stop": {
+          if (open) {
+            const input = open.chunks.join("");
+            if (!isCompleteKiroToolInput(input)) {
+              open = null;
+              yield { type: "error", message: kiroTruncationErrorMessage("incomplete tool input JSON") };
+              return;
+            }
+            yield* flushTool();
           }
           break;
         }
-        case "tool_stop":
-          if (open) {
-            yield { type: "tool_call_end" };
-            open = null;
-          }
-          break;
+        case "truncation":
+          open = null;
+          yield { type: "error", message: kiroTruncationErrorMessage(ev.data) };
+          return;
       }
     }
     for (const contentEvent of thinking.flush()) {
       trackContent(contentEvent);
       yield contentEvent;
     }
-    if (open) yield { type: "tool_call_end" };
+    if (open) {
+      open = null;
+      yield { type: "error", message: kiroTruncationErrorMessage("stream ended before tool stop") };
+      return;
+    }
     yield {
       type: "done",
       usage: { inputTokens, outputTokens: estimateTokens(outputChars, modelId) },
