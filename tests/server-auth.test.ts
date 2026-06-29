@@ -843,6 +843,87 @@ describe("server local API auth", () => {
     }
   });
 
+  test("native passthrough SSE records completed usage without pool terminal tracking", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+
+    const upstream = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(
+          [
+            "event: response.completed",
+            'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.5","usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}}',
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-responses",
+          baseUrl: upstream.url.toString(),
+          apiKey: "provider-key",
+          defaultModel: "gpt-5.5",
+        },
+      },
+    } as OcxConfig);
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }),
+      });
+
+      expect(response.status).toBe(200);
+      await response.text();
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{
+        status: number;
+        terminalStatus?: string;
+        closeReason?: string;
+        usageStatus?: string;
+        totalTokens?: number;
+        usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number; reasoningOutputTokens?: number };
+      }>;
+      expect(logs.at(-1)).toMatchObject({
+        status: 200,
+        terminalStatus: "completed",
+        closeReason: "terminal",
+        usageStatus: "reported",
+        totalTokens: 18,
+        usage: {
+          inputTokens: 11,
+          outputTokens: 7,
+          cachedInputTokens: 3,
+          reasoningOutputTokens: 2,
+        },
+      });
+
+      const usage = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json()) as {
+        summary: { requests: number; reportedRequests: number; totalTokens: number };
+        models: Array<{ provider: string; model: string; reportedRequests: number; totalTokens: number }>;
+      };
+      expect(usage.summary).toMatchObject({ requests: 1, reportedRequests: 1, totalTokens: 18 });
+      expect(usage.models.at(-1)).toMatchObject({
+        provider: "test-openai",
+        model: "gpt-5.5",
+        reportedRequests: 1,
+        totalTokens: 18,
+      });
+    } finally {
+      await server.stop(true);
+      await upstream.stop(true);
+    }
+  });
+
   test("passthrough SSE client cancel aborts the upstream request", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

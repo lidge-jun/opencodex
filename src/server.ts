@@ -518,14 +518,13 @@ async function handleResponses(
       const turnAc = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc);
-      if (terminalBodyWillRecord && recordTerminalOutcomes) {
-        const recordTerminal = terminalRecorder;
+      if (recordTerminalOutcomes) {
         const reportNativeTerminal = (status: ResponsesTerminalStatus) => {
           if (options.abortSignal?.aborted) {
             options.onNativePassthroughCancel?.();
             return;
           }
-          recordTerminal(status);
+          terminalRecorder?.(status);
           options.onNativePassthroughTerminal?.(status);
         };
         consumeForInspection(inspectBody, reportNativeTerminal, turnAc.signal, () => unregisterTurn(turnAc), logCtx);
