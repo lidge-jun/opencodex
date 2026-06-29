@@ -53,7 +53,49 @@ describe("kiro retry fetch", () => {
     const mock = mockFetch([new Response("bad request", { status: 400 })]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Kiro invalid request");
     expect(mock.calls).toHaveLength(1);
+  });
+
+  test("normalizes final 403 response body into a redacted Kiro auth error", async () => {
+    const mock = mockFetch([
+      new Response(JSON.stringify({
+        __type: "AccessDeniedException",
+        message: "expired token accessToken=aoa-secret path /Users/jun/private.json",
+      }), { status: 403 }),
+    ]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    const text = await res.text();
+    expect(res.status).toBe(403);
+    expect(text).toContain("Kiro authentication failed: AccessDeniedException");
+    expect(text).not.toContain("aoa-secret");
+    expect(text).not.toContain("/Users/jun");
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("normalizes final 400 validation/model body into an invalid request error", async () => {
+    const mock = mockFetch([
+      new Response(JSON.stringify({
+        __type: "ValidationException",
+        message: "model not found in region us-east-1",
+      }), { status: 400 }),
+    ]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Kiro invalid request: ValidationException");
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("normalizes final retryable 429 after attempts while preserving retry count", async () => {
+    const mock = mockFetch([
+      new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
+      new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
+      new Response(JSON.stringify({ message: "too many requests" }), { status: 429, headers: { "Retry-After": "0" } }),
+    ]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(429);
+    expect(await res.text()).toContain("Kiro rate limit exceeded");
+    expect(mock.calls).toHaveLength(3);
   });
 
   test("does not start fetch when caller signal is already aborted", async () => {

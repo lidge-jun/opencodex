@@ -1,4 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
+import { safeKiroHttpErrorMessage } from "./kiro-errors";
 
 const KIRO_RETRY_ATTEMPTS = 3;
 const KIRO_RETRY_BASE_MS = 250;
@@ -55,6 +56,19 @@ function signalWithAttemptTimeout(parent: AbortSignal | undefined, timeoutMs: nu
   return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
+async function normalizeFinalKiroHttpError(res: Response): Promise<Response> {
+  if (res.ok) return res;
+  const payloadText = await res.clone().text().catch(() => "");
+  const headers = new Headers(res.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  return new Response(safeKiroHttpErrorMessage(res.status, res.headers, payloadText), {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
 export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
   const timeoutMs = ctx.timeoutMs ?? 30_000;
   let lastError: unknown;
@@ -67,7 +81,7 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFe
         body: request.body,
         signal: signalWithAttemptTimeout(ctx.abortSignal, timeoutMs),
       });
-      if (!retryableKiroStatus(res.status) || attempt === KIRO_RETRY_ATTEMPTS - 1) return res;
+      if (!retryableKiroStatus(res.status) || attempt === KIRO_RETRY_ATTEMPTS - 1) return normalizeFinalKiroHttpError(res);
       await res.body?.cancel().catch(() => {});
       await sleepWithAbort(retryDelayMs(attempt, res.headers), ctx.abortSignal);
     } catch (err) {

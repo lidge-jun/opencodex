@@ -90,7 +90,7 @@ describe("kiro adapter — parseStream", () => {
     for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(frame)))) {
       out.push(e.type === "error" ? `error:${e.message}` : e.type);
     }
-    expect(out[0]).toBe("error:Kiro upstream error: ThrottlingException: rate limited");
+    expect(out[0]).toBe("error:Kiro rate limit exceeded: ThrottlingException: rate limited");
   });
 
   test("exception frame is terminal: no trailing done", async () => {
@@ -100,7 +100,7 @@ describe("kiro adapter — parseStream", () => {
     for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(errFrame, contentFrame)))) {
       out.push(e.type === "error" ? `error:${e.message}` : e.type);
     }
-    expect(out).toEqual(["error:Kiro upstream error: ThrottlingException: rate limited"]);
+    expect(out).toEqual(["error:Kiro rate limit exceeded: ThrottlingException: rate limited"]);
     expect(out).not.toContain("done");
     expect(out).not.toContain("text_delta");
   });
@@ -132,13 +132,35 @@ describe("kiro adapter — parseStream", () => {
       if (e.type === "error") errors.push(e.message);
     }
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain("Kiro upstream error: ValidationException");
+    expect(errors[0]).toContain("Kiro invalid request: ValidationException");
     expect(errors[0]).not.toContain("aoa-secret");
     expect(errors[0]).not.toContain("rt-secret");
     expect(errors[0]).not.toContain("client-secret");
     expect(errors[0]).not.toContain("arn:aws");
     expect(errors[0]).not.toContain("/Users/jun");
     expect(errors[0]).not.toContain("{");
+  });
+
+  test("auth and model exceptions become actionable Kiro errors", async () => {
+    const authFrame = encodeMessage(
+      { ":message-type": "exception", ":exception-type": "AccessDeniedException" },
+      enc.encode(JSON.stringify({ message: "expired token for profileArn=arn:aws:codewhisperer:us-east-1:123456789012:profile/demo" })),
+    );
+    const modelFrame = encodeMessage(
+      { ":message-type": "exception", ":exception-type": "ValidationException" },
+      enc.encode(JSON.stringify({ message: "model not found in this region" })),
+    );
+    const messages: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(authFrame)))) {
+      if (e.type === "error") messages.push(e.message);
+    }
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(modelFrame)))) {
+      if (e.type === "error") messages.push(e.message);
+    }
+    expect(messages[0]).toContain("Kiro authentication failed: AccessDeniedException");
+    expect(messages[0]).not.toContain("arn:aws");
+    expect(messages[1]).toContain("Kiro invalid request: ValidationException");
+    expect(messages[1]).toContain("model not found");
   });
 
   test("stream parser catch path redacts thrown error details", async () => {
