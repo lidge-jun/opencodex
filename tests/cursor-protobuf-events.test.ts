@@ -420,5 +420,7 @@ describe("Cursor protobuf tool-call events", () => {
     expect(mapCursorProtobufServerMessage(turnEnd, state)).toEqual([
       { type: "done", usage: { inputTokens: 0, outputTokens: 42, totalTokens: 10_300, estimated: true } },
     ]);
+    // After the terminal done, state is marked terminated so post-terminal progress frames stay inert.
+    expect(state.terminated).toBe(true);
   });
 });

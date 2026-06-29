@@ -18,6 +18,8 @@ export interface CursorProtobufEventState {
   contextTokens?: number;
   openToolCalls: Map<string, { name: string; args: string }>;
   completedToolCalls: Set<string>;
+  /** Set once a terminal `done`/truncation has been emitted, so post-terminal frames stay inert. */
+  terminated?: boolean;
   clientToolNames?: Set<string>;
   parallelToolCalls?: boolean;
   startedClientToolCalls: number;
@@ -276,6 +278,7 @@ export function mapCursorProtobufServerMessage(
  * Mirrors kiro-truncation.ts behavior.
  */
 function finalizeTurn(state: CursorProtobufEventState): CursorServerMessage[] {
+  state.terminated = true;
   if (state.openToolCalls.size > 0) {
     const openIds = [...state.openToolCalls.keys()].join(", ");
     // Clear so a second turnEnded (should not happen, but defensive) doesn't re-emit.

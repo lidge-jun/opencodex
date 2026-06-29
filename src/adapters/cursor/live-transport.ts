@@ -323,7 +323,8 @@ class LiveCursorTransport implements CursorTransport {
     // deferred to completion for atomic, parallel-safe emission, so a turn that silently assembles
     // several tool calls can otherwise exceed the bridge's stall watchdog (upstream_stall_timeout).
     // Emit a liveness heartbeat for these progress frames so the watchdog sees the upstream is alive.
-    if (isCursorProgressFrame(message)) push({ type: "heartbeat" });
+    // Never after a terminal (done/truncation): a stray post-terminal frame must stay fully inert.
+    if (!state.terminated && isCursorProgressFrame(message)) push({ type: "heartbeat" });
   }
 }
 
