@@ -48,6 +48,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "./oauth/key-pr
 import { deriveProviderPresets } from "./providers/derive";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "./types";
 import type { OcxUsage } from "./types";
+import { DEFAULT_PROVIDER_CONTEXT_CAP, providerContextCap, providerContextCaps, setProviderContextCap } from "./provider-context-cap";
 import {
   appendUsageEntry,
   readUsageEntries,
@@ -1759,6 +1760,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     if (name === config.defaultProvider) return jsonResponse({ error: "cannot delete the default provider; set another default first" }, 400);
     const { saveConfig: save } = await import("./config");
     delete config.providers[name];
+    setProviderContextCap(config, name, false);
     save(config);
     const { clearModelCache: clearCache } = await import("./model-cache");
     clearCache(name);
@@ -1771,8 +1773,40 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     const disabled = new Set(config.disabledModels ?? []);
     return jsonResponse(models.map(m => {
       const namespaced = `${m.provider}/${m.id}`;
-      return { ...m, namespaced, disabled: disabled.has(namespaced) };
+      const contextCap = providerContextCap(config, m.provider);
+      return {
+        ...m,
+        namespaced,
+        disabled: disabled.has(namespaced),
+        ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
+      };
     }));
+  }
+
+  if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
+    return jsonResponse({ cap: DEFAULT_PROVIDER_CONTEXT_CAP, caps: providerContextCaps(config) });
+  }
+
+  if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
+    let body: { provider?: unknown; enabled?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
+    }
+    const provider = body.provider.trim();
+    if (!isValidProviderName(provider)) {
+      return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
+    }
+    if (!hasOwnProvider(config.providers, provider)) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    setProviderContextCap(config, provider, body.enabled);
+    const { saveConfig: save } = await import("./config");
+    save(config);
+    const { clearModelCache } = await import("./model-cache");
+    clearModelCache(provider);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, caps: providerContextCaps(config) });
   }
 
   // Enable/disable models: which routed models Codex sees. PUT hides them from the catalog +

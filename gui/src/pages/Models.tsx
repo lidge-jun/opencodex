@@ -3,12 +3,27 @@ import { Switch, Notice } from "../ui";
 import { IconChevron, IconBoxes } from "../icons";
 import { useT } from "../i18n";
 
-interface ModelRow { provider: string; id: string; namespaced: string; disabled: boolean }
+interface ModelRow {
+  provider: string;
+  id: string;
+  namespaced: string;
+  disabled: boolean;
+  contextWindow?: number;
+  contextCap?: number;
+  contextCapped?: boolean;
+}
+
+interface ProviderContextCapsResponse {
+  cap?: number;
+  caps?: Record<string, number>;
+}
 
 export default function Models({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [models, setModels] = useState<ModelRow[]>([]);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const [contextCaps, setContextCaps] = useState<Record<string, number>>({});
+  const [contextCapValue, setContextCapValue] = useState(350_000);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
@@ -18,9 +33,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const load = async () => {
     try {
-      const data = (await fetch(`${apiBase}/api/models`).then(r => r.json())) as ModelRow[];
+      const [data, capsData] = await Promise.all([
+        fetch(`${apiBase}/api/models`).then(r => r.json()) as Promise<ModelRow[]>,
+        fetch(`${apiBase}/api/provider-context-caps`).then(r => r.json()) as Promise<ProviderContextCapsResponse>,
+      ]);
       setModels(data);
       setDisabled(new Set(data.filter(m => m.disabled).map(m => m.namespaced)));
+      if (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0) setContextCapValue(capsData.cap);
+      setContextCaps(capsData.caps ?? {});
     } catch {
       setOk(false); setStatus(t("models.loadFail"));
     } finally {
@@ -72,6 +92,34 @@ export default function Models({ apiBase }: { apiBase: string }) {
     for (const m of rows) { if (enable) next.delete(m.namespaced); else next.add(m.namespaced); }
     apply(next);
   };
+  const toggleProviderCap = async (provider: string) => {
+    setBusy(true);
+    busyRef.current = true;
+    setStatus("");
+    const enabled = contextCaps[provider] !== contextCapValue;
+    try {
+      const r = await fetch(`${apiBase}/api/provider-context-caps`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, enabled }),
+      });
+      if (r.ok) {
+        const data = (await r.json()) as ProviderContextCapsResponse;
+        setContextCaps(data.caps ?? {});
+        setOk(true);
+        setStatus(t("models.capApplied"));
+        await load();
+      } else {
+        setOk(false);
+        setStatus(t("models.capSaveFailed"));
+      }
+    } catch {
+      setOk(false); setStatus(t("models.networkError"));
+    } finally {
+      setBusy(false);
+      busyRef.current = false;
+    }
+  };
   const toggleCollapse = (p: string) => {
     setCollapsed(prev => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n; });
   };
@@ -91,6 +139,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       {groups.map(([provider, rows]) => {
         const isCollapsed = collapsed.has(provider);
         const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
+        const capOn = contextCaps[provider] === contextCapValue;
         return (
           <div key={provider} className="card" style={{ marginBottom: 8, overflow: "hidden" }}>
             <div onClick={() => toggleCollapse(provider)}
@@ -99,6 +148,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
               <span style={{ fontWeight: 600, fontSize: 14 }}>{provider}</span>
               <span className="muted mono" style={{ fontSize: 12 }}>{t("models.active", { active: activeCount, total: rows.length })}</span>
               <div style={{ flex: 1 }} />
+              <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
+                <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.cap350k")} />
+                <span className="muted mono" style={{ fontSize: 12 }}>{t("models.cap350k")}</span>
+              </div>
               <button onClick={e => { e.stopPropagation(); toggleProvider(rows, true); }} disabled={busy} className="btn btn-ghost btn-sm">{t("models.allOn")}</button>
               <button onClick={e => { e.stopPropagation(); toggleProvider(rows, false); }} disabled={busy} className="btn btn-ghost btn-sm">{t("models.allOff")}</button>
             </div>
@@ -110,6 +163,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
                       <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.id} />
                       <code className="mono" style={{ fontSize: 13, color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.id}</code>
+                      {m.contextCapped && <span className="muted mono" style={{ fontSize: 11, padding: "1px 6px", border: "1px solid var(--border)", borderRadius: 999 }}>{t("models.contextCapped")}</span>}
                     </div>
                   );
                 })}

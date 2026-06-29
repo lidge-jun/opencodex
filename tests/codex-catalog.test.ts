@@ -323,6 +323,19 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.input_modalities).toEqual(["text"]);
   });
 
+  test("provider context-cap applies before jawcode catalog metadata reaches Codex", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "opencode-go", id: "deepseek-v4-pro", contextCap: 350_000, contextCapped: false },
+    ]);
+    const routed = entries.find(e => e.slug === "opencode-go/deepseek-v4-pro");
+
+    expect(routed?.context_window).toBe(350_000);
+    expect(routed?.max_context_window).toBe(350_000);
+    expect(routed?.auto_compact_token_limit).toBe(315_000);
+    expect(routed?.input_modalities).toEqual(["text"]);
+    expect(getJawcodeModelMetadata("opencode-go", "deepseek-v4-pro")?.contextWindow).toBe(1_000_000);
+  });
+
   test("opencode-go high-risk models use official jawcode metadata in the Codex catalog", () => {
     const cases = [
       { id: "glm-5.2", context: 1_000_000, auto: 900_000, input: ["text"] },
@@ -355,6 +368,37 @@ describe("Codex catalog routed normalization", () => {
     expect(slugs.has("opencode-go/qwen3.5-plus")).toBe(true);
     expect(slugs.has("opencode-go/hy3-preview")).toBe(true);
     expect(models.filter(m => `${m.provider}/${m.id}` === "opencode-go/glm-5.2")).toHaveLength(1);
+  });
+
+  test("opencode-go catalog sync appends jawcode rows with provider context-cap metadata", () => {
+    const models = augmentRoutedModelsWithJawcodeMetadata(
+      [],
+      ["opencode-go"],
+      {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode-go.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+      { providerContextCaps: { "opencode-go": 350_000 } },
+    );
+    const model = models.find(m => `${m.provider}/${m.id}` === "opencode-go/qwen3.5-plus");
+
+    expect(model).toMatchObject({
+      contextWindow: 350_000,
+      contextCap: 350_000,
+      contextCapped: true,
+      inputModalities: ["text", "image"],
+    });
+
+    const entries = buildCatalogEntries(nativeTemplate(), [], [model!]);
+    const routed = entries.find(e => e.slug === "opencode-go/qwen3.5-plus");
+
+    expect(routed?.context_window).toBe(350_000);
+    expect(routed?.max_context_window).toBe(350_000);
+    expect(routed?.auto_compact_token_limit).toBe(315_000);
+    expect(routed?.input_modalities).toEqual(["text", "image"]);
   });
 
   test("liveModels false disables jawcode metadata augmentation for exact allowlists", async () => {
@@ -536,6 +580,75 @@ describe("Codex catalog routed normalization", () => {
     expect(models.find(m => m.id === "small-model")?.contextWindow).toBe(64_000);
   });
 
+  test("provider context-cap toggle lowers only known windows above 350k", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "wide-model", metadata: { limits: { max_context_length: 500_000 } } },
+        { id: "small-model", metadata: { limits: { max_context_length: 64_000 } } },
+        { id: "unknown-model", metadata: { capabilities: { vision: true } } },
+      ],
+    }))) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-cap",
+      providerContextCaps: { "meta-cap": 350_000 },
+      providers: {
+        "meta-cap": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-cap.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+    });
+
+    expect(models.find(m => m.id === "wide-model")).toMatchObject({
+      contextWindow: 350_000,
+      contextCap: 350_000,
+      contextCapped: true,
+    });
+    expect(models.find(m => m.id === "small-model")).toMatchObject({
+      contextWindow: 64_000,
+      contextCap: 350_000,
+      contextCapped: false,
+    });
+    expect(models.find(m => m.id === "unknown-model")).toMatchObject({
+      contextCap: 350_000,
+      contextCapped: false,
+    });
+    expect(models.find(m => m.id === "unknown-model")?.contextWindow).toBeUndefined();
+  });
+
+  test("provider context-cap toggle does not invent context for static no-metadata models", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-static-cap",
+      providerContextCaps: { "meta-static-cap": 350_000 },
+      providers: {
+        "meta-static-cap": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-static-cap.test/v1",
+          apiKey: "sk-test",
+          liveModels: false,
+          models: ["static-no-context"],
+        },
+      },
+    });
+
+    expect(fetchCalls).toBe(0);
+    expect(models.find(m => m.id === "static-no-context")).toMatchObject({
+      contextCap: 350_000,
+      contextCapped: false,
+    });
+    expect(models.find(m => m.id === "static-no-context")?.contextWindow).toBeUndefined();
+  });
+
   test("provider context-window caps apply to stale cached metadata", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       data: [{
@@ -577,6 +690,52 @@ describe("Codex catalog routed normalization", () => {
     });
 
     expect(models.find(m => m.id === "cached-model")?.contextWindow).toBe(80_000);
+  });
+
+  test("provider context-cap toggle applies to stale cached metadata", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{
+        id: "cached-wide-model",
+        metadata: {
+          limits: { max_context_length: 500_000 },
+          capabilities: { vision: true },
+        },
+      }],
+    }))) as typeof fetch;
+
+    await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-cache-cap",
+      providers: {
+        "meta-cache-cap": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-cache-cap.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+    });
+
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "meta-cache-cap",
+      modelCacheTtlMs: 0,
+      providerContextCaps: { "meta-cache-cap": 350_000 },
+      providers: {
+        "meta-cache-cap": {
+          adapter: "openai-chat",
+          baseUrl: "https://meta-cache-cap.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+    });
+
+    expect(models.find(m => m.id === "cached-wide-model")).toMatchObject({
+      contextWindow: 350_000,
+      contextCap: 350_000,
+      contextCapped: true,
+    });
   });
 });
 
