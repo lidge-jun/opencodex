@@ -74,6 +74,24 @@ describe("vertex parseStream fail-closed truncation", () => {
   });
 });
 
+describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {
+  test("MAX_TOKENS with a tool call yields a terminal error, not done", async () => {
+    const adapter = createGoogleAdapter(vertexProvider);
+    const body = JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "get_x", args: {} } }] }, finishReason: "MAX_TOKENS" }] });
+    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    expect(events[events.length - 1].type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("clean STOP non-stream response yields done", async () => {
+    const adapter = createGoogleAdapter(vertexProvider);
+    const body = JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 1 } });
+    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    expect(events.some(e => e.type === "done")).toBe(true);
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+});
+
 describe("usage status for google-vertex stays reported", () => {
   test("usageForFinalLog does not force-estimate google-vertex (but does for kiro)", async () => {
     const { usageForFinalLog, usageStatusForFinalLog } = await import("../src/usage-log");

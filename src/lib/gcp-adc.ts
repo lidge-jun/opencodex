@@ -265,7 +265,9 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
     if (cached.expiresAtMs - skew <= now) tokenCache.delete(source);
   }
 
-  const cacheKey = "vertex-adc";
+  // Dedup in-flight fetches PER source, not globally: if the credential source changes while a
+  // fetch is in flight, a new caller must not reuse the old source's promise (cross-source bleed).
+  const cacheKey = expectedSource;
   const existing = inflight.get(cacheKey);
   if (existing) return existing;
 

@@ -333,7 +333,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         : raw);
       const events: AdapterEvent[] = [];
 
-      const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] } }[] | undefined;
+      const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
+      let toolCallsStarted = 0;
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming CCA: observe thoughtSignatures for the next turn, same as the stream path.
         if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession) {
@@ -343,11 +344,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.text) events.push({ type: "text_delta", text: part.text });
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
+            toolCallsStarted++;
             events.push({ type: "tool_call_start", id, name: part.functionCall.name });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });
           }
         }
+      }
+
+      // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
+      // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
+      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+        && toolCallsStarted > 0 && isVertexTruncationReason(candidates?.[0]?.finishReason)) {
+        return [{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }];
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
