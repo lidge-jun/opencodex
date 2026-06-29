@@ -82,6 +82,18 @@ export const ko: Record<TKey, string> = {
   "prov.removeConfirm": "프로바이더 \"{name}\" 을(를) 삭제할까요? 해당 모델이 Codex 선택기에서 사라집니다.",
   "prov.hasApiKey": "API 키 설정됨",
   "prov.hasHeaders": "커스텀 헤더 설정됨",
+  "prov.activeBadge": "활성",
+  "prov.disabledBadge": "비활성",
+  "prov.defaultBadge": "기본",
+  "prov.enable": "활성화",
+  "prov.disable": "비활성화",
+  "prov.enabled": "\"{name}\" 을(를) 활성화했습니다. 해당 모델을 다시 Codex에서 사용할 수 있습니다.",
+  "prov.disabled": "\"{name}\" 을(를) 비활성화했습니다. 설정은 유지되고 모델은 숨겨집니다.",
+  "prov.enableFail": "\"{name}\" 활성화에 실패했습니다.",
+  "prov.disableFail": "\"{name}\" 비활성화에 실패했습니다.",
+  "prov.enableAria": "{name} 프로바이더 활성화",
+  "prov.disableAria": "{name} 프로바이더 비활성화",
+  "prov.defaultCannotDisable": "기본 프로바이더는 비활성화할 수 없습니다",
 
   // models
   "models.subtitle": "Codex가 보는 라우팅된 모델을 프로바이더별로 묶어 켜고 끕니다(헤더를 클릭하면 접힘). 비활성화된 모델은 카탈로그와 모델 선택기에서 숨겨집니다. 변경 사항은 다음 Codex 턴에 적용됩니다 — opencodex가 Codex의 5분 모델 캐시를 무효화하므로 재시작이 필요 없습니다.",

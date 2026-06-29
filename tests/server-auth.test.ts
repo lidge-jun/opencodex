@@ -138,6 +138,7 @@ describe("server local API auth", () => {
     });
     expect(dto.providers.openai).not.toHaveProperty("apiKey");
     expect(dto.providers.openai).not.toHaveProperty("headers");
+    expect(dto.providers.openai.disabled).toBeUndefined();
   });
 
   test("safeConfigDTO strips URL-embedded provider secrets", () => {
@@ -447,6 +448,83 @@ describe("server local API auth", () => {
 
       const caps = await fetch(new URL("/api/provider-context-caps", server.url));
       expect(await caps.json()).toMatchObject({ caps: {} });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider management can disable and re-enable non-default providers", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 10100,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        extra: {
+          adapter: "openai-chat",
+          baseUrl: "https://extra.example.test/v1",
+          liveModels: false,
+          models: ["extra-model"],
+        },
+      },
+    });
+
+    const server = startServer(0);
+    try {
+      const disable = await fetch(new URL("/api/providers?name=extra", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ disabled: true }),
+      });
+      expect(disable.status).toBe(200);
+      expect(await disable.json()).toMatchObject({ success: true, name: "extra", disabled: true });
+
+      const disabledConfig = await fetch(new URL("/api/config", server.url)).then(r => r.json()) as {
+        providers: Record<string, { disabled?: boolean }>;
+      };
+      expect(disabledConfig.providers.extra.disabled).toBe(true);
+
+      const enable = await fetch(new URL("/api/providers?name=extra", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ disabled: false }),
+      });
+      expect(enable.status).toBe(200);
+      expect(await enable.json()).toMatchObject({ success: true, name: "extra", disabled: false });
+
+      const enabledConfig = await fetch(new URL("/api/config", server.url)).then(r => r.json()) as {
+        providers: Record<string, { disabled?: boolean }>;
+      };
+      expect(enabledConfig.providers.extra.disabled).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider management rejects disabling the default provider", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ disabled: true }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining("cannot disable the default provider"),
+      });
     } finally {
       await server.stop(true);
     }

@@ -82,6 +82,18 @@ export const en = {
   "prov.removeConfirm": "Remove provider \"{name}\"? Its models disappear from Codex's picker.",
   "prov.hasApiKey": "api key configured",
   "prov.hasHeaders": "custom headers configured",
+  "prov.activeBadge": "Active",
+  "prov.disabledBadge": "Disabled",
+  "prov.defaultBadge": "Default",
+  "prov.enable": "Enable",
+  "prov.disable": "Disable",
+  "prov.enabled": "Enabled \"{name}\". Its models can appear in Codex again.",
+  "prov.disabled": "Disabled \"{name}\". Settings are kept, but its models are hidden.",
+  "prov.enableFail": "Failed to enable \"{name}\".",
+  "prov.disableFail": "Failed to disable \"{name}\".",
+  "prov.enableAria": "Enable provider {name}",
+  "prov.disableAria": "Disable provider {name}",
+  "prov.defaultCannotDisable": "Default provider can't be disabled",
 
   // models
   "models.subtitle": "Toggle which routed models Codex sees, grouped by provider (click a header to collapse). Disabled models are hidden from the catalog + model picker. Changes apply on the next Codex turn — opencodex invalidates Codex's 5-min model cache so no restart is needed.",

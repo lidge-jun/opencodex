@@ -36,6 +36,7 @@ function clamp(s: string, max: number): string {
 /** First configured forward (ChatGPT passthrough) provider — the path with native image input. */
 function findForwardProvider(config: OcxConfig): OcxProviderConfig | undefined {
   for (const prov of Object.values(config.providers)) {
+    if (prov.disabled === true) continue;
     if (prov.authMode === "forward") return prov;
   }
   return undefined;

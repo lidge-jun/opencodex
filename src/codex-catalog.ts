@@ -704,10 +704,11 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
  */
 export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const activeProviders = Object.entries(config.providers).filter(([, prov]) => prov.disabled !== true);
   const lists = await Promise.all(
-    Object.entries(config.providers).map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
+    activeProviders.map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
   );
-  const all = augmentRoutedModelsWithJawcodeMetadata(lists.flat(), Object.keys(config.providers), config.providers, config)
+  const all = augmentRoutedModelsWithJawcodeMetadata(lists.flat(), activeProviders.map(([name]) => name), config.providers, config)
     // Drop image/video generation models (e.g. Grok image/video) — they are not usable by Codex and
     // must not surface in the dashboard, /v1/models, or the routed catalog. Single choke point.
     .filter(m => !isMediaGenerationModelId(m.id));

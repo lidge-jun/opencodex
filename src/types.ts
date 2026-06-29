@@ -267,6 +267,8 @@ export interface OcxWebSearchSidecarConfig {
 export interface OcxProviderConfig {
   adapter: string;
   baseUrl: string;
+  /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
+  disabled?: boolean;
   apiKey?: string;
   defaultModel?: string;
   models?: string[];

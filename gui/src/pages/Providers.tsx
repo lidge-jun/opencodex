@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import { Notice } from "../ui";
-import { IconPlus, IconTrash, IconLock, IconExternal } from "../icons";
+import { IconPlus, IconTrash, IconLock, IconExternal, IconPower } from "../icons";
 import { useT } from "../i18n";
 
 interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string }>;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; disabled?: boolean }>;
 }
 
 interface OAuthStatus { loggedIn: boolean; email?: string; error?: string }
@@ -133,6 +133,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     else notify(t("prov.removeFail", { name }), false);
   };
 
+  const setProviderDisabled = async (name: string, disabled: boolean) => {
+    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ disabled }),
+    });
+    if (res.ok) {
+      notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
+      fetchConfig();
+      fetchOauth();
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    notify(data.error || (disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
+  };
+
   if (!config) return <div className="muted">{t("prov.loadingConfig")}</div>;
 
   return (
@@ -211,24 +227,42 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
             {t("prov.port")}: <code className="chip">{config.port}</code> · {t("prov.default")}: <code className="chip">{config.defaultProvider}</code>
           </div>
-          {Object.entries(config.providers).map(([name, prov]) => (
-            <div key={name} className="card prov-card">
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                  <span style={{ fontWeight: 600 }}>{name}</span>
-                  {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
-                  {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
+          {Object.entries(config.providers).map(([name, prov]) => {
+            const isDefault = name === config.defaultProvider;
+            const isDisabled = prov.disabled === true;
+            return (
+              <div key={name} className={`card prov-card${isDisabled ? " prov-card-disabled" : ""}`}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                    <span style={{ fontWeight: 600 }}>{name}</span>
+                    {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
+                    {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
+                    {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
+                    {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
+                  </div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    <code className="chip">{prov.adapter}</code> · {prov.baseUrl}
+                    {prov.defaultModel && <> · {prov.defaultModel}</>}
+                    {prov.hasApiKey && <> · {t("prov.hasApiKey")}</>}
+                    {prov.hasHeaders && <> · {t("prov.hasHeaders")}</>}
+                  </div>
                 </div>
-                <div className="muted" style={{ fontSize: 13 }}>
-                  <code className="chip">{prov.adapter}</code> · {prov.baseUrl}
-                  {prov.defaultModel && <> · {prov.defaultModel}</>}
-                  {prov.hasApiKey && <> · {t("prov.hasApiKey")}</>}
-                  {prov.hasHeaders && <> · {t("prov.hasHeaders")}</>}
+                <div className="provider-actions">
+                  <button
+                    className={`btn ${isDisabled ? "btn-primary" : "btn-ghost"} btn-sm`}
+                    onClick={() => setProviderDisabled(name, !isDisabled)}
+                    disabled={isDefault}
+                    title={isDefault ? t("prov.defaultCannotDisable") : undefined}
+                    aria-label={isDisabled ? t("prov.enableAria", { name }) : t("prov.disableAria", { name })}
+                  >
+                    {isDefault ? <IconLock /> : <IconPower />}
+                    {isDisabled ? t("prov.enable") : t("prov.disable")}
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => removeProvider(name)} aria-label={t("sub.removeAria", { m: name })}><IconTrash />{t("common.remove")}</button>
                 </div>
               </div>
-              <button className="btn btn-danger btn-sm" onClick={() => removeProvider(name)} aria-label={t("sub.removeAria", { m: name })} style={{ flexShrink: 0 }}><IconTrash />{t("common.remove")}</button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {adding && (

@@ -182,11 +182,23 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.searchModelHint")}</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <select className="select-sm" value={sidecar?.webSearch.model ?? "gpt-5.4-mini"} disabled={!sidecar || sidecarSaving}
+            <select
+              id="sidecar-web-search-model"
+              name="sidecarWebSearchModel"
+              className="select-sm"
+              aria-label={t("dash.searchModel")}
+              value={sidecar?.webSearch.model ?? "gpt-5.4-mini"}
+              disabled={!sidecar || sidecarSaving}
               onChange={e => saveSidecar({ webSearch: { model: e.target.value, reasoning: sidecar!.webSearch.reasoning } })}>
               {SIDECAR_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
-            <select className="select-sm" value={sidecar?.webSearch.reasoning ?? "low"} disabled={!sidecar || sidecarSaving}
+            <select
+              id="sidecar-web-search-reasoning"
+              name="sidecarWebSearchReasoning"
+              className="select-sm"
+              aria-label={`${t("dash.searchModel")} reasoning`}
+              value={sidecar?.webSearch.reasoning ?? "low"}
+              disabled={!sidecar || sidecarSaving}
               onChange={e => saveSidecar({ webSearch: { model: sidecar!.webSearch.model, reasoning: e.target.value } })}>
               {REASONING_LEVELS.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
@@ -200,7 +212,13 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <div style={{ fontWeight: 650 }}>{t("dash.visionModel")}</div>
             <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.visionModelHint")}</div>
           </div>
-          <select className="select-sm" value={sidecar?.vision.model ?? "gpt-5.4-mini"} disabled={!sidecar || sidecarSaving}
+          <select
+            id="sidecar-vision-model"
+            name="sidecarVisionModel"
+            className="select-sm"
+            aria-label={t("dash.visionModel")}
+            value={sidecar?.vision.model ?? "gpt-5.4-mini"}
+            disabled={!sidecar || sidecarSaving}
             onChange={e => saveSidecar({ vision: { model: e.target.value } })}>
             {SIDECAR_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
           </select>

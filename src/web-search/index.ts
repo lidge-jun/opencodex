@@ -16,6 +16,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** First configured forward (ChatGPT passthrough) provider — the only path with server-side web_search. */
 export function findForwardProvider(config: OcxConfig): OcxProviderConfig | undefined {
   for (const prov of Object.values(config.providers)) {
+    if (prov.disabled === true) continue;
     if (prov.authMode === "forward") return prov;
   }
   return undefined;

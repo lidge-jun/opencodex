@@ -232,6 +232,30 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("disabled providers are excluded from routed model gathering", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "active",
+      providers: {
+        active: {
+          adapter: "openai-chat",
+          baseUrl: "https://active.example.test/v1",
+          liveModels: false,
+          models: ["active-model"],
+        },
+        disabled: {
+          adapter: "openai-chat",
+          baseUrl: "https://disabled.example.test/v1",
+          liveModels: false,
+          models: ["disabled-model"],
+          disabled: true,
+        },
+      },
+    });
+
+    expect(models.map(m => `${m.provider}/${m.id}`)).toEqual(["active/active-model"]);
+  });
+
   test("liveModels false ignores a fresh live-model cache", async () => {
     setCached("static-cache", [
       { provider: "static-cache", id: "cached-live-model" },

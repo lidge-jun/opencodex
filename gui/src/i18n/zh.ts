@@ -82,6 +82,18 @@ export const zh: Record<TKey, string> = {
   "prov.removeConfirm": "移除提供方 \"{name}\"？其模型将从 Codex 选择器中消失。",
   "prov.hasApiKey": "已配置 API 密钥",
   "prov.hasHeaders": "已配置自定义请求头",
+  "prov.activeBadge": "已启用",
+  "prov.disabledBadge": "已禁用",
+  "prov.defaultBadge": "默认",
+  "prov.enable": "启用",
+  "prov.disable": "禁用",
+  "prov.enabled": "已启用 \"{name}\"。其模型可再次出现在 Codex 中。",
+  "prov.disabled": "已禁用 \"{name}\"。设置会保留，但模型会被隐藏。",
+  "prov.enableFail": "启用 \"{name}\" 失败。",
+  "prov.disableFail": "禁用 \"{name}\" 失败。",
+  "prov.enableAria": "启用提供方 {name}",
+  "prov.disableAria": "禁用提供方 {name}",
+  "prov.defaultCannotDisable": "默认提供方不能被禁用",
 
   // models
   "models.subtitle": "按提供方分组开关 Codex 可见的已路由模型（点击标题可折叠）。已禁用的模型会从目录和模型选择器中隐藏。更改在下一个 Codex 回合生效 — opencodex 会使 Codex 的 5 分钟模型缓存失效，因此无需重启。",

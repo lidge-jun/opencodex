@@ -112,6 +112,10 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   };
 }
 
+function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
+  return Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
+}
+
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
@@ -122,6 +126,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     const provName = modelId.slice(0, slash);
     if (hasOwnProvider(config.providers, provName)) {
       const prov = config.providers[provName];
+      if (prov.disabled === true) throw new Error(`Provider is disabled: ${provName}`);
       return {
         providerName: provName,
         provider: routedProviderConfig(provName, prov),
@@ -130,7 +135,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     }
   }
 
-  for (const [provName, prov] of Object.entries(config.providers)) {
+  for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.defaultModel === modelId) {
       return {
         providerName: provName,
@@ -140,7 +145,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     }
   }
 
-  for (const [provName, prov] of Object.entries(config.providers)) {
+  for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.models && Array.isArray(prov.models) && (prov.models as string[]).includes(modelId)) {
       return {
         providerName: provName,
@@ -152,7 +157,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
 
   for (const [patternKey, prefixes] of Object.entries(MODEL_PROVIDER_PATTERNS)) {
     if (prefixes.some(prefix => modelId.startsWith(prefix))) {
-      const matchingProvider = Object.entries(config.providers).find(
+      const matchingProvider = activeProviderEntries(config).find(
         ([name]) => name === patternKey || name.startsWith(patternKey)
       );
       if (matchingProvider) {
@@ -168,6 +173,7 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
 
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
+    if (defaultProv.disabled === true) throw new Error(`Default provider is disabled: ${config.defaultProvider}`);
     return {
       providerName: config.defaultProvider,
       provider: routedProviderConfig(config.defaultProvider, defaultProv),

@@ -163,4 +163,30 @@ describe("routeModel registry effort defaults", () => {
 
     expect(() => routeModel(config, "constructor/model")).toThrow("No provider configured");
   });
+
+  test("skips disabled providers during routing", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "active",
+      providers: {
+        disabled: {
+          adapter: "openai-chat",
+          baseUrl: "https://disabled.example.test/v1",
+          defaultModel: "shared-model",
+          models: ["disabled-only"],
+          disabled: true,
+        },
+        active: {
+          adapter: "openai-chat",
+          baseUrl: "https://active.example.test/v1",
+          defaultModel: "shared-model",
+          models: ["active-only"],
+        },
+      },
+    };
+
+    expect(routeModel(config, "shared-model").providerName).toBe("active");
+    expect(routeModel(config, "active-only").providerName).toBe("active");
+    expect(() => routeModel(config, "disabled/disabled-only")).toThrow("Provider is disabled");
+  });
 });

@@ -1469,7 +1469,7 @@ export function corsHeaders(req?: Request, config?: OcxConfig): Record<string, s
   const allowOrigin = origin && req && config && isAllowedRequestOrigin(req, config) ? origin : _corsOrigin;
   return {
     "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-OpenCodex-API-Key",
     "Vary": "Origin",
   };
@@ -1582,6 +1582,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     };
     for (const key of [
       "defaultModel",
+      "disabled",
       "authMode",
       "liveModels",
       "models",
@@ -1722,6 +1723,7 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
+      disabled: p.disabled === true,
     })));
   }
 
@@ -1752,6 +1754,22 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     clearModelCache(name);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ success: true, name });
+  }
+
+  if (url.pathname === "/api/providers" && req.method === "PATCH") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    let body: { disabled?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (typeof body.disabled !== "boolean") return jsonResponse({ error: "disabled boolean is required" }, 400);
+    if (body.disabled && name === config.defaultProvider) {
+      return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
+    }
+    const { saveConfig: save } = await import("./config");
+    config.providers[name] = { ...config.providers[name], disabled: body.disabled };
+    save(config);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ success: true, name, disabled: body.disabled });
   }
 
   if (url.pathname === "/api/providers" && req.method === "DELETE") {
