@@ -13,7 +13,12 @@ export const ANTIGRAVITY_REQUEST_UA = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT 
  */
 export function isLikelyRealThoughtSignature(sig: string | undefined): boolean {
   if (typeof sig !== "string" || sig.length < 16) return false;
-  return !/^(fc|call|msg|rs|resp|reasoning|item|ws)_/.test(sig);
+  // Reject synthetic Responses/tool-call ids in both `_` and `-` separated spellings
+  // (e.g. `fc_...`, `call_...`, `function-call-...`, `tool-call-...`).
+  if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(sig)) return false;
+  // Real Gemini thought signatures are opaque base64/base64url blobs: only [A-Za-z0-9+/_=-].
+  // Anything containing other characters (or whitespace) is not a real signature.
+  return /^[A-Za-z0-9+/_=-]+$/.test(sig);
 }
 
 function firstUserText(parsed: OcxParsedRequest): string | undefined {
@@ -32,6 +37,11 @@ function firstUserText(parsed: OcxParsedRequest): string | undefined {
  * 0x7FFFFFFFFFFFFFFF, prefixed with "-". Falls back to a random "-<digits>" id when there is no text.
  */
 export function antigravitySessionId(parsed: OcxParsedRequest): string {
+  // Anchored on the first user message text: this is the one value that stays STABLE across every
+  // turn of a conversation, which the replay cache requires (it observes signatures on turn N's
+  // response and re-injects them on turn N+1's request, so both turns must map to the same id).
+  // Cross-conversation collisions (two threads opening with identical text) are made harmless by
+  // the replay cache keying signatures on functionCall identity (name+args), not on this id alone.
   const text = firstUserText(parsed);
   if (!text) return `-${Math.floor(Math.random() * 9e18).toString()}`;
   const digest = createHash("sha256").update(text, "utf8").digest();

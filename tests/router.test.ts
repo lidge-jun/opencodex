@@ -190,3 +190,33 @@ describe("routeModel registry effort defaults", () => {
     expect(() => routeModel(config, "disabled/disabled-only")).toThrow("Provider is disabled");
   });
 });
+
+describe("routeModel backfills google wire mode from the registry", () => {
+  test("a minimal google-antigravity config (no googleMode) is routed with googleMode cloud-code-assist", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          defaultModel: "gemini-3-pro",
+        },
+      },
+    };
+    const routed = routeModel(config, "gemini-3-pro");
+    expect(routed.providerName).toBe("google-antigravity");
+    expect(routed.provider.googleMode).toBe("cloud-code-assist");
+  });
+
+  test("a minimal google-vertex config is routed with googleMode vertex", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "google-vertex",
+      providers: {
+        "google-vertex": { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", defaultModel: "gemini-3-pro" },
+      },
+    };
+    expect(routeModel(config, "gemini-3-pro").provider.googleMode).toBe("vertex");
+  });
+});

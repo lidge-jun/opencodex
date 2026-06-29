@@ -10,15 +10,9 @@
  * Claude-on-Antigravity uses inline signature sanitization instead (see google-antigravity-wire).
  */
 
-interface ThoughtSignatureItem {
-  type: "thought_signature";
-  contentIndex: number;
-  partIndex: number;
-  thoughtSignature: string;
-}
-
 interface ReplayEntry {
-  items: ThoughtSignatureItem[];
+  /** thoughtSignature keyed by functionCall identity (name + canonical args). */
+  byCall: Map<string, string>;
   expiresAtMs: number;
 }
 
@@ -31,6 +25,18 @@ const replayCache = new Map<string, ReplayEntry>();
 
 function replayKey(model: string, sessionId: string): string {
   return `${model}::session:${sessionId}`;
+}
+
+/** Stable identity for a functionCall part: name + canonical (key-sorted) args JSON. */
+function functionCallKey(name: unknown, args: unknown): string | undefined {
+  if (typeof name !== "string" || name.length === 0) return undefined;
+  let argsKey = "";
+  try {
+    argsKey = JSON.stringify(args ?? {}, Object.keys((args as Record<string, unknown>) ?? {}).sort());
+  } catch {
+    argsKey = "";
+  }
+  return `${name}::${argsKey}`;
 }
 
 function extractSignature(part: Record<string, unknown>): string | undefined {
@@ -56,32 +62,36 @@ export function antigravityUsesReplayCache(model: string): boolean {
 }
 
 /**
- * Observe a parsed CCA chunk's `candidates[0].content.parts` and record any thought signatures,
- * keyed by model + session. `parts` is the already-unwrapped `response.candidates[0].content.parts`.
+ * Observe a parsed CCA chunk's `candidates[0].content.parts` and record thought signatures keyed by
+ * the functionCall identity (name + args). Accumulates across the whole session so a sequential
+ * multi-step tool loop keeps EVERY prior call's signature, not just the latest part-index slot.
+ * `parts` is the already-unwrapped `response.candidates[0].content.parts`.
  */
 export function observeAntigravityReplay(model: string, sessionId: string, parts: unknown[]): void {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(parts) || parts.length === 0) return;
-  const found: ThoughtSignatureItem[] = [];
-  parts.forEach((raw, partIndex) => {
-    if (!raw || typeof raw !== "object") return;
-    const sig = extractSignature(raw as Record<string, unknown>);
-    if (sig) found.push({ type: "thought_signature", contentIndex: 0, partIndex, thoughtSignature: sig });
-  });
-  if (found.length === 0) return;
   const key = replayKey(model, sessionId);
-  const existing = replayCache.get(key);
-  // Merge by partIndex (latest wins), keep a single content slot (contentIndex 0 = the model turn).
-  const byPart = new Map<number, ThoughtSignatureItem>();
-  for (const item of existing?.items ?? []) byPart.set(item.partIndex, item);
-  for (const item of found) byPart.set(item.partIndex, item);
-  replayCache.set(key, { items: [...byPart.values()], expiresAtMs: Date.now() + REPLAY_TTL_MS });
+  const entry = replayCache.get(key) ?? { byCall: new Map<string, string>(), expiresAtMs: 0 };
+  let changed = false;
+  for (const raw of parts) {
+    if (!raw || typeof raw !== "object") continue;
+    const part = raw as Record<string, unknown>;
+    const sig = extractSignature(part);
+    if (!sig) continue;
+    const fc = part.functionCall as { name?: unknown; args?: unknown } | undefined;
+    const ck = fc ? functionCallKey(fc.name, fc.args) : undefined;
+    if (!ck) continue; // only function-call signatures are replayable by identity
+    if (entry.byCall.get(ck) !== sig) { entry.byCall.set(ck, sig); changed = true; }
+  }
+  if (!changed && replayCache.has(key)) return;
+  entry.expiresAtMs = Date.now() + REPLAY_TTL_MS;
+  replayCache.set(key, entry);
   evictIfNeeded();
 }
 
 /**
- * Re-inject cached thought signatures into the outgoing `request.contents`. Only fills a part that
- * lacks a signature, and only when the indexed content/part exists. Returns the same array
- * reference (mutated in place) for convenience.
+ * Re-inject cached thought signatures into the outgoing `request.contents`, matched by functionCall
+ * identity across ALL model turns (not just the last one). Only fills a functionCall part that
+ * lacks a real signature. Returns the same array reference (mutated in place).
  */
 export function applyAntigravityReplay(model: string, sessionId: string, contents: unknown[]): unknown[] {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(contents)) return contents;
@@ -90,17 +100,17 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
     if (entry) replayCache.delete(replayKey(model, sessionId));
     return contents;
   }
-  // Re-inject onto the LAST model turn in contents (the most recent assistant content).
-  const modelTurns = contents
-    .map((c, i) => ({ c: c as { role?: string; parts?: unknown[] }, i }))
-    .filter(({ c }) => c && typeof c === "object" && c.role === "model" && Array.isArray(c.parts));
-  const target = modelTurns[modelTurns.length - 1];
-  if (!target) return contents;
-  const parts = target.c.parts as Record<string, unknown>[];
-  for (const item of entry.items) {
-    const part = parts[item.partIndex];
-    if (part && typeof part === "object" && part.thoughtSignature === undefined && part.thought_signature === undefined) {
-      part.thoughtSignature = item.thoughtSignature;
+  for (const c of contents as { role?: string; parts?: unknown[] }[]) {
+    if (!c || typeof c !== "object" || c.role !== "model" || !Array.isArray(c.parts)) continue;
+    for (const raw of c.parts) {
+      if (!raw || typeof raw !== "object") continue;
+      const part = raw as Record<string, unknown>;
+      const fc = part.functionCall as { name?: unknown; args?: unknown } | undefined;
+      if (!fc) continue;
+      if (part.thoughtSignature !== undefined || part.thought_signature !== undefined) continue;
+      const ck = functionCallKey(fc.name, fc.args);
+      const sig = ck ? entry.byCall.get(ck) : undefined;
+      if (sig) part.thoughtSignature = sig;
     }
   }
   return contents;

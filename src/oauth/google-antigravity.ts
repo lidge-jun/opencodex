@@ -197,7 +197,12 @@ class AntigravityOAuthFlow extends OAuthCallbackFlow {
     const creds = credentialsFromPayload(payload);
     this.ctrl.onProgress?.("Discovering Cloud Code Assist project");
     const projectId = await discoverAntigravityProject(creds.access, this.ctrl.signal);
-    return projectId ? { ...creds, projectId } : creds;
+    if (!projectId) {
+      // Fail the login rather than persisting a credential that every request would reject for a
+      // missing CCA project — otherwise status shows "logged in" while all calls fail closed.
+      throw new Error("Antigravity login could not discover a Cloud Code Assist project for this account. Ensure the account has Antigravity/Cloud Code Assist access and try again.");
+    }
+    return { ...creds, projectId };
   }
 }
 

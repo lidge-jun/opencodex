@@ -15,50 +15,74 @@ const MODEL = "gemini-3-pro";
 const SESSION = "-12345";
 
 describe("antigravity reasoning-replay cache", () => {
-  test("observe then apply re-injects the thoughtSignature onto the model turn", () => {
-    observeAntigravityReplay(MODEL, SESSION, [{ text: "thinking", thoughtSignature: SIG }]);
+  // Signatures are keyed by functionCall identity (name + args), so observe/apply use functionCall parts.
+  const fcPart = (name: string, args: unknown, sig?: string, nested = false) => {
+    const part: Record<string, unknown> = { functionCall: { name, args } };
+    if (sig && nested) part.extra_content = { google: { thought_signature: sig } };
+    else if (sig) part.thoughtSignature = sig;
+    return part;
+  };
+
+  test("observe then apply re-injects the signature onto the matching functionCall part", () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
     const contents = [
       { role: "user", parts: [{ text: "hi" }] },
-      { role: "model", parts: [{ text: "thinking" }] },
+      { role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] },
     ];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[1].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
   });
 
   test("ignores signatures shorter than the minimum length", () => {
-    observeAntigravityReplay(MODEL, SESSION, [{ text: "x", thoughtSignature: "short" }]);
-    const contents = [{ role: "model", parts: [{ text: "x" }] }];
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, "short")]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
   });
 
   test("does not clobber an existing signature on the outgoing part", () => {
-    observeAntigravityReplay(MODEL, SESSION, [{ text: "x", thoughtSignature: SIG }]);
-    const contents = [{ role: "model", parts: [{ text: "x", thoughtSignature: "existing-sig-abcdef" }] }];
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, SIG)]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} }, thoughtSignature: "existing-sig-abcdef" }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("existing-sig-abcdef");
   });
 
   test("reads the nested extra_content.google.thought_signature alias", () => {
-    observeAntigravityReplay(MODEL, SESSION, [{ extra_content: { google: { thought_signature: SIG } } }]);
-    const contents = [{ role: "model", parts: [{ text: "x" }] }];
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, SIG, true)]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
   });
 
   test("clear-on-invalid empties the entry", () => {
-    observeAntigravityReplay(MODEL, SESSION, [{ thoughtSignature: SIG }]);
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, SIG)]);
     clearAntigravityReplay(MODEL, SESSION);
-    const contents = [{ role: "model", parts: [{ text: "x" }] }];
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("retains EVERY signature across a sequential tool loop (regression)", () => {
+    // Step 1: FC1 returns sig A.
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("fc1", { i: 1 }, "sig-aaaaaaaaaaaaaaaa")]);
+    // Step 2: FC2 returns sig B (different identity, same partIndex 0).
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("fc2", { i: 2 }, "sig-bbbbbbbbbbbbbbbb")]);
+    // Next request history has both model turns; BOTH must get their own signature back.
+    const contents = [
+      { role: "model", parts: [{ functionCall: { name: "fc1", args: { i: 1 } } }] },
+      { role: "user", parts: [{ text: "result1" }] },
+      { role: "model", parts: [{ functionCall: { name: "fc2", args: { i: 2 } } }] },
+    ];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("sig-aaaaaaaaaaaaaaaa");
+    expect((contents[2].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("sig-bbbbbbbbbbbbbbbb");
   });
 
   test("claude models do not use the replay cache", () => {
     expect(antigravityUsesReplayCache("claude-opus-4.6")).toBe(false);
     expect(antigravityUsesReplayCache("gemini-3-pro")).toBe(true);
-    observeAntigravityReplay("claude-opus-4.6", SESSION, [{ thoughtSignature: SIG }]);
-    const contents = [{ role: "model", parts: [{ text: "x" }] }];
+    observeAntigravityReplay("claude-opus-4.6", SESSION, [fcPart("get_x", {}, SIG)]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay("claude-opus-4.6", SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
   });

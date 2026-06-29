@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
-import { antigravitySessionId } from "../src/adapters/google-antigravity-wire";
+import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function parsed(text = "hello world", stream = false): OcxParsedRequest {
@@ -124,5 +124,22 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
     const modelTurn = (env.request.contents as { role: string; parts: Record<string, unknown>[] }[]).find(c => c.role === "model");
     const fcPart = modelTurn?.parts.find(part => "functionCall" in part);
     expect(fcPart?.thoughtSignature).toBeUndefined();
+  });
+});
+
+describe("isLikelyRealThoughtSignature", () => {
+  test("rejects synthetic Responses/tool-call ids (underscore and hyphen variants)", () => {
+    for (const id of ["fc_d8df7548e31a4130b7624f3d27571cdd", "call_1f57fdea0000", "function-call-1234567890", "tool-call-abcdef123456", "msg_0123456789abcdef", "rs_0123456789abcdef"]) {
+      expect(isLikelyRealThoughtSignature(id)).toBe(false);
+    }
+  });
+  test("rejects too-short or non-base64 values", () => {
+    expect(isLikelyRealThoughtSignature("short")).toBe(false);
+    expect(isLikelyRealThoughtSignature("has spaces in it here")).toBe(false);
+    expect(isLikelyRealThoughtSignature(undefined)).toBe(false);
+  });
+  test("accepts an opaque base64/base64url signature blob", () => {
+    expect(isLikelyRealThoughtSignature("CisBVKhc7+abcDEF0123456789/xyz==")).toBe(true);
+    expect(isLikelyRealThoughtSignature("abcd1234abcd1234abcd1234")).toBe(true);
   });
 });

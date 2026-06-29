@@ -94,6 +94,12 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     baseUrl: registryEntry.baseUrl,
     authMode: canonicalAuthMode,
     apiKey: resolveEnvValue(provider.apiKey),
+    // Backfill the Google wire mode + Vertex project/location from the registry when the user
+    // config omits them, so a minimal `google-vertex`/`google-antigravity` entry still routes
+    // through the correct branch (CCA/Vertex) instead of falling back to AI Studio.
+    ...(provider.googleMode === undefined && registryEntry.googleMode !== undefined ? { googleMode: registryEntry.googleMode } : {}),
+    ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
+    ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
     ...(provider.reasoningEfforts === undefined && registryEntry.reasoningEfforts !== undefined ? { reasoningEfforts: registryEntry.reasoningEfforts } : {}),
     ...(provider.escapeBuiltinToolNames === undefined && registryEntry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: registryEntry.escapeBuiltinToolNames } : {}),
