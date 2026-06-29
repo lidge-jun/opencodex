@@ -205,6 +205,8 @@ export interface OcxConfig {
   subagentModels?: string[];
   /** Routed model ids ("<provider>/<model>") hidden from Codex (excluded from the catalog + /v1/models). */
   disabledModels?: string[];
+  /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
+  providerContextCaps?: Record<string, number>;
   /** Bind hostname. Default "127.0.0.1" (loopback only). Set "0.0.0.0" to expose on all interfaces. */
   hostname?: string;
   /** Upstream stall timeout (seconds). After this many seconds of no upstream data, emits response.incomplete. Default 90. Min 1. */

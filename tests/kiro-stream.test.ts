@@ -189,6 +189,22 @@ describe("kiro adapter — parseStream", () => {
     expect(events).toEqual(["heartbeat", "heartbeat", "heartbeat", "tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
   });
 
+  test("tool input for a different toolUseId before stop fails closed (no merged args)", async () => {
+    const frames = [
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ input: '{"command":"a"}', name: "bash", toolUseId: "t1" }),
+      // Input for a different tool id arrives before t1 stops — must not be merged into t1.
+      eventFrame({ input: '{"pattern":"b"}', name: "grep", toolUseId: "t2" }),
+    ];
+    const out: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(...frames)))) {
+      out.push(e.type === "error" ? `error:${e.message}` : e.type);
+    }
+    expect(out.some(s => s.startsWith("error:"))).toBe(true);
+    expect(out).not.toContain("tool_call_end");
+    expect(out).not.toContain("done");
+  });
+
   test("exception payload errors redact secrets, profile ARNs, raw JSON, and local paths", async () => {
     const secretPayload = JSON.stringify({
       __type: "ValidationException",

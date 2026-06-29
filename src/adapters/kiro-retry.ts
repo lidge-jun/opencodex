@@ -70,7 +70,7 @@ async function normalizeFinalKiroHttpError(res: Response): Promise<Response> {
 }
 
 export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  const timeoutMs = ctx.timeoutMs ?? 30_000;
+  const timeoutMs = ctx.timeoutMs ?? 100_000;
   let lastError: unknown;
   for (let attempt = 0; attempt < KIRO_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
