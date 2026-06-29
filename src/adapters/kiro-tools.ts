@@ -3,14 +3,67 @@ import { namespacedToolName } from "../types";
 
 const MAX_KIRO_TOOL_DESCRIPTION = 1024;
 
+// JSON Schema validation/annotation keywords that Kiro's runtimeservice tool-spec validator
+// rejects ("ValidationException: Invalid tool use format."). Codex's built-in tools omit these,
+// but the `memories__*` tools (add_ad_hoc_note/read/search/list) emit pattern/length/range
+// constraints via schemars, which trip the validator. Strip them everywhere in the schema tree;
+// the constraints are advisory for the model, so dropping them does not change tool behavior.
+const KIRO_REJECTED_SCHEMA_KEYS = new Set([
+  "additionalProperties",
+  "pattern",
+  "format",
+  "minLength",
+  "maxLength",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+  "contentEncoding",
+  "contentMediaType",
+  "$schema",
+  // Validation-only composition/applicator keywords that Bedrock/Kiro do not support. Unlike
+  // `properties`/`$defs`, these are not plain property->schema maps the model needs, so they are
+  // dropped outright rather than recursed into.
+  "patternProperties",
+  "propertyNames",
+  "dependentSchemas",
+  "dependentRequired",
+  "if",
+  "then",
+  "else",
+  "contains",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+]);
+
+// Keys whose values are maps of *property/definition name -> schema* (not schema keywords). Their
+// child keys must never be treated as schema keywords, or a legitimate property named e.g.
+// "format"/"pattern" would be deleted. We recurse into the value schemas but keep every name intact.
+const SCHEMA_MAP_KEYS = new Set(["properties", "$defs", "definitions"]);
+
+function sanitizeSchemaMap(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeKiroSchema(value);
+  const out: Record<string, unknown> = {};
+  for (const [name, child] of Object.entries(value as Record<string, unknown>)) {
+    out[name] = sanitizeKiroSchema(child);
+  }
+  return out;
+}
+
 function sanitizeKiroSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeKiroSchema);
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key === "additionalProperties") continue;
+    if (KIRO_REJECTED_SCHEMA_KEYS.has(key)) continue;
     if (key === "required" && Array.isArray(child) && child.length === 0) continue;
-    out[key] = sanitizeKiroSchema(child);
+    out[key] = SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(child) : sanitizeKiroSchema(child);
   }
   return out;
 }
