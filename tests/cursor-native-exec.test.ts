@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
 import { describe, expect, test } from "bun:test";
-import { handleCursorNativeExec, syntheticResponsesToolAck } from "../src/adapters/cursor/native-exec";
+import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
 import {
   AgentClientMessageSchema,
   BackgroundShellSpawnArgsSchema,
@@ -91,23 +91,6 @@ describe("Cursor native exec bridge", () => {
     }
   });
 
-  test("synthetic Responses tool ack is success without local MCP execution", () => {
-    const ack = decode(syntheticResponsesToolAck(execMessage({
-      case: "mcpArgs",
-      value: create(McpArgsSchema, {
-        name: "mcp__fs__read_file",
-        toolName: "mcp__fs__read_file",
-        providerIdentifier: "opencodex-responses",
-      }),
-    })));
-
-    expect(ack.message.case).toBe("mcpResult");
-    expect(ack.message.value.result.case).toBe("success");
-    if (ack.message.value.result.case === "success") {
-      expect(ack.message.value.result.value.isError).toBe(false);
-      expect(ack.message.value.result.value.content).toEqual([]);
-    }
-  });
 
   test("writes and reads files in a temp directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-exec-"));

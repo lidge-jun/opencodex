@@ -116,6 +116,9 @@ describe("Cursor blob handshake", () => {
         if (content?.case === "text") expect(content.value.text).toBe("contents");
       }
     }
-    expect(run?.action?.action.case).toBe("userMessageAction");
+    // The last raw message is a toolResult, so the turn continues the same Cursor conversation with
+    // the tool result carried as structured history (mcpToolCall.result above). The action must be
+    // ResumeAction, NOT a UserMessageAction that would re-inject the tool result as user text.
+    expect(run?.action?.action.case).toBe("resumeAction");
   });
 });

@@ -87,7 +87,7 @@ describe("Responses previous_response_id state", () => {
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conversation_1");
   });
 
-  test("does not reuse provider conversation id after a client tool-call response", () => {
+  test("preserves provider conversation id after a client tool-call response (multi-turn continuation)", () => {
     const firstBody = { model: "cursor/auto", input: "use ping" };
     const first = buildResponseJSON([
       { type: "tool_call_start", id: "call_1", name: "ping" },
@@ -97,6 +97,9 @@ describe("Responses previous_response_id state", () => {
 
     rememberResponseState(firstBody, first, "cursor_conversation_1");
 
-    expect(previousResponseConversationId(first.id as string)).toBeUndefined();
+    // The conversation id MUST survive a tool-call response so the following tool-result turn
+    // continues the SAME Cursor conversation. The Cursor checkpoint is not reusable (the agent turn
+    // was suspended without a real mcpResult), but the conversation id string itself is preserved.
+    expect(previousResponseConversationId(first.id as string)).toBe("cursor_conversation_1");
   });
 });

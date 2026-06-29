@@ -221,8 +221,14 @@ function lastUserText(request: CursorRunRequest): string {
 
 export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
   const text = lastUserText(request);
+  // A tool-result-only turn (the last raw message is a toolResult) continues the SAME Cursor
+  // conversation with the tool result carried as structured conversation history (mcpToolCall.result
+  // in conversationTurns). It must NOT inject the tool result text as a new UserMessageAction — that
+  // would pollute the model input and double-deliver the result. Use ResumeAction so Cursor picks up
+  // from the history we provided.
+  const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
   const action = create(ConversationActionSchema, {
-    action: text.trim().length > 0
+    action: !lastRawIsToolResult && text.trim().length > 0
       ? {
           case: "userMessageAction",
           value: create(UserMessageActionSchema, {

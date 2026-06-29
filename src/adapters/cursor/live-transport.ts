@@ -10,7 +10,7 @@ import {
   ClientHeartbeatSchema,
   type AgentServerMessage,
 } from "./gen/agent_pb";
-import { handleCursorNativeExec, handleCursorNativeKv, syntheticResponsesToolAck, type CursorNativeExecContext } from "./native-exec";
+import { handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
@@ -299,13 +299,21 @@ class LiveCursorTransport implements CursorTransport {
         });
         if (clientToolEvents.length > 0) {
           for (const event of clientToolEvents) push(event);
-          if (clientToolEvents.some(event => event.type === "error")) {
-            // The error event is the terminal signal; pushing `done` too would make the bridge emit
-            // both response.failed and response.completed. Just close the stream.
-            this.close();
-            return;
-          }
-          this.stream.write(encodeConnectFrame(syntheticResponsesToolAck(execMsg)));
+        if (clientToolEvents.some(event => event.type === "error")) {
+          // The error event is the terminal signal; pushing `done` too would make the bridge emit
+          // both response.failed and response.completed. Just close the stream.
+          this.close();
+          return;
+        }
+          // Do NOT send a fake mcpResult. Cursor's MCP exec protocol is synchronous-on-the-live-stream
+          // and has no "deferred result" signal (McpResult is all-terminal). Sending an empty
+          // McpSuccess would lie to Cursor ("tool succeeded with empty output") and let it finalize the
+          // agent turn on bad state. Instead we surface the tool_call to Codex, end this Responses turn
+          // honestly, and deliver the real result on the NEXT /v1/responses request as structured
+          // conversation history (mcpToolCall.result) on a new Run with the same conversation id
+          // (multi-turn continuation, see protobuf-request.ts toolCallStep + state.ts). The Cursor
+          // stream stays open; if Cursor waits for an mcpResult that never comes, the bridge stall
+          // watchdog produces a clean bounded `upstream_stall_timeout` instead of a silent hang.
           return;
         }
       }

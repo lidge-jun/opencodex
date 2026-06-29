@@ -5,6 +5,7 @@ interface StoredResponseState {
   createdAt: number;
   items: unknown[];
   conversationId?: string;
+  cursorCheckpointUsable?: boolean;
 }
 
 const states = new Map<string, StoredResponseState>();
@@ -61,13 +62,18 @@ export function rememberResponseState(
   if (request.store === false) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
   if (response.status !== undefined && response.status !== "completed") return;
-  const hasClientToolCall = response.output.some(item => {
-    return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
-  });
   states.set(response.id, {
     createdAt: now(),
     items: [...inputItems(request.input), ...response.output],
-    ...(conversationId && !hasClientToolCall ? { conversationId } : {}),
+    // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
+    // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
+    // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an
+    // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
+    // checkpoint must not be reused — but the conversation id string itself is still valid.
+    ...(conversationId ? { conversationId } : {}),
+    cursorCheckpointUsable: !response.output.some(item => {
+      return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
+    }),
   });
   pruneResponses();
 }

@@ -81,7 +81,11 @@ export function generatedCursorConversationId(): string {
 export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest {
   return {
     modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
-    conversationId: parsed._cursorConversationId ?? parsed.previousResponseId ?? generatedCursorConversationId(),
+    // The Cursor conversation id comes ONLY from remembered state (_cursorConversationId). Do NOT fall
+    // back to the OpenAI Responses previous_response_id (resp_*): that is a Responses-chain id in a
+    // different namespace and would start an unrelated Cursor conversation, breaking tool-result
+    // continuation. If we have no remembered Cursor conversation, start a fresh one.
+    conversationId: parsed._cursorConversationId ?? generatedCursorConversationId(),
     system: [...(parsed.context.systemPrompt ?? [])],
     messages: parsed.context.messages
       .map(requestMessage)
