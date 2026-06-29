@@ -91,7 +91,39 @@ Add regression coverage:
 
 ## Commit
 
-`fix(kiro): fall back unsafe tool context to text`
+`a63aa76 fix(kiro): harden tool fallback payloads`
+
+## Completion evidence
+
+- Implemented `convertKiroToolContext()` in `src/adapters/kiro-tools.ts`.
+- Added `src/adapters/kiro-wire.ts` and `src/adapters/kiro-tool-fallback.ts`
+  to keep the Kiro adapter below the 500-line project limit.
+- Updated `src/adapters/kiro.ts` so long tool docs are appended to the
+  current request prompt, unsafe tool calls/results degrade to plain text, and
+  matching tool-use/tool-result continuations remain structured.
+- Split stream tests into `tests/kiro-stream.test.ts` and added payload
+  regressions in `tests/kiro-adapter.test.ts`.
+
+Verification:
+
+- `bun x tsc --noEmit` passed.
+- `bun test tests/kiro-adapter.test.ts tests/kiro-stream.test.ts tests/kiro-images.test.ts tests/kiro-retry.test.ts tests/kiro-oauth.test.ts`
+  passed: 66 pass, 0 fail.
+- Read-only Backend verifier reran the same typecheck, targeted Kiro tests,
+  line counts, and reported DONE.
+- C-stage root test sweep passed with `bun test tests/*.test.ts`: 717 pass,
+  0 fail.
+- `bun test tests` is not used as the C-stage pass gate because Bun also
+  discovers archived `devlog/opencode-cursor/tests/**` fixtures from the
+  repository snapshot; that broader command currently fails in those archived
+  tests and is unrelated to this Kiro adapter phase.
+- Line counts after the split:
+  - `src/adapters/kiro.ts`: 481
+  - `src/adapters/kiro-wire.ts`: 50
+  - `src/adapters/kiro-tool-fallback.ts`: 36
+  - `src/adapters/kiro-tools.ts`: 44
+  - `tests/kiro-adapter.test.ts`: 237
+  - `tests/kiro-stream.test.ts`: 333
 
 ## Explicit non-goals
 
