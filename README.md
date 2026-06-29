@@ -264,6 +264,14 @@ Codex-visible context cap, `modelContextWindows` for model-specific caps, and
 `["text", "image"]`. Context values cap live `/models` metadata; they never raise a smaller live
 context window. See the configuration reference for the full field list.
 
+> **GLM-5.2 1M context via Z.AI:** through the `openai-chat` adapter, both `glm-5.2`
+> and `glm-5.2[1m]` work — opencodex strips the trailing `[1m]` suffix before
+> sending the request, since OpenAI-compatible endpoints reject the bracketed id
+> (Z.AI 400 code 1211). The `[1m]` suffix is a Claude-Code / Anthropic-endpoint
+> convention; to use it natively, point the `anthropic` adapter at Z.AI's coding
+> base (`https://api.z.ai/api/coding/paas/v4`). Set the 1M context window via the
+> model catalog (`modelContextWindows`), not the model name.
+
 Local models work too. Point opencodex at any OpenAI-compatible server running on your machine:
 
 ```json
