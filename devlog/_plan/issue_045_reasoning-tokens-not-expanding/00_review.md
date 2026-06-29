@@ -4,7 +4,7 @@
 - **URL:** https://github.com/<repo>/issues/45
 - **Type:** Bug (response formatting)
 - **Severity:** Medium — feature appears broken for routed models; no data loss.
-- **Status:** Root-caused. Fix described below (NOT applied — documentation phase).
+- **Status:** FIXED (2026-06-29) — Approach A applied in src/bridge.ts. See 30_implementation.md.
 
 ## Report summary
 

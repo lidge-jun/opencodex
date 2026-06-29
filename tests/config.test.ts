@@ -256,6 +256,36 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("validates provider context cap maps explicitly", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+      },
+      defaultProvider: "custom",
+      providerContextCaps: { custom: 350_000 },
+    });
+
+    expect(loadConfig().providerContextCaps).toEqual({ custom: 350_000 });
+
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+      },
+      defaultProvider: "custom",
+      providerContextCaps: { custom: -1 },
+    });
+
+    const diagnostics = readConfigDiagnostics();
+
+    expect(diagnostics.config).toEqual(getDefaultConfig());
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("providerContextCaps");
+  });
+
   test("backs up config when provider validation fails during load", () => {
     writeConfig({
       port: 10100,

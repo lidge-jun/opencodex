@@ -416,6 +416,42 @@ describe("server local API auth", () => {
     }
   });
 
+  test("provider deletion removes stale provider context caps", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+        removable: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.removable.test/v1",
+          apiKey: "sk-removable",
+        },
+      },
+      providerContextCaps: { removable: 350_000 },
+    });
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=removable", server.url), {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(200);
+
+      const caps = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await caps.json()).toMatchObject({ caps: {} });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider management allows restoring the built-in ChatGPT forward provider preset", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
@@ -448,6 +484,75 @@ describe("server local API auth", () => {
       });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ success: true, name: "openai" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider context-cap API persists toggles and annotates model rows", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+          liveModels: false,
+          models: ["wide-model", "small-model"],
+          modelContextWindows: {
+            "wide-model": 500_000,
+            "small-model": 64_000,
+          },
+        },
+      },
+    });
+
+    const server = startServer(0);
+    try {
+      const initial = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(initial.status).toBe(200);
+      expect(await initial.json()).toMatchObject({ cap: 350_000, caps: {} });
+
+      const enabled = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "openai", enabled: true }),
+      });
+      expect(enabled.status).toBe(200);
+      expect(await enabled.json()).toMatchObject({ ok: true, caps: { openai: 350_000 } });
+
+      const models = await fetch(new URL("/api/models", server.url));
+      expect(models.status).toBe(200);
+      const body = await models.json() as Array<{ id: string; contextWindow?: number; contextCap?: number; contextCapped?: boolean }>;
+      expect(body.find(m => m.id === "wide-model")).toMatchObject({
+        contextWindow: 350_000,
+        contextCap: 350_000,
+        contextCapped: true,
+      });
+      expect(body.find(m => m.id === "small-model")).toMatchObject({
+        contextWindow: 64_000,
+        contextCap: 350_000,
+        contextCapped: false,
+      });
+
+      const unknown = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "missing", enabled: true }),
+      });
+      expect(unknown.status).toBe(404);
+
+      const disabled = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "openai", enabled: false }),
+      });
+      expect(disabled.status).toBe(200);
+      expect(await disabled.json()).toMatchObject({ ok: true, caps: {} });
     } finally {
       await server.stop(true);
     }

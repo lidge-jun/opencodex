@@ -10,6 +10,7 @@ import type { OcxConfig, OcxProviderConfig } from "./types";
 import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "./reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "./generated/jawcode-model-metadata";
 import { shouldCaseFoldMetadataModelId } from "./providers/derive";
+import { applyProviderContextCap, providerContextCap } from "./provider-context-cap";
 
 const BUNDLED_CATALOG_CACHE_MS = 60_000;
 let bundledCatalogCache: { expiresAt: number; value: RawCatalog | null } | null = null;
@@ -81,7 +82,16 @@ export function nativeOpenAiSlugs(): string[] {
   return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
 }
 
-export interface CatalogModel { id: string; provider: string; owned_by?: string; reasoningEfforts?: string[]; contextWindow?: number; inputModalities?: string[]; }
+export interface CatalogModel {
+  id: string;
+  provider: string;
+  owned_by?: string;
+  reasoningEfforts?: string[];
+  contextWindow?: number;
+  contextCap?: number;
+  contextCapped?: boolean;
+  inputModalities?: string[];
+}
 type RawEntry = Record<string, unknown>;
 type RawCatalog = { models?: RawEntry[]; [k: string]: unknown };
 const JAWCODE_CATALOG_AUGMENT_PROVIDERS = new Set(["opencode-go"]);
@@ -230,7 +240,7 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry): RawEntry {
   return ensureStrictCatalogFields(entry);
 }
 
-function applyJawcodeCatalogMetadata(entry: RawEntry, slug: string): void {
+function applyJawcodeCatalogMetadata(entry: RawEntry, slug: string, contextCap?: number): void {
   const slash = slug.indexOf("/");
   if (slash < 0) return;
   const provider = slug.slice(0, slash);
@@ -241,9 +251,10 @@ function applyJawcodeCatalogMetadata(entry: RawEntry, slug: string): void {
     ?? (shouldCaseFoldMetadataModelId(provider) ? getJawcodeModelMetadataCaseInsensitive(jawcodeProvider, modelId) : undefined);
   if (!meta) return;
   if (typeof meta.contextWindow === "number" && meta.contextWindow > 0) {
-    entry.context_window = meta.contextWindow;
-    entry.max_context_window = meta.contextWindow;
-    entry.auto_compact_token_limit = Math.floor(meta.contextWindow * 0.9);
+    const contextWindow = applyProviderContextCap(meta.contextWindow, contextCap) ?? meta.contextWindow;
+    entry.context_window = contextWindow;
+    entry.max_context_window = contextWindow;
+    entry.auto_compact_token_limit = Math.floor(contextWindow * 0.9);
   }
   if (Array.isArray(meta.input) && meta.input.length > 0) {
     entry.input_modalities = meta.input;
@@ -439,7 +450,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
       }
       applyReasoningLevels(e, model?.reasoningEfforts);
       normalizeRoutedCatalogEntry(e);
-      applyJawcodeCatalogMetadata(e, slug);
+      applyJawcodeCatalogMetadata(e, slug, model?.contextCap);
       applyCatalogModelMetadata(e, model);
     } else {
       applyNativeOpenAiContextOverride(e);
@@ -455,7 +466,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
   };
   if (slug.includes("/")) applyReasoningLevels(entry, model?.reasoningEfforts);
   else applyReasoningLevels(entry);
-  applyJawcodeCatalogMetadata(entry, slug);
+  applyJawcodeCatalogMetadata(entry, slug, model?.contextCap);
   applyCatalogModelMetadata(entry, model);
   applyNativeOpenAiContextOverride(entry);
   return ensureStrictCatalogFields(normalizeServiceTiers(entry));
@@ -577,33 +588,38 @@ function configuredInputModalities(prov: OcxProviderConfig, id: string): string[
   return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
 }
 
-function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel): CatalogModel {
+function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
-  const contextCap = configuredContextWindow(prov, model.id);
+  const configuredCap = configuredContextWindow(prov, model.id);
   const inputModalities = configuredInputModalities(prov, model.id);
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
-  return {
+  const hinted = {
     ...model,
-    ...(contextCap !== undefined
+    ...(configuredCap !== undefined
       ? {
         contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
-          ? Math.min(model.contextWindow, contextCap)
-          : contextCap,
+          ? Math.min(model.contextWindow, configuredCap)
+          : configuredCap,
       }
       : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
   };
+  const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
+  if (providerCap !== undefined && capped !== hinted.contextWindow) {
+    return { ...hinted, contextWindow: capped, contextCap: providerCap, contextCapped: true };
+  }
+  return providerCap !== undefined ? { ...hinted, contextCap: providerCap, contextCapped: false } : hinted;
 }
 
-function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name });
+function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string, contextCap?: number): Partial<CatalogModel> {
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
 
-function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[]): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model));
+function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[], contextCap?: number): CatalogModel[] {
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
 }
 
 function isGlm52ModelId(id: string): boolean {
@@ -641,26 +657,26 @@ function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModel
  * fetch failure → last-known-good cache (so a provider blip doesn't drop its models), else the
  * static config list. This is the per-provider half of jawcode's "always latest" resolver.
  */
-async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number): Promise<CatalogModel[]> {
+async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
   const apiKey = await resolveModelsAuthToken(name, prov);
   if (prov.authMode === "oauth" && !apiKey) return []; // not logged in → skip
   const configured: CatalogModel[] = (prov.models ?? []).map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
   }));
   if (prov.liveModels === false) {
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
-  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh); // dedups Codex's frequent /v1/models polling within the TTL
+  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh, contextCap); // dedups Codex's frequent /v1/models polling within the TTL
   const { url, headers } = buildModelsRequest(prov, apiKey);
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const stale = getStaleCached(name);
-      return stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured;
+      return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
     }
     const json = await res.json() as { data?: ProviderModelsApiItem[] };
     const live = (json.data ?? []).map(m => applyProviderConfigHints(name, prov, {
@@ -668,7 +684,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       provider: name,
       owned_by: m.owned_by,
       ...catalogHintsFromModelsApiItem(name, m),
-    }));
+    }, contextCap));
     const liveIds = new Set(live.map(m => m.id));
     // Merge explicit config additions (e.g. a model not in the provider's /models, like a new endpoint).
     const merged = [...live, ...configured.filter(m => !liveIds.has(m.id))];
@@ -676,7 +692,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     return merged;
   } catch {
     const stale = getStaleCached(name);
-    return stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured;
+    return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
   }
 }
 
@@ -689,9 +705,9 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
 export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
   const lists = await Promise.all(
-    Object.entries(config.providers).map(([name, prov]) => fetchProviderModels(name, prov, ttlMs)),
+    Object.entries(config.providers).map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
   );
-  const all = augmentRoutedModelsWithJawcodeMetadata(lists.flat(), Object.keys(config.providers), config.providers)
+  const all = augmentRoutedModelsWithJawcodeMetadata(lists.flat(), Object.keys(config.providers), config.providers, config)
     // Drop image/video generation models (e.g. Grok image/video) — they are not usable by Codex and
     // must not surface in the dashboard, /v1/models, or the routed catalog. Single choke point.
     .filter(m => !isMediaGenerationModelId(m.id));
@@ -699,7 +715,12 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
   return all;
 }
 
-export function augmentRoutedModelsWithJawcodeMetadata(models: CatalogModel[], providerNames: string[], providers?: Record<string, OcxProviderConfig>): CatalogModel[] {
+export function augmentRoutedModelsWithJawcodeMetadata(
+  models: CatalogModel[],
+  providerNames: string[],
+  providers?: Record<string, OcxProviderConfig>,
+  caps?: Pick<OcxConfig, "providerContextCaps">,
+): CatalogModel[] {
   const out = [...models];
   const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
   for (const provider of providerNames) {
@@ -711,7 +732,18 @@ export function augmentRoutedModelsWithJawcodeMetadata(models: CatalogModel[], p
       const key = `${provider}/${meta.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ provider, id: meta.id, owned_by: provider, ...(providers?.[provider] ? catalogHintsFromProviderConfig(provider, providers[provider], meta.id) : {}) });
+      const contextCap = caps ? providerContextCap(caps, provider) : undefined;
+      const model: CatalogModel = {
+        provider,
+        id: meta.id,
+        owned_by: provider,
+        ...(typeof meta.contextWindow === "number" && meta.contextWindow > 0 ? { contextWindow: meta.contextWindow } : {}),
+        ...(Array.isArray(meta.input) && meta.input.length > 0 ? { inputModalities: [...meta.input] } : {}),
+      };
+      out.push({
+        ...model,
+        ...(providers?.[provider] ? applyProviderConfigHints(provider, providers[provider], model, contextCap) : {}),
+      });
     }
   }
   return out;
