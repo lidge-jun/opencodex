@@ -13,6 +13,22 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, toolAllowedByChoice } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 
+/**
+ * Inline image parts (Gemini `inline_data`) extracted from tool-result content. Only base64 data URLs
+ * can be inlined; a remote URL has no mime type we can supply, so it is skipped here (the textual
+ * result already carries an "[image]" marker via contentPartsToText).
+ */
+function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
+  if (typeof content === "string") return [];
+  const parts: unknown[] = [];
+  for (const p of content) {
+    if (p.type !== "image") continue;
+    const data = parseDataUrl(p.imageUrl);
+    if (data) parts.push({ inline_data: { mime_type: data.mediaType, data: data.base64 } });
+  }
+  return parts;
+}
+
 function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
   const systemInstruction = parsed.context.systemPrompt?.length
     ? { parts: [{ text: parsed.context.systemPrompt.join("\n\n") }] }
@@ -54,10 +70,15 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         break;
       }
       case "toolResult": {
-        contents.push({
-          role: "user",
-          parts: [{ functionResponse: { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: contentPartsToText(msg.content) } } }],
-        });
+        // The functionResponse part carries the textual result. Gemini cannot embed images inside a
+        // functionResponse, but it does accept sibling inline_data parts in the same user turn, so
+        // tool-result screenshots (e.g. Computer Use) ride along as inline_data instead of being
+        // flattened to a "[image]" marker the model can't actually see.
+        const parts: unknown[] = [
+          { functionResponse: { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: contentPartsToText(msg.content) } } },
+        ];
+        for (const part of toolResultImageParts(msg.content)) parts.push(part);
+        contents.push({ role: "user", parts });
         break;
       }
     }

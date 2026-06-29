@@ -36,7 +36,7 @@
     "dev:proxy": "bun run src/cli.ts start",
     "dev:gui": "cd gui && bun run dev",
     "start": "bun run src/cli.ts start",
-    "test": "bun test tests",
+    "test": "bun test ./tests/",
     "typecheck": "bun x tsc --noEmit",
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "generate:jawcode-metadata": "bun scripts/generate-jawcode-metadata.ts",

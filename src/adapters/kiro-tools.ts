@@ -1,4 +1,5 @@
 import type { OcxParsedRequest } from "../types";
+import { namespacedToolName } from "../types";
 
 const MAX_KIRO_TOOL_DESCRIPTION = 1024;
 
@@ -20,7 +21,10 @@ export function convertKiroToolContext(parsed: OcxParsedRequest): { tools: unkno
   return {
     tools: tools.map(t => {
       const description = t.description || `Tool: ${t.name}`;
-      const toolName = t.name.slice(0, 64);
+      // Send the full namespaced wire name (e.g. mcp__chrome-devtools__navigate_page) so Kiro echoes
+      // it back unchanged; the bridge's toolNsMap is keyed by this name and restores the MCP namespace
+      // Codex routes by. Truncating here breaks long MCP/computer-use round trips.
+      const toolName = namespacedToolName(t.namespace, t.name);
       const kiroDescription = description.length > MAX_KIRO_TOOL_DESCRIPTION
         ? `Tool documentation moved to the system prompt: ${toolName}.`
         : description;

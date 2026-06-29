@@ -10,6 +10,7 @@ import { appendFallbackText, toolCallFallbackText, toolResultFallbackText } from
 import { KiroThinkingParser } from "./kiro-thinking";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "./kiro-truncation";
 import { fallbackToolUseId, fingerprint, invocationId, mapModelId, normalizeToolId, osTag, stableConversationId } from "./kiro-wire";
+import { namespacedToolName } from "../types";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -55,7 +56,6 @@ interface KiroHistoryEntry {
   userInputMessage?: KiroUserInputMessage;
   assistantResponseMessage?: { content: string; toolUses?: KiroToolUse[] };
 }
-
 function userContentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
   return content.map(p => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n");
@@ -72,15 +72,12 @@ function usageContentText(content: string | OcxContentPart[]): string {
     .filter(Boolean)
     .join("\n");
 }
-
 function serializeForUsage(value: unknown): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
-
 function currentTurnUsageMessages(messages: OcxMessage[]): OcxMessage[] {
   return messages.slice(messages.map(m => m.role).lastIndexOf("assistant") + 1).filter(m => m.role !== "assistant");
 }
-
 function currentTurnPayloadMessages(messages: OcxMessage[]): OcxMessage[] {
   const roles = messages.map(m => m.role);
   const lastAssistant = roles.lastIndexOf("assistant");
@@ -216,12 +213,15 @@ export function buildKiroPayload(parsed: OcxParsedRequest, profileArn: string | 
   const history: KiroHistoryEntry[] = [];
   const fallbackEntries = new WeakSet<KiroHistoryEntry>();
   let pending: KiroToolResult[] = [];
+  let pendingImages: KiroImage[] = [];
   let lastRole = "";
   const attachPending = (entry: KiroHistoryEntry): void => {
     if (pending.length === 0) return;
     const uim = entry.userInputMessage!;
     uim.userInputMessageContext = { ...(uim.userInputMessageContext ?? {}), toolResults: pending };
+    if (pendingImages.length > 0) uim.images = [...(uim.images ?? []), ...pendingImages];
     pending = [];
+    pendingImages = [];
   };
   const pushUserEntry = (entry: KiroHistoryEntry): void => {
     if (pending.length === 0 && lastRole === "user") {
@@ -253,7 +253,7 @@ export function buildKiroPayload(parsed: OcxParsedRequest, profileArn: string | 
         ? toolCalls.map(tc => {
           const toolUseId = normalizeToolId(tc.id);
           structuredToolIds.add(toolUseId);
-          return { name: tc.name, input: (tc.arguments ?? {}) as Record<string, unknown>, toolUseId };
+          return { name: namespacedToolName(tc.namespace, tc.name), input: (tc.arguments ?? {}) as Record<string, unknown>, toolUseId };
         })
         : [];
       if (kiroTools.length === 0) {
@@ -267,6 +267,7 @@ export function buildKiroPayload(parsed: OcxParsedRequest, profileArn: string | 
     } else if (msg.role === "toolResult") {
       const tr = msg as OcxToolResultMessage;
       const text = userContentText(tr.content);
+      const images = extractKiroImages(tr.content);
       const toolUseId = normalizeToolId(tr.toolCallId);
       if (kiroTools.length > 0 && structuredToolIds.has(toolUseId)) {
         pending.push({
@@ -274,9 +275,10 @@ export function buildKiroPayload(parsed: OcxParsedRequest, profileArn: string | 
           status: tr.isError ? "error" : "success",
           toolUseId,
         });
+        pendingImages.push(...images);
       } else {
         if (pending.length > 0) pushUserEntry(mkUser("(tool results)"));
-        const fallback = mkUser(toolResultFallbackText(tr));
+        const fallback = mkUser(toolResultFallbackText(tr), images);
         fallbackEntries.add(fallback);
         pushUserEntry(fallback);
       }
@@ -440,9 +442,13 @@ export async function* parseKiroStream(
       yield contentEvent;
     }
     if (open) {
-      open = null;
-      yield { type: "error", message: kiroTruncationErrorMessage("stream ended before tool stop") };
-      return;
+      const input = open.chunks.join("");
+      if (!isCompleteKiroToolInput(input)) {
+        open = null;
+        yield { type: "error", message: kiroTruncationErrorMessage("stream ended before tool stop") };
+        return;
+      }
+      yield* flushTool();
     }
     const outputTokens = estimateTokens(outputChars, modelId);
     const usage: OcxUsage = { inputTokens, outputTokens, estimated: true };

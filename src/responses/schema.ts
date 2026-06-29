@@ -56,7 +56,7 @@ const functionCallItemSchema = z.object({
 const functionCallOutputItemSchema = z.object({
   type: z.literal("function_call_output"),
   call_id: z.string().min(1),
-  output: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
+  output: z.union([z.string(), z.array(z.union([outputContentBlockSchema, inputImageBlockSchema]))]).optional(),
 });
 const customToolCallItemSchema = z.object({
   type: z.literal("custom_tool_call"),

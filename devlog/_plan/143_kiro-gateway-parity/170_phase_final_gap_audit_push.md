@@ -95,3 +95,51 @@ Therefore no employee `DONE` verdict is claimed.
 Push was not performed in this audit pass because the verification plan says to
 push only after employee `DONE`, and the current user turn did not freshly
 authorize `git push`.
+
+## Post-audit follow-up
+
+Later live Codex Desktop/Kiro Computer Use testing found additional tool
+fidelity issues that were not covered by the local final-audit matrix:
+namespaced MCP/Computer Use tool names needed full wire-name preservation,
+complete JSON tool calls could reach EOF without a Kiro `stop` frame, and
+Computer Use screenshot images were dropped from Kiro tool-result
+continuations. The follow-up patch and evidence are recorded below.
+
+Implementation summary:
+
+- `src/adapters/kiro-tools.ts` now advertises full
+  `namespacedToolName(namespace, name)` wire names instead of bare tool names,
+  and no longer truncates tool specification names to 64 characters.
+- `src/adapters/kiro.ts` replays assistant `toolUses` with the same full wire
+  name, so Kiro history matches the current tool definitions and the bridge can
+  restore MCP namespaces from `toolNsMap`.
+- `parseKiroStream()` still fails closed for incomplete tool JSON at EOF, but
+  recovers complete JSON tool calls when Kiro omits the terminal `stop` frame.
+- `src/responses/schema.ts` now explicitly accepts `input_image` blocks in
+  `function_call_output.output`.
+- Kiro tool-result continuations now preserve screenshots by extracting image
+  parts from structured `toolResult` content and attaching them to the carrier
+  `userInputMessage.images` alongside structured `toolResults`.
+
+Regression coverage added:
+
+- Full MCP/Computer Use wire names are advertised and replayed.
+- Long namespaced tool names are preserved rather than truncated.
+- Complete JSON EOF recovery emits a normal tool call; partial JSON EOF still
+  emits the truncation error.
+- Responses `function_call_output` image blocks are preserved.
+- Kiro carrier user messages receive tool-result screenshot images.
+
+Local verification passed:
+
+- `bun x tsc --noEmit`
+- `bun test tests/kiro-adapter.test.ts tests/kiro-stream.test.ts tests/bridge.test.ts tests/responses-parser.test.ts`
+- Result: 62 pass, 0 fail.
+- `src/adapters/kiro.ts` remains at the 500-line limit.
+
+Remaining work after the local patch is runtime-only: rebuild/restart the local
+proxy/app so the patched adapter is loaded, run one live Kiro Computer Use smoke
+(`list_apps`, `get_app_state` on Chrome/Finder), and confirm the next Kiro turn
+can reason over the screenshot. Whether the conversation UI should render a
+visible screenshot thumbnail remains a Codex Desktop UI-rendering question; the
+Kiro model-context mapping is now covered locally.

@@ -147,17 +147,19 @@ describe("kiro adapter — parseStream", () => {
     expect(out).not.toContain("done");
   });
 
-  test("open tool with complete JSON but no stop is still truncation", async () => {
+  test("open tool with complete JSON but no stop is recovered at EOF", async () => {
     const frames = [
       eventFrame({ name: "bash", toolUseId: "t1" }),
       eventFrame({ input: '{"command":"pwd"}', name: "bash", toolUseId: "t1" }),
     ];
     const out: string[] = [];
+    let args = "";
     for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(...frames)))) {
-      out.push(e.type === "error" ? `error:${e.message}` : e.type);
+      if (e.type === "tool_call_delta") { args += e.arguments; out.push("delta"); }
+      else out.push(e.type === "error" ? `error:${e.message}` : e.type);
     }
-    expect(out).toEqual(["heartbeat", "heartbeat", "error:Kiro response truncated upstream before the tool call completed (stream ended before tool stop)"]);
-    expect(out).not.toContain("tool_call_start");
+    expect(out).toEqual(["heartbeat", "heartbeat", "tool_call_start", "delta", "tool_call_end", "done"]);
+    expect(JSON.parse(args)).toEqual({ command: "pwd" });
   });
 
   test("explicit Kiro truncation marker fails without done", async () => {

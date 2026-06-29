@@ -110,13 +110,87 @@ describe("kiro adapter — buildRequest", () => {
     expect(results[0].status).toBe("success");
   });
 
-  test("tools map to toolSpecification with name<=64", () => {
+  test("tool result images are attached to Kiro carrier user messages", () => {
+    const messages = [
+      { role: "user", content: "look" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "get_app_state", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "get_app_state",
+        content: [
+          { type: "text", text: "Looked at Google Chrome" },
+          { type: "image", imageUrl: "data:image/png;base64,aGVsbG8=", detail: "high" },
+        ],
+        isError: false,
+      },
+    ];
+    const { body } = createKiroAdapter(provider).buildRequest(
+      parsedWith(messages, [{ name: "get_app_state", description: "Look at app", parameters: { type: "object" } }]),
+    );
+    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
+
+    expect(current.userInputMessageContext.toolResults[0].content[0].text).toBe("Looked at Google Chrome");
+    expect(current.images).toEqual([{ format: "png", source: { bytes: "aGVsbG8=" } }]);
+  });
+
+  test("tools map to toolSpecification", () => {
     const { body } = createKiroAdapter(provider).buildRequest(
       parsedWith([{ role: "user", content: "hi" }], [{ name: "grep", description: "search", parameters: { type: "object" } }]),
     );
     const ctx = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext;
     expect(ctx.tools[0].toolSpecification.name).toBe("grep");
     expect(ctx.tools[0].toolSpecification.inputSchema.json).toEqual({ type: "object" });
+  });
+
+  test("namespaced (MCP) tools advertise + replay the full wire name", () => {
+    const adapter = createKiroAdapter(provider);
+    // Tool spec advertised to Kiro must carry the full namespaced name so the bridge's toolNsMap
+    // (keyed by namespace__name) can restore the MCP namespace when Kiro echoes the name back.
+    const specBody = adapter.buildRequest(
+      parsedWith(
+        [{ role: "user", content: "hi" }],
+        [{ name: "navigate_page", namespace: "mcp__chrome-devtools", description: "navigate", parameters: { type: "object" } }],
+      ),
+    ).body;
+    const specCtx = JSON.parse(specBody).conversationState.currentMessage.userInputMessage.userInputMessageContext;
+    expect(specCtx.tools[0].toolSpecification.name).toBe("mcp__chrome-devtools__navigate_page");
+
+    // Replayed assistant tool calls in history must use the same wire name.
+    const replayBody = adapter.buildRequest(
+      parsedWith(
+        [
+          { role: "user", content: "hi" },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "navigate_page", namespace: "mcp__chrome-devtools", arguments: { url: "x" } }],
+          },
+          { role: "toolResult", toolCallId: "call_1", toolName: "navigate_page", content: "ok", isError: false },
+        ],
+        [{ name: "navigate_page", namespace: "mcp__chrome-devtools", description: "navigate", parameters: { type: "object" } }],
+      ),
+    ).body;
+    const history = JSON.parse(replayBody).conversationState.history;
+    const replayed = history.find((e: { assistantResponseMessage?: { toolUses?: { name: string }[] } }) => e.assistantResponseMessage?.toolUses);
+    expect(replayed.assistantResponseMessage.toolUses[0].name).toBe("mcp__chrome-devtools__navigate_page");
+  });
+
+  test("long namespaced tool names are preserved rather than truncated", () => {
+    const wireName = "mcp__very-long-computer-use-namespace-with-browser-state__look_at_current_applications";
+    const { body } = createKiroAdapter(provider).buildRequest(
+      parsedWith(
+        [{ role: "user", content: "hi" }],
+        [{
+          name: "look_at_current_applications",
+          namespace: "mcp__very-long-computer-use-namespace-with-browser-state",
+          description: "look",
+          parameters: { type: "object" },
+        }],
+      ),
+    );
+    const ctx = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext;
+    expect(wireName.length).toBeGreaterThan(64);
+    expect(ctx.tools[0].toolSpecification.name).toBe(wireName);
   });
 
   test("tool schemas remove Kiro-rejected fields recursively", () => {

@@ -56,4 +56,27 @@ describe("Responses parser", () => {
 
     expect(parsed.options.serviceTier).toBe("priority");
   });
+
+  test("preserves input_image blocks from function_call_output", () => {
+    const parsed = parseRequest({
+      model: "kiro/claude-sonnet-4.5",
+      input: [
+        { type: "function_call", call_id: "call-1", name: "get_app_state", arguments: "{}" },
+        {
+          type: "function_call_output",
+          call_id: "call-1",
+          output: [
+            { type: "output_text", text: "Looked at Google Chrome" },
+            { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "high" },
+          ],
+        },
+      ],
+    });
+    const result = parsed.context.messages.find(m => m.role === "toolResult");
+
+    expect(result?.content).toEqual([
+      { type: "text", text: "Looked at Google Chrome" },
+      { type: "image", imageUrl: "data:image/png;base64,aGVsbG8=", detail: "high" },
+    ]);
+  });
 });
