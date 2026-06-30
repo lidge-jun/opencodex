@@ -1,11 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
-import { createAnthropicAdapter } from "./adapters/anthropic";
-import { createAzureAdapter } from "./adapters/azure";
-import { createGoogleAdapter } from "./adapters/google";
-import { createKiroAdapter } from "./adapters/kiro";
-import { createOpenAIChatAdapter } from "./adapters/openai-chat";
-import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "./bridge";
 import { markActivity } from "./sidecar-tracker";
 import {
@@ -88,6 +82,8 @@ import {
 import { registerCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketAuthContext } from "./codex-websocket-registry";
 import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile } from "./server/gui-static";
 export { resolveGuiFilePath, rootFallbackPayload } from "./server/gui-static";
+import { resolveAdapter, resolveWireProtocolOverride } from "./server/adapter-resolve";
+export { resolveAdapter } from "./server/adapter-resolve";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -192,37 +188,7 @@ const VERSION = (() => {
 // GUI static serving extracted to ./server/gui-static. Re-exported below to keep the
 // "../src/server" import surface stable for tests/callers.
 
-const ANTHROPIC_WIRE_MODELS: Record<string, Set<string>> = {
-  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"]),
-};
-
-function resolveWireProtocolOverride(providerName: string, modelId: string, providerConfig: OcxProviderConfig): OcxProviderConfig {
-  const overrideSet = ANTHROPIC_WIRE_MODELS[providerName];
-  if (overrideSet?.has(modelId) && providerConfig.adapter !== "anthropic") {
-    return { ...providerConfig, adapter: "anthropic" };
-  }
-  return providerConfig;
-}
-
-export function resolveAdapter(providerConfig: OcxProviderConfig) {
-  switch (providerConfig.adapter) {
-    case "openai-chat":
-      return createOpenAIChatAdapter(providerConfig);
-    case "anthropic":
-      return createAnthropicAdapter(providerConfig);
-    case "openai-responses":
-      return createResponsesPassthroughAdapter(providerConfig);
-    case "google":
-      return createGoogleAdapter(providerConfig);
-    case "kiro":
-      return createKiroAdapter(providerConfig);
-    case "azure":
-    case "azure-openai":
-      return createAzureAdapter(providerConfig);
-    default:
-      throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
-  }
-}
+// Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
 function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthContext): ((outcome: CodexUpstreamOutcome) => void) | undefined {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
