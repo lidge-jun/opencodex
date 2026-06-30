@@ -12,6 +12,7 @@
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
+import { antigravityUserAgent, ANTIGRAVITY_GOOG_API_CLIENT_UA } from "../adapters/client-fingerprint";
 
 const CLIENT_ID = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID
   || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -94,7 +95,7 @@ function extractProjectId(data: Record<string, unknown> | undefined): string | u
 async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
   const response = await fetch(`${PROD_API}/${API_VERSION}:loadCodeAssist`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent() },
     body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
     signal: requestSignal(signal),
   });
@@ -107,8 +108,8 @@ async function onboardProject(accessToken: string, signal?: AbortSignal): Promis
     if (signal?.aborted) throw signal.reason ?? new Error("Antigravity onboarding aborted");
     const response = await fetch(`${DAILY_API}/${API_VERSION}:onboardUser`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json" },
-      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity" } }),
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent(), "x-goog-api-client": ANTIGRAVITY_GOOG_API_CLIENT_UA },
+      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: antigravityUserAgent() } }),
       signal: requestSignal(signal),
     });
     if (!response.ok) {

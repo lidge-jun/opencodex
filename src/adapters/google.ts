@@ -19,7 +19,6 @@ import { isVertexTruncationReason, vertexTruncationErrorMessage } from "./google
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { sanitizeGeminiToolParameters } from "./google-tool-schema";
 import { neutralizeIdentity } from "./identity";
-import { ANTIGRAVITY_GOOG_API_CLIENT_UA } from "./client-fingerprint";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -264,8 +263,6 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           request,
         };
         headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
-        // The Antigravity client library reports a secondary Google API client UA alongside the CLI UA.
-        headers["x-goog-api-client"] = ANTIGRAVITY_GOOG_API_CLIENT_UA;
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }

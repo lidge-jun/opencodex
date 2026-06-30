@@ -40,7 +40,7 @@ const MIN_THINKING_BUDGET = 1024;
 const OUTPUT_HEADROOM = 8192;
 /** Minimum visible-output room kept below `max_tokens` (so `max_tokens > budget_tokens` always holds). */
 const OUTPUT_FLOOR = 4096;
-const COMPAT_TOOL_PREFIX = "ocx_";
+const COMPAT_TOOL_PREFIX = "cx_";
 
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
@@ -172,7 +172,7 @@ function messagesToAnthropicFormat(
               resultBlocks.push({
                 type: "tool_result",
                 tool_use_id: id,
-                content: "[opencodex: missing tool_result for this tool_use in Codex history]",
+                content: "[missing tool_result for this tool_use in history]",
                 is_error: true,
               });
             }
@@ -240,7 +240,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
       if (parsed.options.topP !== undefined) body.top_p = parsed.options.topP;
       if (parsed.options.stopSequences) body.stop_sequences = parsed.options.stopSequences;
 
-      if (parsed.options.reasoning) {
+      // `reasoning` is a Codex effort string; "none" is the disable sentinel (see parser.ts
+      // REASONING_EFFORTS). A bare truthy check would treat "none" as truthy and wrongly enable
+      // extended thinking (and strip temperature/top_p), so gate on a real, non-disable effort.
+      if (typeof parsed.options.reasoning === "string" && parsed.options.reasoning !== "none") {
         // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
         // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
         // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
@@ -270,6 +273,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
+        "Accept": parsed.stream ? "text/event-stream" : "application/json",
+        "User-Agent": "@anthropic-ai/sdk/0.74.0",
       };
       if (isOAuth) {
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;

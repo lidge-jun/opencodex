@@ -107,4 +107,21 @@ describe("client fingerprint — anthropic OAuth headers", () => {
     expect(headers["X-App"]).toBeUndefined();
     expect(headers["X-Claude-Code-Session-Id"]).toBeUndefined();
   });
+
+  test("Accept + User-Agent fingerprint headers are sent on both OAuth and API-key paths", () => {
+    const oauth = createAnthropicAdapter(oauthProvider).buildRequest(parsed()).headers;
+    const apiKey = createAnthropicAdapter(apiKeyProvider).buildRequest(parsed()).headers;
+    for (const headers of [oauth, apiKey]) {
+      // Non-stream request advertises a JSON Accept and the pinned first-party SDK UA.
+      expect(headers["Accept"]).toBe("application/json");
+      expect(headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
+    }
+  });
+
+  test("Accept negotiates SSE for a streaming request", () => {
+    const streaming = { ...parsed(), stream: true } as OcxParsedRequest;
+    const { headers } = createAnthropicAdapter(oauthProvider).buildRequest(streaming);
+    expect(headers["Accept"]).toBe("text/event-stream");
+    expect(headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
+  });
 });

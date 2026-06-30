@@ -223,6 +223,92 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       let currentToolCallId = "";
       let currentToolCallName = "";
       let pendingUsage: OcxUsage | undefined;
+      // Track terminal signals so a socket EOF without any terminator can fail closed instead of
+      // being reported as a clean completion (silent truncation). A graceful close is either an
+      // explicit `[DONE]` sentinel OR a chunk carrying a non-null `finish_reason` (some
+      // OpenAI-compatible providers omit `[DONE]` but do send finish_reason).
+      let sawFinish = false;
+
+      // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
+      // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
+      // Yields adapter events and returns "terminate" for a terminal frame ([DONE] / error) that
+      // must end the stream, or "continue" otherwise. Mutates the closure's terminal-signal state.
+      const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
+        if (!line.startsWith("data: ")) return "continue";
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") {
+          if (currentToolCallId) {
+            yield { type: "tool_call_end" };
+            currentToolCallId = "";
+          }
+          yield { type: "done", usage: pendingUsage };
+          return "terminate";
+        }
+
+        let chunk: Record<string, unknown>;
+        try {
+          chunk = JSON.parse(payload) as Record<string, unknown>;
+        } catch {
+          debugDroppedFrame("openai-chat", payload);
+          return "continue";
+        }
+
+        // A 200/OK chat-completions stream may carry an inline provider error envelope
+        // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a
+        // classified response.failed (bridge case "error") — never a truncated completion.
+        if (chunk.error) {
+          const err = chunk.error as { message?: string } | undefined;
+          if (currentToolCallId) yield { type: "tool_call_end" };
+          yield { type: "error", message: err?.message ?? "upstream error" };
+          return "terminate";
+        }
+
+        if (chunk.usage) {
+          // Record usage but keep parsing: some providers send usage and the final content
+          // delta in the SAME chunk; a bail here would drop that content. The choices
+          // guard below no-ops a usage-only chunk.
+          pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
+        }
+
+        const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[] | undefined;
+        if (!choices || choices.length === 0) return "continue";
+        // Observe the terminator BEFORE the delta guard: a finish-only chunk (finish_reason set,
+        // no delta) is a graceful close and must mark sawFinish even though we skip it below.
+        if (typeof choices[0].finish_reason === "string" && choices[0].finish_reason) {
+          sawFinish = true;
+        }
+        const delta = choices[0].delta;
+        if (delta) {
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            yield { type: "text_delta", text: delta.content };
+          }
+
+          if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+            yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
+          }
+
+          const toolCalls = delta.tool_calls as { index: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined;
+          if (toolCalls) {
+            for (const tc of toolCalls) {
+              if (tc.id && tc.id !== currentToolCallId) {
+                if (currentToolCallId) yield { type: "tool_call_end" };
+                currentToolCallId = tc.id;
+                currentToolCallName = tc.function?.name ?? "";
+                yield { type: "tool_call_start", id: tc.id, name: currentToolCallName };
+              }
+              if (tc.function?.arguments) {
+                yield { type: "tool_call_delta", arguments: tc.function.arguments };
+              }
+            }
+          }
+        }
+
+        if (choices[0].finish_reason === "tool_calls" && currentToolCallId) {
+          yield { type: "tool_call_end" };
+          currentToolCallId = "";
+        }
+        return "continue";
+      };
 
       try {
         while (true) {
@@ -234,81 +320,30 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6).trim();
-            if (payload === "[DONE]") {
-              if (currentToolCallId) {
-                yield { type: "tool_call_end" };
-                currentToolCallId = "";
-              }
-              yield { type: "done", usage: pendingUsage };
-              return;
-            }
-
-            let chunk: Record<string, unknown>;
-            try {
-              chunk = JSON.parse(payload) as Record<string, unknown>;
-            } catch {
-              debugDroppedFrame("openai-chat", payload);
-              continue;
-            }
-
-            // A 200/OK chat-completions stream may carry an inline provider error envelope
-            // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a
-            // classified response.failed (bridge case "error") — never a truncated completion.
-            if (chunk.error) {
-              const err = chunk.error as { message?: string } | undefined;
-              if (currentToolCallId) yield { type: "tool_call_end" };
-              yield { type: "error", message: err?.message ?? "upstream error" };
-              return;
-            }
-
-            if (chunk.usage) {
-              // Record usage but keep parsing: some providers send usage and the final content
-              // delta in the SAME chunk; a `continue` here would drop that content. The choices
-              // guard below no-ops a usage-only chunk.
-              pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
-            }
-
-            const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[] | undefined;
-            if (!choices || choices.length === 0) continue;
-            const delta = choices[0].delta;
-            if (!delta) continue;
-
-            if (typeof delta.content === "string" && delta.content.length > 0) {
-              yield { type: "text_delta", text: delta.content };
-            }
-
-            if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
-              yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
-            }
-
-            const toolCalls = delta.tool_calls as { index: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined;
-            if (toolCalls) {
-              for (const tc of toolCalls) {
-                if (tc.id && tc.id !== currentToolCallId) {
-                  if (currentToolCallId) yield { type: "tool_call_end" };
-                  currentToolCallId = tc.id;
-                  currentToolCallName = tc.function?.name ?? "";
-                  yield { type: "tool_call_start", id: tc.id, name: currentToolCallName };
-                }
-                if (tc.function?.arguments) {
-                  yield { type: "tool_call_delta", arguments: tc.function.arguments };
-                }
-              }
-            }
-
-            if (choices[0].finish_reason === "tool_calls" && currentToolCallId) {
-              yield { type: "tool_call_end" };
-              currentToolCallId = "";
-            }
+            if ((yield* handleDataLine(line)) === "terminate") return;
           }
         }
 
+        // Some providers send the terminal `data:` frame (carrying the final delta, finish_reason,
+        // and/or usage) WITHOUT a trailing newline before closing the socket, so it never crosses
+        // the split("\n") boundary and stays in `buffer`. Run it through the SAME handler so its
+        // content/tool-calls are emitted and its terminal signal observed — otherwise a genuinely
+        // complete stream loses its last frame and may be falsely failed below.
+        if (buffer.length > 0) {
+          if ((yield* handleDataLine(buffer)) === "terminate") return;
+        }
         if (currentToolCallId) {
           yield { type: "tool_call_end" };
         }
-        // EOF without a [DONE] sentinel: still surface any usage accumulated mid-stream.
+        // Reader EOF. A graceful close shows at least one terminal signal: `[DONE]` (returns above),
+        // a non-null finish_reason (sawFinish), or a trailing usage chunk (providers emit usage only
+        // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
+        // closed so the bridge emits a classified response.failed rather than a silent truncation.
+        if (!sawFinish && pendingUsage === undefined) {
+          yield { type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" };
+          return;
+        }
+        // Graceful close that omitted [DONE] but delivered finish_reason and/or final usage.
         yield { type: "done", usage: pendingUsage };
       } finally {
         reader.releaseLock();

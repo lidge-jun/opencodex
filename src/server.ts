@@ -1,12 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
-import { createAnthropicAdapter } from "./adapters/anthropic";
-import { createAzureAdapter } from "./adapters/azure";
-import { createGoogleAdapter } from "./adapters/google";
-import { createKiroAdapter } from "./adapters/kiro";
-import { createOpenAIChatAdapter } from "./adapters/openai-chat";
-import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "./bridge";
 import { markActivity } from "./sidecar-tracker";
 import {
@@ -87,6 +80,10 @@ import {
   type CodexUpstreamOutcome,
 } from "./codex-routing";
 import { registerCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketAuthContext } from "./codex-websocket-registry";
+import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile } from "./server/gui-static";
+export { resolveGuiFilePath, rootFallbackPayload } from "./server/gui-static";
+import { resolveAdapter, resolveWireProtocolOverride } from "./server/adapter-resolve";
+export { resolveAdapter } from "./server/adapter-resolve";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -188,124 +185,10 @@ const VERSION = (() => {
   }
 })();
 
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
-  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
-  ".ico": "image/x-icon",
-};
+// GUI static serving extracted to ./server/gui-static. Re-exported below to keep the
+// "../src/server" import surface stable for tests/callers.
 
-function findGuiDist(): string | null {
-  const candidates = [
-    join(import.meta.dir, "..", "gui", "dist"),
-    join(import.meta.dir, "..", "..", "gui", "dist"),
-  ];
-  for (const c of candidates) {
-    if (existsSync(join(c, "index.html"))) return c;
-  }
-  return null;
-}
-
-export function resolveGuiFilePath(guiDist: string, pathname: string): string | null {
-  let decodedPath: string;
-  try {
-    decodedPath = decodeURIComponent(pathname);
-  } catch {
-    return null;
-  }
-  if (decodedPath.includes("\0")) return null;
-
-  const relativePath = decodedPath === "/" || decodedPath === ""
-    ? "index.html"
-    : decodedPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  const root = resolve(guiDist);
-  const filePath = resolve(root, relativePath);
-  const rel = relative(root, filePath);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
-  return filePath;
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function serveGuiFile(pathname: string): Response | null {
-  const guiDist = findGuiDist();
-  if (!guiDist) return null;
-  const filePath = resolveGuiFilePath(guiDist, pathname);
-  if (!filePath) return null;
-
-  if (!isFile(filePath)) {
-    if (!extname(pathname)) {
-      const indexPath = join(guiDist, "index.html");
-      if (isFile(indexPath)) {
-        return new Response(Bun.file(indexPath), {
-          headers: { "Content-Type": "text/html" },
-        });
-      }
-    }
-    return null;
-  }
-
-  const ext = extname(filePath);
-  const contentType = MIME_TYPES[ext] || "application/octet-stream";
-  return new Response(Bun.file(filePath), {
-    headers: { "Content-Type": contentType },
-  });
-}
-
-export function rootFallbackPayload() {
-  return {
-    status: "ok",
-    service: "opencodex",
-    version: VERSION,
-    dashboard: {
-      available: false,
-      reason: "GUI build not found. Run `bun run build:gui` from the opencodex repo, or use `ocx gui` from a packaged install.",
-    },
-    endpoints: {
-      health: "/healthz",
-      models: "/v1/models",
-      responses: "/v1/responses",
-      management: "/api/*",
-    },
-  };
-}
-
-const ANTHROPIC_WIRE_MODELS: Record<string, Set<string>> = {
-  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"]),
-};
-
-function resolveWireProtocolOverride(providerName: string, modelId: string, providerConfig: OcxProviderConfig): OcxProviderConfig {
-  const overrideSet = ANTHROPIC_WIRE_MODELS[providerName];
-  if (overrideSet?.has(modelId) && providerConfig.adapter !== "anthropic") {
-    return { ...providerConfig, adapter: "anthropic" };
-  }
-  return providerConfig;
-}
-
-export function resolveAdapter(providerConfig: OcxProviderConfig) {
-  switch (providerConfig.adapter) {
-    case "openai-chat":
-      return createOpenAIChatAdapter(providerConfig);
-    case "anthropic":
-      return createAnthropicAdapter(providerConfig);
-    case "openai-responses":
-      return createResponsesPassthroughAdapter(providerConfig);
-    case "google":
-      return createGoogleAdapter(providerConfig);
-    case "kiro":
-      return createKiroAdapter(providerConfig);
-    case "azure":
-    case "azure-openai":
-      return createAzureAdapter(providerConfig);
-    default:
-      throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
-  }
-}
+// Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
 function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthContext): ((outcome: CodexUpstreamOutcome) => void) | undefined {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"

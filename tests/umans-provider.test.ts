@@ -96,8 +96,8 @@ describe("Umans provider", () => {
     expect(req.headers["anthropic-version"]).toBe("2023-06-01");
     expect(req.headers["anthropic-beta"]).toBeUndefined();
     expect(body.system).toBeUndefined();
-    expect(body.tools[0].name).toBe("ocx_web_search");
-    expect(body.tool_choice).toEqual({ type: "tool", name: "ocx_web_search" });
+    expect(body.tools[0].name).toBe("cx_web_search");
+    expect(body.tool_choice).toEqual({ type: "tool", name: "cx_web_search" });
   });
 
   test("Anthropic adapter filters Umans tools for Responses allowed_tools choices", () => {
@@ -126,7 +126,7 @@ describe("Umans provider", () => {
       tool_choice: { type: string };
     };
 
-    expect(body.tools.map(t => t.name)).toEqual(["ocx_web_search"]);
+    expect(body.tools.map(t => t.name)).toEqual(["cx_web_search"]);
     expect(body.tool_choice).toEqual({ type: "any" });
   });
 
@@ -135,7 +135,7 @@ describe("Umans provider", () => {
       start(controller) {
         controller.enqueue(new TextEncoder().encode(
           `event: content_block_start\n` +
-          `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"ocx_web_search"}}\n\n` +
+          `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"cx_web_search"}}\n\n` +
           `event: content_block_delta\n` +
           `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"umans\\"}"}}\n\n` +
           `event: content_block_stop\n` +
@@ -157,7 +157,7 @@ describe("Umans provider", () => {
       content: [{
         type: "tool_use",
         id: "toolu_1",
-        name: "ocx_web_search",
+        name: "cx_web_search",
         input: { query: "umans" },
       }],
       usage: { input_tokens: 10, output_tokens: 3 },

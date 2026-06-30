@@ -307,7 +307,7 @@ describe("anthropic tool result history repair", () => {
       content: [{
         type: "tool_result",
         tool_use_id: "call_1",
-        content: "[opencodex: missing tool_result for this tool_use in Codex history]",
+        content: "[missing tool_result for this tool_use in history]",
         is_error: true,
       }],
     });

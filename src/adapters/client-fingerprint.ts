@@ -20,6 +20,10 @@ export const CLAUDE_CODE_HEADERS: Record<string, string> = {
   "X-Stainless-Runtime": "node",
   "X-Stainless-Lang": "js",
   "X-Stainless-Timeout": "600",
+  "X-Stainless-Arch": process.arch,
+  "X-Stainless-OS": process.platform,
+  "X-Stainless-Package-Version": "0.74.0",
+  "X-Stainless-Runtime-Version": process.version.slice(1),
 };
 
 /**

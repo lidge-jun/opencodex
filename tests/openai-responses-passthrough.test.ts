@@ -46,4 +46,46 @@ describe("OpenAI Responses passthrough sanitization", () => {
       content: [{ type: "input_text", text: "hi" }],
     });
   });
+
+  test("strips image_generation hosted tool for codex-spark passthrough", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.3-codex-spark",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.3-codex-spark",
+        input: [],
+        tools: [
+          { type: "function", name: "shell", parameters: {} },
+          { type: "image_generation" },
+        ],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { tools: { type: string }[] };
+
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]).toMatchObject({ type: "function", name: "shell" });
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(false);
+  });
+
+  test("keeps image_generation hosted tool for supported native slugs", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [{ type: "image_generation" }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { tools: { type: string }[] };
+
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]).toMatchObject({ type: "image_generation" });
+  });
 });

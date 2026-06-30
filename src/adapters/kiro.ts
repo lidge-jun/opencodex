@@ -33,7 +33,7 @@ import { neutralizeIdentity } from "./identity";
 const AMZ_TARGET = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse";
 const SDK_VERSION = "1.0.27";
 const NODE_VERSION = "22.21.1";
-const KIRO_IDE_VERSION = "1.2.0";
+const KIRO_IDE_VERSION = "1.0.0";
 
 // Payload construction (conversationState)
 interface KiroToolUse {

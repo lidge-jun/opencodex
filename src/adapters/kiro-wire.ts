@@ -8,9 +8,9 @@ let cachedFp: string | undefined;
 export function fingerprint(): string {
   if (cachedFp) return cachedFp;
   try {
-    cachedFp = createHash("sha256").update(`${hostname()}-${userInfo().username}-kiro-ocx`).digest("hex");
+    cachedFp = createHash("sha256").update(`${hostname()}-${userInfo().username}-kiro`).digest("hex");
   } catch {
-    cachedFp = createHash("sha256").update("default-kiro-ocx").digest("hex");
+    cachedFp = createHash("sha256").update("default-kiro").digest("hex");
   }
   return cachedFp;
 }

@@ -12,7 +12,7 @@ const DEVICE_ID_FILENAME = "kimi-device-id";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
 const OAUTH_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const KIMI_CLI_VERSION = "1.0.0";
+const KIMI_CLI_VERSION = "0.14.0";
 
 interface DeviceAuthorizationResponse {
   user_code?: string;
@@ -70,7 +70,7 @@ function getDeviceId(): string {
 function getKimiCommonHeaders(): Record<string, string> {
   return {
     "User-Agent": `KimiCLI/${KIMI_CLI_VERSION}`,
-    "X-Msh-Platform": "kimi_cli",
+    "X-Msh-Platform": "kimi_code_cli",
     "X-Msh-Version": KIMI_CLI_VERSION,
     "X-Msh-Device-Name": os.hostname(),
     "X-Msh-Device-Model": getDeviceModel(),
