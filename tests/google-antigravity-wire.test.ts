@@ -26,6 +26,7 @@ describe("antigravity CCA envelope", () => {
     const env = JSON.parse(req.body);
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
     expect(env.model).toBe("gemini-3-pro");
+    // The envelope BODY userAgent is the protocol constant; the versioned CLI UA rides in the header.
     expect(env.userAgent).toBe("antigravity");
     expect(env.requestType).toBe("agent");
     expect(env.project).toBe("proj-123");
@@ -35,7 +36,14 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.model).toBeUndefined();
     expect(env.request.safetySettings).toBeUndefined();
     expect(req.headers["Authorization"]).toBe("Bearer ya29.token");
-    expect(req.headers["User-Agent"]).toBe("antigravity");
+    expect(req.headers["User-Agent"]).toMatch(/^antigravity\/cli\/[\d.]+ \(aidev_client; os_type=\w+; arch=\w+\)$/);
+    // The literal "antigravity" giveaway UA must no longer be sent.
+    expect(req.headers["User-Agent"]).not.toBe("antigravity");
+    expect(req.headers["x-goog-api-client"]).toBe("google-api-nodejs-client/10.3.0");
+    // sessionId lives only at request.sessionId (no top-level / snake_case duplicate).
+    expect(env.request.sessionId).toMatch(/^-/);
+    expect(env.request.session_id).toBeUndefined();
+    expect(env.sessionId).toBeUndefined();
   });
 
   test("stream uses :streamGenerateContent?alt=sse", async () => {
@@ -51,6 +59,39 @@ describe("antigravity CCA envelope", () => {
   test("sessionId is deterministic for the same first user text", () => {
     expect(antigravitySessionId(parsed("same"))).toBe(antigravitySessionId(parsed("same")));
     expect(antigravitySessionId(parsed("a"))).not.toBe(antigravitySessionId(parsed("b")));
+  });
+
+  test("claude-on-antigravity forces toolConfig.functionCallingConfig.mode=VALIDATED", async () => {
+    const claudeProvider = { ...provider } as OcxProviderConfig;
+    const withTools = {
+      modelId: "claude-opus-4-6",
+      stream: false,
+      context: {
+        messages: [{ role: "user", content: "hi" }],
+        systemPrompt: [],
+        tools: [{ name: "bash", description: "run", parameters: { type: "object" } }],
+      },
+      options: {},
+    } as unknown as OcxParsedRequest;
+    const req = await createGoogleAdapter(claudeProvider).buildRequest(withTools);
+    const env = JSON.parse(req.body);
+    expect(env.request.toolConfig.functionCallingConfig.mode).toBe("VALIDATED");
+  });
+
+  test("gemini-on-antigravity does NOT get the VALIDATED override", async () => {
+    const withTools = {
+      modelId: "gemini-3-pro",
+      stream: false,
+      context: {
+        messages: [{ role: "user", content: "hi" }],
+        systemPrompt: [],
+        tools: [{ name: "bash", description: "run", parameters: { type: "object" } }],
+      },
+      options: {},
+    } as unknown as OcxParsedRequest;
+    const req = await createGoogleAdapter(provider).buildRequest(withTools);
+    const env = JSON.parse(req.body);
+    expect(env.request.toolConfig?.functionCallingConfig?.mode).toBeUndefined();
   });
 });
 

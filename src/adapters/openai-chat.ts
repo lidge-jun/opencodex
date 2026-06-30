@@ -4,6 +4,7 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { mapReasoningEffort } from "../reasoning-effort";
 import { contentPartsToText } from "./image";
+import { neutralizeIdentity } from "./identity";
 
 // Z.AI's "glm-5.2[1m]" 1M-context id is a Claude-Code / Anthropic-endpoint-only
 // convention; OpenAI-compatible chat-completions endpoints reject the bracketed
@@ -22,11 +23,9 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
   if (context.systemPrompt && context.systemPrompt.length > 0) {
     // Codex sends its GPT-5 identity prompt for EVERY model (the per-model catalog
     // base_instructions is ignored at request time). Neutralize that one identity line
-    // so routed, non-OpenAI models don't misreport themselves as GPT-5 / OpenAI.
-    const sys = context.systemPrompt.join("\n\n").replace(
-      "You are Codex, a coding agent based on GPT-5.",
-      `You are a coding agent (underlying model: ${parsed.modelId}) running via the opencodex proxy. Do not claim to be GPT-5 or to be made by OpenAI.`,
-    );
+    // so routed, non-OpenAI models don't misreport themselves as GPT-5 / OpenAI — without
+    // leaking the proxy identity into the payload.
+    const sys = neutralizeIdentity(context.systemPrompt.join("\n\n"));
     out.push({ role: "system", content: sys });
   }
 

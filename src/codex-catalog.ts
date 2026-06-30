@@ -11,6 +11,7 @@ import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, modelRecordValue, s
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "./generated/jawcode-model-metadata";
 import { shouldCaseFoldMetadataModelId } from "./providers/derive";
 import { applyProviderContextCap, providerContextCap } from "./provider-context-cap";
+import { CODEX_GPT5_IDENTITY_LINE } from "./adapters/identity";
 
 const BUNDLED_CATALOG_CACHE_MS = 60_000;
 let bundledCatalogCache: { expiresAt: number; value: RawCatalog | null } | null = null;
@@ -443,9 +444,11 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
     if (slug.includes("/")) {
       const modelName = slug.slice(slug.indexOf("/") + 1);
       if (typeof e.base_instructions === "string") {
+        // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
+        // (leaking that into base_instructions is a non-first-party signature → ToS risk).
         e.base_instructions = e.base_instructions.replace(
-          "You are Codex, a coding agent based on GPT-5.",
-          `You are a coding agent powered by the ${modelName} model, served through the opencodex proxy. Do not claim to be GPT-5 or made by OpenAI.`,
+          CODEX_GPT5_IDENTITY_LINE,
+          `You are a coding agent powered by the ${modelName} model. Do not claim to be GPT-5 or made by OpenAI.`,
         );
       }
       applyReasoningLevels(e, model?.reasoningEfforts);

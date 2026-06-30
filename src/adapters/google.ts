@@ -18,6 +18,8 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { isVertexTruncationReason, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { sanitizeGeminiToolParameters } from "./google-tool-schema";
+import { neutralizeIdentity } from "./identity";
+import { ANTIGRAVITY_GOOG_API_CLIENT_UA } from "./client-fingerprint";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -83,7 +85,9 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
 }
 
 function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
-  const systemText = [...(parsed.context.systemPrompt ?? []), GOOGLE_BREVITY_INSTRUCTION].join("\n\n");
+  // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
+  // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
+  const systemText = neutralizeIdentity([...(parsed.context.systemPrompt ?? []), GOOGLE_BREVITY_INSTRUCTION].join("\n\n"));
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
@@ -238,18 +242,30 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             sanitizeAntigravityClaudeSignatures(contents);
           }
         }
-        // The CCA client serializes `session_id` (snake_case); send both spellings so the
-        // deterministic session id is honored regardless of which the backend accepts.
-        const request: Record<string, unknown> = { ...body, sessionId, session_id: sessionId };
+        // The real Antigravity client puts the session id ONLY at `request.sessionId` (camelCase,
+        // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
+        // spelling is a non-first-party key, so we send the single canonical location.
+        const request: Record<string, unknown> = { ...body, sessionId };
+        // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
+        if (/claude/i.test(parsed.modelId)) {
+          const existing = (request.toolConfig ?? {}) as Record<string, unknown>;
+          const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
+          request.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
+        }
         const envelope = {
           model: parsed.modelId,
-          userAgent: ANTIGRAVITY_REQUEST_UA,
+          // The envelope's `userAgent` field is a protocol constant ("antigravity"), distinct from
+          // the HTTP `User-Agent` header (the real CLI UA). CLIProxyAPI `geminiToAntigravity` hardcodes
+          // the body field; only the header carries the versioned client string.
+          userAgent: "antigravity",
           requestType: "agent",
           project,
           requestId: `agent-${crypto.randomUUID()}`,
           request,
         };
         headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+        // The Antigravity client library reports a secondary Google API client UA alongside the CLI UA.
+        headers["x-goog-api-client"] = ANTIGRAVITY_GOOG_API_CLIENT_UA;
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }

@@ -16,6 +16,8 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
+import { neutralizeIdentity } from "./identity";
+import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -115,10 +117,9 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
 ): { system: string | undefined; messages: unknown[] } {
-  const system = parsed.context.systemPrompt?.join("\n\n").replace(
-    "You are Codex, a coding agent based on GPT-5.",
-    `You are a coding agent (underlying model: ${parsed.modelId}) running via the opencodex proxy. Do not claim to be GPT-5 or to be made by OpenAI.`,
-  ) || undefined;
+  const system = parsed.context.systemPrompt?.length
+    ? neutralizeIdentity(parsed.context.systemPrompt.join("\n\n")) || undefined
+    : undefined;
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -273,6 +274,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
       if (isOAuth) {
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+        // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
+        // header set is a non-first-party signature. (cch billing-header signing is intentionally
+        // out of scope — brittle and version-coupled.)
+        Object.assign(headers, CLAUDE_CODE_HEADERS);
+        headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
+        headers["x-client-request-id"] = crypto.randomUUID();
       } else if (provider.apiKey) {
         headers["x-api-key"] = provider.apiKey;
       }
