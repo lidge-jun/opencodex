@@ -553,3 +553,98 @@ describe("web-search sources -> url_citation annotations", () => {
     expect(part.annotations).toEqual([]);
   });
 });
+
+describe("web-search batched sources -> url_citation annotations", () => {
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test("a batched call dedupes duplicate sources across queries by URL", async () => {
+    // Both queries' sidecar answers cite the SAME url; only one url_citation must survive.
+    globalThis.fetch = ((input) => {
+      const url = String(input);
+      if (url.startsWith("https://routed.test/")) return Promise.resolve(new Response("{}", { status: 200 }));
+      const answer = "Shared finding.\n\nSources:\n" +
+        "- Shared doc: https://shared.test/doc\n" +
+        "- Unique: https://shared.test/uniqueA";
+      const completed = {
+        type: "response.completed",
+        response: { output: [{ type: "message", role: "assistant", content: [{ type: "output_text", annotations: [], text: answer }] }] },
+      };
+      return Promise.resolve(new Response(
+        `event: response.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+    }) as typeof fetch;
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "compare", stream: true, tools: [{ type: "web_search" }] }),
+      adapter: scriptedAdapter([
+        { type: "tool_call_start", id: "call_dup", name: "web_search" },
+        { type: "tool_call_delta", arguments: JSON.stringify({ queries: ["q one", "q two"] }) },
+        { type: "tool_call_end" },
+      ]),
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 3,
+    });
+
+    const frames = await collectSse(response.body!);
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    const message = output.find(item => item.type === "message") as Record<string, unknown>;
+    const part = (message.content as Record<string, unknown>[])[0];
+    // Both queries returned the same shared.test/doc, so it appears exactly once.
+    expect(part.annotations).toEqual([
+      { type: "url_citation", url: "https://shared.test/doc", title: "Shared doc", start_index: 0, end_index: 0 },
+      { type: "url_citation", url: "https://shared.test/uniqueA", title: "Unique", start_index: 0, end_index: 0 },
+    ]);
+  });
+
+  test("a partial failure still surfaces the successful query's sources", async () => {
+    // First sidecar call fails (HTTP 500), second succeeds with a real Sources block. The batch is a
+    // partial success, so the surviving query's citation must still reach the assistant message.
+    let sidecarCall = 0;
+    globalThis.fetch = ((input) => {
+      const url = String(input);
+      if (url.startsWith("https://routed.test/")) return Promise.resolve(new Response("{}", { status: 200 }));
+      sidecarCall++;
+      if (sidecarCall === 1) return Promise.resolve(new Response("upstream boom", { status: 500 }));
+      const answer = "Recovered.\n\nSources:\n- Good doc: https://ok.test/doc";
+      const completed = {
+        type: "response.completed",
+        response: { output: [{ type: "message", role: "assistant", content: [{ type: "output_text", annotations: [], text: answer }] }] },
+      };
+      return Promise.resolve(new Response(
+        `event: response.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+    }) as typeof fetch;
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "compare", stream: true, tools: [{ type: "web_search" }] }),
+      adapter: scriptedAdapter([
+        { type: "tool_call_start", id: "call_partial", name: "web_search" },
+        { type: "tool_call_delta", arguments: JSON.stringify({ queries: ["fails first", "works second"] }) },
+        { type: "tool_call_end" },
+      ]),
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 3,
+    });
+
+    const frames = await collectSse(response.body!);
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    // The cell is still "completed" because one query succeeded.
+    const cell = output.find(item => item.type === "web_search_call") as Record<string, unknown>;
+    expect(cell.status).toBe("completed");
+    const message = output.find(item => item.type === "message") as Record<string, unknown>;
+    const part = (message.content as Record<string, unknown>[])[0];
+    expect(part.annotations).toEqual([
+      { type: "url_citation", url: "https://ok.test/doc", title: "Good doc", start_index: 0, end_index: 0 },
+    ]);
+  });
+});

@@ -41,38 +41,75 @@ function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSo
  * answer text with that section stripped so the tool_result renderer doesn't double-print sources.
  *
  * Handles the per-line forms seen from the backend: `- title: url`, `- title (url)`,
- * `- [title](url)`, `- <url>`, `- url`, and numbered `1. ...` variants.
+ * `- [title](url)`, `- <url>`, `- url`, numbered `1. ...` variants, a markdown-prefixed header
+ * (`### Sources:`, `**Sources**`), a title line whose URL sits on the FOLLOWING line, and trailing
+ * URL punctuation (`;`, `,`, `)`, `]`, `.`). Prose that follows the source list is preserved.
  */
-const URL_RE = /https?:\/\/[^\s<>()\]]+/;
+const URL_RE = /https?:\/\/[^\s<>()\[\]]+/;
+// A "Sources:" / "Source:" header, allowing markdown prefixes (#, *, -, >) and bold/italic wrappers.
+const SOURCES_HEADER_RE = /^\s*(?:#{1,6}\s*)?[-*>\s]*\**\s*sources?\s*\**\s*:?\s*\**\s*$/i;
+
+/** Trim wrapping/trailing noise from a captured URL: angle brackets, then trailing punctuation. */
+function cleanUrl(url: string): string {
+  return url.replace(/^<+/, "").replace(/[)>\].,;:]+$/, "");
+}
+
+/** Derive a human title from the list-item text preceding the URL (strip markers, md link, seps). */
+function cleanTitle(prefix: string): string {
+  let title = prefix.replace(/^[-*>\d.)\s]+/, "").trim();
+  // `[title](` from a markdown link, or a leading `[`.
+  title = title.replace(/^\[/, "").replace(/\]\(?$/, "").replace(/[:\-—(<]\s*$/, "").trim();
+  return title;
+}
+
 function extractTrailingSources(text: string): { text: string; sources: WebSearchSource[] } {
   const lines = text.split("\n");
-  // Find the LAST line that is just a "Sources:" / "Source:" header (case-insensitive).
+  // Find the LAST line that is a "Sources:" header (markdown prefixes allowed).
   let headerIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^\s*\**\s*sources?\s*:?\s*\**\s*$/i.test(lines[i])) { headerIdx = i; break; }
+    if (SOURCES_HEADER_RE.test(lines[i])) { headerIdx = i; break; }
   }
   if (headerIdx === -1) return { text, sources: [] };
   const sources: WebSearchSource[] = [];
   const seen = new Set<string>();
+  // Track the last line index actually consumed as part of the source list so trailing prose after
+  // the list survives (we strip the header through the last consumed source line, not to EOF).
+  let lastConsumed = headerIdx;
+  // A title line whose URL is expected on a following line (multiline entry).
+  let pendingTitle: string | null = null;
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const raw = lines[i].trim();
-    if (raw === "") continue;
-    // Only consume list-ish lines that carry a URL; stop at the first non-source line so we don't
-    // swallow trailing prose after the section.
+    if (raw === "") {
+      // Blank line between header and first entry is fine; a blank AFTER entries ends the list.
+      if (sources.length > 0 || pendingTitle !== null) break;
+      continue;
+    }
     const m = raw.match(URL_RE);
-    if (!m) break;
-    const url = m[0].replace(/[).,]+$/, "");
+    if (!m) {
+      // A list-ish line with no URL may be a title whose URL is on the next line. Only treat it as a
+      // pending title when it looks like a list item; otherwise it's prose → stop.
+      if (/^[-*>\d.)]/.test(raw) || pendingTitle === null) {
+        if (/^[-*>\d.)]/.test(raw)) { pendingTitle = raw; lastConsumed = i; continue; }
+      }
+      break;
+    }
+    const url = cleanUrl(m[0]);
+    if (!url) { break; }
+    lastConsumed = i;
+    // Title: text before the URL on this line, else a buffered title from a preceding line.
+    const inlinePrefix = raw.slice(0, m.index);
+    const title = cleanTitle(inlinePrefix) || (pendingTitle ? cleanTitle(pendingTitle) : "");
+    pendingTitle = null;
     if (seen.has(url)) continue;
     seen.add(url);
-    // Derive a title from the text before the URL: strip list markers, [md](), and separators.
-    let title = raw.slice(0, m.index).replace(/^[-*\d.)\s]+/, "").trim();
-    title = title.replace(/^\[/, "").replace(/\]\(?$/, "").replace(/[:\-—(]\s*$/, "").trim();
     sources.push(title ? { url, title } : { url });
   }
   if (sources.length === 0) return { text, sources: [] };
-  // Strip the Sources section (header + consumed lines) from the answer text.
-  const stripped = lines.slice(0, headerIdx).join("\n").replace(/\s+$/, "");
-  return { text: stripped, sources };
+  // Keep text before the header AND any prose after the consumed source lines.
+  const before = lines.slice(0, headerIdx).join("\n").replace(/\s+$/, "");
+  const after = lines.slice(lastConsumed + 1).join("\n").replace(/^\s+/, "");
+  const body = after ? (before ? `${before}\n\n${after}` : after) : before;
+  return { text: body, sources };
 }
 
 /** Pull final text + url_citation sources from a completed Responses `output[]` array. */
