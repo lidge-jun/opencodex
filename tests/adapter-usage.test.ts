@@ -76,7 +76,7 @@ describe("adapter reasoning and usage details", () => {
   });
 
   test("Anthropic API-key requests mark system prompt as cacheable", () => {
-    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
     const request = adapter.buildRequest({
       modelId: "claude-opus-4-1",
       context: {
@@ -86,8 +86,9 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { system: unknown };
+    const body = JSON.parse(request.body) as { system: unknown; cache_control?: unknown };
 
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system).toEqual([{
       type: "text",
       text: "stable project instructions",
@@ -100,6 +101,7 @@ describe("adapter reasoning and usage details", () => {
       ...provider,
       adapter: "anthropic",
       authMode: "oauth",
+      baseUrl: "https://api.anthropic.com",
     });
     const request = adapter.buildRequest({
       modelId: "claude-opus-4-1",
@@ -110,8 +112,9 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { system: Record<string, unknown>[] };
+    const body = JSON.parse(request.body) as { system: Record<string, unknown>[]; cache_control?: unknown };
 
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system[0]).toMatchObject({ type: "text" });
     expect(body.system[0].cache_control).toBeUndefined();
     expect(body.system[1]).toEqual({
@@ -122,7 +125,7 @@ describe("adapter reasoning and usage details", () => {
   });
 
   test("Anthropic requests mark the final tool definition as cacheable", () => {
-    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
     const request = adapter.buildRequest({
       modelId: "claude-opus-4-1",
       context: {
@@ -145,8 +148,9 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[] };
+    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[]; cache_control?: unknown };
 
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.tools[0].cache_control).toBeUndefined();
     expect(body.tools[1].cache_control).toEqual({ type: "ephemeral" });
   });

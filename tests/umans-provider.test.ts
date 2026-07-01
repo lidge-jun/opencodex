@@ -86,6 +86,7 @@ describe("Umans provider", () => {
     const body = JSON.parse(req.body as string) as {
       tools: Array<{ name: string }>;
       tool_choice: { type: string; name: string };
+      cache_control?: unknown;
       system?: unknown;
     };
 
@@ -95,6 +96,7 @@ describe("Umans provider", () => {
     expect(req.headers["x-api-key"]).toBe("sk-umans");
     expect(req.headers["anthropic-version"]).toBe("2023-06-01");
     expect(req.headers["anthropic-beta"]).toBeUndefined();
+    expect(body.cache_control).toBeUndefined();
     expect(body.system).toBeUndefined();
     expect(body.tools[0].name).toBe("cx_web_search");
     expect(body.tool_choice).toEqual({ type: "tool", name: "cx_web_search" });

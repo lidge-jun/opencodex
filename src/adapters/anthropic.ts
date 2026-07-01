@@ -47,6 +47,14 @@ function withPromptCache<T extends Record<string, unknown>>(block: T): T & { cac
   return { ...block, cache_control: EPHEMERAL_CACHE_CONTROL };
 }
 
+function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
+  try {
+    return new URL(provider.baseUrl).hostname === "api.anthropic.com";
+  } catch {
+    return false;
+  }
+}
+
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
   switch (effort) {
@@ -234,6 +242,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
         stream: parsed.stream,
         max_tokens: parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
       };
+      if (usesNativeAnthropicEndpoint(provider)) body.cache_control = EPHEMERAL_CACHE_CONTROL;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         body.system = [
