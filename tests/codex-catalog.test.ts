@@ -363,10 +363,10 @@ describe("Codex catalog routed normalization", () => {
   test("opencode-go high-risk models use official jawcode metadata in the Codex catalog", () => {
     const cases = [
       { id: "glm-5.2", context: 1_000_000, auto: 900_000, input: ["text"] },
-      { id: "qwen3.5-plus", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
+      { id: "qwen3.5-plus", context: 262_144, auto: 235_929, input: ["text", "image"] },
       { id: "kimi-k2.7-code", context: 262_144, auto: 235_929, input: ["text", "image"] },
-      { id: "minimax-m3", context: 512_000, auto: 460_800, input: ["text", "image"] },
-      { id: "hy3-preview", context: 256_000, auto: 230_400, input: ["text"] },
+      { id: "minimax-m3", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
+      { id: "qwen3.7-max", context: 1_000_000, auto: 900_000, input: ["text"] },
     ] as const;
     const entries = buildCatalogEntries(nativeTemplate(), [], cases.map(({ id }) => ({ provider: "opencode-go", id })));
 
@@ -390,7 +390,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(slugs.has("opencode-go/glm-5.2")).toBe(true);
     expect(slugs.has("opencode-go/qwen3.5-plus")).toBe(true);
-    expect(slugs.has("opencode-go/hy3-preview")).toBe(true);
+    expect(slugs.has("opencode-go/qwen3.6-plus")).toBe(true);
     expect(models.filter(m => `${m.provider}/${m.id}` === "opencode-go/glm-5.2")).toHaveLength(1);
   });
 
@@ -407,7 +407,7 @@ describe("Codex catalog routed normalization", () => {
       },
       { providerContextCaps: { "opencode-go": 350_000 } },
     );
-    const model = models.find(m => `${m.provider}/${m.id}` === "opencode-go/qwen3.5-plus");
+    const model = models.find(m => `${m.provider}/${m.id}` === "opencode-go/qwen3.6-plus");
 
     expect(model).toMatchObject({
       contextWindow: 350_000,
@@ -417,7 +417,7 @@ describe("Codex catalog routed normalization", () => {
     });
 
     const entries = buildCatalogEntries(nativeTemplate(), [], [model!]);
-    const routed = entries.find(e => e.slug === "opencode-go/qwen3.5-plus");
+    const routed = entries.find(e => e.slug === "opencode-go/qwen3.6-plus");
 
     expect(routed?.context_window).toBe(350_000);
     expect(routed?.max_context_window).toBe(350_000);
@@ -602,6 +602,32 @@ describe("Codex catalog routed normalization", () => {
       inputModalities: ["text"],
     });
     expect(models.find(m => m.id === "small-model")?.contextWindow).toBe(64_000);
+  });
+
+  test("OpenRouter-style context_length live metadata is preserved", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "anthropic/claude-sonnet-5", owned_by: "openrouter", context_length: 1_000_000 },
+      ],
+    }))) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "openrouter",
+      providers: {
+        openrouter: {
+          adapter: "openai-chat",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "sk-test",
+          models: ["anthropic/claude-sonnet-5"],
+          modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000 },
+        },
+      },
+    });
+
+    expect(models.find(m => m.id === "anthropic/claude-sonnet-5")).toMatchObject({
+      contextWindow: 1_000_000,
+    });
   });
 
   test("provider context-cap toggle lowers only known windows above 350k", async () => {

@@ -574,6 +574,7 @@ function readNativeBaseline(catalogPath: string): Map<string, number> {
 type ProviderModelsApiItem = {
   id: string;
   owned_by?: string;
+  context_length?: number;
   max_model_len?: number;
   metadata?: {
     capabilities?: Record<string, unknown>;
@@ -635,6 +636,7 @@ function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModel
   const limits = item.metadata?.limits;
   const contextWindow =
     typeof limits?.max_context_length === "number" ? limits.max_context_length
+      : typeof item.context_length === "number" ? item.context_length
       : typeof item.max_model_len === "number" ? item.max_model_len
         : undefined;
   const reasoningEfforts = capabilities && typeof capabilities.reasoning_effort === "boolean"

@@ -518,7 +518,8 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
   });
 
   test("1M-context models map to 1_000_000", () => {
-    for (const id of ["claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
+    for (const id of ["claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
+      expect(kiro.models ?? []).toContain(id);
       expect(cw[id]).toBe(1_000_000);
     }
   });
