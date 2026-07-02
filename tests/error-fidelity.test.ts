@@ -46,7 +46,7 @@ describe("error fidelity", () => {
       type: "invalid_request_error",
       code: "origin_rejected",
     });
-    expect(classifyError(502, "upstream_error", "Kiro rate limit exceeded: ThrottlingException: rate limited")).toMatchObject({
+    expect(classifyError(502, "upstream_error", "Kiro rate limit exceeded: ThrottlingException: rate limited", { errorType: "ThrottlingException" })).toMatchObject({
       type: "rate_limit_error",
       code: "rate_limit_exceeded",
     });
@@ -74,6 +74,22 @@ describe("error fidelity", () => {
         code: "rate_limit_exceeded",
       },
     });
+  });
+
+  test("message-only rate-limit text on a 502 remains an upstream server error", () => {
+    expect(classifyError(502, "upstream_error", "Provider said rate limit without status or code")).toMatchObject({
+      type: "server_error",
+      code: "upstream_server_error",
+    });
+  });
+
+  test("formatErrorResponse preserves safe retry metadata headers", () => {
+    const response = formatErrorResponse(429, "upstream_error", "Rate limit reached", {
+      headers: { "Retry-After": "8", "X-RateLimit-Reset": "later" },
+    });
+    expect(response.headers.get("retry-after")).toBe("8");
+    expect(response.headers.get("x-ratelimit-reset")).toBe("later");
+    expect(response.headers.get("content-type")).toContain("application/json");
   });
 
   test("streaming response.failed includes both error and last_error", async () => {

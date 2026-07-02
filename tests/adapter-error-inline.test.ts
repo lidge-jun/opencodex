@@ -37,25 +37,41 @@ describe("inline error envelope in a 200 stream (F1)", () => {
       'data: {"error":{"message":"Rate limit reached for model","code":"rate_limit_exceeded"}}\n\n',
     ].join(""));
     const events = await collect(adapter.parseStream(response));
-    expect(events.find(e => e.type === "error")).toMatchObject({ message: "Rate limit reached for model" });
+    expect(events.find(e => e.type === "error")).toMatchObject({
+      message: "Rate limit reached for model",
+      status: 429,
+      code: "rate_limit_exceeded",
+    });
   });
 
   test("google yields a terminal error on an inline error frame", async () => {
     const adapter = createGoogleAdapter({ ...provider, adapter: "google" });
     const response = new Response('data: {"error":{"message":"RESOURCE_EXHAUSTED","code":429}}\n\n');
     const events = await collect(adapter.parseStream(response));
-    expect(events.find(e => e.type === "error")).toMatchObject({ message: "RESOURCE_EXHAUSTED" });
+    expect(events.find(e => e.type === "error")).toMatchObject({ message: "RESOURCE_EXHAUSTED", status: 429 });
   });
 
-  test("bridge converts the adapter error into a classified response.failed (no completed)", async () => {
+  test("bridge converts a structured adapter rate-limit error into a classified response.failed (no completed)", async () => {
     async function* gen(): AsyncGenerator<AdapterEvent> {
       yield { type: "text_delta", text: "par" };
-      yield { type: "error", message: "Rate limit reached for model" };
+      yield { type: "error", message: "Rate limit reached for model", status: 429, code: "rate_limit_exceeded" };
     }
     const frames = await collectSse(bridgeToResponsesSSE(gen(), "routed/model"));
     const failed = frames.find(f => f.event === "response.failed");
     expect(failed).toBeDefined();
     expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({ code: "rate_limit_exceeded" });
     expect(frames.some(f => f.event === "response.completed")).toBe(false);
+  });
+
+  test("bridge does not turn message-only rate-limit text into a false 429", async () => {
+    async function* gen(): AsyncGenerator<AdapterEvent> {
+      yield { type: "error", message: "provider said rate limit, but sent no status or code" };
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(gen(), "umans/umans-coder"));
+    const failed = frames.find(f => f.event === "response.failed");
+    expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({
+      type: "server_error",
+      code: "upstream_server_error",
+    });
   });
 });

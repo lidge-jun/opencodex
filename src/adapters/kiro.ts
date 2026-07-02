@@ -5,11 +5,12 @@ import { resolveKiroApiRegion, resolveKiroProfileArn } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";
 import { parseKiroEvent } from "./kiro-events";
-import { safeKiroErrorMessage } from "./kiro-errors";
+import { kiroEventErrorMetadata, safeKiroErrorMessage } from "./kiro-errors";
 import { appendFallbackText, toolCallFallbackText, toolResultFallbackText } from "./kiro-tool-fallback";
 import { KiroThinkingParser } from "./kiro-thinking";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "./kiro-truncation";
 import { fallbackToolUseId, fingerprint, invocationId, kiroToolName, mapModelId, normalizeToolId, osTag, stableConversationId } from "./kiro-wire";
+import { errorEvent } from "./error-events";
 import { namespacedToolName } from "../types";
 import type {
   AdapterEvent,
@@ -338,7 +339,7 @@ export async function* parseKiroStream(
   nameMap?: Map<string, string>,
 ): AsyncGenerator<AdapterEvent> {
   if (!response.body) {
-    yield { type: "error", message: "Kiro response has no body" };
+    yield errorEvent("Kiro response has no body");
     return;
   }
   let open: { id: string; name: string; chunks: string[] } | null = null;
@@ -367,7 +368,8 @@ export async function* parseKiroStream(
       if (mt === "exception" || mt === "error") {
         // Terminal: surface the upstream error and never emit a trailing success-shaped `done`.
         open = null;
-        yield { type: "error", message: safeKiroErrorMessage(msg.headers, new TextDecoder().decode(msg.payload)) };
+        const payloadText = new TextDecoder().decode(msg.payload);
+        yield errorEvent(safeKiroErrorMessage(msg.headers, payloadText), kiroEventErrorMetadata(msg.headers, payloadText));
         return;
       }
       if (mt && mt !== "event") continue;
@@ -384,7 +386,10 @@ export async function* parseKiroStream(
         case "content":
           if (open) {
             open = null;
-            yield { type: "error", message: kiroTruncationErrorMessage("content arrived before tool stop") };
+            yield errorEvent(kiroTruncationErrorMessage("content arrived before tool stop"), {
+              status: 502,
+              code: "upstream_stream_truncated",
+            });
             return;
           }
           if (ev.data) {
@@ -404,7 +409,10 @@ export async function* parseKiroStream(
           if (open) {
             if (open.id !== id || open.name !== name) {
               open = null;
-              yield { type: "error", message: kiroTruncationErrorMessage("new tool started before previous tool stop") };
+              yield errorEvent(kiroTruncationErrorMessage("new tool started before previous tool stop"), {
+                status: 502,
+                code: "upstream_stream_truncated",
+              });
               return;
             }
           } else {
@@ -434,7 +442,10 @@ export async function* parseKiroStream(
             const input = open.chunks.join("");
             if (!isCompleteKiroToolInput(input)) {
               open = null;
-              yield { type: "error", message: kiroTruncationErrorMessage("incomplete tool input JSON") };
+              yield errorEvent(kiroTruncationErrorMessage("incomplete tool input JSON"), {
+                status: 502,
+                code: "upstream_stream_truncated",
+              });
               return;
             }
             yield* flushTool();
@@ -443,7 +454,10 @@ export async function* parseKiroStream(
         }
         case "truncation":
           open = null;
-          yield { type: "error", message: kiroTruncationErrorMessage(ev.data) };
+          yield errorEvent(kiroTruncationErrorMessage(ev.data), {
+            status: 502,
+            code: "upstream_stream_truncated",
+          });
           return;
       }
     }
@@ -455,7 +469,10 @@ export async function* parseKiroStream(
       const input = open.chunks.join("");
       if (!isCompleteKiroToolInput(input)) {
         open = null;
-        yield { type: "error", message: kiroTruncationErrorMessage("stream ended before tool stop") };
+        yield errorEvent(kiroTruncationErrorMessage("stream ended before tool stop"), {
+          status: 502,
+          code: "upstream_stream_truncated",
+        });
         return;
       }
       yield* flushTool();
@@ -466,7 +483,10 @@ export async function* parseKiroStream(
     if (totalTokens !== undefined) usage.totalTokens = totalTokens;
     yield { type: "done", usage };
   } catch (err) {
-    yield { type: "error", message: safeKiroErrorMessage({}, err instanceof Error ? err.message : String(err)) };
+    yield errorEvent(safeKiroErrorMessage({}, err instanceof Error ? err.message : String(err)), {
+      status: 502,
+      code: "upstream_stream_error",
+    });
   }
 }
 

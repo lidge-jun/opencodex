@@ -501,7 +501,12 @@ async function handleResponses(
   if (!upstreamResponse.ok) {
     const errorText = await upstreamResponse.text().catch(() => "unknown error");
     cleanupUpstreamAbort();
-    return formatErrorResponse(upstreamResponse.status, "upstream_error", `Provider error ${upstreamResponse.status}: ${errorText.slice(0, 500)}`);
+    return formatErrorResponse(
+      upstreamResponse.status,
+      "upstream_error",
+      `Provider error ${upstreamResponse.status}: ${errorText.slice(0, 500)}`,
+      { headers: errorResponseHeaders(upstreamResponse.headers) },
+    );
   }
 
   if (parsed.stream) {
@@ -1300,6 +1305,12 @@ export function sanitizePassthroughHeaders(upstream: Headers): Headers {
     if (!DROP.has(key.toLowerCase())) out.set(key, value);
   });
   return out;
+}
+
+function errorResponseHeaders(upstream: Headers): Headers {
+  const headers = sanitizePassthroughHeaders(upstream);
+  headers.delete("content-type");
+  return headers;
 }
 
 let _corsOrigin = "http://localhost:10100";

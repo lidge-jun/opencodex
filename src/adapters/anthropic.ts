@@ -18,6 +18,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPr
 import { parseDataUrl } from "./image";
 import { neutralizeIdentity } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { errorEvent, errorEventFromEnvelope } from "./error-events";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -325,7 +326,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
 
     async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
-        yield { type: "error", message: "No response body" };
+        yield errorEvent("No response body");
         return;
       }
 
@@ -418,8 +419,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
                 break;
               }
               case "error": {
-                const err = data.error as { message?: string } | undefined;
-                yield { type: "error", message: err?.message ?? "Anthropic error" };
+                yield errorEventFromEnvelope(data.error, "Anthropic error");
                 return;
               }
             }
@@ -427,6 +427,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
           }
         }
         if (pendingUsage && !emittedDone) yield* emitDone();
+      } catch (err) {
+        yield errorEvent(`Anthropic stream read failed: ${err instanceof Error ? err.message : String(err)}`, {
+          status: 502,
+          code: "upstream_stream_error",
+        });
       } finally {
         reader.releaseLock();
       }

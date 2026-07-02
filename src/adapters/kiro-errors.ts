@@ -96,6 +96,18 @@ export function safeKiroErrorMessage(headers: Record<string, unknown>, payloadTe
   return normalizedKiroErrorMessage(headers, payloadText);
 }
 
+export function kiroEventErrorMetadata(headers: Record<string, unknown>, payloadText: string): { status?: number; code?: string; errorType?: string } {
+  const headerType = headerValue(headers, ":exception-type") || headerValue(headers, ":error-type");
+  const parts = [headerType, ...payloadDetails(payloadText)].filter((part): part is string => !!part);
+  const classification = classifyKiroText(undefined, parts.join(" "));
+  if (classification === "Kiro rate limit exceeded") return { status: 429, code: "rate_limit_exceeded", ...(headerType ? { errorType: headerType } : {}) };
+  if (classification === "Kiro quota exhausted") return { status: 402, code: "insufficient_quota", ...(headerType ? { errorType: headerType } : {}) };
+  if (classification === "Kiro authentication failed") return { status: 401, code: "invalid_api_key", ...(headerType ? { errorType: headerType } : {}) };
+  if (classification === "Kiro server overloaded") return { status: 503, code: "server_is_overloaded", ...(headerType ? { errorType: headerType } : {}) };
+  if (classification === "Kiro invalid request") return { status: 400, code: "invalid_request_error", ...(headerType ? { errorType: headerType } : {}) };
+  return headerType ? { errorType: headerType } : {};
+}
+
 export function safeKiroHttpErrorMessage(status: number, headers: Headers | Record<string, unknown>, payloadText: string): string {
   return normalizedKiroErrorMessage(headers, payloadText, status);
 }

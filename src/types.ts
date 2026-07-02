@@ -192,7 +192,13 @@ export type AdapterEvent =
   | { type: "web_search_call_begin"; id: string }
   | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
   | { type: "done"; usage?: OcxUsage }
-  | { type: "error"; message: string };
+  | {
+    type: "error";
+    message: string;
+    status?: number;
+    code?: string | null;
+    errorType?: string | null;
+  };
 
 /**
  * A web source backing a search answer. Surfaced on the search-end event and rendered by the bridge

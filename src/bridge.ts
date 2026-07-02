@@ -1,5 +1,5 @@
 import type { AdapterEvent, OcxUsage } from "./types";
-import { classifyError, type OcxErrorPayload } from "./errors";
+import { classifyError, type OcxErrorHints, type OcxErrorPayload } from "./errors";
 import { usageDisplayTotalTokens, usageInputTokensWithCacheDetail } from "./usage-totals";
 
 function uuid(): string {
@@ -27,8 +27,15 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   return out;
 }
 
-function responseError(status: number, type: string, message: string): OcxErrorPayload {
-  return classifyError(status, type, message);
+function responseError(status: number, type: string, message: string, hints?: OcxErrorHints): OcxErrorPayload {
+  return classifyError(status, type, message, hints);
+}
+
+function adapterError(event: Extract<AdapterEvent, { type: "error" }>): OcxErrorPayload {
+  return responseError(event.status ?? 502, "upstream_error", event.message, {
+    code: event.code,
+    errorType: event.errorType,
+  });
 }
 
 /**
@@ -450,11 +457,12 @@ export function bridgeToResponsesSSE(
               if (currentRawReasoning) closeCurrentRawReasoning();
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
+              const error = adapterError(event);
               emit("response.failed", {
                 response: {
                   ...responseSnapshot("failed", finishedItems),
-                  error: responseError(502, "upstream_error", event.message),
-                  last_error: responseError(502, "upstream_error", event.message),
+                  error,
+                  last_error: error,
                 },
               });
               reportTerminal("failed");
@@ -527,7 +535,7 @@ export function buildResponseJSON(
   const responseId = `resp_${uuid()}`;
   const output: OutputItem[] = [];
   let usage: OcxUsage | undefined;
-  let errorMessage: string | undefined;
+  let errorPayload: OcxErrorPayload | undefined;
 
   let currentText = "";
   let currentSummaryReasoning = "";
@@ -662,7 +670,7 @@ export function buildResponseJSON(
         }
         break;
       case "error":
-        errorMessage = e.message;
+        errorPayload = adapterError(e);
         break;
       case "done":
         usage = e.usage;
@@ -677,15 +685,17 @@ export function buildResponseJSON(
   return {
     id: responseId, object: "response",
     created_at: Math.floor(Date.now() / 1000),
-    status: errorMessage ? "failed" : "completed",
+    status: errorPayload ? "failed" : "completed",
     model: modelId, output,
-    ...(errorMessage ? { error: { message: errorMessage } } : {}),
+    ...(errorPayload ? { error: errorPayload } : {}),
     usage: responsesUsage(usage),
   };
 }
 
-export function formatErrorResponse(status: number, type: string, message: string): Response {
-  return new Response(JSON.stringify({ error: classifyError(status, type, message) }), {
-    status, headers: { "Content-Type": "application/json" },
+export function formatErrorResponse(status: number, type: string, message: string, options?: { hints?: OcxErrorHints; headers?: HeadersInit }): Response {
+  const headers = new Headers(options?.headers);
+  headers.set("Content-Type", "application/json");
+  return new Response(JSON.stringify({ error: classifyError(status, type, message, options?.hints) }), {
+    status, headers,
   });
 }

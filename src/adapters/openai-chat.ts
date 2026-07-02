@@ -5,6 +5,7 @@ import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoice
 import { mapReasoningEffort } from "../reasoning-effort";
 import { contentPartsToText } from "./image";
 import { neutralizeIdentity } from "./identity";
+import { errorEvent, errorEventFromEnvelope } from "./error-events";
 
 // Z.AI's "glm-5.2[1m]" 1M-context id is a Claude-Code / Anthropic-endpoint-only
 // convention; OpenAI-compatible chat-completions endpoints reject the bracketed
@@ -213,7 +214,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
-        yield { type: "error", message: "No response body" };
+        yield errorEvent("No response body");
         return;
       }
 
@@ -257,9 +258,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a
         // classified response.failed (bridge case "error") — never a truncated completion.
         if (chunk.error) {
-          const err = chunk.error as { message?: string } | undefined;
           if (currentToolCallId) yield { type: "tool_call_end" };
-          yield { type: "error", message: err?.message ?? "upstream error" };
+          yield errorEventFromEnvelope(chunk.error);
           return "terminate";
         }
 
@@ -340,11 +340,19 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
         // closed so the bridge emits a classified response.failed rather than a silent truncation.
         if (!sawFinish && pendingUsage === undefined) {
-          yield { type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" };
+          yield errorEvent("upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation", {
+            status: 502,
+            code: "upstream_stream_truncated",
+          });
           return;
         }
         // Graceful close that omitted [DONE] but delivered finish_reason and/or final usage.
         yield { type: "done", usage: pendingUsage };
+      } catch (err) {
+        yield errorEvent(`upstream stream read failed: ${err instanceof Error ? err.message : String(err)}`, {
+          status: 502,
+          code: "upstream_stream_error",
+        });
       } finally {
         reader.releaseLock();
       }

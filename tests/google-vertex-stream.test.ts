@@ -72,6 +72,18 @@ describe("vertex parseStream fail-closed truncation", () => {
     expect(usage?.inputTokens).toBe(7);
     expect(usage?.outputTokens).toBe(3);
   });
+
+  test("EOF without finishReason or usage fails closed as possible truncation", async () => {
+    const events = await collect(vertexProvider, [
+      { candidates: [{ content: { parts: [{ text: "partial" }] } }] },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      status: 502,
+      code: "upstream_stream_truncated",
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
 });
 
 describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {

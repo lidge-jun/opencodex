@@ -4,6 +4,7 @@ import { safeKiroHttpErrorMessage } from "./kiro-errors";
 const KIRO_RETRY_ATTEMPTS = 3;
 const KIRO_RETRY_BASE_MS = 250;
 const KIRO_RETRY_MAX_MS = 2_000;
+const KIRO_RETRY_AFTER_MAX_MS = 60_000;
 
 function retryableKiroStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
@@ -21,7 +22,7 @@ function retryAfterMs(headers: Headers): number | undefined {
 
 function retryDelayMs(attempt: number, headers?: Headers): number {
   const retryAfter = headers ? retryAfterMs(headers) : undefined;
-  if (retryAfter !== undefined) return Math.min(retryAfter, KIRO_RETRY_MAX_MS);
+  if (retryAfter !== undefined) return Math.min(retryAfter, KIRO_RETRY_AFTER_MAX_MS);
   const exp = Math.min(KIRO_RETRY_BASE_MS * (2 ** attempt), KIRO_RETRY_MAX_MS);
   return Math.floor(exp * (0.8 + Math.random() * 0.4));
 }

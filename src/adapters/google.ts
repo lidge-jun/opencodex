@@ -21,6 +21,7 @@ import { sanitizeGeminiToolParameters } from "./google-tool-schema";
 import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityWireModelId } from "../providers/antigravity-models";
+import { errorEvent, errorEventFromEnvelope } from "./error-events";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -297,7 +298,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
     async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
-        yield { type: "error", message: "No response body" };
+        yield errorEvent("No response body");
         return;
       }
 
@@ -327,14 +328,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
             // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
             if (chunk.error) {
-              const err = chunk.error as { message?: string } | undefined;
               // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
               // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
               if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession
-                && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
+                && /signature|invalid_argument|invalid argument/i.test((chunk.error as { message?: string } | undefined)?.message ?? "")) {
                 clearAntigravityReplay(antigravityModel, antigravitySession);
               }
-              yield { type: "error", message: err?.message ?? "upstream error" };
+              yield errorEventFromEnvelope(chunk.error);
               return;
             }
 
@@ -380,10 +380,25 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
         if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
           && toolCallsStarted > 0 && isVertexTruncationReason(lastFinishReason)) {
-          yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
+          yield errorEvent(vertexTruncationErrorMessage(lastFinishReason), {
+            status: 502,
+            code: "upstream_stream_truncated",
+          });
+          return;
+        }
+        if (!lastFinishReason && pendingUsage === undefined) {
+          yield errorEvent("Google stream ended without finishReason or usage metadata — possible truncation", {
+            status: 502,
+            code: "upstream_stream_truncated",
+          });
           return;
         }
         yield { type: "done", usage: pendingUsage };
+      } catch (err) {
+        yield errorEvent(`Google stream read failed: ${err instanceof Error ? err.message : String(err)}`, {
+          status: 502,
+          code: "upstream_stream_error",
+        });
       } finally {
         reader.releaseLock();
       }
@@ -420,7 +435,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
         && toolCallsStarted > 0 && isVertexTruncationReason(candidates?.[0]?.finishReason)) {
-        return [{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }];
+        return [errorEvent(vertexTruncationErrorMessage(candidates?.[0]?.finishReason), {
+          status: 502,
+          code: "upstream_stream_truncated",
+        })];
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;

@@ -4,6 +4,7 @@ import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage
 const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
+const GOOGLE_RETRY_AFTER_MAX_MS = 60_000;
 
 function retryAfterMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
@@ -17,7 +18,7 @@ function retryAfterMs(headers: Headers): number | undefined {
 
 function retryDelayMs(attempt: number, headers?: Headers): number {
   const retryAfter = headers ? retryAfterMs(headers) : undefined;
-  if (retryAfter !== undefined) return Math.min(retryAfter, GOOGLE_RETRY_MAX_MS);
+  if (retryAfter !== undefined) return Math.min(retryAfter, GOOGLE_RETRY_AFTER_MAX_MS);
   const exp = Math.min(GOOGLE_RETRY_BASE_MS * (2 ** attempt), GOOGLE_RETRY_MAX_MS);
   return Math.floor(exp * (0.8 + Math.random() * 0.4));
 }

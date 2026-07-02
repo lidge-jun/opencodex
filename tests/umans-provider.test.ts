@@ -154,6 +154,43 @@ describe("Umans provider", () => {
     expect(events[2]).toEqual({ type: "tool_call_end" });
   });
 
+  test("Anthropic adapter does not invent Umans rate-limit metadata from message text alone", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `event: error\n` +
+          `data: {"type":"error","error":{"message":"rate limit text from compatibility layer"}}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+
+    const events = await collect(createAnthropicAdapter(umansProvider()).parseStream(new Response(stream)));
+
+    expect(events.at(-1)).toEqual({ type: "error", message: "rate limit text from compatibility layer" });
+  });
+
+  test("Anthropic adapter preserves structured Umans rate-limit errors", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `event: error\n` +
+          `data: {"type":"error","error":{"type":"rate_limit_error","message":"rate limit reached"}}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+
+    const events = await collect(createAnthropicAdapter(umansProvider()).parseStream(new Response(stream)));
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "rate limit reached",
+      status: 429,
+      errorType: "rate_limit_error",
+    });
+  });
+
   test("Anthropic adapter strips Umans compatibility prefix from non-streaming tool calls", async () => {
     const response = new Response(JSON.stringify({
       content: [{

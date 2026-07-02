@@ -44,7 +44,11 @@ describe("openai-chat stream EOF fail-closed", () => {
       'data: {"error":{"message":"Rate limit reached for model","code":"rate_limit_exceeded"}}\n\n',
     ].join(""));
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
-    expect(events.find(e => e.type === "error")).toMatchObject({ message: "Rate limit reached for model" });
+    expect(events.find(e => e.type === "error")).toMatchObject({
+      message: "Rate limit reached for model",
+      status: 429,
+      code: "rate_limit_exceeded",
+    });
   });
 
   test("finish-only chunk with no delta (provider omits [DONE]) is accepted as done", async () => {
