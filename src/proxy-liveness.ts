@@ -32,11 +32,15 @@ export interface LiveProxy {
   port: number;
 }
 
-/** Host to probe for a given bind hostname (wildcards answer on IPv4 loopback). */
+/**
+ * Host to probe for a given bind hostname: wildcards answer on IPv4 loopback, and raw
+ * IPv6 addresses must be bracketed or the composed URL is invalid.
+ */
 export function probeHostname(hostname: string | undefined): string {
   const trimmed = (hostname ?? "").trim();
   if (!trimmed || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "[::]") return "127.0.0.1";
-  return trimmed;
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
 
 /**

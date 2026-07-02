@@ -324,7 +324,7 @@ describe("service lifecycle cleanup ordering", () => {
   test("service cleanup stops gracefully first via the shared stopper and clears the pid file", async () => {
     const service = await readText("src/service.ts");
 
-    expect(service).toContain('import { getConfigDir, readPid, removePid, removeRuntimePort } from "./config";');
+    expect(service).toContain('import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";');
     expect(service).toContain("removeRuntimePort(pid);");
     expect(service).toContain('import { isProcessAlive, stopProxy } from "./process-control";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readRuntimePort } from "./config";
+import { loadConfig, readRuntimePort } from "./config";
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -74,7 +74,18 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     return false;
   }
   const waitExit = io.waitExit ?? waitForExit;
-  return waitExit(pid, io.exitTimeoutMs ?? 8000);
+  // Honor the server's own drain window: /api/stop answers 200 first, then drains for
+  // config.shutdownTimeoutMs. Waiting less than that hard-kills mid-drain.
+  const exitTimeoutMs = io.exitTimeoutMs ?? drainDeadlineMs();
+  return waitExit(pid, exitTimeoutMs);
+}
+
+function drainDeadlineMs(): number {
+  try {
+    return (loadConfig().shutdownTimeoutMs ?? 5000) + 3000;
+  } catch {
+    return 8000;
+  }
 }
 
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */

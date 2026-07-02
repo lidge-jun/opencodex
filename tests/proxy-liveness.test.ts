@@ -31,6 +31,12 @@ describe("probeHostname", () => {
     expect(probeHostname("::")).toBe("127.0.0.1");
     expect(probeHostname("192.168.1.20")).toBe("192.168.1.20");
   });
+
+  test("raw IPv6 hosts are bracketed so the healthz URL stays valid", () => {
+    expect(probeHostname("::1")).toBe("[::1]");
+    expect(probeHostname("[::1]")).toBe("[::1]");
+    expect(probeHostname("2001:db8::5")).toBe("[2001:db8::5]");
+  });
 });
 
 describe("proxyIdentityAt", () => {

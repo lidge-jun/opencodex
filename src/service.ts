@@ -9,7 +9,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
+import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex-inject";
 import { durableBunPath, durableBunRuntime } from "./bun-runtime";
@@ -63,11 +63,15 @@ function serviceStatePaths(): string[] {
 }
 
 function currentCodexHome(): string {
-  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"));
+  const raw = process.env.CODEX_HOME?.trim();
+  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
 }
 
 function currentOpenCodexHome(): string {
-  return resolve(process.env.OPENCODEX_HOME?.trim() || getConfigDir());
+  // getConfigDir() already resolves OPENCODEX_HOME with ~ expansion; keep the
+  // install-state comparison on the same normalization or `~/...` values falsely
+  // fail the environment-match check depending on cwd.
+  return getConfigDir();
 }
 
 function normalizePathForCompare(path: string): string {

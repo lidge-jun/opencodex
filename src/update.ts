@@ -83,12 +83,24 @@ export async function runUpdate(): Promise<void> {
     return;
   }
 
+  // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
+  // unloads it permanently, so a successful update must reinstall/restart it afterwards.
+  let serviceWasInstalled = false;
+  try {
+    const { isServiceInstalled } = await import("./service");
+    serviceWasInstalled = isServiceInstalled();
+  } catch { /* best-effort */ }
+
   // Never replace package files under a live proxy: the running server dynamic-imports
   // modules after startup, so an in-place update leaves it executing mixed old/new code.
   // Full `ocx stop` semantics (graceful drain, service stop, native Codex restore).
   if (readPid()) {
-    console.log("⏹  Stopping the running proxy before updating (restart afterwards with 'ocx start')...");
-    spawnSync(process.execPath, [process.argv[1], "stop"], { stdio: "inherit", windowsHide: true });
+    console.log("⏹  Stopping the running proxy before updating...");
+    const stop = spawnSync(process.execPath, [process.argv[1], "stop"], { stdio: "inherit", windowsHide: true });
+    if (stop.status !== 0 || readPid()) {
+      console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      process.exit(1);
+    }
   }
 
   const { bin, args: cmdArgs } = updateCommand(installer, tag);
@@ -109,13 +121,16 @@ export async function runUpdate(): Promise<void> {
     } catch (e) {
       console.warn(`⚠️  Shim repair skipped: ${e instanceof Error ? e.message : e}`);
     }
-    // The launchd/systemd/Task Scheduler service bakes an absolute Bun path;
-    // advise refreshing it (reinstall is heavier, so we don't auto-run it).
-    try {
-      const { isServiceInstalled } = await import("./service");
-      if (isServiceInstalled()) console.log("Service detected — refresh its baked path:  ocx service install");
-    } catch { /* best-effort advisory */ }
-    console.log("Restart the proxy:  ocx stop && ocx start");
+    // The stop above unloaded any managed service; reinstall it with the NEW files
+    // (spawn the fresh cli.ts so updated code writes the baked paths) so a
+    // launchd/schtasks/systemd user isn't left with the background proxy down.
+    if (serviceWasInstalled) {
+      console.log("🔁 Reinstalling the background service with the updated files...");
+      const svc = spawnSync(process.execPath, [process.argv[1], "service", "install"], { stdio: "inherit", windowsHide: true });
+      if (svc.status !== 0) console.warn("⚠️  Service refresh failed — run 'ocx service install' manually.");
+    } else {
+      console.log("Restart the proxy:  ocx start");
+    }
   } else {
     console.error(`\n⚠️  Update failed (${bin} exit ${r.status ?? "?"}). Try manually:  ${bin} ${cmdArgs.join(" ")}`);
     process.exit(1);

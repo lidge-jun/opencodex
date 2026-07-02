@@ -243,7 +243,7 @@ describe("Codex autostart shim", () => {
     expect(script).toContain('if /I "%~1"=="--help" goto run_codex');
   });
 
-  test("Windows install backs up cmd and ps1 npm launchers without touching the bare launcher", () => {
+  test("Windows install backs up cmd, ps1, and the bare Git-Bash launcher", () => {
     if (process.platform !== "win32") return;
 
     const dir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
@@ -269,12 +269,13 @@ describe("Codex autostart shim", () => {
       expect(installed.installed).toBe(true);
       expect(readFileSync(cmd, "utf8")).toContain(SHIM_MARKER);
       expect(readFileSync(ps1, "utf8")).toContain(SHIM_MARKER);
-      expect(readFileSync(bare, "utf8")).toBe(bareOriginal);
+      expect(readFileSync(bare, "utf8")).toContain(SHIM_MARKER);
       expect(readFileSync(join(dir, "codex.opencodex-real.cmd"), "utf8")).toBe(cmdOriginal);
       expect(readFileSync(join(dir, "codex.opencodex-real.ps1"), "utf8")).toBe(ps1Original);
+      expect(readFileSync(join(dir, "codex.opencodex-real"), "utf8")).toBe(bareOriginal);
 
       const state = JSON.parse(readFileSync(join(home, "codex-shim.json"), "utf8"));
-      expect(state.wrappers).toHaveLength(2);
+      expect(state.wrappers).toHaveLength(3);
 
       const removed = uninstallCodexShim();
 

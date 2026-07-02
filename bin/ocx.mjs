@@ -49,8 +49,17 @@ function updateTag(currentVersion) {
   return String(currentVersion).includes("-preview.") ? "preview" : "latest";
 }
 
+function expandUserPath(raw) {
+  // Mirror src/config.ts expandUserPath — the Bun proxy expands `~`, so this launcher's
+  // pid/state gates must resolve the same directory or they silently check the wrong path.
+  if (raw === "~") return homedir();
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(homedir(), raw.slice(2));
+  return raw;
+}
+
 function configDir() {
-  return resolve(process.env.OPENCODEX_HOME?.trim() || join(homedir(), ".opencodex"));
+  const raw = process.env.OPENCODEX_HOME?.trim();
+  return resolve(raw ? expandUserPath(raw) : join(homedir(), ".opencodex"));
 }
 
 function shouldRepairCodexShim() {
@@ -90,13 +99,21 @@ function runNpmSelfUpdate() {
     process.exit(0);
   }
 
+  // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
+  // unloads it permanently, so a successful update must reinstall it afterwards.
+  const serviceWasInstalled = existsSync(join(configDir(), "service-state.json"));
+
   // Never replace package files under a live proxy — stop it first (full `ocx stop`
   // semantics: graceful drain, service stop, native Codex restore). The pid file is the
   // cheap liveness gate available to this Node launcher.
+  const launcher = fileURLToPath(import.meta.url);
   if (existsSync(join(configDir(), "ocx.pid"))) {
-    console.log("⏹  Stopping the running proxy before updating (restart afterwards with 'ocx start')...");
-    const launcher = fileURLToPath(import.meta.url);
-    spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
+    console.log("⏹  Stopping the running proxy before updating...");
+    const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
+    if (stopRes.status !== 0 || existsSync(join(configDir(), "ocx.pid"))) {
+      console.error("opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      process.exit(1);
+    }
   }
 
   console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ ${npm} install -g ${PKG}@${tag}`);
@@ -109,8 +126,15 @@ function runNpmSelfUpdate() {
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     repairCodexShimIfNeeded();
-    console.log("Restart the proxy:  ocx stop && ocx start");
-    console.log("If a background service is installed, refresh its baked path:  ocx service install");
+    // The stop above unloaded any managed service; reinstall via the freshly-installed
+    // launcher so the new files write the baked paths and the service restarts.
+    if (serviceWasInstalled) {
+      console.log("Reinstalling the background service with the updated files...");
+      const svc = spawnSync(process.execPath, [launcher, "service", "install"], { stdio: "inherit", windowsHide: true });
+      if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+    } else {
+      console.log("Restart the proxy:  ocx start");
+    }
     process.exit(0);
   }
   console.error(`\nUpdate failed (${npm} exit ${res.status ?? "?"}). Try manually:  ${npm} install -g ${PKG}@${tag}`);

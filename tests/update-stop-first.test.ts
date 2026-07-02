@@ -24,6 +24,14 @@ describe("update stops the running proxy before replacing files", () => {
     expect(stopAt).toBeLessThan(installAt);
     expect(launcherSource).toContain('existsSync(join(configDir(), "ocx.pid"))');
   });
+
+  test("both paths abort when the stop fails, and reinstall a managed service after success", () => {
+    expect(updateSource).toContain("aborting the update");
+    expect(updateSource).toContain('[process.argv[1], "service", "install"]');
+    expect(launcherSource).toContain("aborting the update");
+    expect(launcherSource).toContain('[launcher, "service", "install"]');
+    expect(launcherSource).toContain('existsSync(join(configDir(), "service-state.json"))');
+  });
 });
 
 describe("/healthz identity fields", () => {
