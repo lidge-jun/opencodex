@@ -687,7 +687,14 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
     }
     const json = await res.json() as { data?: ProviderModelsApiItem[] };
-    const live = (json.data ?? []).map(m => applyProviderConfigHints(name, prov, {
+    const jsonData = (json as any).data;
+    const models = name === "google" && prov.adapter === "google" && Array.isArray((json as any).models)
+      ? ((json as any).models as Array<{name?: string; displayName?: string}>).map((m: any) => ({
+          id: (m.name ?? '').replace(/^models\//, ''),
+          owned_by: "google",
+        }))
+      : (jsonData ?? []);
+    const live = models.map(m => applyProviderConfigHints(name, prov, {
       id: m.id,
       provider: name,
       owned_by: m.owned_by,

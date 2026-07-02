@@ -195,6 +195,10 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     }
     return { url: `${prov.baseUrl}/v1/models?limit=1000`, headers };
   }
+  if (prov.adapter === "google") {
+    if (apiKey) headers["x-goog-api-key"] = apiKey;
+    return { url: ${prov.baseUrl}/v1/models, headers };
+  }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   return { url: `${prov.baseUrl}/models`, headers };
 }
