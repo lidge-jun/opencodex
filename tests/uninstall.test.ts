@@ -42,10 +42,10 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service stopped"');
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
-    expect(uninstallBody).toContain("killProxy(pid);");
+    expect(uninstallBody).toContain("await stopProxy(pid);");
     expect(uninstallBody).toContain("uninstallServiceIfInstalled()");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("killProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceIfInstalled()"));
+    expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceIfInstalled()"));
   });
 });

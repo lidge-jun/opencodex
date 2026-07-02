@@ -193,6 +193,37 @@ describe("Windows service task", () => {
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
   });
 
+  test("switches the wrapper console to UTF-8 and sleeps via ping (timeout dies without console stdin)", () => {
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+
+    expect(script).toContain("chcp 65001 >nul");
+    expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "OCX_SERVICE=1"'));
+    expect(script).toContain("ping -n 6 127.0.0.1 >nul");
+    expect(script).not.toContain("timeout /t");
+  });
+
+  test("rewrites profile-relative paths to env indirection so non-ASCII usernames survive OEM-codepage batch parsing", () => {
+    const oldUserProfile = process.env.USERPROFILE;
+    const oldAppData = process.env.APPDATA;
+    try {
+      process.env.USERPROFILE = "C:\\Users\\한글사용자";
+      process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
+      const script = buildWindowsServiceScript({
+        bun: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
+        cli: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
+      });
+
+      expect(script).toContain('set "OCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
+      expect(script).toContain('set "OCX_CLI=%APPDATA%\\npm\\node_modules\\opencodex\\src\\cli.ts"');
+      expect(script).not.toContain('set "OCX_BUN=C:\\Users\\한글사용자');
+    } finally {
+      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = oldUserProfile;
+      if (oldAppData === undefined) delete process.env.APPDATA;
+      else process.env.APPDATA = oldAppData;
+    }
+  });
+
   test("writes token-safe startup identity and child output to the service log", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -262,7 +293,7 @@ describe("service lifecycle cleanup ordering", () => {
     const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
 
     expect(stopCase).toContain("ops.stop();");
-    expect(stopCase).toContain("stopTrackedProxyForServiceCommand();");
+    expect(stopCase).toContain("await stopTrackedProxyForServiceCommand();");
     expect(stopCase).toContain("restoreNativeCodex();");
     expect(stopCase.indexOf("ops.stop();")).toBeLessThan(stopCase.indexOf("stopTrackedProxyForServiceCommand();"));
     expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodex();"));
@@ -273,7 +304,7 @@ describe("service lifecycle cleanup ordering", () => {
     const uninstallCase = service.slice(service.indexOf('case "uninstall":'), service.indexOf("default:"));
 
     expect(uninstallCase).toContain("ops.stop();");
-    expect(uninstallCase).toContain("stopTrackedProxyForServiceCommand();");
+    expect(uninstallCase).toContain("await stopTrackedProxyForServiceCommand();");
     expect(uninstallCase).toContain("ops.uninstall();");
     expect(uninstallCase).toContain("restoreNativeCodex();");
     expect(uninstallCase.indexOf("ops.stop();")).toBeLessThan(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();"));
@@ -290,17 +321,17 @@ describe("service lifecycle cleanup ordering", () => {
     expect(uninstallWindows).toContain("unlinkSync(windowsTaskXmlPath())");
   });
 
-  test("service cleanup uses the shared process-tree killer and clears the pid file", async () => {
+  test("service cleanup stops gracefully first via the shared stopper and clears the pid file", async () => {
     const service = await readText("src/service.ts");
 
     expect(service).toContain('import { getConfigDir, readPid, removePid } from "./config";');
-    expect(service).toContain('import { isProcessAlive, killProxy } from "./process-control";');
+    expect(service).toContain('import { isProcessAlive, stopProxy } from "./process-control";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
-    expect(service).toContain("function stopTrackedProxyIfRunning(): TrackedProxyCleanupResult");
+    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain('if (!pid) return "none";');
     expect(service).toContain("if (!isProcessAlive(pid))");
     expect(service).toContain('return "stale";');
-    expect(service).toContain("killProxy(pid);");
+    expect(service).toContain("await stopProxy(pid);");
     expect(service).toContain("removePid(pid);");
     expect(service).toContain('return "stopped";');
   });
@@ -308,7 +339,7 @@ describe("service lifecycle cleanup ordering", () => {
   test("service command cleanup logs kill failures without skipping restore/delete", async () => {
     const service = await readText("src/service.ts");
 
-    expect(service).toContain("function stopTrackedProxyForServiceCommand(): TrackedProxyCleanupResult");
+    expect(service).toContain("async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("catch (err)");
     expect(service).toContain("Failed to stop proxy");
     expect(service).toContain('return "none";');

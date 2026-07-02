@@ -30,9 +30,19 @@ export function updateTag(current: string): Channel {
   return current.includes("-preview.") ? "preview" : "latest";
 }
 
+/**
+ * npm is `npm.cmd` on Windows, and Node/Bun refuse shell-less .cmd spawns
+ * (CVE-2024-27980 hardening) — route Windows npm invocations through the shell.
+ */
+function npmSpawnTarget(bin: string): { bin: string; shell: boolean } {
+  if (process.platform !== "win32" || bin !== "npm") return { bin, shell: false };
+  return { bin: "npm.cmd", shell: true };
+}
+
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
 export function latestVersion(tag: string): string | null {
-  const r = spawnSync("npm", ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true });
+  const npm = npmSpawnTarget("npm");
+  const r = spawnSync(npm.bin, ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
@@ -75,7 +85,8 @@ export async function runUpdate(): Promise<void> {
   const { bin, args: cmdArgs } = updateCommand(installer, tag);
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
-  const r = spawnSync(bin, cmdArgs, { stdio: "inherit", timeout: 180000, windowsHide: true });
+  const target = npmSpawnTarget(bin);
+  const r = spawnSync(target.bin, cmdArgs, { stdio: "inherit", timeout: 180000, windowsHide: true, shell: target.shell });
   if (r.status === 0) {
     console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
     // Re-bake the bundled Bun path into the Codex autostart shim on every

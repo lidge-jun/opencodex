@@ -3,6 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, 
 import { getConfigDir } from "./config";
 import { durableBunPath } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
+import { windowsEnvIndirectBatchValue } from "./win-paths";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 let lastShimDiscoveryError: string | null = null;
@@ -150,7 +151,12 @@ function windowsBatchValue(value: string): string {
 }
 
 function windowsBatchSet(name: string, value: string): string {
-  return `set "${name}=${windowsBatchValue(value)}"`;
+  // Paths are rewritten to %USERPROFILE%-style env indirection: cmd.exe parses .cmd
+  // files in the OEM codepage, so a literal non-ASCII profile prefix (Korean/Chinese
+  // usernames) written as UTF-8 turns to mojibake. The env token expands natively in
+  // the right codepage at parse time; no `chcp` here — this shim runs in the USER's
+  // console and must not leak a codepage change into it.
+  return `set "${name}=${windowsEnvIndirectBatchValue(value, windowsBatchValue)}"`;
 }
 
 export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cliPath: string): string {
@@ -218,7 +224,9 @@ function writeShim(wrapperPath: string, realCodexPath: string): void {
   const { bun, cli } = cliEntry();
   if (process.platform === "win32") {
     if (wrapperPath.toLowerCase().endsWith(".ps1")) {
-      writeFileSync(wrapperPath, buildWindowsPowerShellCodexShim(realCodexPath, bun, cli), "utf8");
+      // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
+      // codepage, which mangles non-ASCII paths embedded in the shim.
+      writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`, "utf8");
     } else {
       writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli), "utf8");
     }

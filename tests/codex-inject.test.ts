@@ -29,9 +29,13 @@ describe("Codex config injection", () => {
     expect(block).toContain('env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }');
   });
 
-  test("uses the bind hostname in injected Codex base_url only when localhost is not reachable", () => {
-    expect(buildProviderTableBlock(10100, false, false, "0.0.0.0")).toContain('base_url = "http://localhost:10100/v1"');
-    expect(buildProviderTableBlock(10100, false, false, "::")).toContain('base_url = "http://localhost:10100/v1"');
+  test("injected base_url matches the actual bind: literal 127.0.0.1 for loopback/wildcard (Windows resolves localhost to ::1 first)", () => {
+    expect(buildProviderTableBlock(10100, false, false, undefined)).toContain('base_url = "http://127.0.0.1:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "localhost")).toContain('base_url = "http://127.0.0.1:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "0.0.0.0")).toContain('base_url = "http://127.0.0.1:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "::")).toContain('base_url = "http://127.0.0.1:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "::1")).toContain('base_url = "http://[::1]:10100/v1"');
+    expect(buildProviderTableBlock(10100, false, false, "[::1]")).toContain('base_url = "http://[::1]:10100/v1"');
     expect(buildProviderTableBlock(10100, false, false, "192.168.1.20")).toContain('base_url = "http://192.168.1.20:10100/v1"');
     expect(buildProviderTableBlock(10100, false, false, "2001:db8::5")).toContain('base_url = "http://[2001:db8::5]:10100/v1"');
   });
@@ -116,7 +120,7 @@ describe("Codex config injection", () => {
 
     expect(profile).toContain('model_provider = "opencodex"');
     expect(profile).toContain("[model_providers.opencodex]");
-    expect(profile).toContain('base_url = "http://localhost:10100/v1"');
+    expect(profile).toContain('base_url = "http://127.0.0.1:10100/v1"');
     expect(profile).not.toContain("model_catalog_json");
   });
 

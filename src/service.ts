@@ -13,8 +13,9 @@ import { getConfigDir, readPid, removePid } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex-inject";
 import { durableBunPath, durableBunRuntime } from "./bun-runtime";
-import { isProcessAlive, killProxy } from "./process-control";
+import { isProcessAlive, stopProxy } from "./process-control";
 import { serviceApiTokenFilePath } from "./service-secrets";
+import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./win-paths";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -252,9 +253,15 @@ function windowsBatchValue(value: string): string {
     .replace(/[\r\n]/g, "");
 }
 
-function windowsBatchSet(name: string, value: string | undefined): string | null {
+type WindowsBatchValueKind = "raw" | "path" | "pathList";
+
+function windowsBatchSet(name: string, value: string | undefined, kind: WindowsBatchValueKind = "raw"): string | null {
   if (!value) return null;
-  return `set "${name}=${windowsBatchValue(value)}"`;
+  const rendered =
+    kind === "path" ? windowsEnvIndirectBatchValue(value, windowsBatchValue)
+    : kind === "pathList" ? windowsEnvIndirectBatchPathList(value, windowsBatchValue)
+    : windowsBatchValue(value);
+  return `set "${name}=${rendered}"`;
 }
 
 function taskXmlString(value: string): string {
@@ -273,14 +280,17 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
   const lines = [
     "@echo off",
     "setlocal",
+    // The wrapper runs in its own hidden console, so switching that console to UTF-8 is
+    // safe (no leak into user shells) and lets cmd parse any UTF-8 remnants correctly.
+    "chcp 65001 >nul",
     windowsBatchSet("OCX_SERVICE", "1"),
-    windowsBatchSet("PATH", path),
-    windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim()),
-    windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim()),
-    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath()),
-    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath()),
-    windowsBatchSet("OCX_BUN", bun),
-    windowsBatchSet("OCX_CLI", cli),
+    windowsBatchSet("PATH", path, "pathList"),
+    windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
+    windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
+    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
+    windowsBatchSet("OCX_BUN", bun, "path"),
+    windowsBatchSet("OCX_CLI", cli, "path"),
     'if exist "%OCX_API_TOKEN_FILE%" (',
     '  set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"',
     ")",
@@ -295,7 +305,9 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
     '"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1',
     "if %ERRORLEVEL% NEQ 0 (",
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',
-    "  timeout /t 5 /nobreak >nul",
+    // `timeout` needs console stdin and dies with "Input redirection is not supported"
+    // under Task Scheduler, turning the 5s cooldown into a hot restart loop; ping doesn't.
+    "  ping -n 6 127.0.0.1 >nul",
     "  goto loop",
     ")",
     "endlocal",
@@ -489,21 +501,21 @@ function platformOps(): ServiceOps | null {
 
 type TrackedProxyCleanupResult = "none" | "stale" | "stopped";
 
-function stopTrackedProxyIfRunning(): TrackedProxyCleanupResult {
+async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   const pid = readPid();
   if (!pid) return "none";
   if (!isProcessAlive(pid)) {
     removePid(pid);
     return "stale";
   }
-  killProxy(pid);
+  await stopProxy(pid);
   removePid(pid);
   return "stopped";
 }
 
-function stopTrackedProxyForServiceCommand(): TrackedProxyCleanupResult {
+async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {
   try {
-    return stopTrackedProxyIfRunning();
+    return await stopTrackedProxyIfRunning();
   } catch (err) {
     console.error(`⚠️  Failed to stop proxy: ${err instanceof Error ? err.message : String(err)}`);
     return "none";
@@ -581,7 +593,7 @@ export function serviceStatusSummary(): string {
   return `unsupported on ${process.platform}`;
 }
 
-export function serviceCommand(sub?: string): void {
+export async function serviceCommand(sub?: string): Promise<void> {
   const ops = platformOps();
   if (!ops) {
     console.error("ocx service supports macOS (launchd), Windows (Task Scheduler), and Linux (systemd).");
@@ -602,7 +614,7 @@ export function serviceCommand(sub?: string): void {
     case "stop":
       assertServiceEnvironmentMatchesInstall();
       ops.stop();
-      stopTrackedProxyForServiceCommand();
+      await stopTrackedProxyForServiceCommand();
       restoreNativeCodex();
       console.log("✅ service stopped + native Codex restored.");
       break;
@@ -616,7 +628,7 @@ export function serviceCommand(sub?: string): void {
     case "remove":
       assertServiceEnvironmentMatchesInstall();
       ops.stop();
-      stopTrackedProxyForServiceCommand();
+      await stopTrackedProxyForServiceCommand();
       ops.uninstall();
       restoreNativeCodex();
       for (const path of serviceStatePaths()) {

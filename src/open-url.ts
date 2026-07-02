@@ -17,5 +17,9 @@ export function openUrl(url: string): void {
   const args = process.platform === "win32"
     ? ["url.dll,FileProtocolHandler", url]
     : [url];
-  spawn(cmd, args, { detached: true, stdio: "ignore", shell: false }).unref();
+  const child = spawn(cmd, args, { detached: true, stdio: "ignore", shell: false });
+  // Headless hosts (no xdg-open) emit ENOENT as an async 'error' event; without a
+  // listener that is an uncaught exception that kills the whole proxy/login flow.
+  child.on("error", () => {});
+  child.unref();
 }

@@ -21,7 +21,7 @@ import { collectStatus } from "./cli-status";
 import { installCrashGuards } from "./crash-guard";
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./cli-help";
 import { findAvailablePort, shouldPersistSelectedPort } from "./ports";
-import { killProxy } from "./process-control";
+import { stopProxy } from "./process-control";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
 import { drainAndShutdown, startServer } from "./server";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -242,7 +242,7 @@ async function handleEnsure() {
   console.log(`✅ Proxy running on port ${config.port ?? port}`);
 }
 
-function handleStop() {
+async function handleStop() {
   const stoppedService = stopServiceIfInstalled();
   if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
 
@@ -250,7 +250,9 @@ function handleStop() {
   let stopFailed = false;
   if (pid) {
     try {
-      killProxy(pid);
+      // Graceful-first (management-API drain) — on Windows this is the only path where
+      // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
+      await stopProxy(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
       removeRuntimePort(pid);
@@ -269,9 +271,9 @@ function handleStop() {
 async function handleUninstall() {
   const failures: string[] = [];
 
-  const runStep = (label: string, step: () => void | boolean) => {
+  const runStep = async (label: string, step: () => void | boolean | Promise<void | boolean>) => {
     try {
-      const changed = step();
+      const changed = await step();
       if (changed === false) console.log(`- ${label}: not installed`);
       else console.log(`✅ ${label}`);
     } catch (err) {
@@ -280,20 +282,20 @@ async function handleUninstall() {
     }
   };
 
-  runStep("service stopped", () => stopServiceIfInstalled());
+  await runStep("service stopped", () => stopServiceIfInstalled());
 
-  runStep("proxy stopped", () => {
+  await runStep("proxy stopped", async () => {
     const pid = readPid();
     if (!pid) return false;
-    killProxy(pid);
+    await stopProxy(pid);
     removePid(pid);
     removeRuntimePort(pid);
     return true;
   });
 
-  runStep("service removed", () => uninstallServiceIfInstalled());
+  await runStep("service removed", () => uninstallServiceIfInstalled());
 
-  runStep("native Codex restored", () => {
+  await runStep("native Codex restored", () => {
     const r = restoreNativeCodex();
     if (!r.success) throw new Error(r.message);
   });
@@ -308,7 +310,7 @@ async function handleUninstall() {
   }
 
   if (failures.length === 0) {
-    runStep("opencodex config removed", () => {
+    await runStep("opencodex config removed", () => {
       rmSync(getConfigDir(), { recursive: true, force: true });
     });
   } else {
@@ -385,7 +387,7 @@ switch (command) {
     await handleStart();
     break;
   case "stop":
-    handleStop();
+    await handleStop();
     break;
   case "restore":
   case "eject": {
@@ -458,7 +460,7 @@ switch (command) {
     break;
   }
   case "service":
-    serviceCommand(args[1]);
+    await serviceCommand(args[1]);
     break;
   case "codex-shim": {
     const { codexShimStatus, installCodexShim, uninstallCodexShim } = await import("./codex-shim");

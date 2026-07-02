@@ -22,7 +22,7 @@ changes local Codex state by writing a provider table and model catalog, then se
 
 ```text
 Codex CLI / TUI / App / SDK
-  -> http://localhost:<port>/v1/responses
+  -> http://127.0.0.1:<port>/v1/responses
   -> opencodex routing + adapter bridge
   -> upstream provider
 ```

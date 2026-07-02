@@ -31,7 +31,7 @@ The provider itself is registered as a Responses-compatible endpoint:
 ```toml
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
-base_url = "http://localhost:10100/v1"
+base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
 ```

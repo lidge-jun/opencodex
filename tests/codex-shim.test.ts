@@ -45,6 +45,37 @@ describe("Codex autostart shim", () => {
     expect(script).not.toContain('"C:\\Tools&A\\100%codex^\\codex-real.exe" %*');
   });
 
+  test("Windows cmd shim rewrites profile paths to env indirection (OEM-codepage batch parsing vs non-ASCII usernames)", () => {
+    const oldUserProfile = process.env.USERPROFILE;
+    const oldAppData = process.env.APPDATA;
+    try {
+      process.env.USERPROFILE = "C:\\Users\\한글사용자";
+      process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
+      const script = buildWindowsCodexShim(
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\codex.opencodex-real.cmd",
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
+      );
+
+      expect(script).toContain('set "OCX_REAL_CODEX=%APPDATA%\\npm\\codex.opencodex-real.cmd"');
+      expect(script).toContain('set "OCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
+      expect(script).not.toContain("한글사용자");
+      // No chcp in the shim: it runs in the USER's console and must not leak a codepage change.
+      expect(script).not.toContain("chcp");
+    } finally {
+      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = oldUserProfile;
+      if (oldAppData === undefined) delete process.env.APPDATA;
+      else process.env.APPDATA = oldAppData;
+    }
+  });
+
+  test("PowerShell shim is written with a UTF-8 BOM (Windows PowerShell 5.1 decodes BOM-less ps1 as ANSI)", async () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "codex-shim.ts"), "utf8");
+
+    expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`");
+  });
+
   test("shim builder output contains the marker that isShim() checks", () => {
     const unix = buildUnixCodexShim("/bin/codex", "/bin/bun", "/cli.ts");
     const win = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts");

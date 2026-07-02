@@ -18,7 +18,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at end of file (TOML tables are position-independent)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
-base_url = "http://localhost:10100/v1"
+base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
 # supports_websockets = true   # config.websockets가 true일 때만

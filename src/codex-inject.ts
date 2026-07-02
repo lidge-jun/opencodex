@@ -32,7 +32,11 @@ function isLoopbackHostname(hostname: string | undefined): boolean {
 
 function providerBaseHost(hostname: string | undefined): string {
   const trimmed = (hostname ?? "127.0.0.1").trim();
-  if (isLoopbackHostname(trimmed) || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "[::]") return "localhost";
+  const lower = trimmed.toLowerCase();
+  // Match what the server actually binds. Writing "localhost" while binding IPv4-only
+  // 127.0.0.1 breaks on Windows, where localhost commonly resolves to ::1 first.
+  if (lower === "::1" || lower === "[::1]") return "[::1]";
+  if (isLoopbackHostname(trimmed) || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "[::]") return "127.0.0.1";
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }

@@ -41,8 +41,11 @@ function currentPackageVersion() {
 }
 
 function updateTag(currentVersion) {
+  // Allowlist the tag: the value is argv-controlled and (on Windows) flows into a
+  // shell-joined spawnSync — never forward arbitrary strings.
   const tagIndex = process.argv.indexOf("--tag");
-  if (tagIndex !== -1 && process.argv[tagIndex + 1]) return process.argv[tagIndex + 1];
+  const explicit = tagIndex !== -1 ? process.argv[tagIndex + 1] : undefined;
+  if (explicit === "preview" || explicit === "latest") return explicit;
   return String(currentVersion).includes("-preview.") ? "preview" : "latest";
 }
 
@@ -70,10 +73,14 @@ function runNpmSelfUpdate() {
   const current = currentPackageVersion();
   const tag = updateTag(current);
   const npm = npmBin();
+  // Node ≥18.20/20.12 refuses to spawn .cmd/.bat without a shell (CVE-2024-27980
+  // hardening) — spawning "npm.cmd" shell-less throws EINVAL on Windows.
+  const winShell = process.platform === "win32";
   const latestResult = spawnSync(npm, ["view", `${PKG}@${tag}`, "version"], {
     encoding: "utf8",
     timeout: 12000,
     windowsHide: true,
+    shell: winShell,
   });
   const latest = latestResult.status === 0 ? latestResult.stdout.trim() : "";
 
@@ -88,6 +95,7 @@ function runNpmSelfUpdate() {
     stdio: "inherit",
     timeout: 180000,
     windowsHide: true,
+    shell: winShell,
   });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
