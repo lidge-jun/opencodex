@@ -1,11 +1,12 @@
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { expandUserPath } from "./config";
 
 function resolveCodexHome(): string {
   const raw = process.env.CODEX_HOME?.trim();
   if (raw) {
-    const path = resolve(raw);
+    const path = resolve(expandUserPath(raw));
     let stat;
     try {
       stat = statSync(path);

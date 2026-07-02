@@ -1,11 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { stopProxyGracefully } from "../src/process-control";
+import { gracefulStopHost, stopProxyGracefully } from "../src/process-control";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true }), { status: 200 });
 }
 
+describe("gracefulStopHost", () => {
+  test("loopback aliases and wildcard binds answer on IPv4 loopback", () => {
+    for (const host of [undefined, "", "  ", "localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "::", "[::]"]) {
+      expect(gracefulStopHost(host)).toBe("127.0.0.1");
+    }
+  });
+
+  test("concrete binds are followed (and IPv6 bracketed)", () => {
+    expect(gracefulStopHost("::1")).toBe("[::1]");
+    expect(gracefulStopHost("[::1]")).toBe("[::1]");
+    expect(gracefulStopHost("192.168.1.20")).toBe("192.168.1.20");
+    expect(gracefulStopHost("2001:db8::5")).toBe("[2001:db8::5]");
+    expect(gracefulStopHost("[2001:db8::5]")).toBe("[2001:db8::5]");
+  });
+});
+
 describe("stopProxyGracefully", () => {
+  test("follows the recorded bind hostname when it names a concrete address", async () => {
+    const calls: string[] = [];
+    await stopProxyGracefully(9, {
+      readRuntime: () => ({ port: 10100, hostname: "::1" }),
+      fetchFn: (async (url: string | URL | Request) => {
+        calls.push(String(url));
+        return okResponse();
+      }) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(calls).toEqual(["http://[::1]:10100/api/stop"]);
+  });
+
   test("POSTs /api/stop on 127.0.0.1 with the runtime port, then waits for exit", async () => {
     const calls: { url: string; method?: string }[] = [];
     const result = await stopProxyGracefully(4242, {

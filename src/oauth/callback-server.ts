@@ -36,6 +36,19 @@ function errorHtml(message: string): string {
 
 export type CallbackResult = { code: string; state: string };
 
+/**
+ * The redirect URI advertised to providers must stay `localhost` (it is what the OAuth
+ * apps have registered), but Windows commonly resolves `localhost` to `::1` first while
+ * we historically bound IPv4-only — the browser then hits refusal/timeouts/wrong server.
+ * When advertising `localhost` over an IPv4 loopback bind, also bind `::1` best-effort.
+ */
+export function loopbackBindHostnames(callbackHostname: string, bindHostname: string): string[] {
+  if (callbackHostname.trim().toLowerCase() === "localhost" && bindHostname === "127.0.0.1") {
+    return ["127.0.0.1", "::1"];
+  }
+  return [bindHostname];
+}
+
 export interface OAuthCallbackFlowOptions {
   preferredPort: number;
   callbackPath?: string;
@@ -96,7 +109,7 @@ export abstract class OAuthCallbackFlow {
   /** Execute the OAuth login flow. */
   async login(): Promise<OAuthCredentials> {
     const state = this.generateState();
-    const { server, redirectUri } = await this.#startCallbackServer(state);
+    const { servers, redirectUri } = await this.#startCallbackServer(state);
     try {
       const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
       this.ctrl.onAuth?.({ url: authUrl, instructions });
@@ -105,39 +118,45 @@ export abstract class OAuthCallbackFlow {
       this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
       return await this.exchangeToken(code, state, redirectUri);
     } finally {
-      server.stop();
+      for (const server of servers) server.stop();
     }
   }
 
-  async #startCallbackServer(expectedState: string): Promise<{ server: BunServer; redirectUri: string }> {
+  async #startCallbackServer(expectedState: string): Promise<{ servers: BunServer[]; redirectUri: string }> {
     try {
-      const server = this.#createServer(this.preferredPort, expectedState);
+      const servers = this.#createServers(this.preferredPort, expectedState);
       if (this.redirectUri) {
-        return { server, redirectUri: this.redirectUri };
+        return { servers, redirectUri: this.redirectUri };
       }
       const redirectUri = `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
-      return { server, redirectUri };
+      return { servers, redirectUri };
     } catch {
       if (this.redirectUri) {
         throw new Error(
           `OAuth callback port ${this.preferredPort} unavailable; cannot fall back to a random port when redirectUri is set`,
         );
       }
-      const server = this.#createServer(0, expectedState);
-      const actualPort = server.port;
+      const servers = this.#createServers(0, expectedState);
+      const actualPort = servers[0].port;
       const redirectUri = `http://${this.callbackHostname}:${actualPort}${this.callbackPath}`;
       this.ctrl.onProgress?.(`Preferred port ${this.preferredPort} unavailable, using port ${actualPort}`);
-      return { server, redirectUri };
+      return { servers, redirectUri };
     }
   }
 
-  #createServer(port: number, expectedState: string): BunServer {
-    return Bun.serve({
-      hostname: this.callbackBindHostname,
-      port,
-      reusePort: false,
-      fetch: (req: Request) => this.#handleCallback(req, expectedState),
-    });
+  #createServers(port: number, expectedState: string): BunServer[] {
+    const fetch = (req: Request) => this.#handleCallback(req, expectedState);
+    const [primaryHost, ...extraHosts] = loopbackBindHostnames(this.callbackHostname, this.callbackBindHostname);
+    const primary = Bun.serve({ hostname: primaryHost, port, reusePort: false, fetch });
+    const servers = [primary];
+    for (const host of extraHosts) {
+      try {
+        servers.push(Bun.serve({ hostname: host, port: primary.port, reusePort: false, fetch }));
+      } catch {
+        // IPv6 loopback unavailable/occupied — the IPv4 listener still serves the redirect.
+      }
+    }
+    return servers;
   }
 
   #handleCallback(req: Request, expectedState: string): Response {

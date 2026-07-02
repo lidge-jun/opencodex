@@ -16,12 +16,23 @@ export function atomicWriteFile(path: string, content: string): void {
   renameSync(tmp, path);
 }
 
+/**
+ * Expand a leading `~` to the home directory in user-supplied paths
+ * (OPENCODEX_HOME/CODEX_HOME set from GUIs/service files where no shell expanded it).
+ * `~user` and `%VAR%`/`$VAR` forms pass through untouched — those belong to the shell.
+ */
+export function expandUserPath(raw: string): string {
+  if (raw === "~") return homedir();
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(homedir(), raw.slice(2));
+  return raw;
+}
+
 let resolvedConfigDirCache: { raw: string | undefined; path: string } | null = null;
 
 function resolveConfigDir(): string {
   const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
   if (resolvedConfigDirCache && resolvedConfigDirCache.raw === raw) return resolvedConfigDirCache.path;
-  const path = raw ? resolve(raw) : join(homedir(), ".opencodex");
+  const path = raw ? resolve(expandUserPath(raw)) : join(homedir(), ".opencodex");
   resolvedConfigDirCache = { raw, path };
   return path;
 }

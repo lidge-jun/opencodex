@@ -23,10 +23,26 @@ export function waitForExit(pid: number, timeoutMs: number): boolean {
 /** Injectable seams so the graceful-stop flow is unit-testable without a live proxy. */
 export interface GracefulStopIo {
   fetchFn?: typeof fetch;
-  readRuntime?: (pid: number) => { port: number } | null;
+  readRuntime?: (pid: number) => { port: number; hostname?: string } | null;
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   env?: Record<string, string | undefined>;
   exitTimeoutMs?: number;
+}
+
+/**
+ * Host to POST /api/stop against: follow the recorded bind hostname when it names a
+ * concrete address (a proxy bound to ::1 or a LAN IP is unreachable on 127.0.0.1);
+ * loopback aliases and wildcard binds all answer on IPv4 loopback.
+ */
+export function gracefulStopHost(hostname: string | undefined): string {
+  const trimmed = (hostname ?? "").trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed || lower === "localhost" || trimmed === "127.0.0.1" || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "[::]") {
+    return "127.0.0.1";
+  }
+  if (lower === "::1" || lower === "[::1]") return "[::1]";
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
 
 /**
@@ -48,9 +64,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   if (token) headers["x-opencodex-api-key"] = token;
   const fetchFn = io.fetchFn ?? fetch;
   try {
-    // The runtime file records the bind hostname only optionally; the proxy always
-    // listens on loopback for local management, so target 127.0.0.1 explicitly.
-    const res = await fetchFn(`http://127.0.0.1:${runtime.port}/api/stop`, {
+    const res = await fetchFn(`http://${gracefulStopHost(runtime.hostname)}:${runtime.port}/api/stop`, {
       method: "POST",
       headers,
       signal: AbortSignal.timeout(2000),

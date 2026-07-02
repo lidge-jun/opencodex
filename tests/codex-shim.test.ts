@@ -76,6 +76,27 @@ describe("Codex autostart shim", () => {
     expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`");
   });
 
+  test("Windows target discovery includes the extensionless Git-Bash launcher and writeShim emits a forward-slash sh shim for it", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "codex-shim.ts"), "utf8");
+
+    expect(source).toContain('const gitBashLauncher = join(dir, "codex");');
+    expect(source).toContain("for (const path of [cmd, ps1, gitBashLauncher])");
+    expect(source).toContain("buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), gitBashPath(serviceApiTokenFilePath()))");
+  });
+
+  test("Unix shim accepts an injected token-file path (Git-Bash shims need forward slashes everywhere)", () => {
+    const script = buildUnixCodexShim(
+      "C:/Users/한글사용자/AppData/Roaming/npm/codex.opencodex-real",
+      "C:/Users/한글사용자/AppData/Roaming/npm/node_modules/bun/bin/bun.exe",
+      "C:/Users/한글사용자/AppData/Roaming/npm/node_modules/opencodex/src/cli.ts",
+      "C:/Users/한글사용자/.opencodex/service-api-token",
+    );
+
+    expect(script).toContain("exec 'C:/Users/한글사용자/AppData/Roaming/npm/codex.opencodex-real' \"$@\"");
+    expect(script).toContain("[ -f 'C:/Users/한글사용자/.opencodex/service-api-token' ]");
+    expect(script).not.toContain("\\\\");
+  });
+
   test("shim builder output contains the marker that isShim() checks", () => {
     const unix = buildUnixCodexShim("/bin/codex", "/bin/bun", "/cli.ts");
     const win = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts");

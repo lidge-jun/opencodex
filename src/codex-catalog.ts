@@ -280,6 +280,7 @@ type ExecFile = (
     stdio: ["ignore", "pipe", "ignore"];
     timeout: number;
     windowsHide: boolean;
+    shell?: boolean;
   },
 ) => string;
 
@@ -328,13 +329,33 @@ function codexShimCommandCandidates(): string[] {
   }
 }
 
+/**
+ * `.cmd`/`.bat` launchers (npm's `codex.cmd`) cannot be spawned shell-less — Node ≥18.20
+ * and Bun refuse with EINVAL (CVE-2024-27980 hardening), which the probe loop silently
+ * swallowed, so npm-only Codex installs never loaded the bundled catalog on Windows.
+ * Route those through the shell (repo convention — see src/update.ts, bin/ocx.mjs) and
+ * pre-quote the path: shell:true joins file+args verbatim, so an unquoted path with
+ * spaces (`C:\Users\John Doe\...`) would split. Windows paths cannot contain `"`.
+ */
+export function codexExecInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): { file: string; shell: boolean } {
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    return { file: `"${command.replace(/"/g, "")}"`, shell: true };
+  }
+  return { file: command, shell: false };
+}
+
 function runCodexDebugModels(command: string, execFile: ExecFile): string {
   const args = ["debug", "models", "--bundled"];
-  return execFile(command, args, {
+  const invocation = codexExecInvocation(command);
+  return execFile(invocation.file, args, {
     encoding: "utf8" as const,
     stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
     timeout: 10_000,
     windowsHide: true,
+    shell: invocation.shell,
   });
 }
 

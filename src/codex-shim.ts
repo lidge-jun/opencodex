@@ -97,8 +97,11 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
 
     const cmd = join(dir, "codex.cmd");
     const ps1 = join(dir, "codex.ps1");
+    // npm also installs an extensionless `codex` sh launcher for Git-Bash/MSYS shells;
+    // leaving it unshimmed means Git-Bash users silently get no autostart.
+    const gitBashLauncher = join(dir, "codex");
     const targets: ShimFileState[] = [];
-    for (const path of [cmd, ps1]) {
+    for (const path of [cmd, ps1, gitBashLauncher]) {
       if (!existsSync(path) || isShim(path)) continue;
       try {
         if (!lstatSync(path).isDirectory()) {
@@ -120,9 +123,8 @@ function shQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPath: string): string {
+export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPath: string, tokenFile = serviceApiTokenFilePath()): string {
   const internalCommands = CODEX_INTERNAL_COMMANDS.join("|");
-  const tokenFile = serviceApiTokenFilePath();
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
 if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
@@ -220,15 +222,28 @@ function writeState(state: ShimState): void {
   writeFileSync(statePath(), JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
+/** Git-Bash accepts `C:/...` but not backslashed paths inside sh scripts. */
+function gitBashPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
 function writeShim(wrapperPath: string, realCodexPath: string): void {
   const { bun, cli } = cliEntry();
   if (process.platform === "win32") {
-    if (wrapperPath.toLowerCase().endsWith(".ps1")) {
+    const lower = wrapperPath.toLowerCase();
+    if (lower.endsWith(".ps1")) {
       // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
       // codepage, which mangles non-ASCII paths embedded in the shim.
       writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`, "utf8");
-    } else {
+    } else if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
       writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli), "utf8");
+    } else {
+      // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
+      writeFileSync(
+        wrapperPath,
+        buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), gitBashPath(serviceApiTokenFilePath())),
+        "utf8",
+      );
     }
   } else {
     writeFileSync(wrapperPath, buildUnixCodexShim(realCodexPath, bun, cli), "utf8");
