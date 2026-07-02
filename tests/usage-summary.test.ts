@@ -216,16 +216,21 @@ describe("summarizeUsage", () => {
     expect(sum.providers[0].shareRatio).toBeCloseTo(2 / 3);
   });
 
-  test("merges codex pool log-label suffix into one provider/model row", () => {
+  test("merges OpenAI passthrough and ChatGPT main/pool usage into one provider/model row", () => {
     const entries: PersistedUsageEntry[] = [
-      entry({ ts: FIXED_NOW - 1, provider: "chatgpt", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 3, outputTokens: 1 }, totalTokens: 4 }),
-      entry({ ts: FIXED_NOW - 2, provider: "chatgpt-p104398", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
+      entry({ ts: FIXED_NOW - 1, provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 4, outputTokens: 1 }, totalTokens: 5 }),
+      entry({ ts: FIXED_NOW - 2, provider: "chatgpt", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 3, outputTokens: 1 }, totalTokens: 4 }),
+      entry({ ts: FIXED_NOW - 3, provider: "chatgpt-main", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1 }, totalTokens: 2 }),
+      entry({ ts: FIXED_NOW - 4, provider: "chatgpt-p104398", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
     ];
     const sum = summarizeUsage(entries, "30d", FIXED_NOW);
     expect(sum.providers).toHaveLength(1);
-    expect(sum.providers[0]).toMatchObject({ provider: "chatgpt", requests: 2, totalTokens: 7 });
+    expect(sum.providers[0]).toMatchObject({ provider: "openai", requests: 4, totalTokens: 14 });
     expect(sum.models).toHaveLength(1);
-    expect(sum.models[0]).toMatchObject({ provider: "chatgpt", model: "gpt-5.5", requests: 2, totalTokens: 7 });
+    expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 });
+    expect(sum.days.find(day => day.requests === 4)?.models).toEqual([
+      { provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 },
+    ]);
   });
 
   test("merges reported and unreported rows of the same model into one row", () => {

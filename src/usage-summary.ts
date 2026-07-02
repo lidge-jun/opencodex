@@ -150,9 +150,10 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
   const bumpDayModel = (dayKey: string, entry: PersistedUsageEntry): void => {
     let models = dayModels.get(dayKey);
     if (!models) { models = new Map(); dayModels.set(dayKey, models); }
-    const mKey = `${entry.provider}/${entry.model}`;
+    const providerKey = baseProviderLabel(entry.provider);
+    const mKey = `${providerKey}/${entry.model}`;
     let m = models.get(mKey);
-    if (!m) { m = { model: entry.model, provider: entry.provider, requests: 0, totalTokens: 0 }; models.set(mKey, m); }
+    if (!m) { m = { model: entry.model, provider: providerKey, requests: 0, totalTokens: 0 }; models.set(mKey, m); }
     m.requests += 1;
     m.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
   };

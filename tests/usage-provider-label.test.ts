@@ -3,17 +3,23 @@ import { baseProviderLabel } from "../src/provider-label";
 
 describe("baseProviderLabel", () => {
   test("returns the input when there is no pool suffix", () => {
-    expect(baseProviderLabel("chatgpt")).toBe("chatgpt");
     expect(baseProviderLabel("openai")).toBe("openai");
+    expect(baseProviderLabel("anthropic")).toBe("anthropic");
+  });
+
+  test("normalizes ChatGPT auth usage into the OpenAI display provider", () => {
+    expect(baseProviderLabel("chatgpt")).toBe("openai");
+    expect(baseProviderLabel("chatgpt-main")).toBe("openai");
+    expect(baseProviderLabel("chatgpt-p104398")).toBe("openai");
   });
 
   test("strips a lowercase-hex pool suffix matching CODEX_ACCOUNT_LOG_LABEL_RE", () => {
-    expect(baseProviderLabel("chatgpt-p104398")).toBe("chatgpt");
-    expect(baseProviderLabel("chatgpt-pabc123")).toBe("chatgpt");
+    expect(baseProviderLabel("openai-p104398")).toBe("openai");
+    expect(baseProviderLabel("anthropic-pabc123")).toBe("anthropic");
   });
 
   test("strips the legacy -main suffix so historical main-account rows aggregate", () => {
-    expect(baseProviderLabel("chatgpt-main")).toBe("chatgpt");
+    expect(baseProviderLabel("openai-main")).toBe("openai");
     expect(baseProviderLabel("codex-main")).toBe("codex");
   });
 
