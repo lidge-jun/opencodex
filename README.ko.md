@@ -23,6 +23,11 @@ Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등 어떤 LLM이든 Cod
 
 opencodex는 Codex의 Responses API를 프로바이더가 쓰는 프로토콜로 변환해 주는 가벼운 로컬 프록시입니다. streaming, tool 호출, reasoning 토큰, 이미지까지 양방향으로 모두 동작합니다.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="opencodex 데모 — Codex 앱에서 비-OpenAI 라우팅 모델로 작업 실행" width="820">
+</p>
+<p align="center"><sub><b>Codex에서 어떤 모델이든.</b> 프로바이더만 고르면 끝 — 같은 Codex 워크플로, 다른 두뇌.</sub></p>
+
 또한 Codex 인증을 위한 **ChatGPT 계정 풀**을 관리할 수 있습니다. 여러 ChatGPT / Codex 계정을 추가하고,
 대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신하며, 새 세션을 사용량이 가장 적은 정상 계정으로 자동
 라우팅할 수 있습니다. 기존 Codex 스레드는 시작한 계정에 그대로 고정되므로, 긴 SSH·tmux·모바일 연결
