@@ -5,7 +5,10 @@ import { homedir } from "node:os";
 import {
   collectPaths,
   detectFsType,
+  collectConfiguredProxy,
   collectProxyEnv,
+  collectRunningProxyEnv,
+  parseProcessEnvBlock,
   probeWham,
   resolveCodexHomeDir,
 } from "../src/doctor";
@@ -16,12 +19,16 @@ const TEST_OPENCODEX_HOME = join(TEST_DIR, "opencodex");
 let prevOpencodexHome: string | undefined;
 let prevCodexHome: string | undefined;
 let prevHttpsProxy: string | undefined;
+let prevLowerHttpsProxy: string | undefined;
+let prevProxyRef: string | undefined;
 
 describe("doctor", () => {
   beforeEach(() => {
     prevOpencodexHome = process.env.OPENCODEX_HOME;
     prevCodexHome = process.env.CODEX_HOME;
     prevHttpsProxy = process.env.HTTPS_PROXY;
+    prevLowerHttpsProxy = process.env.https_proxy;
+    prevProxyRef = process.env.OCX_TEST_PROXY_REF;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     mkdirSync(TEST_OPENCODEX_HOME, { recursive: true });
@@ -29,6 +36,7 @@ describe("doctor", () => {
     process.env.CODEX_HOME = TEST_CODEX_HOME;
     delete process.env.HTTPS_PROXY;
     delete process.env.https_proxy;
+    delete process.env.OCX_TEST_PROXY_REF;
   });
 
   afterEach(() => {
@@ -38,6 +46,10 @@ describe("doctor", () => {
     else process.env.CODEX_HOME = prevCodexHome;
     if (prevHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
     else process.env.HTTPS_PROXY = prevHttpsProxy;
+    if (prevLowerHttpsProxy === undefined) delete process.env.https_proxy;
+    else process.env.https_proxy = prevLowerHttpsProxy;
+    if (prevProxyRef === undefined) delete process.env.OCX_TEST_PROXY_REF;
+    else process.env.OCX_TEST_PROXY_REF = prevProxyRef;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
@@ -94,6 +106,58 @@ describe("doctor", () => {
     expect(https.present).toBe(true);
     // The row exposes only a boolean; the secret value is never carried.
     expect(JSON.stringify(rows)).not.toContain("secret");
+  });
+
+  test("parseProcessEnvBlock supports proxy presence without carrying secret values", () => {
+    const env = parseProcessEnvBlock([
+      "HTTP_PROXY=http://user:secret@proxy.example.test:8080",
+      "NO_PROXY=localhost,127.0.0.1",
+      "",
+    ].join("\0"));
+
+    const rows = collectProxyEnv(env);
+    expect(rows.find(r => r.key === "HTTP_PROXY")!.present).toBe(true);
+    expect(rows.find(r => r.key === "NO_PROXY")!.present).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain("secret");
+  });
+
+  test("collectRunningProxyEnv separates no pid, unreadable pid env, and pid env presence", () => {
+    const none = collectRunningProxyEnv({ readPidFn: () => null });
+    expect(none.status).toBe("not_running");
+    expect(none.rows.every(row => !row.present)).toBe(true);
+
+    const unreadable = collectRunningProxyEnv({
+      readPidFn: () => 4242,
+      readEnvironFn: () => null,
+      platform: "linux",
+    });
+    expect(unreadable.status).toBe("unavailable");
+    expect(unreadable.rows.every(row => !row.present)).toBe(true);
+
+    const running = collectRunningProxyEnv({
+      readPidFn: () => 4242,
+      readEnvironFn: () => "HTTPS_PROXY=http://user:secret@proxy.example.test:8080\0NO_PROXY=localhost\0",
+      platform: "linux",
+    });
+    expect(running.status).toBe("ok");
+    expect(running.rows.find(row => row.key === "HTTPS_PROXY")!.present).toBe(true);
+    expect(running.rows.find(row => row.key === "NO_PROXY")!.present).toBe(true);
+    expect(JSON.stringify(running)).not.toContain("secret");
+  });
+
+  test("collectConfiguredProxy reports effective config proxy without leaking values", () => {
+    writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), JSON.stringify({ proxy: "${OCX_TEST_PROXY_REF}" }));
+
+    let diagnostic = collectConfiguredProxy();
+    expect(diagnostic.configured).toBe(true);
+    expect(diagnostic.present).toBe(false);
+    expect(diagnostic.detail).toContain("OCX_TEST_PROXY_REF");
+
+    process.env.OCX_TEST_PROXY_REF = "http://user:secret@proxy.example.test:8080";
+    diagnostic = collectConfiguredProxy();
+    expect(diagnostic.configured).toBe(true);
+    expect(diagnostic.present).toBe(true);
+    expect(JSON.stringify(diagnostic)).not.toContain("secret");
   });
 
   test("probeWham classifies ok, http error, timeout, and connect failures", async () => {

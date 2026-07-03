@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { expandUserPath, getConfigDir, getConfigPath } from "./config";
+import { expandUserPath, getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "./config";
 import { readCodexTokens } from "./codex-auth-collision";
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -78,14 +78,141 @@ function readMounts(): string | null {
 const PROXY_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
 
 export type ProxyEnvRow = { key: string; present: boolean };
+export type EnvMap = Record<string, string | undefined>;
 
 /** Report only presence/absence of proxy env vars - never the value (it may
  * embed credentials). Checks both upper- and lower-case forms. */
-export function collectProxyEnv(): ProxyEnvRow[] {
+export function collectProxyEnv(env: EnvMap = process.env): ProxyEnvRow[] {
   return PROXY_KEYS.map(key => ({
     key,
-    present: !!(process.env[key]?.trim() || process.env[key.toLowerCase()]?.trim()),
+    present: !!(env[key]?.trim() || env[key.toLowerCase()]?.trim()),
   }));
+}
+
+export type ConfiguredProxyDiagnostic = {
+  key: "config.proxy";
+  present: boolean;
+  configured: boolean;
+  source: "default" | "file" | "fallback";
+  detail: string;
+};
+
+function envReferenceName(value: string): string | null {
+  const braced = value.match(/^\$\{(\w+)\}$/);
+  if (braced) return braced[1]!;
+  const bare = value.match(/^\$(\w+)$/);
+  return bare ? bare[1]! : null;
+}
+
+export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
+  const diagnostics = readConfigDiagnostics();
+  const rawProxy = typeof diagnostics.config.proxy === "string" ? diagnostics.config.proxy.trim() : "";
+  if (diagnostics.error) {
+    return {
+      key: "config.proxy",
+      present: false,
+      configured: false,
+      source: diagnostics.source,
+      detail: `config unreadable (${diagnostics.error})`,
+    };
+  }
+  if (!rawProxy) {
+    return {
+      key: "config.proxy",
+      present: false,
+      configured: false,
+      source: diagnostics.source,
+      detail: "not configured",
+    };
+  }
+
+  const envName = envReferenceName(rawProxy);
+  const resolved = resolveEnvValue(rawProxy);
+  if (resolved?.trim()) {
+    return {
+      key: "config.proxy",
+      present: true,
+      configured: true,
+      source: diagnostics.source,
+      detail: envName ? `env reference ${envName} resolved` : "value hidden",
+    };
+  }
+
+  return {
+    key: "config.proxy",
+    present: false,
+    configured: true,
+    source: diagnostics.source,
+    detail: envName ? `env reference ${envName} is unset` : "empty after resolution",
+  };
+}
+
+export function parseProcessEnvBlock(content: string): EnvMap {
+  const env: EnvMap = {};
+  for (const entry of content.split("\0")) {
+    if (!entry) continue;
+    const separator = entry.indexOf("=");
+    if (separator <= 0) continue;
+    env[entry.slice(0, separator)] = entry.slice(separator + 1);
+  }
+  return env;
+}
+
+export type RunningProxyEnvDiagnostic =
+  | { status: "not_running"; rows: ProxyEnvRow[] }
+  | { status: "ok"; pid: number; rows: ProxyEnvRow[] }
+  | { status: "unavailable"; pid: number; reason: string; rows: ProxyEnvRow[] };
+
+type RunningProxyEnvDeps = {
+  readPidFn?: () => number | null;
+  readEnvironFn?: (pid: number) => string | null;
+  platform?: NodeJS.Platform | string;
+};
+
+function readProcessEnviron(pid: number): string | null {
+  try {
+    return readFileSync(`/proc/${pid}/environ`, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/*
+ * [Decision Log]
+ * - Purpose: Make `ocx doctor` distinguish the current shell env from the already-running proxy process env.
+ * - Alternatives: Rename the old section only; parse service-manager env for each OS; read the recorded proxy PID's env presence.
+ * - Rationale: PID env presence is the narrowest useful diagnostic on Linux/WSL, avoids secret value output, and keeps unsupported platforms explicit.
+ */
+export function collectRunningProxyEnv(deps: RunningProxyEnvDeps = {}): RunningProxyEnvDiagnostic {
+  const rowsWhenEmpty = () => collectProxyEnv({});
+  const pid = (deps.readPidFn ?? readPid)();
+  if (!pid) return { status: "not_running", rows: rowsWhenEmpty() };
+
+  const platform = deps.platform ?? process.platform;
+  if (platform !== "linux" && !deps.readEnvironFn) {
+    return {
+      status: "unavailable",
+      pid,
+      reason: "process env inspection is only supported on Linux",
+      rows: rowsWhenEmpty(),
+    };
+  }
+
+  const content = (deps.readEnvironFn ?? readProcessEnviron)(pid);
+  if (content === null) {
+    return {
+      status: "unavailable",
+      pid,
+      reason: "could not read process environment",
+      rows: rowsWhenEmpty(),
+    };
+  }
+
+  return {
+    status: "ok",
+    pid,
+    rows: collectProxyEnv(parseProcessEnvBlock(content)),
+  };
 }
 
 export type WhamProbeResult = {
@@ -142,9 +269,28 @@ export async function runDoctor(): Promise<void> {
     console.log(`  ${row.exists ? "ok " : "-- "} ${row.label}: ${row.path}${flags ? `  (${flags})` : ""}`);
   }
 
-  console.log("\nProxy env (presence only)");
-  for (const row of collectProxyEnv()) {
+  const currentProxyEnv = collectProxyEnv();
+  const configuredProxy = collectConfiguredProxy();
+  const runningProxyEnv = collectRunningProxyEnv();
+
+  console.log("\nCurrent doctor process proxy env (presence only)");
+  for (const row of currentProxyEnv) {
     console.log(`  ${row.present ? "set    " : "unset  "} ${row.key}`);
+  }
+
+  console.log("\nConfigured proxy (value hidden)");
+  console.log(`  ${configuredProxy.present ? "set    " : "unset  "} ${configuredProxy.key} (${configuredProxy.source}; ${configuredProxy.detail})`);
+
+  console.log("\nRunning proxy process proxy env (presence only)");
+  if (runningProxyEnv.status === "not_running") {
+    console.log("  --     no running ocx proxy process found");
+  } else if (runningProxyEnv.status === "unavailable") {
+    console.log(`  --     pid ${runningProxyEnv.pid}: ${runningProxyEnv.reason}`);
+  } else {
+    console.log(`  ok     pid ${runningProxyEnv.pid}`);
+    for (const row of runningProxyEnv.rows) {
+      console.log(`  ${row.present ? "set    " : "unset  "} ${row.key}`);
+    }
   }
 
   console.log("\nWHAM reachability");
@@ -156,7 +302,7 @@ export async function runDoctor(): Promise<void> {
   // Hints, not fixes.
   const hints: string[] = [];
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
-  const noProxy = collectProxyEnv().every(p => !p.present);
+  const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (anyDrvfs) {
     hints.push("State dir is on a Windows-mounted (/mnt) drive. Prefer the Linux home (~) under WSL for token/lock reliability.");
   }
@@ -164,7 +310,7 @@ export async function runDoctor(): Promise<void> {
     if (probe.classification === "timeout" || probe.classification === "connect_error") {
       hints.push("WHAM probe could not reach chatgpt.com. On WSL2 this is often NAT/DNS/VPN. Quota cannot prime, so auto-switch stays on unknown scores.");
       if (noProxy) {
-        hints.push("No *_PROXY env is set in this WSL process. If Windows uses a proxy/VPN, set HTTP(S)_PROXY here or enable WSL autoProxy so Bun fetch can reach the network.");
+        hints.push("No proxy is visible to this doctor process and config.proxy is unset or unresolved. If Windows uses a proxy/VPN, set config.proxy or start ocx from a shell with HTTP(S)_PROXY.");
       }
     }
   }
