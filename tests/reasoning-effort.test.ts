@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex-catalog";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { routeModel } from "../src/router";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -105,6 +106,94 @@ describe("provider-specific reasoning effort mapping", () => {
 
     expect(body.reasoning_effort).toBe("max");
     expect(body.messages[1].reasoning_content).toBe("prior reasoning");
+  });
+
+  test("DeepSeek V4 thinking models replay reasoning_content beside tool calls", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com",
+          apiKey: "key",
+          models: ["deepseek-v4-pro"],
+        },
+      },
+    };
+    const route = routeModel(config, "deepseek/deepseek-v4-pro");
+
+    const req = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: {
+        messages: [
+          { role: "user", content: "inspect the repo", timestamp: 0 },
+          { role: "assistant", timestamp: 1, content: [
+            { type: "thinking", thinking: "I need to inspect files before answering." },
+            { type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "README.md" } },
+          ] },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: "contents",
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      },
+      stream: true,
+      options: { reasoning: "xhigh" },
+    });
+    const body = JSON.parse(req.body as string) as { reasoning_effort?: string; messages: Record<string, unknown>[] };
+
+    expect(body.reasoning_effort).toBe("max");
+    expect(body.messages[1].reasoning_content).toBe("I need to inspect files before answering.");
+    expect(body.messages[1]).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "read_file", arguments: JSON.stringify({ path: "README.md" }) },
+      }],
+    });
+  });
+
+  test("DeepSeek legacy reasoner does not inherit V4 thinking-mode history replay", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com",
+          apiKey: "key",
+          models: ["deepseek-reasoner"],
+        },
+      },
+    };
+    const route = routeModel(config, "deepseek/deepseek-reasoner");
+
+    const req = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: {
+        messages: [
+          { role: "user", content: "first", timestamp: 0 },
+          { role: "assistant", timestamp: 1, content: [
+            { type: "thinking", thinking: "legacy hidden reasoning" },
+            { type: "text", text: "answer" },
+          ] },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: false,
+      options: {},
+    });
+    const body = JSON.parse(req.body as string) as { messages: Record<string, unknown>[] };
+
+    expect(route.provider.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    expect(body.messages[1].reasoning_content).toBeUndefined();
   });
 
   test("Kimi K2.7 Code does not receive unsupported OpenAI reasoning/sampling controls", () => {
