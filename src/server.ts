@@ -444,15 +444,22 @@ async function handleResponses(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc);
       if (recordTerminalOutcomes) {
+        // A real terminal was parsed from the (teed) inspection stream — record it as the outcome
+        // even if the client has already disconnected: the turn genuinely reached that terminal, so
+        // it must log as completed/failed, not be dropped or downgraded to a cancel (#44). A pure
+        // client-cancel (no terminal seen) is finalized separately via consumeForInspection's onCancel.
         const reportNativeTerminal = (status: ResponsesTerminalStatus) => {
-          if (options.abortSignal?.aborted) {
-            options.onNativePassthroughCancel?.();
-            return;
-          }
           terminalRecorder?.(status);
           options.onNativePassthroughTerminal?.(status);
         };
-        consumeForInspection(inspectBody, reportNativeTerminal, turnAc.signal, () => unregisterTurn(turnAc), logCtx);
+        consumeForInspection(
+          inspectBody,
+          reportNativeTerminal,
+          turnAc.signal,
+          () => unregisterTurn(turnAc),
+          logCtx,
+          () => options.onNativePassthroughCancel?.(),
+        );
       } else {
         consumeForResponseLogMetadata(inspectBody, logCtx, turnAc.signal, () => unregisterTurn(turnAc));
       }
@@ -1302,12 +1309,13 @@ export function relaySseWithHeartbeat(
  * Background-consume an SSE stream purely for terminal-outcome inspection (quota tracking).
  * Does not produce output; safe to ignore errors (the client-facing stream is separate).
  */
-function consumeForInspection(
+export function consumeForInspection(
   body: ReadableStream<Uint8Array>,
   onTerminal: (status: ResponsesTerminalStatus) => void,
   signal?: AbortSignal,
   onDone?: () => void,
   logCtx?: RequestLogContext,
+  onCancel?: () => void,
 ): void {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1316,13 +1324,21 @@ function consumeForInspection(
   let cancelled = false;
   if (signal) {
     if (signal.aborted) {
+      // Aborted before we could read anything (Codex disconnects the instant it finishes reading).
+      // Finalize as a client-cancel and release the turn — the early return skips pump()'s finally,
+      // so onDone/onCancel must run here or the entry is silently dropped (#44).
       cancelled = true;
       reader.cancel(signal.reason).catch(() => {});
+      onCancel?.();
+      onDone?.();
       return;
     }
     signal.addEventListener("abort", () => {
+      // Mid-drain disconnect: record a client-cancel entry (idempotent downstream) instead of the
+      // suppressed onTerminal path. onDone still fires via pump()'s finally after the read rejects.
       cancelled = true;
       reader.cancel(signal.reason).catch(() => {});
+      onCancel?.();
     }, { once: true });
   }
   const pump = async () => {
@@ -2102,9 +2118,15 @@ export function startServer(port?: number) {
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
 
+  // Canonicalize an explicit "localhost" bind to IPv4 so it matches the injected base_url (which
+  // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
+  // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
+  // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
+  const bindHost = /^localhost$/i.test(config.hostname ?? "") ? "127.0.0.1" : (config.hostname ?? "127.0.0.1");
+
   const server: Server<WsData> = Bun.serve<WsData>({
     port: listenPort,
-    hostname: config.hostname ?? "127.0.0.1",
+    hostname: bindHost,
     idleTimeout: 255,
     async fetch(req, requestServer): Promise<Response> {
       const url = new URL(req.url);

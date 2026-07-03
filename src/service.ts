@@ -493,12 +493,41 @@ WantedBy=default.target
 `;
 }
 
+/** The per-user runtime dir systemd creates (holds the user-bus socket), or null. */
+function userRuntimeDir(): string | null {
+  const fromEnv = process.env.XDG_RUNTIME_DIR;
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  if (typeof process.getuid === "function") {
+    const candidate = `/run/user/${process.getuid()}`;
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * SSH sessions frequently start without `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`, so
+ * `systemctl --user` can't find the user bus even when systemd is running. Point `XDG_RUNTIME_DIR`
+ * at the per-user runtime dir when it exists so the `--user` probe and install commands reach the
+ * bus. No-op when already set or when no runtime dir exists (e.g. genuinely non-systemd hosts).
+ */
+function ensureUserBusEnv(): void {
+  if (process.env.XDG_RUNTIME_DIR) return;
+  const dir = userRuntimeDir();
+  if (dir) process.env.XDG_RUNTIME_DIR = dir;
+}
+
 function isSystemd(): boolean {
   try { execSync("systemctl --version", { stdio: "pipe" }); } catch { return false; }
-  try { execSync("systemctl --user show-environment", { stdio: "pipe" }); return true; } catch { return false; }
+  ensureUserBusEnv();
+  // Prefer the user-bus probe; but an SSH session without a user D-Bus fails it even when systemd
+  // is present (F9). Fall back to the per-user runtime dir existing — a strong signal the user
+  // systemd instance is available — so a first-time `ocx service install` isn't wrongly refused.
+  try { execSync("systemctl --user show-environment", { stdio: "pipe" }); return true; } catch { /* no user bus in this session */ }
+  return userRuntimeDir() !== null;
 }
 
 function installSystemd(): void {
+  ensureUserBusEnv(); // reach the user bus over a bare SSH session (F9)
   const dir = unitDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });

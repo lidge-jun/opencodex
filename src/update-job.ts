@@ -78,10 +78,6 @@ function nodeBin(): string {
   return process.platform === "win32" ? "node.exe" : "node";
 }
 
-function ocxBin(): string {
-  return process.platform === "win32" ? "ocx.cmd" : "ocx";
-}
-
 function packageLauncherPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "ocx.mjs");
 }
@@ -163,8 +159,11 @@ export function restartCommand(
     const args = serviceInstalled ? [launcher, "service", "install"] : [launcher, "start"];
     return { mode, bin, args, display: formatCommand(bin, args) };
   }
-  const bin = ocxBin();
-  const args = serviceInstalled ? ["service", "install"] : ["start"];
+  // bun/source installs: restart via the current runtime executable + package launcher (both real
+  // .exe files), NOT the `ocx.cmd` shim. Spawning a `.cmd` shell-less throws EINVAL on Windows
+  // Node/Bun ≥18.20/20.12 (CVE-2024-27980 hardening) — the same class the npm path (nodeBin) avoids.
+  const bin = process.execPath;
+  const args = serviceInstalled ? [launcher, "service", "install"] : [launcher, "start"];
   return { mode, bin, args, display: formatCommand(bin, args) };
 }
 
