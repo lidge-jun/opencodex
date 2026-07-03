@@ -1,5 +1,9 @@
 import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
+import { abortError, sleepWithAbort } from "../../upstream-retry";
+
+// Compat: historical name for the shared abortable sleep, kept for external callers.
+export { sleepWithAbort as abortAwareSleep } from "../../upstream-retry";
 
 export const CURSOR_RETRY_ATTEMPTS = 3;
 export const CURSOR_RETRY_BASE_MS = 250;
@@ -34,31 +38,6 @@ export function isRetryableCursorError(err: unknown): boolean {
 export function cursorRetryDelayMs(attempt: number): number {
   const exp = Math.min(CURSOR_RETRY_BASE_MS * 2 ** attempt, CURSOR_RETRY_MAX_MS);
   return Math.floor(exp * (0.8 + Math.random() * 0.4));
-}
-
-function abortError(signal?: AbortSignal): unknown {
-  return signal?.reason ?? new DOMException("The operation was aborted", "AbortError");
-}
-
-export async function abortAwareSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return;
-  if (signal?.aborted) throw abortError(signal);
-  await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(abortError(signal));
-    };
-    timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /**
@@ -105,7 +84,7 @@ export async function runCursorTurnWithRetry(
         requestUncommitted(transport) &&
         isRetryableCursorError(err);
       if (!canRetry) throw err;
-      await abortAwareSleep(cursorRetryDelayMs(attempt), signal);
+      await sleepWithAbort(cursorRetryDelayMs(attempt), signal);
     } finally {
       await transport.close?.();
     }

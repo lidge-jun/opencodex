@@ -1,5 +1,6 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { abortError, sleepWithAbort } from "../upstream-retry";
 
 const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
@@ -20,22 +21,6 @@ function retryDelayMs(attempt: number, headers?: Headers): number {
   if (retryAfter !== undefined) return Math.min(retryAfter, GOOGLE_RETRY_MAX_MS);
   const exp = Math.min(GOOGLE_RETRY_BASE_MS * (2 ** attempt), GOOGLE_RETRY_MAX_MS);
   return Math.floor(exp * (0.8 + Math.random() * 0.4));
-}
-
-function abortError(signal?: AbortSignal): unknown {
-  return signal?.reason ?? new DOMException("The operation was aborted", "AbortError");
-}
-
-async function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return;
-  if (signal?.aborted) throw abortError(signal);
-  await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
-    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
-    const onAbort = () => { cleanup(); reject(abortError(signal)); };
-    timer = setTimeout(() => { cleanup(); resolve(); }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function signalWithAttemptTimeout(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
