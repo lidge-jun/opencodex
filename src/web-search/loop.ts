@@ -4,6 +4,7 @@ import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { cancelBodyOnAbort } from "../abort";
+import { fetchWithResetRetry } from "../upstream-retry";
 import { formatWebSearchResults } from "./format-result";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
@@ -200,12 +201,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     try {
       resp = adapter.fetchResponse
         ? await adapter.fetchResponse(request, { abortSignal: signal })
-        : await fetch(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: request.body,
-            signal,
-          });
+        : await fetchWithResetRetry(
+            () => fetch(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+              signal,
+            }),
+            { abortSignal: signal, label: "web-search-loop" },
+          );
     } catch (e) {
       throw new LoopError(502, `Provider unreachable: ${e instanceof Error ? e.message : String(e)}`);
     }

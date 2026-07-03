@@ -84,6 +84,7 @@ import {
 } from "./codex-routing";
 import { registerCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketAuthContext } from "./codex-websocket-registry";
 import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile } from "./server/gui-static";
+import { fetchWithResetRetry } from "./upstream-retry";
 export { resolveGuiFilePath, rootFallbackPayload } from "./server/gui-static";
 import { resolveAdapter, resolveWireProtocolOverride } from "./server/adapter-resolve";
 export { resolveAdapter } from "./server/adapter-resolve";
@@ -368,11 +369,14 @@ async function handleResponses(
     const connectMs = config.connectTimeoutMs ?? 100_000;
     let upstreamResponse: Response;
     try {
-      upstreamResponse = await fetchWithHeaderTimeout(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      }, upstream.signal, connectMs);
+      upstreamResponse = await fetchWithResetRetry(
+        () => fetchWithHeaderTimeout(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        }, upstream.signal, connectMs),
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+      );
     } catch (err) {
       upstream.abort();
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
@@ -563,9 +567,12 @@ async function handleResponses(
   try {
     upstreamResponse = adapter.fetchResponse
       ? await adapter.fetchResponse(request, { abortSignal: upstream.signal, timeoutMs: connectMs })
-      : await fetchWithHeaderTimeout(request.url, {
-          method: request.method, headers: request.headers, body: request.body,
-        }, upstream.signal, connectMs);
+      : await fetchWithResetRetry(
+          () => fetchWithHeaderTimeout(request.url, {
+            method: request.method, headers: request.headers, body: request.body,
+          }, upstream.signal, connectMs),
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        );
   } catch (err) {
     cleanupUpstreamAbort();
     upstream.abort();
@@ -640,6 +647,15 @@ export function disableResponsesRequestTimeout(req: Request, server: Pick<Server
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Host-only label for retry logs — never leaks path/query/credentials. */
+function safeHostLabel(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "upstream";
   }
 }
 

@@ -2,6 +2,7 @@ import type { OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../abort";
 import { sidecarEnter } from "../sidecar-tracker";
+import { fetchWithResetRetry } from "../upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
@@ -84,12 +85,15 @@ export async function describeImage(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("vision");
   try {
-    const res = await fetch(`${forwardProvider.baseUrl}/responses`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: linkedSignal.signal,
-    });
+    const res = await fetchWithResetRetry(
+      () => fetch(`${forwardProvider.baseUrl}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: linkedSignal.signal,
+      }),
+      { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
+    );
     recordOutcome?.(res.status);
     if (!res.ok) {
       const t = await res.text().catch(() => "");
