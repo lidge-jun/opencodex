@@ -356,7 +356,7 @@ async function handleResponses(
   }
 
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
-  const adapter = resolveAdapter(adapterProvider);
+  const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   if ("passthrough" in adapter && adapter.passthrough) {
@@ -366,7 +366,7 @@ async function handleResponses(
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
     linkAbortSignal(upstream, options.abortSignal);
-    const connectMs = config.connectTimeoutMs ?? 100_000;
+    const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     try {
       upstreamResponse = await fetchWithResetRetry(
@@ -570,7 +570,7 @@ async function handleResponses(
 
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
-  const connectMs = config.connectTimeoutMs ?? 100_000;
+  const connectMs = config.connectTimeoutMs ?? 200_000;
 
   const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
   if (typeof request.usageLog?.inputTokens === "number") {

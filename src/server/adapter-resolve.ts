@@ -23,12 +23,12 @@ export function resolveWireProtocolOverride(providerName: string, modelId: strin
 }
 
 /** Build the provider adapter for a resolved provider config. */
-export function resolveAdapter(providerConfig: OcxProviderConfig) {
+export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
   switch (providerConfig.adapter) {
     case "openai-chat":
       return createOpenAIChatAdapter(providerConfig);
     case "anthropic":
-      return createAnthropicAdapter(providerConfig);
+      return createAnthropicAdapter(providerConfig, cacheRetention);
     case "openai-responses":
       return createResponsesPassthroughAdapter(providerConfig);
     case "google":

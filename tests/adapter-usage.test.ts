@@ -127,14 +127,17 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { system: unknown; cache_control?: unknown };
+    const body = JSON.parse(request.body) as { system: unknown; messages: Array<{ content: unknown }>; cache_control?: unknown };
 
+    // Native Anthropic gets top-level automatic caching plus stable explicit breakpoints.
     expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system).toEqual([{
       type: "text",
       text: "stable project instructions",
       cache_control: { type: "ephemeral" },
     }]);
+    // The moving final user block is handled by top-level automatic caching.
+    expect(body.messages[0].content).toBe("hi");
   });
 
   test("Anthropic OAuth requests keep Claude identity first and cache user system prompt", () => {
@@ -158,6 +161,7 @@ describe("adapter reasoning and usage details", () => {
     expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system[0]).toMatchObject({ type: "text" });
     expect(body.system[0].cache_control).toBeUndefined();
+    // The last system block (user system prompt) gets the cache breakpoint.
     expect(body.system[1]).toEqual({
       type: "text",
       text: "stable project instructions",
@@ -189,12 +193,51 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[]; cache_control?: unknown; system?: Array<{ text: string }> };
+    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[]; cache_control?: unknown; system?: Array<Record<string, unknown>>; messages: Array<{ content: unknown }> };
 
     expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system?.[0]?.text).toContain("Valid tool names for this turn are exactly `codex__read_file`, `codex__write_file`.");
+    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" });
     expect(body.tools[0].cache_control).toBeUndefined();
     expect(body.tools[1].cache_control).toEqual({ type: "ephemeral" });
+    // Native automatic caching consumes the final-turn slot, so the last user block stays plain.
+    expect(body.messages[0].content).toBe("hi");
+  });
+
+  test("Anthropic native automatic caching reserves one explicit breakpoint slot", () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
+    const request = adapter.buildRequest({
+      modelId: "claude-opus-4-1",
+      context: {
+        systemPrompt: ["stable project instructions"],
+        messages: [
+          { role: "user", content: "previous turn" },
+          { role: "user", content: "current turn" },
+        ],
+        tools: [{
+          namespace: "codex",
+          name: "read_file",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+        }],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as {
+      cache_control?: unknown;
+      tools: Array<Record<string, unknown>>;
+      system?: Array<Record<string, unknown>>;
+      messages: Array<{ content: unknown }>;
+    };
+
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.tools[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.messages[0].content).toEqual([
+      { type: "text", text: "previous turn", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(body.messages[1].content).toBe("current turn");
   });
 
   test("Google usage maps cached and thoughts tokens when present", async () => {
@@ -409,7 +452,7 @@ describe("anthropic tool result history repair", () => {
     expect(body.messages[2].role).toBe("user");
     expect(body.messages[2].content).toEqual([
       { type: "tool_result", tool_use_id: "call_1", content: "one" },
-      { type: "tool_result", tool_use_id: "call_2", content: "two" },
+      { type: "tool_result", tool_use_id: "call_2", content: "two", cache_control: { type: "ephemeral" } },
     ]);
   });
 
@@ -437,6 +480,7 @@ describe("anthropic tool result history repair", () => {
         tool_use_id: "call_1",
         content: "[missing tool_result for this tool_use in history]",
         is_error: true,
+        cache_control: { type: "ephemeral" },
       }],
     });
   });
@@ -462,7 +506,11 @@ describe("anthropic tool result history repair", () => {
 
     expect(body.messages).toEqual([{
       role: "user",
-      content: "[tool_result without adjacent tool_use: lost_tool (orphan_call)]\norphan output",
+      content: [{
+        type: "text",
+        text: "[tool_result without adjacent tool_use: lost_tool (orphan_call)]\norphan output",
+        cache_control: { type: "ephemeral" },
+      }],
     }]);
   });
 
@@ -491,7 +539,7 @@ describe("anthropic tool result history repair", () => {
       role: "user",
       content: [
         { type: "tool_result", tool_use_id: "call_1", content: "first" },
-        { type: "text", text: "[tool_result without adjacent tool_use: read_file (call_1)]\nduplicate" },
+        { type: "text", text: "[tool_result without adjacent tool_use: read_file (call_1)]\nduplicate", cache_control: { type: "ephemeral" } },
       ],
     });
   });
@@ -535,6 +583,7 @@ describe("anthropic tool result history repair", () => {
           { type: "text", text: "image attached" },
           { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
         ],
+        cache_control: { type: "ephemeral" },
       }],
     });
   });

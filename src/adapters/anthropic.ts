@@ -42,10 +42,192 @@ const OUTPUT_HEADROOM = 8192;
 /** Minimum visible-output room kept below `max_tokens` (so `max_tokens > budget_tokens` always holds). */
 const OUTPUT_FLOOR = 4096;
 const COMPAT_TOOL_PREFIX = "cx_";
-const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
+type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
+const MAX_CACHE_BREAKPOINTS = 4;
 
-function withPromptCache<T extends Record<string, unknown>>(block: T): T & { cache_control: typeof EPHEMERAL_CACHE_CONTROL } {
-  return { ...block, cache_control: EPHEMERAL_CACHE_CONTROL };
+function resolveCacheControl(retention: "none" | "short" | "long" | undefined): CacheControl | undefined {
+  const r = retention ?? "short";
+  if (r === "none") return undefined;
+  return r === "long" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
+}
+// ---------------------------------------------------------------------------
+// Prompt-caching breakpoint placement (ported from jawcode)
+//
+// Strategy: place cache_control breakpoints on up to 4 locations in order
+// of stability (most stable first), so Anthropic's cumulative prefix cuts
+// maximise cache hits across turns:
+//   1. tools (last block)          — changes rarely
+//   2. system (last block)         — changes rarely
+//   3. penultimate user message    — stable across the current turn
+//   4. last user message           — the new turn's content
+// ---------------------------------------------------------------------------
+
+function applyCacheControlToLast<T extends Record<string, unknown>>(blocks: T[], cc: CacheControl): void {
+  if (blocks.length === 0) return;
+  const i = blocks.length - 1;
+  blocks[i] = { ...blocks[i], cache_control: cc };
+}
+
+function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc: CacheControl): void {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].type === "text") {
+      blocks[i] = { ...blocks[i], cache_control: cc };
+      return;
+    }
+  }
+  applyCacheControlToLast(blocks, cc);
+}
+
+type PromptCachingOptions = {
+  maxExplicitBreakpoints?: number;
+  skipLastUser?: boolean;
+};
+
+/** Place explicit cache_control breakpoints on the built Anthropic body. */
+function applyPromptCaching(
+  body: Record<string, unknown>,
+  cc: CacheControl | undefined,
+  options: PromptCachingOptions = {},
+): void {
+  if (!cc) return;
+  const explicitLimit = options.maxExplicitBreakpoints ?? MAX_CACHE_BREAKPOINTS;
+  if (explicitLimit <= 0) return;
+
+  const messages = body.messages as Array<Record<string, unknown>> | undefined;
+
+  // Skip if external breakpoints are already present on messages.
+  if (messages) {
+    for (const msg of messages) {
+      if (Array.isArray(msg.content)) {
+        if ((msg.content as Array<Record<string, unknown>>).some(b => b.cache_control != null)) return;
+      }
+    }
+  }
+
+  let used = 0;
+
+  // 1. tools
+  const tools = body.tools as Array<Record<string, unknown>> | undefined;
+  if (tools && tools.length > 0) {
+    applyCacheControlToLast(tools, cc);
+    used++;
+  }
+  if (used >= explicitLimit) return;
+
+  // 2. system
+  const system = body.system as Array<Record<string, unknown>> | undefined;
+  if (system && system.length > 0) {
+    applyCacheControlToLast(system, cc);
+    used++;
+  }
+  if (used >= explicitLimit || !messages) return;
+
+  // Locate user-role message indexes.
+  const userIdxs: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "user") userIdxs.push(i);
+  }
+
+  // 3. penultimate user message
+  if (userIdxs.length >= 2) {
+    const msg = messages[userIdxs[userIdxs.length - 2]];
+    if (typeof msg.content === "string") {
+      msg.content = [{ type: "text", text: msg.content, cache_control: cc }];
+    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+      applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
+    }
+    used++;
+  }
+  if (used >= explicitLimit || options.skipLastUser) return;
+
+  // 4. last user message
+  if (userIdxs.length >= 1) {
+    const msg = messages[userIdxs[userIdxs.length - 1]];
+    if (typeof msg.content === "string") {
+      msg.content = [{ type: "text", text: msg.content, cache_control: cc }];
+    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+      applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Breakpoint cap enforcement — strip excess beyond the 4-breakpoint limit
+// ---------------------------------------------------------------------------
+
+function countBreakpoints(body: Record<string, unknown>): number {
+  let total = 0;
+  const count = (blocks: Array<Record<string, unknown>> | undefined) => {
+    if (!blocks) return;
+    for (const b of blocks) if (b.cache_control) total++;
+  };
+  count(body.tools as Array<Record<string, unknown>> | undefined);
+  count(body.system as Array<Record<string, unknown>> | undefined);
+  const messages = body.messages as Array<Record<string, unknown>> | undefined;
+  if (messages) {
+    for (const msg of messages) {
+      if (Array.isArray(msg.content)) count(msg.content as Array<Record<string, unknown>>);
+    }
+  }
+  return total;
+}
+
+function enforceCacheControlLimit(body: Record<string, unknown>, limit = MAX_CACHE_BREAKPOINTS): void {
+  const total = countBreakpoints(body);
+  if (total <= limit) return;
+  let excess = total - limit;
+  // Strip from messages first (least stable), then system, then tools.
+  const messages = body.messages as Array<Record<string, unknown>> | undefined;
+  if (messages) {
+    for (const msg of messages) {
+      if (excess <= 0) break;
+      if (!Array.isArray(msg.content)) continue;
+      for (const block of msg.content as Array<Record<string, unknown>>) {
+        if (excess <= 0) break;
+        if (block.cache_control) { delete block.cache_control; excess--; }
+      }
+    }
+  }
+  const stripBlocks = (blocks: Array<Record<string, unknown>> | undefined) => {
+    if (!blocks) return;
+    for (const b of blocks) {
+      if (excess <= 0) break;
+      if (b.cache_control) { delete b.cache_control; excess--; }
+    }
+  };
+  if (excess > 0) stripBlocks(body.system as Array<Record<string, unknown>> | undefined);
+  if (excess > 0) stripBlocks(body.tools as Array<Record<string, unknown>> | undefined);
+}
+
+// ---------------------------------------------------------------------------
+// TTL ordering — Anthropic requires 1-hour breakpoints before 5-minute ones
+// ---------------------------------------------------------------------------
+
+function normalizeTtlOrdering(body: Record<string, unknown>): void {
+  const allBlocks: Array<Record<string, unknown>> = [];
+  const collect = (blocks: Array<Record<string, unknown>> | undefined) => {
+    if (!blocks) return;
+    for (const b of blocks) if (b.cache_control) allBlocks.push(b);
+  };
+  collect(body.tools as Array<Record<string, unknown>> | undefined);
+  collect(body.system as Array<Record<string, unknown>> | undefined);
+  const messages = body.messages as Array<Record<string, unknown>> | undefined;
+  if (messages) {
+    for (const msg of messages) {
+      if (Array.isArray(msg.content)) collect(msg.content as Array<Record<string, unknown>>);
+    }
+  }
+  // Walk forward: once we see a 5-min (no ttl / ttl:"5m"), any subsequent 1h must be demoted.
+  let seenShort = false;
+  for (const b of allBlocks) {
+    const cc = b.cache_control as CacheControl;
+    if (cc.ttl !== "1h") {
+      seenShort = true;
+    } else if (seenShort) {
+      // 1h after a short → demote to default (5m)
+      delete cc.ttl;
+    }
+  }
 }
 
 function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
@@ -241,12 +423,10 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
     description: t.description,
     input_schema: t.parameters,
   }));
-  const last = converted.length - 1;
-  converted[last] = withPromptCache(converted[last]);
   return converted;
 }
 
-export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
   return {
@@ -262,15 +442,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
         stream: parsed.stream,
         max_tokens: parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
       };
-      if (usesNativeAnthropicEndpoint(provider)) body.cache_control = EPHEMERAL_CACHE_CONTROL;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [withPromptCache({ type: "text", text: system })] : []),
+          ...(system ? [{ type: "text", text: system }] : []),
         ];
       } else if (system) {
-        body.system = [withPromptCache({ type: "text", text: system })];
+        body.system = [{ type: "text", text: system }];
       }
       if (tools) body.tools = tools;
       if (parsed.options.temperature !== undefined) body.temperature = parsed.options.temperature;
@@ -326,6 +505,19 @@ export function createAnthropicAdapter(provider: OcxProviderConfig): ProviderAda
         headers["x-api-key"] = provider.apiKey;
       }
       if (provider.headers) Object.assign(headers, provider.headers);
+
+      // Prompt caching: native Anthropic supports top-level automatic caching, which
+      // follows the moving final block across turns. Keep one breakpoint slot free for it.
+      const cc = resolveCacheControl(cacheRetention);
+      const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
+      if (automaticPromptCaching) body.cache_control = cc;
+      const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;
+      applyPromptCaching(body, cc, {
+        maxExplicitBreakpoints: explicitLimit,
+        skipLastUser: !!automaticPromptCaching,
+      });
+      enforceCacheControlLimit(body, explicitLimit);
+      normalizeTtlOrdering(body);
 
       return { url, method: "POST", headers, body: JSON.stringify(body) };
     },

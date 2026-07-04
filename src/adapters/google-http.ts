@@ -46,7 +46,7 @@ async function normalizeFinalGoogleError(label: string, res: Response): Promise<
  * error body. `label` is the provider-facing prefix used in error messages.
  */
 export async function fetchGoogleWithRetry(label: string, request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  const timeoutMs = ctx.timeoutMs ?? 100_000;
+  const timeoutMs = ctx.timeoutMs ?? 200_000;
   let lastError: unknown;
   for (let attempt = 0; attempt < GOOGLE_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
