@@ -405,7 +405,9 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     : history.failed
       ? (legacyMode
         ? `  ⚠️ Codex resume history sync SKIPPED: the history DB is locked (Codex app/IDE open?). Close it and rerun 'ocx start'.\n`
-        : `  ⚠️ Codex resume history migration deferred: the history DB is locked (Codex app/IDE open?). The proxy will keep retrying in the background.\n`)
+        // Honest in every caller context: the daemon retries in the background while it runs,
+        // and this inject path re-runs the migration on every future start/sync anyway.
+        : `  ⚠️ Codex resume history migration deferred: the history DB is locked (Codex app/IDE open?). It is retried automatically (while the proxy runs and on every 'ocx start'); to force it now, close the Codex app and run 'ocx sync'.\n`)
       : legacyMode
         ? `  Codex resume history: ${history.rows} thread(s) made visible for opencodex; originals backed up for restore.\n`
         : migratedRows > 0

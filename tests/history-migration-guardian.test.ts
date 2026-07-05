@@ -93,11 +93,18 @@ describe("history migration guardian", () => {
     expect(migrations).toBe(0);
   });
 
-  test("a locked count probe still attempts migration (count unknown != count zero)", () => {
+  test("a locked count probe still attempts migration and keeps ticking until a clean re-count", () => {
     const sched = manualScheduler();
     let migrations = 0;
+    let counts = 0;
     startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 0, backupEntries: 0, failed: true as const }),
+      countFn: () => {
+        counts++;
+        // First probe (pre-migrate) locked; re-count after migration comes back clean.
+        return counts === 1
+          ? { pendingRows: 0, backupEntries: 0, failed: true as const }
+          : { pendingRows: 0, backupEntries: 0 };
+      },
       migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
@@ -105,6 +112,26 @@ describe("history migration guardian", () => {
 
     expect(sched.runNext()).toBe(true);
     expect(migrations).toBe(1);
-    expect(sched.size).toBe(0); // migration succeeded → stop
+    expect(sched.size).toBe(0); // migration succeeded and re-count is clean → stop
+  });
+
+  test("does not stop on a zero-row 'success' while backup entries remain (missing-DB race)", () => {
+    const sched = manualScheduler();
+    let migrations = 0;
+    // DB missing: count sees only the backup manifest; migrate 'succeeds' with 0 rows.
+    startHistoryMigrationGuardian({
+      countFn: () => ({ pendingRows: 0, backupEntries: 2 }),
+      migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
+      log: silent,
+      scheduleFn: sched.scheduleFn,
+      maxTicks: 3,
+    });
+
+    expect(sched.runNext()).toBe(true);
+    expect(migrations).toBe(1);
+    expect(sched.size).toBe(1); // NOT stopped — backup work is still pending
+    expect(sched.runNext()).toBe(true);
+    expect(sched.runNext()).toBe(true); // budget exhausted on tick 3
+    expect(sched.size).toBe(0);
   });
 });

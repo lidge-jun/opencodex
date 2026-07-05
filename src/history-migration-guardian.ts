@@ -72,8 +72,14 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
         if (moved > 0) {
           log.log(`🩹 history-migration: ${moved} legacy opencodex thread(s) migrated back to openai.`);
         }
-        stopped = true;
-        return;
+        // A "successful" zero-row migration can also mean the DB does not exist YET while a
+        // backup manifest still holds restore work (fresh reinstall race). Only stop when a
+        // re-count proves nothing is pending; otherwise keep ticking within the budget.
+        const after = countFn();
+        if (moved > 0 || (!after.failed && after.pendingRows === 0 && after.backupEntries === 0)) {
+          stopped = true;
+          return;
+        }
       }
     } catch {
       /* hard errors are not retryable state — fall through to the tick budget */
