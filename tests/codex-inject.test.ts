@@ -281,4 +281,25 @@ describe("Design B openai_base_url injection", () => {
     expect(stripped).not.toContain("openai_base_url");
     expect(stripped).toContain('model = "gpt-5.5"');
   });
+
+  test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {
+    // No Design B form present — stripInjectedOpenaiBaseUrl must not eat the legacy EOF marker
+    // in a way that leaves the [model_providers.opencodex] table behind.
+    const legacyOnly = [
+      'model_provider = "opencodex"',
+      'model = "gpt-5.5"',
+      "",
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(legacyOnly);
+
+    expect(stripped).not.toContain("opencodex");
+    expect(stripped).not.toContain("[model_providers.opencodex]");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
 });

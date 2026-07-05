@@ -409,9 +409,18 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
         : migratedRows > 0
           ? `  Codex resume history: ${migratedRows} legacy opencodex-tagged thread(s) migrated back to openai (one-time).\n`
           : `  Codex resume history: untouched (threads keep their native openai tag).\n`;
-  const baseUrlMessage = keptUserBaseUrl
-    ? `  ⚠️ Kept your existing root openai_base_url (not overwritten); remove it and rerun 'ocx start' to route through the proxy.\n`
-    : "";
+  // A user-owned root openai_base_url means we did NOT install routing — say so honestly
+  // instead of claiming the proxy route is active (catalog/fast_mode were still written).
+  if (keptUserBaseUrl) {
+    return {
+      success: true,
+      message: `⚠️ Codex routing NOT injected: your config already sets a root openai_base_url, and opencodex never overwrites a user-owned override.\n` +
+        catalogMessage +
+        historyMessage +
+        `  To route plain codex through the proxy, remove your openai_base_url line from ~/.codex/config.toml and rerun 'ocx start'.\n` +
+        `  Reference config: ${CODEX_PROFILE_PATH}`,
+    };
+  }
   const headline = legacyMode
     ? `Injected opencodex as default provider into Codex config.\n`
     : `Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url).\n`;
@@ -420,7 +429,6 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     message: headline +
       catalogMessage +
       historyMessage +
-      baseUrlMessage +
       `  All models now route through opencodex proxy (like OpenRouter).\n` +
       `  OpenAI models (gpt-5.5, etc.) are passed through to OpenAI.\n` +
       `  Custom models route to their configured providers.\n` +
