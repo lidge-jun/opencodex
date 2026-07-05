@@ -264,11 +264,14 @@ async function handleResponses(
     }
     return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
   }
+  const originalBody = body;
   body = expandPreviousResponseInput(body);
+  const previousResponseInputExpanded = body !== originalBody;
 
   let parsed;
   try {
     parsed = parseRequest(body);
+    if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     parsed._cursorConversationId = previousResponseConversationId(parsed.previousResponseId);
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));

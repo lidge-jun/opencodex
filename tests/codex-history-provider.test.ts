@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { isRecoverableHistoryError, restoreLegacyOpenaiHistory, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex-history-provider";
+import { countPendingOpencodexHistory, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex-history-provider";
 
 /** Read the LAST session_meta payload, mirroring the app's last-writer-wins fold over rollout lines. */
 function latestSessionMetaPayload(path: string): Record<string, unknown> {
@@ -330,5 +330,61 @@ describe("history lock retry", () => {
       }, { sleepFn: () => {} }),
     ).toThrow("malformed database schema");
     expect(calls).toBe(1);
+  });
+});
+
+describe("Design B migration helpers", () => {
+  const busy = () => Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+
+  test("withHistoryRetry honors a custom attempts budget", () => {
+    let calls = 0;
+    const result = withHistoryRetry(() => {
+      calls++;
+      if (calls < 4) throw busy();
+      return "ok";
+    }, { sleepFn: () => {}, attempts: 4 });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(4);
+  });
+
+  test("withHistoryRetry attempts:1 never sleeps and fails fast", () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const result = withHistoryRetry(() => {
+      calls++;
+      throw busy();
+    }, { sleepFn: ms => sleeps.push(ms), attempts: 1 });
+
+    expect(result).toBeNull();
+    expect(calls).toBe(1);
+    expect(sleeps.length).toBe(0);
+  });
+
+  test("countPendingOpencodexHistory mirrors the eject predicate and reaches 0 after migration", () => {
+    const { dbPath, backupPath } = makeFixture({ includeExec: true, includeLegacy: true });
+
+    const before = countPendingOpencodexHistory(dbPath, backupPath);
+    expect(before.failed).toBeUndefined();
+    expect(before.pendingRows).toBe(2); // exec + legacy rows, both with non-empty first_user_message
+
+    const migrated = migrateHistoryToOpenai(dbPath, backupPath);
+    expect(migrated.failed).toBeUndefined();
+    expect((migrated.rows ?? 0) + (migrated.ejectedRows ?? 0)).toBeGreaterThan(0);
+
+    const after = countPendingOpencodexHistory(dbPath, backupPath);
+    expect(after.pendingRows).toBe(0);
+    expect(after.backupEntries).toBe(0);
+
+    // Idempotent: a second migration is a no-op.
+    const again = migrateHistoryToOpenai(dbPath, backupPath);
+    expect(again.rows).toBe(0);
+    expect(again.ejectedRows ?? 0).toBe(0);
+  });
+
+  test("countPendingOpencodexHistory returns zeros for a missing DB", () => {
+    const missing = join(tmpdir(), `ocx-none-${Date.now()}`, "state_5.sqlite");
+    const result = countPendingOpencodexHistory(missing, join(tmpdir(), "no-backup.json"));
+    expect(result).toEqual({ pendingRows: 0, backupEntries: 0 });
   });
 });

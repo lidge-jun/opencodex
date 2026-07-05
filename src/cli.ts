@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
-import { restoreNativeCodex } from "./codex-inject";
+import { restoreNativeCodex, shouldInjectApiAuthHeader } from "./codex-inject";
 import { restoreLegacyOpenaiHistory } from "./codex-history-provider";
 import { writeJournal, reconcileJournal } from "./codex-journal";
 import {
@@ -28,6 +28,7 @@ import { stopProxy } from "./process-control";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "./service";
 import { drainAndShutdown, startServer } from "./server";
 import { startTokenGuardian } from "./oauth/token-guardian";
+import { startHistoryMigrationGuardian } from "./history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
 import { maybeShowUpdatePrompt } from "./update-notify";
 import { syncModelsToCodex } from "./codex-sync";
@@ -138,12 +139,19 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Background proactive token refresh. No-op unless config.tokenGuardian.enabled; timer is unref'd
   // so it never keeps the process alive on its own. Stopped in syncCleanup so no refresh fires mid-drain.
   const guardian = startTokenGuardian();
+  // Design B upgrade path: keep retrying the one-time opencodex→openai history migration in the
+  // background — the first `ocx start` after an update usually races the Codex app's DB lock.
+  // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
+  const historyGuardian = !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false
+    ? startHistoryMigrationGuardian()
+    : undefined;
 
   let cleaned = false;
   const syncCleanup = () => {
     if (cleaned) return;
     cleaned = true;
     try { guardian.stop(); } catch { /* best-effort */ }
+    try { historyGuardian?.stop(); } catch { /* best-effort */ }
     removePid(process.pid);
     removeRuntimePort(process.pid);
     if (!process.env.OCX_SERVICE) { try { restoreNativeCodex(); } catch { /* best-effort restore */ } }

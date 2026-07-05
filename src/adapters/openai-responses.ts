@@ -58,6 +58,12 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+function stripExpandedPreviousResponseId(body: unknown, expanded: boolean | undefined): unknown {
+  if (!expanded || !isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, "previous_response_id")) return body;
+  const { previous_response_id: _previousResponseId, ...rest } = body;
+  return rest;
+}
+
 /**
  * Remove hosted tool entries the target native slug rejects, so the OAuth-passthrough body never
  * carries a tool the upstream model 400s on. No-op (returns the original reference) when nothing
@@ -117,7 +123,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         url,
         method: "POST",
         headers,
-        body: JSON.stringify(stripUnsupportedHostedTools(sanitizeReasoningInputContent(parsed._rawBody))),
+        body: JSON.stringify(stripUnsupportedHostedTools(sanitizeReasoningInputContent(
+          stripExpandedPreviousResponseId(parsed._rawBody, parsed._previousResponseInputExpanded),
+        ))),
       };
     },
 

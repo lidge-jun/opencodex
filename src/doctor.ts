@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "./config";
 import { readCodexTokens } from "./codex-auth-collision";
 import { resolveCodexHomeDir as resolveCodexHomeDirImpl } from "./codex-home";
+import { countPendingOpencodexHistory } from "./codex-history-provider";
 export { resolveCodexHomeDir } from "./codex-home";
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -293,6 +294,19 @@ export async function runDoctor(): Promise<void> {
   console.log(`  ${probe.ok ? "ok " : "-- "} ${WHAM_USAGE_URL}`);
   console.log(`       ${detail}, ${probe.durationMs}ms, ${probe.authenticated ? "authenticated" : "unauthenticated"}`);
 
+  // Design B upgrade visibility: threads still tagged opencodex are invisible to the native
+  // Codex app until the one-time migration lands. Read-only probe (readonly sqlite, 100ms
+  // busy timeout) — reports state, never mutates.
+  console.log("\nCodex history migration");
+  const pending = countPendingOpencodexHistory();
+  if (pending.failed) {
+    console.log("  --     state DB locked or unreadable (Codex app open?) — migration state unknown");
+  } else if (pending.pendingRows === 0 && pending.backupEntries === 0) {
+    console.log("  ok     no legacy opencodex-tagged threads pending");
+  } else {
+    console.log(`  --     ${pending.pendingRows} thread(s) still tagged opencodex, ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"}`);
+  }
+
   // Hints, not fixes.
   const hints: string[] = [];
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
@@ -307,6 +321,9 @@ export async function runDoctor(): Promise<void> {
         hints.push("No proxy is visible to this doctor process and config.proxy is unset or unresolved. If Windows uses a proxy/VPN, set config.proxy or start ocx from a shell with HTTP(S)_PROXY.");
       }
     }
+  }
+  if (pending.failed || pending.pendingRows > 0 || pending.backupEntries > 0) {
+    hints.push("Legacy chat threads are still tagged opencodex (or the DB was locked). The running proxy retries the migration automatically; to force it now, close the Codex app and run 'ocx sync'.");
   }
   if (hints.length > 0) {
     console.log("\nHints");

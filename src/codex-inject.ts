@@ -2,7 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { atomicWriteFile, websocketsEnabled } from "./config";
 import { markJournalInjectedState, restoreJournalState, writeJournal } from "./codex-journal";
 import { restoreCodexCatalog } from "./codex-catalog";
-import { syncCodexHistoryProvider } from "./codex-history-provider";
+import { migrateHistoryToOpenai, syncCodexHistoryProvider } from "./codex-history-provider";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH, parseTomlString, readRootTomlString, resolveCodexConfigPath, tomlString } from "./codex-paths";
 import type { OcxConfig } from "./types";
 
@@ -50,7 +50,7 @@ function providerBaseHost(hostname: string | undefined): string {
   return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
 
-function shouldInjectApiAuthHeader(config: Pick<OcxConfig, "hostname"> | undefined): boolean {
+export function shouldInjectApiAuthHeader(config: Pick<OcxConfig, "hostname"> | undefined): boolean {
   return !isLoopbackHostname(config?.hostname);
 }
 
@@ -393,7 +393,7 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
   // the opposite: a one-time migration of previously re-tagged threads BACK to openai (restore
   // machinery; cheap no-op when there is nothing to migrate).
   const history = config?.syncResumeHistory !== false
-    ? syncCodexHistoryProvider(legacyMode ? "opencodex" : "openai")
+    ? (legacyMode ? syncCodexHistoryProvider("opencodex") : migrateHistoryToOpenai())
     : { rows: 0, files: 0 };
 
   const catalogMessage = catalogPath
@@ -403,7 +403,9 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
   const historyMessage = config?.syncResumeHistory === false
     ? `  Codex resume history: left unchanged (syncResumeHistory=false).\n`
     : history.failed
-      ? `  ⚠️ Codex resume history ${legacyMode ? "sync" : "migration"} SKIPPED: the history DB is locked (Codex app/IDE open?). Close it and rerun 'ocx start'.\n`
+      ? (legacyMode
+        ? `  ⚠️ Codex resume history sync SKIPPED: the history DB is locked (Codex app/IDE open?). Close it and rerun 'ocx start'.\n`
+        : `  ⚠️ Codex resume history migration deferred: the history DB is locked (Codex app/IDE open?). The proxy will keep retrying in the background.\n`)
       : legacyMode
         ? `  Codex resume history: ${history.rows} thread(s) made visible for opencodex; originals backed up for restore.\n`
         : migratedRows > 0

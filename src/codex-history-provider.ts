@@ -369,6 +369,7 @@ export function isRecoverableHistoryError(error: unknown): boolean {
 }
 
 const HISTORY_RETRY_DELAY_MS = 500;
+const HISTORY_RETRY_ATTEMPTS = 2;
 
 /**
  * Run a history mutation with one retry across recoverable lock/busy errors (the app's own
@@ -377,15 +378,17 @@ const HISTORY_RETRY_DELAY_MS = 500;
  * error — callers surface that as `failed: true` instead of a silent no-op. Hard errors
  * (corruption, programming bugs) still throw.
  */
-export function withHistoryRetry<T>(fn: () => T, io: { sleepFn?: (ms: number) => void } = {}): T | null {
+export function withHistoryRetry<T>(fn: () => T, io: { sleepFn?: (ms: number) => void; attempts?: number; delayMs?: number } = {}): T | null {
   const sleepFn = io.sleepFn ?? Bun.sleepSync;
+  const attempts = Math.max(1, io.attempts ?? HISTORY_RETRY_ATTEMPTS);
+  const delayMs = io.delayMs ?? HISTORY_RETRY_DELAY_MS;
   for (let attempt = 0; ; attempt++) {
     try {
       return fn();
     } catch (error) {
       if (!isRecoverableHistoryError(error)) throw error;
-      if (attempt >= 1) return null;
-      try { sleepFn(HISTORY_RETRY_DELAY_MS); } catch { /* sleep is best-effort */ }
+      if (attempt >= attempts - 1) return null;
+      try { sleepFn(delayMs); } catch { /* sleep is best-effort */ }
     }
   }
 }
@@ -525,4 +528,64 @@ export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): { rows:
       db.close();
     }
   }) ?? { rows: 0, files: 0, failed: true };
+}
+
+/**
+ * One-time Design-B migration: restore backed-up originals, then eject any remaining
+ * opencodex-tagged threads to openai. Thin wrapper over the restore path with a
+ * configurable retry budget — the daemon migration guardian uses `{ attempts: 1 }`
+ * per tick so a locked DB never stalls the event loop beyond one sqlite busy wait.
+ */
+export function migrateHistoryToOpenai(
+  stateDbPath = STATE_DB_PATH,
+  backupPath = HISTORY_BACKUP_PATH,
+  opts: { attempts?: number; delayMs?: number; sleepFn?: (ms: number) => void } = {},
+): CodexHistorySyncResult {
+  if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
+  return withHistoryRetry(() => syncCodexHistoryProviderUnsafe("openai", stateDbPath, backupPath), opts)
+    ?? { rows: 0, files: 0, failed: true };
+}
+
+export interface PendingHistoryCount {
+  /** Threads still tagged opencodex that the eject path WOULD move (mirrors its WHERE). */
+  pendingRows: number;
+  /** Entries still recorded in the backup manifest (restore targets). */
+  backupEntries: number;
+  /** Set when the DB could not be opened/read (locked); counts are then unknown, not zero. */
+  failed?: true;
+}
+
+/**
+ * Read-only migration progress probe for the guardian and `ocx doctor`. Opens sqlite
+ * readonly with a SHORT busy timeout so a locked DB cannot stall a daemon tick. The
+ * pending predicate mirrors ejectRemainingOpencodexHistory exactly — rows eject ignores
+ * (empty first_user_message) are not counted, so 0 really means "migration done".
+ */
+export function countPendingOpencodexHistory(stateDbPath = STATE_DB_PATH, backupPath = HISTORY_BACKUP_PATH): PendingHistoryCount {
+  let backupEntries = 0;
+  try {
+    const manifest = readBackup(backupPath, stateDbPath);
+    backupEntries = Object.keys(manifest.entries).length;
+  } catch { /* unreadable manifest counts as 0 — restore treats it the same way */ }
+
+  if (!existsSync(stateDbPath)) return { pendingRows: 0, backupEntries };
+  try {
+    const db = new Database(stateDbPath, { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 100");
+      const row = db.query<{ n: number }, []>(`
+        SELECT count(*) AS n
+        FROM threads
+        WHERE model_provider = 'opencodex'
+          AND trim(coalesce(first_user_message, '')) != ''
+      `).get();
+      return { pendingRows: row?.n ?? 0, backupEntries };
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    if (isRecoverableHistoryError(error)) return { pendingRows: 0, backupEntries, failed: true };
+    // Schema drift (e.g. a future codex renames the table) is a "cannot know" too, not a crash.
+    return { pendingRows: 0, backupEntries, failed: true };
+  }
 }

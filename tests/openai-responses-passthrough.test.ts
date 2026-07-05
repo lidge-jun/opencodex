@@ -124,4 +124,43 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.prompt_cache_retention).toBe("24h");
   });
+
+  test("drops previous_response_id only after proxy-expanded replay", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const expandedRawBody = {
+      model: "gpt-5.5",
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: "first" },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] },
+        { type: "function_call_output", call_id: "call_1", output: "done" },
+      ],
+    };
+    const expandedRequest = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      previousResponseId: "resp_1",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _previousResponseInputExpanded: true,
+      _rawBody: expandedRawBody,
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const expandedBody = JSON.parse(expandedRequest.body) as { previous_response_id?: string; input: unknown[] };
+
+    expect(expandedBody.previous_response_id).toBeUndefined();
+    expect(expandedBody.input).toHaveLength(3);
+
+    const rawDeltaRequest = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      previousResponseId: "resp_1",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { ...expandedRawBody, input: [{ type: "function_call_output", call_id: "call_1", output: "done" }] },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const rawDeltaBody = JSON.parse(rawDeltaRequest.body) as { previous_response_id?: string; input: unknown[] };
+
+    expect(rawDeltaBody.previous_response_id).toBe("resp_1");
+    expect(rawDeltaBody.input).toHaveLength(1);
+  });
 });
