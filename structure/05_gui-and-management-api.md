@@ -14,8 +14,8 @@ Management endpoints live in `src/server.ts` under `/api/*`:
 | Config | Read/write `~/.opencodex/config.json`; mask secrets on read. |
 | Providers | Create/update/delete provider configs and enrich registry metadata. |
 | Models | Fetch routed model lists, disabled model visibility, and catalog-facing ids. |
-| OAuth | Login/status/logout for OAuth-backed providers. |
-| Key providers | Expose API-key provider presets for setup and dashboard flows. |
+| OAuth | Login/status/logout for OAuth-backed providers, plus multiauth account management (`/api/oauth/accounts` GET/DELETE, `/api/oauth/accounts/active` PUT) — list masked accounts per provider, switch the active one, remove one. Login accepts `addAccount: true` to force a fresh browser identity. |
+| Key providers | Expose API-key provider presets for setup and dashboard flows. Multi-key pool per key-auth provider (`/api/providers/keys` GET/POST/DELETE, `/api/providers/keys/active` PUT): masked list, add (upsert + activate), switch, remove — `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. |
 | Logs | Surface request/runtime logs for local diagnosis. |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |

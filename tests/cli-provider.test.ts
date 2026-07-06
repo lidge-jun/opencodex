@@ -7,11 +7,15 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli.ts");
+const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
 
 function runCli(args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    // ALWAYS isolate CODEX_HOME: `provider add --sync` runs syncModelsToCodex, which rewrites the
+    // catalog under CODEX_HOME. With the real ~/.codex and a config.port matching the live proxy,
+    // a test run would WIPE the user's routed catalog entries (live-catalog pollution).
+    env: { ...process.env, CODEX_HOME: isolatedCodexHome, ...env },
     encoding: "utf8",
   });
 }
