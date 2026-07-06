@@ -1,8 +1,12 @@
 import { fromBinary, create } from "@bufbuild/protobuf";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Real child-process spawns resolve packages through bun's install cache; Windows CI runners
+// ("Slow filesystem detected") can take >5s for the first spawn. Explicit headroom.
+setDefaultTimeout(30_000);
 import {
   AgentClientMessageSchema,
   ExecServerMessageSchema,

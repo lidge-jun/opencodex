@@ -2,12 +2,15 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { countPendingOpencodexHistory, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setHistoryDbBusyTimeoutForTests, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
 setHistoryDbBusyTimeoutForTests(250);
+// Windows CI runners also have slow filesystems: legitimate sqlite open/fsync cycles in this
+// file measure 5-7s there (vs <100ms locally), straddling bun's 5s default. Explicit headroom.
+setDefaultTimeout(30_000);
 
 /** Read the LAST session_meta payload, mirroring the app's last-writer-wins fold over rollout lines. */
 function latestSessionMetaPayload(path: string): Record<string, unknown> {
