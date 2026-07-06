@@ -8,9 +8,10 @@ import { DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFet
 import { buildModelsRequest, resolveModelsAuthToken } from "../oauth";
 import { effectiveGoogleMode } from "../providers/registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { modelInList } from "../types";
 import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../generated/jawcode-model-metadata";
-import { shouldCaseFoldMetadataModelId } from "../providers/derive";
+import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../providers/derive";
 import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import { CODEX_GPT5_IDENTITY_LINE } from "../adapters/identity";
 import { fetchCursorUsableModels } from "../adapters/cursor/live-models";
@@ -677,10 +678,18 @@ function configuredInputModalities(prov: OcxProviderConfig, id: string): string[
   return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
 }
 
-function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
+export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
-  const inputModalities = configuredInputModalities(prov, model.id);
+  let inputModalities = configuredInputModalities(prov, model.id);
+  // Vision-sidecar coverage: `noVisionModels` marks models whose images the PROXY describes
+  // (src/vision/index.ts). The catalog must still advertise image input for them — the Codex app
+  // gates attachments client-side on input_modalities, and a text-only entry would block images
+  // before the sidecar ever runs ("This model does not support image inputs").
+  if (modelInList(prov.noVisionModels, model.id)) {
+    const base = inputModalities ?? model.inputModalities ?? ["text"];
+    inputModalities = base.includes("image") ? [...base] : [...base, "image"];
+  }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const hinted = {
     ...model,
@@ -847,7 +856,19 @@ export function filterCatalogVisibleModels(
  */
 export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
-  const activeProviders = Object.entries(config.providers).filter(([, prov]) => prov.disabled !== true);
+  // Persisted provider entries can predate newer registry fields (noVisionModels,
+  // modelInputModalities, ...). The ROUTER merges registry seeds at request time
+  // (routedProviderConfig), so the proxy behaves correctly — the catalog listing must see the
+  // same merged view or its advertisements drift from actual proxy behavior (e.g. a
+  // vision-sidecar model advertised text-only, blocking image attachments app-side).
+  // Enrich a CLONE: hydrated defaults must never leak into the persisted config.
+  const activeProviders = Object.entries(config.providers)
+    .filter(([, prov]) => prov.disabled !== true)
+    .map(([name, prov]): [string, OcxProviderConfig] => {
+      const enriched = { ...prov };
+      enrichProviderFromRegistry(name, enriched);
+      return [name, enriched];
+    });
   const lists = await Promise.all(
     activeProviders.map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
   );
