@@ -16,6 +16,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
+import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { neutralizeIdentity } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
@@ -406,6 +407,16 @@ function messagesToAnthropicFormat(
     }
   }
 
+  // Newer Anthropic models reject assistant-tail histories as prefill:
+  // "This model does not support assistant message prefill. The conversation must end with a user message."
+  // previous_response_id expansion with empty new input, interrupted-turn replay, and web-search sidecar
+  // first iterations can all reach this; Kiro uses the same "(continue)" nudge precedent (src/adapters/kiro.ts:283).
+  if (messages.length === 0) {
+    messages.push({ role: "user", content: "(continue)" });
+  } else if ((messages[messages.length - 1] as { role?: string }).role === "assistant") {
+    messages.push({ role: "user", content: "(continue)" });
+  }
+
   return { system, messages };
 }
 
@@ -434,6 +445,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
     buildRequest(parsed: OcxParsedRequest) {
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      // Anthropic rejects many-image requests (>20 images) carrying any image over
+      // 2000px per side; see anthropic-image-guard.ts for the full limit policy.
+      enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
       const body: Record<string, unknown> = {
