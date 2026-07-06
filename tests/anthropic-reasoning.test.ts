@@ -5,9 +5,9 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as OcxProviderConfig;
 
-function parsed(reasoning?: string, extraOpts: Record<string, unknown> = {}): OcxParsedRequest {
+function parsed(reasoning?: string, extraOpts: Record<string, unknown> = {}, modelId = "anthropic/claude-sonnet-4.5"): OcxParsedRequest {
   return {
-    modelId: "anthropic/claude-sonnet-4.5",
+    modelId,
     stream: false,
     options: { ...(reasoning !== undefined ? { reasoning } : {}), ...extraOpts },
     context: { systemPrompt: ["sys"], messages: [{ role: "user", content: "hi" }] },
@@ -42,6 +42,46 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.max_tokens as number).toBeGreaterThan(thinking!.budget_tokens);
     expect(b.temperature).toBeUndefined();
     expect(b.top_p).toBeUndefined();
+  });
+
+  test.each([
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-4-8[1m]",
+  ])("adaptive-thinking model %s sends thinking.adaptive + output_config.effort", (modelId) => {
+    const b = bodyOf(parsed("xhigh", { temperature: 0.3, topP: 0.9 }, modelId));
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.output_config).toEqual({ effort: "xhigh" });
+    expect(b.temperature).toBeUndefined();
+    expect(b.top_p).toBeUndefined();
+  });
+
+  test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", () => {
+    const b = bodyOf(parsed("minimal", {}, "claude-fable-5"));
+    expect(b.output_config).toEqual({ effort: "low" });
+  });
+
+  test.each([
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-opus-4-6",
+    "claude-opus-4-20250514",
+  ])("budget-thinking model %s keeps thinking.enabled with budget_tokens", (modelId) => {
+    const b = bodyOf(parsed("high", {}, modelId));
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(typeof thinking?.budget_tokens).toBe("number");
+    expect(b.output_config).toBeUndefined();
+  });
+
+  test("adaptive-thinking model with reasoning 'none' sends no thinking config", () => {
+    const b = bodyOf(parsed("none", { temperature: 0.3 }, "claude-fable-5"));
+    expect(b.thinking).toBeUndefined();
+    expect(b.output_config).toBeUndefined();
+    expect(b.temperature).toBe(0.3);
   });
 
   test("drops reconstructed Responses reasoning signatures when switching into Anthropic", () => {
