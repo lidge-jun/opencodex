@@ -62,6 +62,11 @@ export type ProviderConfigSeed = Pick<
 
 const OLLAMA_REASONING_MAP: Record<string, string> = { xhigh: "max" };
 
+// Shared between the OAuth (Claude account) and API-key Anthropic entries so both expose the
+// same static model seed.
+const ANTHROPIC_MODELS = ["claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000 };
+
 const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
 const ZAI_GLM_52_REASONING_MAP: Record<string, string> = {
@@ -174,8 +179,24 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     oauthId: "anthropic",
     jawcodeBundle: "anthropic",
     note: "Log in with your Claude account",
-    models: ["claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
-    modelContextWindows: { "claude-sonnet-5": 1_000_000 },
+    models: [...ANTHROPIC_MODELS],
+    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    defaultModel: "claude-sonnet-4-6",
+  },
+  {
+    id: "anthropic-apikey",
+    label: "Anthropic (API key)",
+    adapter: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://console.anthropic.com/settings/keys",
+    jawcodeBundle: "anthropic",
+    extraMetadataAliases: ["anthropic-key"],
+    note: "Direct Anthropic API billing — no Claude subscription",
+    models: [...ANTHROPIC_MODELS],
+    liveModels: true,
+    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
     defaultModel: "claude-sonnet-4-6",
   },
   {

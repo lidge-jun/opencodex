@@ -14,6 +14,8 @@ export interface JawcodeModelMetadata {
 const PROVIDER_ALIASES: Record<string, string> = {
   "xai": "xai",
   "anthropic": "anthropic",
+  "anthropic-apikey": "anthropic",
+  "anthropic-key": "anthropic",
   "kimi": "moonshot",
   "opencode-go": "opencode-go",
   "openrouter": "openrouter",
