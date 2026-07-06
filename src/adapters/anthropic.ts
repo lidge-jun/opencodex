@@ -258,6 +258,36 @@ function reasoningBudget(effort: string): number {
   }
 }
 
+/**
+ * Claude families that moved to adaptive thinking: they 400 on `thinking.type: "enabled"`
+ * ("Use \"thinking.type.adaptive\" and \"output_config.effort\" to control thinking behavior."),
+ * while older families (Haiku 4.5, Sonnet 4.x, Opus <= 4.6) 400 on `adaptive` — so both wire
+ * shapes must stay. Verified against api.anthropic.com: sonnet-5, fable-5, opus-4-7 and opus-4-8
+ * require adaptive; haiku-4-5 and sonnet-4-5 reject it; opus-4-6/sonnet-4-6 accept both.
+ */
+const ADAPTIVE_THINKING_FAMILY_MINIMUMS: Record<string, readonly [major: number, minor: number]> = {
+  sonnet: [5, 0],
+  opus: [4, 7],
+  fable: [0, 0],
+};
+
+function usesAdaptiveThinking(modelId: string): boolean {
+  // Minor is 1-2 digits with a non-digit lookahead so date-pinned ids ("claude-opus-4-20250514")
+  // parse as minor 0 instead of minor 20250514; suffixed ids ("claude-opus-4-8[1m]") still match.
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?!\d)/.exec(modelId);
+  if (!match) return false;
+  const minimum = ADAPTIVE_THINKING_FAMILY_MINIMUMS[match[1]];
+  if (!minimum) return false;
+  const major = Number(match[2]);
+  const minor = match[3] === undefined ? 0 : Number(match[3]);
+  return major > minimum[0] || (major === minimum[0] && minor >= minimum[1]);
+}
+
+/** `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" is rejected with a 400. */
+function adaptiveEffort(effort: string): string {
+  return effort === "minimal" ? "low" : effort;
+}
+
 function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage | undefined {
   if (!usage) return undefined;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
@@ -479,16 +509,23 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // REASONING_EFFORTS). A bare truthy check would treat "none" as truthy and wrongly enable
       // extended thinking (and strip temperature/top_p), so gate on a real, non-disable effort.
       if (typeof parsed.options.reasoning === "string" && parsed.options.reasoning !== "none") {
-        // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
-        // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
-        // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
-        // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
-        const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
-        const wantBudget = reasoningBudget(parsed.options.reasoning);
-        const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
-        const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
-        body.max_tokens = maxTokens;
-        body.thinking = { type: "enabled", budget_tokens: budget };
+        if (usesAdaptiveThinking(parsed.modelId)) {
+          // Adaptive-thinking models replace the token budget with an effort knob and reject
+          // `thinking.type: "enabled"` outright — no budget/max_tokens re-sizing needed.
+          body.thinking = { type: "adaptive" };
+          body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
+        } else {
+          // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
+          // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
+          // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
+          // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
+          const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+          const wantBudget = reasoningBudget(parsed.options.reasoning);
+          const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
+          const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
+          body.max_tokens = maxTokens;
+          body.thinking = { type: "enabled", budget_tokens: budget };
+        }
         // Extended thinking disallows temperature != 1 and top_p — drop both or the API 400s.
         delete body.temperature;
         delete body.top_p;
