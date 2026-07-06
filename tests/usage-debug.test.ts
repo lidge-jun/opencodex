@@ -11,7 +11,7 @@ import {
   USAGE_DEBUG_KEEP_LINES,
   USAGE_DEBUG_MAX_LINES,
   usageDebugPath,
-} from "../src/usage-debug";
+} from "../src/usage/debug";
 
 let testDir = "";
 let previousHome: string | undefined;

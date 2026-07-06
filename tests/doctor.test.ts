@@ -11,7 +11,7 @@ import {
   parseProcessEnvBlock,
   probeWham,
   resolveCodexHomeDir,
-} from "../src/doctor";
+} from "../src/cli/doctor";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");

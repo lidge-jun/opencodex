@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../src/bridge";
-import { classifyError } from "../src/errors";
+import { classifyError } from "../src/lib/errors";
 import { sanitizePassthroughHeaders } from "../src/server";
 import type { AdapterEvent } from "../src/types";
 

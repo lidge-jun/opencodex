@@ -51,7 +51,7 @@ describe("snapshot-guarded stale-state purge", () => {
   });
 
   test("handleStop snapshots stale state before probing and purges through the guards", () => {
-    const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+    const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
     const stopFn = cliSource.slice(cliSource.indexOf("async function handleStop()"), cliSource.indexOf("async function handleUninstall()"));
 
     const snapshotAt = stopFn.indexOf("const stalePidValue = readPidFileValue()");
@@ -66,7 +66,7 @@ describe("snapshot-guarded stale-state purge", () => {
   });
 
   test("gui opens the actual bind host and recover-history surfaces a locked DB", () => {
-    const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+    const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
     expect(cliSource).toContain("const guiHost = probeHostname(live?.hostname ?? config.hostname)");
     const recoverFn = cliSource.slice(cliSource.indexOf("function handleRecoverHistory()"), cliSource.indexOf("switch (command)"));
     expect(recoverFn).toContain("if (r.failed)");

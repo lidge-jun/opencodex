@@ -2,26 +2,26 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../src/codex-account-label";
+import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../src/codex/account-label";
 import {
   handleCodexAuthAPI, updateAccountQuota, getAccountQuota,
   checkAccountIdCollision, getMainChatgptAccountId,
   markAccountNeedsReauth, isAccountNeedsReauth, clearAccountNeedsReauth, clearAccountQuota,
   maskEmail,
-} from "../src/codex-auth-api";
-import { getCodexAccountCredential, saveCodexAccountCredential } from "../src/codex-account-store";
+} from "../src/codex/auth-api";
+import { getCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
-} from "../src/codex-routing";
+} from "../src/codex/routing";
 import {
   clearCodexWebSocketRegistry,
   getTrackedCodexWebSocketCountForAccount,
   registerCodexWebSocket,
-} from "../src/codex-websocket-registry";
+} from "../src/codex/websocket-registry";
 import type { OcxConfig } from "../src/types";
-import type { WsData } from "../src/ws-bridge";
+import type { WsData } from "../src/server/ws-bridge";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -823,18 +823,18 @@ describe("codex-auth API", () => {
   });
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {
-    const source = await Bun.file("src/codex-auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api.ts").text();
     expect(source).toContain("st.done && st.loggedIn");
     expect(source).toContain("Login timed out before OAuth completed.");
   });
 
   test("OAuth pool login stores a privacy log label at the account creation call site", async () => {
-    const source = await Bun.file("src/codex-auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api.ts").text();
     expect(source).toContain("withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts)");
   });
 
   test("GET /api/codex-auth/login-status masks transient flow-state emails at response boundaries", async () => {
-    const source = await Bun.file("src/codex-auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api.ts").text();
     expect(source).toContain("st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: \"expired\" }");
     expect(source).toContain("return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });");
   });

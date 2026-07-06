@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
-import { openUrl } from "../open-url";
+import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
-import { findLiveProxy, probeHostname } from "../proxy-liveness";
+import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { OAUTH_PROVIDERS, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxProviderConfig } from "../types";

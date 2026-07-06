@@ -26,8 +26,8 @@ describe("install scripts", () => {
     expect(pkg.dependencies?.zod).toBe("4.4.3");
     expect(pkg.devDependencies?.typescript).toBe("5.9.3");
     expect(pkg.devDependencies?.["@types/bun"]).toBe("1.3.14");
-    expect(pkg.scripts?.dev).toBe("bun run src/cli.ts start");
-    expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli.ts start");
+    expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
+    expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");
     expect(pkg.scripts?.["prepare:package"]).toBe("bun scripts/prepare-package.ts");
     expect(pkg.scripts?.prepack).toBe("bun run prepare:package");

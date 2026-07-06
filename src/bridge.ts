@@ -1,7 +1,7 @@
 import type { AdapterEvent, OcxUsage } from "./types";
-import { classifyError, type OcxErrorPayload } from "./errors";
+import { classifyError, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
-import { usageDisplayTotalTokens, usageInputTokensWithCacheDetail } from "./usage-totals";
+import { usageDisplayTotalTokens, usageInputTokensWithCacheDetail } from "./usage/totals";
 
 function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");

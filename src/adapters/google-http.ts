@@ -1,6 +1,6 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
-import { abortError, sleepWithAbort } from "../upstream-retry";
+import { abortError, sleepWithAbort } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;

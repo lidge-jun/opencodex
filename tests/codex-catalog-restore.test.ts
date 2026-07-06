@@ -50,7 +50,7 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex-catalog");
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
       const result = restoreCodexCatalog();
       console.log(JSON.stringify(result));
     `);
@@ -81,7 +81,7 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex-catalog");
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
       const result = restoreCodexCatalog();
       console.log(JSON.stringify(result));
     `);
@@ -111,7 +111,7 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex-catalog");
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
       const result = restoreCodexCatalog();
       console.log(JSON.stringify(result));
     `);
@@ -133,7 +133,7 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       (async () => {
         const result = await syncCatalogModels({
           port: 10100,
@@ -177,7 +177,7 @@ describe("Codex catalog restore", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       (async () => {
         const result = await syncCatalogModels({
           port: 10100,

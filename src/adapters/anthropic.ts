@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "./base";
-import { debugDroppedFrame } from "../debug";
+import { debugDroppedFrame } from "../lib/debug";
 import type {
   AdapterEvent,
   OcxAssistantMessage,

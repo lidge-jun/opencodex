@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { splitWindowsEnvPrefix, windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../src/win-paths";
+import { splitWindowsEnvPrefix, windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
 
 const escape = (value: string): string => value.replace(/%/g, "%%");
 

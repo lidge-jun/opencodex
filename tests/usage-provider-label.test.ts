@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { baseProviderLabel } from "../src/provider-label";
+import { baseProviderLabel } from "../src/providers/label";
 
 describe("baseProviderLabel", () => {
   test("returns the input when there is no pool suffix", () => {

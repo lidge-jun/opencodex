@@ -8,7 +8,7 @@ async function readText(path: string): Promise<string> {
 
 describe("full uninstall command", () => {
   test("CLI exposes a one-shot local state cleanup command", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
 
     expect(cli).toContain('case "uninstall"');
     expect(cli).toContain("async function handleUninstall()");
@@ -19,7 +19,7 @@ describe("full uninstall command", () => {
   });
 
   test("CLI exposes explicit legacy history recovery command", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
 
     expect(cli).toContain("ocx recover-history --legacy-openai");
     expect(cli).toContain("function handleRecoverHistory()");
@@ -36,7 +36,7 @@ describe("full uninstall command", () => {
   });
 
   test("full uninstall kills the tracked proxy before deleting service assets", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
     const uninstallBody = cli.slice(cli.indexOf("async function handleUninstall()"), cli.indexOf("type HealthCheck"));
 
     expect(uninstallBody).toContain('runStep("service stopped"');

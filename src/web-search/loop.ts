@@ -3,8 +3,8 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig } fr
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
-import { cancelBodyOnAbort } from "../abort";
-import { fetchWithResetRetry } from "../upstream-retry";
+import { cancelBodyOnAbort } from "../lib/abort";
+import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { formatWebSearchResults } from "./format-result";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 

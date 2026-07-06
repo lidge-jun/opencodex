@@ -1,4 +1,4 @@
-import { redactSecretString } from "../redact";
+import { redactSecretString } from "../lib/redact";
 
 const REASON_KEYS = ["finish_reason", "finishReason", "stop_reason", "stopReason", "completionReason", "reason"];
 const TRUNCATION_PATTERN = /length|max[_-]?tokens?|truncat|incomplete|context_length/i;

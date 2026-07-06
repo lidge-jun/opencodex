@@ -9,7 +9,7 @@ import {
   updateExecutionCommand,
   updateJobPath,
   type UpdateJobState,
-} from "../src/update-job";
+} from "../src/update/job";
 
 const prevHome = process.env.OPENCODEX_HOME;
 let dir: string;

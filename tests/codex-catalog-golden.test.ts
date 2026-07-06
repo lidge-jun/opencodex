@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildCatalogEntries } from "../src/codex-catalog";
+import { buildCatalogEntries } from "../src/codex/catalog";
 
 // Behavior-preservation ORACLE for the future codex-catalog.ts split (devlog 260701).
 // buildCatalogEntries is the pure core (no fs/network). This snapshots its full serialized

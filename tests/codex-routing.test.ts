@@ -20,8 +20,8 @@ import {
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
-} from "../src/codex-routing";
-import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex-account-store";
+} from "../src/codex/routing";
+import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -29,8 +29,8 @@ import {
   isAccountNeedsReauth,
   parseUsageQuota,
   updateAccountQuota,
-} from "../src/codex-auth-api";
-import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex-quota";
+} from "../src/codex/auth-api";
+import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-routing-test");

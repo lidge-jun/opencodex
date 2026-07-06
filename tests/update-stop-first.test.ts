@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update.ts"), "utf8");
+const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
-const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server.ts"), "utf8");
+const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
 
 describe("update stops the running proxy before replacing files", () => {
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {

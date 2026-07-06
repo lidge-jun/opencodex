@@ -1,6 +1,6 @@
 import { decodeEventStream } from "../lib/eventstream-decoder";
 import { estimateTokens } from "../lib/token-estimate";
-import { debugProviderDiagnostic } from "../debug";
+import { debugProviderDiagnostic } from "../lib/debug";
 import { resolveKiroApiRegion, resolveKiroProfileArn } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";

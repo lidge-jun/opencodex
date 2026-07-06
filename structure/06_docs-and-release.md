@@ -34,12 +34,12 @@ bun run build
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Short Linux + Windows quality gate. `test` job (Bun) runs typecheck/tests/GUI build; `npm-global-smoke` job (Node only, **no setup-bun**) packs and `npm install -g`s the tarball, then runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
-| `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
+| `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli/index.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
 
 Docs-only changes intentionally route through the docs workflow instead of the runtime CI gate. If a
 docs change also edits runtime/package/release files, run the relevant local runtime checks before
 push and let `ci.yml` provide the Linux/Windows confirmation. Service-related changes
-(`src/service.ts`, `src/cli.ts`) additionally trigger the `service-lifecycle.yml` smoke test on Linux.
+(`src/service.ts`, `src/cli/index.ts`) additionally trigger the `service-lifecycle.yml` smoke test on Linux.
 
 ## Root README
 
@@ -64,10 +64,10 @@ Invariants:
 
 - `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
   (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
-  lazy-runs `install.js` and execs `src/cli.ts` under Bun, propagating exit code and signal.
+  lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
-- `src/service.ts` and `src/codex-shim.ts` bake `durableBunPath()` (the bundled binary, stable under
+- `src/service.ts` and `src/codex/shim.ts` bake `durableBunPath()` (the bundled binary, stable under
   the npm global prefix) into launchd/systemd/Task Scheduler and the Codex autostart shim, so those
   durable artifacts keep resolving across `ocx update`.
 - Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
@@ -121,7 +121,7 @@ bun install --frozen-lockfile
 bun x tsc --noEmit
 bun test tests
 bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
-bun run src/cli.ts help
+bun run src/cli/index.ts help
 ```
 
 The CI intentionally does not build docs, build the GUI, run coverage, run macOS, or perform remote

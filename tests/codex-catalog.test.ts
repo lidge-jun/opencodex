@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex-catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -11,7 +11,7 @@ import {
   cursorModelReasoningEfforts,
 } from "../src/adapters/cursor/discovery";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
-import { clearModelCache, setCached } from "../src/model-cache";
+import { clearModelCache, setCached } from "../src/codex/model-cache";
 
 const originalFetch = globalThis.fetch;
 

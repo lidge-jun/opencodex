@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { gatherRoutedModels } from "../src/codex-catalog";
-import { buildModelsRequest } from "../src/oauth/index";
-import { clearModelCache } from "../src/model-cache";
+import { gatherRoutedModels } from "../src/codex/catalog";
+import { buildModelsRequest } from "../src/oauth";
+import { clearModelCache } from "../src/codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;

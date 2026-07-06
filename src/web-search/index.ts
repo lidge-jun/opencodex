@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
 import type { SidecarSettings } from "./executor";
-import type { CodexAuthContext } from "../codex-auth-context";
+import type { CodexAuthContext } from "../codex/auth-context";
 
 export { runWithWebSearch } from "./loop";
 export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";

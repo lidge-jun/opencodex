@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
-import { selectForwardHeaders } from "../src/ws-bridge";
+import { selectForwardHeaders } from "../src/server/ws-bridge";
 
 const forwardProvider = { adapter: "openai-responses", baseUrl: "https://chat.openai.com/backend-api/codex", authMode: "forward" as const };
 

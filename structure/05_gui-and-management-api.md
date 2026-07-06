@@ -7,7 +7,7 @@ starts the proxy when needed and opens `http://localhost:<port>`.
 
 ## API ownership
 
-Management endpoints live in `src/server.ts` under `/api/*`:
+Management endpoints live in `src/server/index.ts` under `/api/*`:
 
 | Endpoint area | Responsibility |
 | --- | --- |
@@ -38,8 +38,8 @@ and catalog invariants documented in this folder rather than inventing parallel 
 
 ## Usage accounting
 
-`src/usage-log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
-`src/usage-summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
+`src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
+`src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 Missing usage is never treated as zero. The dashboard Usage tab renders the same shape, and the
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at

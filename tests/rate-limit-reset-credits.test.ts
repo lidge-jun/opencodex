@@ -5,7 +5,7 @@ import {
   getAccountQuota,
   clearAccountQuota,
   type WhamUsageResponse,
-} from "../src/codex-quota";
+} from "../src/codex/quota";
 
 describe("rate-limit reset credits", () => {
   describe("parseUsageQuota", () => {

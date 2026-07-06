@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, installCodexShim, uninstallCodexShim } from "../src/codex-shim";
+import { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, installCodexShim, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 
@@ -71,13 +71,13 @@ describe("Codex autostart shim", () => {
   });
 
   test("PowerShell shim is written with a UTF-8 BOM (Windows PowerShell 5.1 decodes BOM-less ps1 as ANSI)", async () => {
-    const source = readFileSync(join(import.meta.dir, "..", "src", "codex-shim.ts"), "utf8");
+    const source = readFileSync(join(import.meta.dir, "..", "src", "codex", "shim.ts"), "utf8");
 
     expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`");
   });
 
   test("Windows target discovery includes the extensionless Git-Bash launcher and writeShim emits a forward-slash sh shim for it", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "src", "codex-shim.ts"), "utf8");
+    const source = readFileSync(join(import.meta.dir, "..", "src", "codex", "shim.ts"), "utf8");
 
     expect(source).toContain('const gitBashLauncher = join(dir, "codex");');
     expect(source).toContain("for (const path of [cmd, ps1, gitBashLauncher])");

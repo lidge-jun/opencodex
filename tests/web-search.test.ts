@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { planWebSearch } from "../src/web-search";
 import { runWithWebSearch } from "../src/web-search/loop";
-import { headersForCodexAuthContext } from "../src/codex-auth-context";
+import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import type { ProviderAdapter } from "../src/adapters/base";
 import type { OcxMessage, OcxParsedRequest } from "../src/types";

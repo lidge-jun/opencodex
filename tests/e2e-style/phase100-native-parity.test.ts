@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE } from "../../src/bridge";
-import { buildCatalogEntries } from "../../src/codex-catalog";
+import { buildCatalogEntries } from "../../src/codex/catalog";
 import { parseRequest } from "../../src/responses/parser";
 import { planWebSearch } from "../../src/web-search";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";

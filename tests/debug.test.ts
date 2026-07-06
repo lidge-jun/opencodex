@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { debugDroppedFrame, debugProviderDiagnostic } from "../src/debug";
+import { debugDroppedFrame, debugProviderDiagnostic } from "../src/lib/debug";
 
 describe("debug frame logging", () => {
   const previous = process.env.OCX_DEBUG_FRAMES;

@@ -1,4 +1,4 @@
-import { redactSecretString } from "../redact";
+import { redactSecretString } from "../lib/redact";
 
 const ABSOLUTE_PATH_PATTERN = /(?:\/Users\/[^ "';,]+|\/home\/[^ "';,]+|[A-Za-z]:\\Users\\[^ "';,]+)/g;
 const DETAIL_KEYS = ["__type", "code", "error", "name", "message", "Message", "errorMessage"];

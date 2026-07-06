@@ -5,7 +5,7 @@ import {
   createCodexAccountLogLabel,
   fallbackCodexAccountLogLabel,
   withCodexAccountLogLabel,
-} from "../src/codex-account-label";
+} from "../src/codex/account-label";
 
 describe("codex account privacy labels", () => {
   test("generates non-PII log labels", () => {

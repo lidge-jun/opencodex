@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildCatalogEntries } from "../src/codex-catalog";
+import { buildCatalogEntries } from "../src/codex/catalog";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { routeModel } from "../src/router";

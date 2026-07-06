@@ -1,4 +1,4 @@
-import { redactSecretString } from "../redact";
+import { redactSecretString } from "../lib/redact";
 
 /** Gemini/Vertex finishReason values that mean the turn was cut off, not cleanly stopped. */
 const TRUNCATION_REASONS = new Set(["MAX_TOKENS", "MALFORMED_FUNCTION_CALL"]);

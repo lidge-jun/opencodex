@@ -22,7 +22,7 @@ describe("loopbackBindHostnames", () => {
     // localhost may resolve to ::1 first — silently serving IPv4-only while another
     // process holds ::1:<port> would hand the OAuth callback (auth code) to that process.
     const source = readFileSync(join(import.meta.dir, "..", "src", "oauth", "callback-server.ts"), "utf8");
-    expect(source).toContain('import { isAddrInUse } from "../ports";');
+    expect(source).toContain('import { isAddrInUse } from "../server/ports";');
     const createServers = source.slice(source.indexOf("#createServers(port: number"), source.indexOf("#handleCallback(req: Request"));
     expect(createServers).toContain("if (isAddrInUse(err))");
     expect(createServers).toContain("server.stop(true)");

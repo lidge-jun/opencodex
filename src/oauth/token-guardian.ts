@@ -20,7 +20,7 @@ import {
   listCodexAccountIds,
   readCodexAccountRecord,
   TokenRefreshError,
-} from "../codex-account-store";
+} from "../codex/account-store";
 
 export interface TokenGuardianHandle {
   stop(): void;

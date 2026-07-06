@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { refreshCodexModelCatalog } from "../src/codex-refresh";
+import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import type { OcxConfig } from "../src/types";
 
 const config = {

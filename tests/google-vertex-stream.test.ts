@@ -94,7 +94,7 @@ describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {
 
 describe("usage status for google-vertex stays reported", () => {
   test("usageForFinalLog does not force-estimate google-vertex (but does for kiro)", async () => {
-    const { usageForFinalLog, usageStatusForFinalLog } = await import("../src/usage-log");
+    const { usageForFinalLog, usageStatusForFinalLog } = await import("../src/usage/log");
     const usage = { inputTokens: 5, outputTokens: 2 };
     const vertex = usageForFinalLog("google-vertex", usage);
     expect(vertex?.estimated).toBeUndefined();

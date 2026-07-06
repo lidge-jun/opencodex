@@ -1,4 +1,4 @@
-import { redactSecretString } from "../../redact";
+import { redactSecretString } from "../../lib/redact";
 
 const ABSOLUTE_PATH_PATTERN = /(?:\/Users\/[^ "';,]+|\/home\/[^ "';,]+|[A-Za-z]:\\Users\\[^ "';,]+)/g;
 // Cursor error messages can contain raw credential key=value pairs beyond what the shared

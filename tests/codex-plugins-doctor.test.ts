@@ -4,10 +4,10 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diagnoseCodexBundledPlugins, locateCurrentBundledMarketplace } from "../src/codex-plugins-doctor";
+import { diagnoseCodexBundledPlugins, locateCurrentBundledMarketplace } from "../src/codex/plugins-doctor";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const cliPath = join(repoRoot, "src", "cli.ts");
+const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 function makeConfig(body: string): { dir: string; configPath: string } {
   const dir = mkdtempSync(join(tmpdir(), "ocx-codex-home-"));

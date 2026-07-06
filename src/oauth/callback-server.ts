@@ -8,7 +8,7 @@
  * Handles: port allocation (preferred → random fallback), callback server, CSRF state,
  * manual-input race, 300s timeout. Providers implement generateAuthUrl() + exchangeToken().
  */
-import { isAddrInUse } from "../ports";
+import { isAddrInUse } from "../server/ports";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const DEFAULT_TIMEOUT = 300_000;

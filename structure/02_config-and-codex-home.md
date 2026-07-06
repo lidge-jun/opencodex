@@ -2,7 +2,7 @@
 
 ## Codex home
 
-`src/codex-paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
+`src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
 `~/.codex`. The managed files are:
 
 ```text
@@ -21,7 +21,7 @@ shutdown handler) both restore Codex config simultaneously. The temp is renamed 
 
 ## Config injection
 
-`src/codex-inject.ts` inserts root-level keys and an opencodex provider table:
+`src/codex/inject.ts` inserts root-level keys and an opencodex provider table:
 
 ```toml
 model_provider = "opencodex"

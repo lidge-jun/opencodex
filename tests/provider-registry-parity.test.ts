@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildCatalogEntries } from "../src/codex-catalog";
+import { buildCatalogEntries } from "../src/codex/catalog";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
-import { buildInitProviders } from "../src/init";
+import { buildInitProviders } from "../src/cli/init";
 import { OAUTH_PROVIDERS } from "../src/oauth";
 import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import {

@@ -9,7 +9,7 @@ import {
   usageLogPath,
   usageStatusForFinalLog,
   usageTotalTokens,
-} from "../src/usage-log";
+} from "../src/usage/log";
 
 let testDir = "";
 let previousHome: string | undefined;

@@ -30,7 +30,7 @@ import {
   type InteractionQuery,
   type InteractionResponse,
 } from "./gen/agent_pb";
-import { debugProviderDiagnostic } from "../../debug";
+import { debugProviderDiagnostic } from "../../lib/debug";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import { cursorUnsafeNativeLocalExecEnabled, handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";

@@ -7,9 +7,9 @@ import {
   updateAccountQuota,
   clearAccountQuota,
   clearCodexQuotaPrimeState,
-} from "../src/codex-auth-api";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
-import { resolveCodexAccountForThread, clearThreadAccountMap } from "../src/codex-routing";
+} from "../src/codex/auth-api";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { resolveCodexAccountForThread, clearThreadAccountMap } from "../src/codex/routing";
 import type { OcxConfig } from "../src/types";
 
 // Phase 20 (260630_wsl-account-autoswitch): startup/lazy quota priming.

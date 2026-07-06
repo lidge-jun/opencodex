@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { fetchWithResetRetry, isConnectionResetError } from "../src/upstream-retry";
+import { fetchWithResetRetry, isConnectionResetError } from "../src/lib/upstream-retry";
 
 function bunResetError(): Error {
   // Shape of Bun's fetch rejection on a stale pooled socket.

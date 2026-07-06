@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { buildCatalogEntries, gatherRoutedModels } from "../src/codex-catalog";
+import { buildCatalogEntries, gatherRoutedModels } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -7,7 +7,7 @@ import {
   cursorModelInputModalities,
   cursorModelReasoningEfforts,
 } from "../src/adapters/cursor/discovery";
-import { clearModelCache } from "../src/model-cache";
+import { clearModelCache } from "../src/codex/model-cache";
 
 const originalFetch = globalThis.fetch;
 

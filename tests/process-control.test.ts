@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isProcessAlive, waitForExit } from "../src/process-control";
+import { isProcessAlive, waitForExit } from "../src/lib/process-control";
 
 describe("process control helpers", () => {
   test("reports the current process as alive", () => {

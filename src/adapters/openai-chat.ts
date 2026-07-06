@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "./base";
-import { debugDroppedFrame } from "../debug";
+import { debugDroppedFrame } from "../lib/debug";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { mapReasoningEffort } from "../reasoning-effort";

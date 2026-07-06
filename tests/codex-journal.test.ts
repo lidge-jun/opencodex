@@ -30,7 +30,7 @@ describe("codex-journal", () => {
 
   test("writeJournal creates journal file", () => {
     const r = runScript(testDir, `
-      const { writeJournal } = require("./src/codex-journal");
+      const { writeJournal } = require("./src/codex/journal");
       writeJournal();
       const fs = require("fs");
       const path = require("path");
@@ -60,7 +60,7 @@ describe("codex-journal", () => {
     }), "utf8");
 
     const r = runScript(testDir, `
-      const { reconcileJournal } = require("./src/codex-journal");
+      const { reconcileJournal } = require("./src/codex/journal");
       const result = reconcileJournal();
       console.log(JSON.stringify({ restored: result }));
     `);
@@ -75,7 +75,7 @@ describe("codex-journal", () => {
     writeFileSync(journalPath, "NOT VALID JSON{{{", "utf8");
 
     const r = runScript(testDir, `
-      const { reconcileJournal } = require("./src/codex-journal");
+      const { reconcileJournal } = require("./src/codex/journal");
       const result = reconcileJournal();
       console.log(JSON.stringify({ restored: result }));
     `);
@@ -86,7 +86,7 @@ describe("codex-journal", () => {
 
   test("reconcileJournal no-ops when no journal exists", () => {
     const r = runScript(testDir, `
-      const { reconcileJournal } = require("./src/codex-journal");
+      const { reconcileJournal } = require("./src/codex/journal");
       const result = reconcileJournal();
       console.log(JSON.stringify({ restored: result }));
     `);
@@ -107,7 +107,7 @@ describe("codex-journal", () => {
     }), "utf8");
 
     const r = runScript(testDir, `
-      const { reconcileJournal } = require("./src/codex-journal");
+      const { reconcileJournal } = require("./src/codex/journal");
       const result = reconcileJournal();
       console.log(JSON.stringify({ restored: result }));
     `);
@@ -122,7 +122,7 @@ describe("codex-journal", () => {
     writeFileSync(journalPath, "{}", "utf8");
 
     const r = runScript(testDir, `
-      const { removeJournal } = require("./src/codex-journal");
+      const { removeJournal } = require("./src/codex/journal");
       removeJournal();
       const fs = require("fs");
       const path = require("path");
@@ -154,8 +154,8 @@ describe("codex-journal", () => {
     const r = runScript(testDir, `
       const fs = require("fs");
       const path = require("path");
-      const { writeJournal } = require("./src/codex-journal");
-      const { restoreNativeCodex } = require("./src/codex-inject");
+      const { writeJournal } = require("./src/codex/journal");
+      const { restoreNativeCodex } = require("./src/codex/inject");
       writeJournal();
       fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), [
         'model_provider = "opencodex"',
@@ -192,7 +192,7 @@ describe("codex-journal", () => {
     writeFileSync(join(testDir, "config.toml"), originalConfig, "utf8");
 
     const r = runScript(testDir, `
-      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex-inject");
+      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
       (async () => {
         await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
         const result = restoreNativeCodex();
@@ -212,7 +212,7 @@ describe("codex-journal", () => {
     const r = runScript(testDir, `
       const fs = require("fs");
       const path = require("path");
-      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex-inject");
+      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
       (async () => {
         await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
         fs.appendFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "\\n[tools]\\nweb_search = true\\n", "utf8");
@@ -238,7 +238,7 @@ describe("codex-journal", () => {
     const r = runScript(testDir, `
       const fs = require("fs");
       const path = require("path");
-      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex-inject");
+      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
       (async () => {
         await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
         fs.appendFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "\\n[tools]\\nweb_search = true\\n", "utf8");
@@ -255,7 +255,7 @@ describe("codex-journal", () => {
 
   test("full lifecycle: write → crash → reconcile restores", () => {
     const r = runScript(testDir, `
-      const { writeJournal } = require("./src/codex-journal");
+      const { writeJournal } = require("./src/codex/journal");
       writeJournal();
       console.log("written");
     `);
@@ -268,7 +268,7 @@ describe("codex-journal", () => {
     writeFileSync(join(testDir, "config.toml"), "# injected opencodex config\n", "utf8");
 
     const r2 = runScript(testDir, `
-      const { reconcileJournal } = require("./src/codex-journal");
+      const { reconcileJournal } = require("./src/codex/journal");
       const result = reconcileJournal();
       console.log(JSON.stringify({ restored: result }));
     `);

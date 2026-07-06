@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
-import { serviceApiTokenFilePath } from "../src/service-secrets";
+import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-service-test");
@@ -379,7 +379,7 @@ describe("service lifecycle cleanup ordering", () => {
 
     expect(service).toContain('import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";');
     expect(service).toContain("removeRuntimePort(pid);");
-    expect(service).toContain('import { isProcessAlive, stopProxy } from "./process-control";');
+    expect(service).toContain('import { isProcessAlive, stopProxy } from "./lib/process-control";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain('if (!pid) return "none";');

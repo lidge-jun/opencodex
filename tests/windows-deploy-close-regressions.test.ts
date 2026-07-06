@@ -10,7 +10,7 @@ import { join } from "node:path";
 const read = (rel: string) => readFileSync(join(import.meta.dir, "..", rel), "utf8");
 
 describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/source)", () => {
-  const src = read("src/update-job.ts");
+  const src = read("src/update/job.ts");
   test("no ocx.cmd shim is spawned for restart", () => {
     expect(src).not.toContain('"ocx.cmd"');
     expect(src).not.toMatch(/function ocxBin/);
@@ -35,7 +35,7 @@ describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
 });
 
 describe("server bind canonicalizes explicit localhost but preserves wildcards (F4 symmetry)", () => {
-  const src = read("src/server.ts");
+  const src = read("src/server/index.ts");
   test("literal localhost binds to 127.0.0.1; 0.0.0.0/:: exposure is untouched", () => {
     expect(src).toContain('/^localhost$/i.test(config.hostname ?? "") ? "127.0.0.1"');
     expect(src).toContain("hostname: bindHost,");

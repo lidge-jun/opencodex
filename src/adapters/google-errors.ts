@@ -1,4 +1,4 @@
-import { redactSecretString } from "../redact";
+import { redactSecretString } from "../lib/redact";
 
 const ABSOLUTE_PATH_PATTERN = /(?:\/Users\/[^ "';,]+|\/home\/[^ "';,]+|\/root\/[^ "';,]*|[A-Za-z]:\\Users\\[^ "';,]+)/g;
 

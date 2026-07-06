@@ -1,7 +1,7 @@
 import type { OAuthController, OAuthCredentials } from "./types";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
-import { maskEmail } from "../privacy";
+import { maskEmail } from "../lib/privacy";
 import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential } from "./store";
 import { loginXai, refreshXaiToken } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./anthropic";

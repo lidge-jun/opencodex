@@ -13,21 +13,21 @@ import {
   resolveCodexAuthContext,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
   stripCodexRuntimeProviderFields,
-} from "../src/codex-auth-context";
+} from "../src/codex/auth-context";
 import {
   CodexCredentialGenerationConflictError,
   CodexCredentialRefreshLockTimeoutError,
   getCodexAccountCredential,
   removeCodexAccountCredential,
   saveCodexAccountCredential,
-} from "../src/codex-account-store";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex-auth-api";
+} from "../src/codex/account-store";
+import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex/auth-api";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   recordCodexUpstreamOutcome,
-} from "../src/codex-routing";
+} from "../src/codex/routing";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 let testDir: string;

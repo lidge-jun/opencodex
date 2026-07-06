@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
-import { checkAccountIdCollision } from "../src/codex-auth-api";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { checkAccountIdCollision } from "../src/codex/auth-api";
 import { saveConfig } from "../src/config";
 import type { OcxConfig } from "../src/types";
 

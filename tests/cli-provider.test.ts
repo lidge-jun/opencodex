@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const cliPath = join(repoRoot, "src", "cli.ts");
+const cliPath = join(repoRoot, "src", "cli", "index.ts");
 const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
 
 function runCli(args: string[], env: Record<string, string> = {}) {

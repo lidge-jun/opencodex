@@ -6,8 +6,8 @@ import {
   invalidateCodexWebSocketsForAccount,
   registerCodexWebSocket,
   unregisterCodexWebSocket,
-} from "../src/codex-websocket-registry";
-import type { WsData } from "../src/ws-bridge";
+} from "../src/codex/websocket-registry";
+import type { WsData } from "../src/server/ws-bridge";
 
 function mockWs(data: WsData): {
   ws: ServerWebSocket<WsData>;

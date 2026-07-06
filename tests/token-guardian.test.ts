@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
 import { getConfigPath } from "../src/config";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { __resetGuardianState, guardianSweep } from "../src/oauth/token-guardian";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 

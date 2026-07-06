@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent } from "../types";
 import { modelInList } from "../types";
 import { describeImage, type VisionSettings } from "./describe";
-import type { CodexAuthContext } from "../codex-auth-context";
+import type { CodexAuthContext } from "../codex/auth-context";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export { describeImage } from "./describe";

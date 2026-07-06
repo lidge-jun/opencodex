@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { countPendingOpencodexHistory, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex-history-provider";
+import { countPendingOpencodexHistory, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
 
 /** Read the LAST session_meta payload, mirroring the app's last-writer-wins fold over rollout lines. */
 function latestSessionMetaPayload(path: string): Record<string, unknown> {

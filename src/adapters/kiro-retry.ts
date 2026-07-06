@@ -1,6 +1,6 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { safeKiroHttpErrorMessage } from "./kiro-errors";
-import { abortError, sleepWithAbort } from "../upstream-retry";
+import { abortError, sleepWithAbort } from "../lib/upstream-retry";
 
 const KIRO_RETRY_ATTEMPTS = 3;
 const KIRO_RETRY_BASE_MS = 250;

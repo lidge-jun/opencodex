@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, overrideBunPath } from "../src/bun-runtime";
+import { isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, overrideBunPath } from "../src/lib/bun-runtime";
 
 const tmp = mkdtempSync(join(tmpdir(), "ocx-bun-runtime-"));
 const previousOverride = process.env.OPENCODEX_BUN_PATH;

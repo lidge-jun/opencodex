@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { oauthLoginSummary } from "../src/oauth/index";
+import { oauthLoginSummary } from "../src/oauth";
 
 describe("oauthLoginSummary (ocx status OAuth logins)", () => {
   test("lists every OAuth provider with a boolean login state, including cursor", () => {

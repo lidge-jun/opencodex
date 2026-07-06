@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
-const helpSource = readFileSync(join(import.meta.dir, "..", "src", "cli-help.ts"), "utf8");
+const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const helpSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "help.ts"), "utf8");
 
 describe("ocx restore back", () => {
   test("restore/eject accept `back` to re-point codex at the RUNNING proxy only", () => {

@@ -1,8 +1,8 @@
 import type { OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
-import { signalWithTimeout, cancelBodyOnAbort } from "../abort";
-import { sidecarEnter } from "../sidecar-tracker";
-import { fetchWithResetRetry } from "../upstream-retry";
+import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
+import { sidecarEnter } from "../lib/sidecar-tracker";
+import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 

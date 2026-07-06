@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { syncModelsToCodex } from "../src/codex-sync";
+import { syncModelsToCodex } from "../src/codex/sync";
 import type { OcxConfig } from "../src/types";
 
 const config = {

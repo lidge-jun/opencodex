@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatCrashEntry, installCrashGuards, isBenignAbortTeardown } from "../src/crash-guard";
-import { sidecarEnter } from "../src/sidecar-tracker";
+import { formatCrashEntry, installCrashGuards, isBenignAbortTeardown } from "../src/lib/crash-guard";
+import { sidecarEnter } from "../src/lib/sidecar-tracker";
 
 describe("crash-guard diagnostics", () => {
   test("surfaces the JSC throw site from hidden source fields when the stack is native-only", () => {

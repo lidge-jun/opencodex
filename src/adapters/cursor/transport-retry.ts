@@ -1,9 +1,9 @@
 import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
-import { abortError, sleepWithAbort } from "../../upstream-retry";
+import { abortError, sleepWithAbort } from "../../lib/upstream-retry";
 
 // Compat: historical name for the shared abortable sleep, kept for external callers.
-export { sleepWithAbort as abortAwareSleep } from "../../upstream-retry";
+export { sleepWithAbort as abortAwareSleep } from "../../lib/upstream-retry";
 
 export const CURSOR_RETRY_ATTEMPTS = 3;
 export const CURSOR_RETRY_BASE_MS = 250;

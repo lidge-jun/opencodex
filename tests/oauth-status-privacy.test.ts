@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getLoginStatus, getValidAccessToken, UnsupportedOAuthProviderError } from "../src/oauth/index";
+import { getLoginStatus, getValidAccessToken, UnsupportedOAuthProviderError } from "../src/oauth";
 import { saveCredential } from "../src/oauth/store";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-status-privacy-test");

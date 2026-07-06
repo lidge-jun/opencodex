@@ -31,7 +31,7 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
   test("native passthrough SSE keeps win32 on the pure native relay (Bun#32111)", async () => {
-    const source = await readSource("src/server.ts");
+    const source = await readSource("src/server/index.ts");
     const sseBranch = source.slice(
       source.indexOf("if (isEventStream && upstreamResponse.body)"),
       source.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),

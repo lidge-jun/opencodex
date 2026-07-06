@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cancelBodyOnAbort } from "../src/abort";
+import { cancelBodyOnAbort } from "../src/lib/abort";
 
 function bodyWithCancelSpy(): { body: ReadableStream<Uint8Array>; cancelled: () => boolean } {
   let cancelled = false;

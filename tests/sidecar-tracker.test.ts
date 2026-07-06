@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { sidecarEnter, sidecarBreadcrumb, markActivity, activityBreadcrumb } from "../src/sidecar-tracker";
+import { sidecarEnter, sidecarBreadcrumb, markActivity, activityBreadcrumb } from "../src/lib/sidecar-tracker";
 
 // Drain any leftover in-flight counters between tests (defensive; each test balances its own).
 afterEach(() => {

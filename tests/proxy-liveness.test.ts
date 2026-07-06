@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findLiveProxy, isOpencodexHealthz, probeHostname, proxyIdentityAt } from "../src/proxy-liveness";
+import { findLiveProxy, isOpencodexHealthz, probeHostname, proxyIdentityAt } from "../src/server/proxy-liveness";
 
 function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });

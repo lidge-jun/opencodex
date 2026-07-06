@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearAccountQuota } from "../src/codex-quota";
+import { clearAccountQuota } from "../src/codex/quota";
 import { saveCredential } from "../src/oauth/store";
-import { fetchProviderQuotaReports } from "../src/provider-quota";
+import { fetchProviderQuotaReports } from "../src/providers/quota";
 import type { OcxConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;

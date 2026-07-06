@@ -71,7 +71,7 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
     `);
     expect(r.status).toBe(0);
@@ -100,7 +100,7 @@ describe("Codex catalog sync hardening", () => {
 
     // config has NO providers => gatherRoutedModels returns [] (transient empty fetch).
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
     `);
     expect(r.status).toBe(0);
@@ -124,7 +124,7 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({
         providers: {
           openai: {
@@ -156,7 +156,7 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex-catalog");
+      const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({
         providers: {
           cursor: {
@@ -182,7 +182,7 @@ describe("Codex catalog sync hardening", () => {
     writeFileSync(join(alternateHome, "config.toml"), 'model_catalog_json = "nested/catalog.json"\n', "utf8");
 
     const r = runScript(codexHome, opencodexHome, `
-      const { readCodexCatalogPath } = require("./src/codex-catalog");
+      const { readCodexCatalogPath } = require("./src/codex/catalog");
       process.env.CODEX_HOME = ${JSON.stringify(alternateHome)};
       console.log(readCodexCatalogPath());
     `);

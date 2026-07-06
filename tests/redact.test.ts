@@ -5,7 +5,7 @@ import {
   redactSecretString,
   redactSecrets,
   redactUrlForLog,
-} from "../src/redact";
+} from "../src/lib/redact";
 
 describe("redactSecretString", () => {
   test("masks bearer, api, access, refresh, and profile values", () => {

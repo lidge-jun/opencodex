@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { gracefulStopHost, stopProxyGracefully } from "../src/process-control";
+import { gracefulStopHost, stopProxyGracefully } from "../src/lib/process-control";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true }), { status: 200 });

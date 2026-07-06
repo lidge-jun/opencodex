@@ -388,7 +388,7 @@ describe("opencodex config defaults", () => {
 
   test("recognizes opencodex start command lines", () => {
     expect(isOcxStartCommandLine('bun run src/cli.ts start')).toBe(true);
-    expect(isOcxStartCommandLine('"C:/tools/bun/bin/bun.exe" "run" "src/cli.ts" "start"')).toBe(true);
+    expect(isOcxStartCommandLine('"C:/tools/bun/bin/bun.exe" "run" "src/cli/index.ts" "start"')).toBe(true);
     expect(isOcxStartCommandLine('bun C:/tools/bun/install/global/node_modules/@bitkyc08/opencodex/src/cli.ts start')).toBe(true);
     expect(isOcxStartCommandLine("opencodex start")).toBe(true);
 

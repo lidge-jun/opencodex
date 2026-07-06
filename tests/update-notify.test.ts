@@ -9,7 +9,7 @@ import {
   readVersionCache,
   writeVersionCache,
   type VersionCache,
-} from "../src/update-notify";
+} from "../src/update/notify";
 
 const prevHome = process.env.OPENCODEX_HOME;
 let dir: string;
@@ -117,7 +117,7 @@ describe("cli wiring", () => {
   const readText = (p: string) => Bun.file(new URL(p, root)).text();
 
   test("update prompt runs before the server binds a port", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
     const promptIndex = cli.indexOf("await maybeShowUpdatePrompt()");
     const portIndex = cli.indexOf("let port = await chooseListenPort");
     const serverIndex = cli.indexOf("startServer(port)");
@@ -128,7 +128,7 @@ describe("cli wiring", () => {
   });
 
   test("hidden __refresh-version subcommand is wired", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
     expect(cli).toContain("case \"__refresh-version\"");
     expect(cli).toContain("refreshVersionCache");
   });

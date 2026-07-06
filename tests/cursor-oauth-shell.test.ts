@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildInitProviders } from "../src/init";
-import { isOAuthProvider, listOAuthProviders } from "../src/oauth/index";
+import { buildInitProviders } from "../src/cli/init";
+import { isOAuthProvider, listOAuthProviders } from "../src/oauth";
 import { deriveProviderPresets } from "../src/providers/derive";
 
 // WP16 (devlog 350.100): the disabled OAuth shell was replaced by the real PKCE flow — the flow

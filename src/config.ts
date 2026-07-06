@@ -472,7 +472,9 @@ export function parsePidFile(raw: string): number | null {
 
 export function isOcxStartCommandLine(commandLine: string): boolean {
   const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
+  // "src/cli.ts" matches pre-restructure installs still running; "src/cli/index.ts" is current.
   const hasOcxEntrypoint = normalized.includes("src/cli.ts")
+    || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
     || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);

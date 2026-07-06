@@ -4,10 +4,10 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { selectListenTarget } from "../src/cli-status";
+import { selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const cliPath = join(repoRoot, "src", "cli.ts");
+const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 function runStatusJson(opencodexHome: string) {
   return spawnSync(process.execPath, [cliPath, "status", "--json"], {

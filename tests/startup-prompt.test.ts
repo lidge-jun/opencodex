@@ -18,7 +18,7 @@ describe("startup star prompt", () => {
   });
 
   test("ocx start waits for the interactive prompt before sync/injection", async () => {
-    const cli = await readText("src/cli.ts");
+    const cli = await readText("src/cli/index.ts");
     const promptIndex = cli.indexOf("await maybeShowStarPrompt()");
     const syncIndex = cli.indexOf("await syncModelsToCodex(port)");
 
@@ -29,7 +29,7 @@ describe("startup star prompt", () => {
   });
 
   test("ocx init offers the Codex autostart shim by default", async () => {
-    const init = await readText("src/init.ts");
+    const init = await readText("src/cli/init.ts");
 
     expect(init).toContain("Install Codex autostart shim? [Y/n]");
     expect(init).toContain("installCodexShim");

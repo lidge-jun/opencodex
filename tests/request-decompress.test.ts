@@ -5,7 +5,7 @@ import {
   MAX_DECOMPRESSED_BODY_BYTES,
   readJsonRequestBody,
   UnsupportedContentEncodingError,
-} from "../src/request-decompress";
+} from "../src/server/request-decompress";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
 const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify(PAYLOAD));

@@ -21,7 +21,7 @@ The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
 
 `websocketsEnabled(config)` is true only for an explicit `true`. When false, opencodex removes
 `supports_websockets` from injected provider tables and routed catalog entries, keeping Codex on
-HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/ws-bridge.ts`.
+HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/server/ws-bridge.ts`.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
@@ -47,7 +47,7 @@ need them.
 
 ## Upstream reset retry
 
-`src/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
+`src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
 `ECONNRESET` before any response bytes). `fetchWithResetRetry` retries only
 connection-reset-shaped rejections (up to 3 total attempts, jittered backoff, warn-logged);

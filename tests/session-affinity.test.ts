@@ -1,10 +1,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/codex-routing";
-import { CODEX_ACCOUNT_LOG_LABEL_RE, fallbackCodexAccountLogLabel } from "../src/codex-account-label";
-import { updateAccountQuota, clearAccountQuota } from "../src/codex-auth-api";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
+import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/codex/routing";
+import { CODEX_ACCOUNT_LOG_LABEL_RE, fallbackCodexAccountLogLabel } from "../src/codex/account-label";
+import { updateAccountQuota, clearAccountQuota } from "../src/codex/auth-api";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-session-affinity-test");

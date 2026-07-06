@@ -9,21 +9,21 @@ import {
   pickLowestUsageCodexAccount,
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
-} from "../src/codex-routing";
+} from "../src/codex/routing";
 import {
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
-} from "../src/codex-auth-context";
-import { isCodexAccountUsable } from "../src/codex-account-usability";
-import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex-main-account";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
+} from "../src/codex/auth-context";
+import { isCodexAccountUsable } from "../src/codex/account-usability";
+import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
   markAccountNeedsReauth,
   updateAccountQuota,
-} from "../src/codex-auth-api";
+} from "../src/codex/auth-api";
 import type { OcxConfig } from "../src/types";
 
 const STORE_DIR = join(import.meta.dir, ".tmp-main-rotation-store");

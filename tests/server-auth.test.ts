@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { saveCodexAccountCredential } from "../src/codex-account-store";
-import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex-auth-api";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
-} from "../src/codex-routing";
+} from "../src/codex/routing";
 import { saveConfig } from "../src/config";
 import {
   assertServerAuthConfig,

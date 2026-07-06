@@ -2,7 +2,7 @@
 
 ## Shared catalog
 
-`src/codex-catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
+`src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
 - preserves native OpenAI entries from the live catalog or static fallback;
 - clones a native template for routed `provider/model` entries;

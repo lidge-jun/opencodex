@@ -108,19 +108,19 @@ describe("ChatGPT OAuth constants", () => {
 
 describe("codex-account-store constants sync", () => {
   test("uses same auth.openai.com endpoint as chatgpt.ts", async () => {
-    const source = await Bun.file("src/codex-account-store.ts").text();
+    const source = await Bun.file("src/codex/account-store.ts").text();
     expect(source).toContain("auth.openai.com/oauth/token");
     expect(source).not.toContain("auth0.openai.com");
   });
 
   test("uses same client_id as chatgpt.ts", async () => {
-    const source = await Bun.file("src/codex-account-store.ts").text();
+    const source = await Bun.file("src/codex/account-store.ts").text();
     expect(source).toContain("app_EMoamEEZ73f0CkXaXp7hrann");
     expect(source).not.toContain("DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD");
   });
 
   test("uses form-urlencoded for refresh", async () => {
-    const source = await Bun.file("src/codex-account-store.ts").text();
+    const source = await Bun.file("src/codex/account-store.ts").text();
     expect(source).toContain("application/x-www-form-urlencoded");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { codexExecInvocation } from "../src/codex-catalog";
+import { codexExecInvocation } from "../src/codex/catalog";
 
 describe("codexExecInvocation", () => {
   test(".cmd/.bat on win32 route through the shell with a pre-quoted path (spaces survive)", () => {

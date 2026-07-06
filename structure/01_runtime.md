@@ -4,15 +4,15 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled Bun binary (`bun` dependency), lazy-runs its `install.js` if only the placeholder stub is present, then execs `src/cli.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. |
-| `src/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, `durableBunPath()` (path baked into service/shim artifacts). |
-| `src/cli.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli.ts`). |
-| `src/server.ts` | Bun server for `/v1/responses`, `/v1/models`, static GUI, and `/api/*` management endpoints. |
+| `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled Bun binary (`bun` dependency), lazy-runs its `install.js` if only the placeholder stub is present, then execs `src/cli/index.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. |
+| `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, `durableBunPath()` (path baked into service/shim artifacts). |
+| `src/cli/index.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
+| `src/server/index.ts` | Bun server for `/v1/responses`, `/v1/models`, static GUI, and `/api/*` management endpoints. |
 | `src/config.ts` | `~/.opencodex/config.json`, defaults, PID path, env-value resolution, `websocketsEnabled()`. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
-| `src/codex-shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. Detects stale/overwritten wrappers and repairs by re-backing-up the updated Codex binary. |
+| `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. Detects stale/overwritten wrappers and repairs by re-backing-up the updated Codex binary. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. |
 
 ## Lifecycle

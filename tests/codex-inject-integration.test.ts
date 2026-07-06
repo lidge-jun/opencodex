@@ -11,7 +11,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
 function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { stdout: string; status: number } {
   const script = `
-    const { injectCodexConfig } = require("./src/codex-inject");
+    const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(10100, JSON.parse(process.env.TEST_OCX_CONFIG)).then(r => {
       console.log(JSON.stringify(r));
     });

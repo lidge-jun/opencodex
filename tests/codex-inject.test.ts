@@ -10,7 +10,7 @@ import {
   stripInjectedOpenaiBaseUrl,
   stripOpencodexConfig,
   stripRootContextWindowOverrides,
-} from "../src/codex-inject";
+} from "../src/codex/inject";
 
 describe("Codex config injection", () => {
   test("omits provider-level Responses WebSocket support by default", () => {

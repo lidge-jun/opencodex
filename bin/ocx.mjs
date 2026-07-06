@@ -5,8 +5,8 @@
  * The package source is TypeScript that runs on the Bun runtime. To let
  * `npm install -g @bitkyc08/opencodex` work without a separately-installed Bun,
  * we bundle the runtime via the `bun` npm dependency and exec it from this
- * Node shim. (Dev still runs `bun run src/cli.ts` directly via the shebang on
- * src/cli.ts — only the published npm `bin` routes through here.)
+ * Node shim. (Dev still runs `bun run src/cli/index.ts` directly via the shebang on
+ * src/cli/index.ts — only the published npm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const cliPath = join(here, "..", "src", "cli.ts");
+const cliPath = join(here, "..", "src", "cli", "index.ts");
 
 function isNodeModulesInstall() {
   return here.split(/[\\/]/).includes("node_modules");
