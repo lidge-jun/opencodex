@@ -203,6 +203,7 @@ export const ko: Record<TKey, string> = {
   "logs.col.status": "상태",
   "logs.col.tokens": "토큰",
   "logs.col.error": "오류",
+  "logs.col.upstreamReason": "업스트림 원인",
   "logs.col.duration": "소요 시간",
   "logs.tokens.reported": "측정됨",
   "logs.tokens.unreported": "미보고",

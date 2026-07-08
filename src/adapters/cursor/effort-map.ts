@@ -19,6 +19,8 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-fable-5": ["low", "medium", "high", "max", "xhigh"],
   "claude-opus-4-7": ["low", "medium", "high", "max", "xhigh"],
   "claude-opus-4-8": ["low", "medium", "high", "max", "xhigh"],
+  "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
+  "glm-5.2": ["high", "max"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],

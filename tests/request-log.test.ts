@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   filterRequestLogs,
+  httpStatusFromTerminalError,
   nextRequestLogId,
   responseWithDeferredRequestLog,
   requestLogErrorCode,
@@ -215,6 +216,75 @@ describe("request log metadata", () => {
       totalTokens: 13,
       usage: { inputTokens: 9, outputTokens: 4, estimated: true },
     });
+  });
+
+  test("deferred SSE logging captures the granular upstream reason from response.failed", async () => {
+    const entries: RequestLogEntry[] = [];
+    const cursorMessage = "Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests";
+    const failedPayload = JSON.stringify({
+      type: "response.failed",
+      response: {
+        error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: cursorMessage },
+        last_error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: cursorMessage },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${failedPayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cursor-rate-limit",
+      Date.now(),
+      { model: "cursor/gpt-5", provider: "cursor" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      upstreamError: cursorMessage,
+      status: 429,
+      errorCode: "rate_limit_exceeded",
+    });
+  });
+
+  test("httpStatusFromTerminalError maps Cursor rate limits to 429", () => {
+    expect(httpStatusFromTerminalError({
+      type: "rate_limit_error",
+      code: "rate_limit_exceeded",
+      message: "Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests",
+    })).toBe(429);
+  });
+
+  test("upstream reason capture redacts secret-shaped error messages", async () => {
+    const entries: RequestLogEntry[] = [];
+    const failedPayload = JSON.stringify({
+      type: "response.failed",
+      error: { message: "unauthorized: Bearer secret-leak-abc123" },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${failedPayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cursor-redact",
+      Date.now(),
+      { model: "cursor/gpt-5", provider: "cursor" },
+      entry => entries.push(entry),
+    );
+
+    const text = await response.text();
+    expect(text).toContain("\"message\":\"unauthorized: Bearer secret-leak-abc123\"");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].upstreamError).not.toContain("secret-leak-abc123");
+    expect(entries[0].upstreamError).toContain("[REDACTED]");
   });
 
   test("deferred SSE logging uses adapter-provided Kiro log input tokens", async () => {

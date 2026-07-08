@@ -1,6 +1,8 @@
 import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
 import { abortError, sleepWithAbort } from "../../lib/upstream-retry";
+import { debugProviderDiagnostic } from "../../lib/debug";
+import { safeCursorErrorMessage } from "./cursor-errors";
 
 // Compat: historical name for the shared abortable sleep, kept for external callers.
 export { sleepWithAbort as abortAwareSleep } from "../../lib/upstream-retry";
@@ -20,6 +22,8 @@ export function isRetryableCursorError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const haystack = `${code} ${message}`.toLowerCase();
   if (/auth|unauthor|forbidden|invalid|permission|denied|not found|unsupported/.test(haystack)) return false;
+  if (/resource.exhausted|resource_exhausted|rate limit|too many requests|throttl/.test(haystack)) return false;
+  if (haystack.includes("nghttp2_cancel") || haystack.includes("stream suspended")) return false;
   return (
     haystack.includes("econnreset") ||
     haystack.includes("econnrefused") ||
@@ -27,7 +31,7 @@ export function isRetryableCursorError(err: unknown): boolean {
     haystack.includes("enetunreach") ||
     haystack.includes("eai_again") ||
     haystack.includes("goaway") ||
-    haystack.includes("nghttp2") ||
+    (haystack.includes("nghttp2") && !haystack.includes("nghttp2_cancel")) ||
     haystack.includes("socket hang up") ||
     haystack.includes("connection reset") ||
     haystack.includes("unavailable") ||
@@ -83,8 +87,23 @@ export async function runCursorTurnWithRetry(
         !signal?.aborted &&
         requestUncommitted(transport) &&
         isRetryableCursorError(err);
-      if (!canRetry) throw err;
-      await sleepWithAbort(cursorRetryDelayMs(attempt), signal);
+      if (!canRetry) {
+        debugProviderDiagnostic("cursor", "no-retry", {
+          attempt,
+          reason: safeCursorErrorMessage(err instanceof Error ? err.message : String(err)),
+          emittedAny,
+          committed: !requestUncommitted(transport),
+          aborted: !!signal?.aborted,
+        });
+        throw err;
+      }
+      const backoffMs = cursorRetryDelayMs(attempt);
+      debugProviderDiagnostic("cursor", "retry", {
+        attempt,
+        reason: safeCursorErrorMessage(err instanceof Error ? err.message : String(err)),
+        backoffMs,
+      });
+      await sleepWithAbort(backoffMs, signal);
     } finally {
       await transport.close?.();
     }

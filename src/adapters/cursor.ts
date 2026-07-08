@@ -1,7 +1,7 @@
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { cursorExecDeniedMessage } from "./cursor/exec-policy";
-import { safeCursorErrorMessage } from "./cursor/cursor-errors";
+import { isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor/cursor-errors";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import { createCursorRequest, generatedCursorConversationId } from "./cursor/request-builder";
@@ -91,6 +91,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           },
         );
       } catch (err) {
+        if (isCursorBenignCancelError(err)) return;
         const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
         emit({ type: "error", message: safeCursorTransportError(err), ...(partialUsage ? { usage: partialUsage } : {}) });
       }

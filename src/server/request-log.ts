@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
+import { httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { OcxUsage } from "../types";
+import { redactSecretString } from "../lib/redact";
 import {
   appendUsageEntry,
   usageForFinalLog,
@@ -35,6 +37,12 @@ export interface RequestLogContext {
   usageDebugBodyKind?: UsageDebugBodyKind;
   usageDebugBodySample?: string;
   usageDebugContentType?: string;
+  /** Secret-redacted upstream error reason (e.g. the granular Cursor "rate limit exceeded…"
+   * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
+   * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
+  upstreamError?: string;
+  /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
+  terminalHttpStatus?: number;
 }
 
 export interface RequestLogEntry {
@@ -56,6 +64,8 @@ export interface RequestLogEntry {
   errorCode?: string;
   terminalStatus?: ResponsesTerminalStatus;
   closeReason?: "terminal" | "client_cancel" | "non_stream";
+  /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
+  upstreamError?: string;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -208,6 +218,7 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
   } catch {
     /* body may not be JSON; request log metadata is best-effort only */
   }
+  captureUpstreamError(logCtx, text);
   if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
     logCtx.usageDebugBodyKind = "json";
     logCtx.usageDebugBodySample = truncateForDebug(text);
@@ -223,6 +234,7 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
   } catch {
     /* SSE block payload may not be JSON; metadata inspection is best-effort */
   }
+  captureUpstreamError(logCtx, payload);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
       logCtx.usageDebugBodyKind = "sse";
@@ -235,8 +247,73 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
   }
 }
 
+/**
+ * Capture the upstream error reason into the request log context. Codex/consumer surfaces only
+ * see an HTTP-mapped error code (502 → upstream_server_error); the granular reason lives inside
+ * a `response.failed` SSE payload's `error.message` (the adapter's redacted upstream message) or
+ * a non-streaming JSON error body. We keep the FIRST non-empty reason (the original failure) and
+ * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
+ */
+function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
+  if (!text || logCtx.upstreamError) return;
+  try {
+    const json = JSON.parse(text) as {
+      type?: unknown;
+      error?: { message?: unknown };
+      last_error?: { message?: unknown };
+      response?: { error?: { type?: unknown; code?: unknown; message?: unknown } };
+    };
+    captureTerminalHttpStatus(logCtx, json);
+    const message = json?.error?.message
+      ?? json?.last_error?.message
+      ?? json?.response?.error?.message;
+    if (typeof message === "string" && message.trim()) {
+      logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+    }
+  } catch {
+    /* not JSON; nothing to capture */
+  }
+}
+
+function captureTerminalHttpStatus(
+  logCtx: RequestLogContext,
+  json: {
+    type?: unknown;
+    response?: { error?: { type?: unknown; code?: unknown; message?: unknown } };
+  },
+): void {
+  if (logCtx.terminalHttpStatus !== undefined) return;
+  if (json.type !== "response.failed") return;
+  const error = json.response?.error;
+  if (!error || typeof error !== "object") return;
+  logCtx.terminalHttpStatus = httpStatusFromTerminalError({
+    type: typeof error.type === "string" ? error.type : undefined,
+    code: error.code === null || typeof error.code === "string" ? error.code : undefined,
+    message: typeof error.message === "string" ? error.message : undefined,
+  });
+}
+
+/** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
+export function httpStatusFromTerminalError(error: {
+  type?: string;
+  code?: string | null;
+  message?: string;
+} | undefined): number {
+  return httpStatusFromClassifiedTerminalError(error);
+}
+
 export function httpStatusForTerminalStatus(status: ResponsesTerminalStatus): number {
   return status === "completed" ? 200 : 502;
+}
+
+export function httpStatusForRequestLogTerminal(
+  status: ResponsesTerminalStatus,
+  logCtx?: RequestLogContext,
+): number {
+  if (status === "failed" && logCtx?.terminalHttpStatus !== undefined) {
+    return logCtx.terminalHttpStatus;
+  }
+  return httpStatusForTerminalStatus(status);
 }
 
 export function addFinalRequestLog(
@@ -276,6 +353,7 @@ export function addFinalRequestLog(
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(meta?.closeReason ? { closeReason: meta.closeReason } : {}),
+    ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),

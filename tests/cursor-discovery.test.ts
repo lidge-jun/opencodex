@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CURSOR_AUTO_WIRE_MODEL_ID,
   CURSOR_DEFAULT_CONTEXT_WINDOW,
   CURSOR_STATIC_MODELS,
+  cursorCodexToWireModelId,
+  filterCursorConfiguredModelsByLiveDiscovery,
+  isCursorModelAvailableForAccount,
   cursorModelContextWindows,
   cursorModelIds,
   cursorModelInputModalities,
@@ -38,6 +42,32 @@ describe("Cursor discovery metadata", () => {
     // `auto` mirrors the jawcode SOT `default` entry (200k), not the generic fallback window.
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS).auto).toBe(200_000);
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["composer-2.5-fast"]).toBe(200_000);
+  });
+
+  test("auto is not activated by live GetUsableModels wire ids alone", () => {
+    expect(isCursorModelAvailableForAccount("gpt-5.4", ["gpt-5.4-high"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("claude-fable-5", ["gpt-5.4-high"])).toBe(false);
+    expect(isCursorModelAvailableForAccount("auto", ["default"])).toBe(false);
+
+    const filtered = filterCursorConfiguredModelsByLiveDiscovery(
+      [{ id: "gpt-5.4" }, { id: "claude-fable-5" }],
+      ["gpt-5.4-high"],
+    );
+    expect(filtered.map(model => model.id)).toEqual(["gpt-5.4"]);
+  });
+
+  test("live discovery filter always keeps auto even when GetUsableModels omits it", () => {
+    const filtered = filterCursorConfiguredModelsByLiveDiscovery(
+      [{ id: "auto" }, { id: "gpt-5.4" }, { id: "claude-fable-5" }],
+      ["gpt-5.4-high"],
+    );
+    expect(filtered.map(model => model.id)).toEqual(["auto", "gpt-5.4"]);
+  });
+
+  test("auto maps to default on the Cursor wire", () => {
+    expect(cursorCodexToWireModelId("auto")).toBe(CURSOR_AUTO_WIRE_MODEL_ID);
+    expect(cursorCodexToWireModelId("cursor/auto")).toBe(CURSOR_AUTO_WIRE_MODEL_ID);
+    expect(cursorCodexToWireModelId("gpt-5.4")).toBe("gpt-5.4");
   });
 
   test("normalization trims, deduplicates, sorts, and fills context windows", () => {

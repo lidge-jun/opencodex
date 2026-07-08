@@ -31,6 +31,7 @@ import {
   type InteractionResponse,
 } from "./gen/agent_pb";
 import { debugProviderDiagnostic } from "../../lib/debug";
+import { classifyCursorError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import { cursorUnsafeNativeLocalExecEnabled, handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";
@@ -323,6 +324,12 @@ class LiveCursorTransport implements CursorTransport {
   private readonly desktopDeps: CursorNativeToolDeps;
   private execContext: CursorNativeExecContext = {};
   private mcpPrepared?: Promise<void>;
+  // Per-turn diagnostic counters/timestamps when provider debug is on (`ocx debug provider on`). Stamped in open(), cleared on
+  // close; safe to read after a stream failure because open() owns the only writer before run().
+  private turnStartedAt = 0;
+  private framesReceived = 0;
+  private firstFrameAt?: number;
+  private firstFrameLogged = false;
 
   constructor(private readonly input: CursorTransportFactoryInput) {
     this.token = resolveCursorToken(input.provider, input.headers);
@@ -379,6 +386,27 @@ class LiveCursorTransport implements CursorTransport {
     let done = false;
     let failure: Error | undefined;
     let state = createCursorProtobufEventState();
+    let failureLogged = false;
+    // One per-turn summary of the failure path (end-stream error, socket reset, abort) so the
+    // operator can see how far the turn got and how it was classified without re-scanning every
+    // frame. Gated behind provider debug (`ocx debug provider on`).
+    const summarizeFailure = (err: Error): Error => {
+      if (!failureLogged && !isCursorBenignCancelError(err)) {
+        failureLogged = true;
+        debugProviderDiagnostic("cursor", "turn-failed", {
+          committed: this.committed,
+          framesReceived: this.framesReceived,
+          outputTokens: state.usage.outputTokens,
+          contextTokens: state.contextTokens,
+          firstFrameMs: this.firstFrameAt ? this.firstFrameAt - this.turnStartedAt : undefined,
+          elapsedMs: this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined,
+          classified: classifyCursorError(err.message),
+          errorCode: (err as { code?: unknown }).code ?? undefined,
+          message: redactCursorForLog(err.message),
+        });
+      }
+      return err;
+    };
     const wake = () => {
       const fn = notify;
       notify = undefined;
@@ -428,13 +456,19 @@ class LiveCursorTransport implements CursorTransport {
         const message = queue.shift();
         if (message) yield message;
       }
-      if (failure) throw attachPartialUsage(failure, state);
+      if (failure) {
+        if (isCursorBenignCancelError(failure)) return;
+        throw attachPartialUsage(summarizeFailure(failure), state);
+      }
       if (done) break;
       await new Promise<void>(resolve => {
         notify = resolve;
       });
     }
-    if (failure) throw attachPartialUsage(failure, state);
+    if (failure) {
+      if (isCursorBenignCancelError(failure)) return;
+      throw attachPartialUsage(summarizeFailure(failure), state);
+    }
   }
 
   writeClient(_message: CursorClientMessage): void {}
@@ -506,6 +540,11 @@ class LiveCursorTransport implements CursorTransport {
       const terminal = finalizeAfterDrain(state);
       if (terminal.length === 0) return;
       for (const event of terminal) push(event);
+      debugProviderDiagnostic("cursor", "client-tool-suspend", {
+        reason: "Responses bridge owns client tools; ending turn without fake mcpResult",
+        framesReceived: this.framesReceived,
+        elapsedMs: Date.now() - this.turnStartedAt,
+      });
       this.cancelCursorRun();
     }, this.activeClientToolFinalizeGraceMs);
   }
@@ -518,11 +557,20 @@ class LiveCursorTransport implements CursorTransport {
     fail: (error: Error) => void,
     finish: () => void,
   ): void {
+    this.turnStartedAt = Date.now();
+    this.framesReceived = 0;
+    this.firstFrameAt = undefined;
+    this.firstFrameLogged = false;
+    const dialHost = cursorHostLabel(this.input.provider.baseUrl || "https://api2.cursor.sh");
+    debugProviderDiagnostic("cursor", "dial", { host: dialHost });
     this.session = http2.connect(this.input.provider.baseUrl || "https://api2.cursor.sh");
     // The run request is buffered until the HTTP/2 session connects. Failures before `connect`
     // (DNS, ECONNREFUSED, TLS, connect timeout) mean the server never received the request, so they
     // are safe to retry. Once connected, bytes flush to the server and the turn must not be replayed.
-    this.session.on("connect", () => { this.committed = true; });
+    this.session.on("connect", () => {
+      this.committed = true;
+      debugProviderDiagnostic("cursor", "connected", { connectMs: Date.now() - this.turnStartedAt });
+    });
     this.stream = this.session.request({
       ":method": "POST",
       ":path": CURSOR_RUN_PATH,
@@ -543,6 +591,12 @@ class LiveCursorTransport implements CursorTransport {
       if (this.expectedClose) {
         // We already emitted a terminal `done` and cancelled the run (client-tool suspension). The
         // RST_STREAM CANCEL surfaces here as a stream error/abort; it is expected, not a failure.
+        debugProviderDiagnostic("cursor", "stream-cancel-expected", {
+          code: (error as { code?: unknown }).code,
+          message: redactCursorForLog(error.message),
+          framesReceived: this.framesReceived,
+          elapsedMs: Date.now() - this.turnStartedAt,
+        });
         finish();
         return;
       }
@@ -552,6 +606,7 @@ class LiveCursorTransport implements CursorTransport {
     const stream = this.stream;
     this.firstFrameTimer = setTimeout(() => {
       this.firstFrameTimer = undefined;
+      debugProviderDiagnostic("cursor", "first-frame-timeout", { timeoutMs: this.input.firstFrameTimeoutMs ?? CURSOR_FIRST_FRAME_TIMEOUT_MS });
       try { stream.close(); } catch { /* already closing */ }
       try { session.close(); } catch { /* already closing */ }
       fail(new Error("Cursor transport timed out before first response"));
@@ -560,6 +615,11 @@ class LiveCursorTransport implements CursorTransport {
     let pending: Uint8Array<ArrayBufferLike> = new Uint8Array();
     this.stream.on("data", chunk => {
       this.clearFirstFrameTimer();
+      if (!this.firstFrameLogged) {
+        this.firstFrameLogged = true;
+        this.firstFrameAt = Date.now();
+        debugProviderDiagnostic("cursor", "first-frame", { latencyMs: this.firstFrameAt - this.turnStartedAt });
+      }
       const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
       pending = concatBytes(pending, bytes);
       try {
@@ -567,8 +627,16 @@ class LiveCursorTransport implements CursorTransport {
         pending = decoded.remainder;
         const frames = decoded.frames;
         for (const frame of frames) {
+          this.framesReceived++;
           if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
             const endError = parseConnectEndStreamError(frame.payload);
+            debugProviderDiagnostic("cursor", "connect-end-stream", endError ? {
+              code: cursorConnectErrorCode(frame.payload),
+              message: redactCursorForLog(endError.message),
+              classified: classifyCursorError(endError.message),
+              framesReceived: this.framesReceived,
+              elapsedMs: Date.now() - this.turnStartedAt,
+            } : { framesReceived: this.framesReceived, elapsedMs: Date.now() - this.turnStartedAt });
             if (endError) failAndClear(endError);
             continue;
           }
@@ -582,10 +650,38 @@ class LiveCursorTransport implements CursorTransport {
     });
     this.stream.on("trailers", trailers => {
       const status = trailers["grpc-status"];
+      if (status !== undefined) debugProviderDiagnostic("cursor", "trailers", { grpcStatus: String(status) });
       if (status && status !== "0") failAndClear(new Error(`Cursor gRPC error ${status}`));
     });
-    this.stream.on("error", err => failAndClear(err instanceof Error ? err : new Error(String(err))));
-    this.stream.on("end", () => { this.clearFirstFrameTimer(); finish(); });
+    this.stream.on("error", err => {
+      const realErr = err instanceof Error ? err : new Error(String(err));
+      if (this.expectedClose) {
+        failAndClear(realErr);
+        return;
+      }
+      const code = (realErr as { code?: unknown }).code;
+      const errno = (realErr as { errno?: unknown }).errno;
+      debugProviderDiagnostic("cursor", "stream-error", {
+        code: typeof code === "string" || typeof code === "number" ? String(code) : undefined,
+        errno: typeof errno === "string" || typeof errno === "number" ? String(errno) : undefined,
+        name: realErr.name,
+        message: redactCursorForLog(realErr.message),
+        committed: this.committed,
+        framesReceived: this.framesReceived,
+        elapsedMs: Date.now() - this.turnStartedAt,
+      });
+      failAndClear(realErr);
+    });
+    this.stream.on("end", () => {
+      this.clearFirstFrameTimer();
+      debugProviderDiagnostic("cursor", "stream-end", {
+        committed: this.committed,
+        framesReceived: this.framesReceived,
+        expectedClose: this.expectedClose,
+        elapsedMs: Date.now() - this.turnStartedAt,
+      });
+      finish();
+    });
 
     signal?.addEventListener("abort", () => {
       this.close();
@@ -689,7 +785,7 @@ function attachPartialUsage(failure: Error, state: ReturnType<typeof createCurso
 }
 
 /**
- * Compact frame descriptor for OCX_DEBUG_FRAMES diagnostics: outer case plus the inner
+ * Compact frame descriptor for provider debug (`ocx debug provider on`): outer case plus the inner
  * interactionUpdate/exec case and tool-call union case when present. No payload content is logged.
  */
 function describeCursorServerFrame(message: AgentServerMessage): Record<string, unknown> {
@@ -756,6 +852,34 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a);
   out.set(b, a.length);
   return out;
+}
+
+/** Host-only label for Cursor transport diagnostics — never leaks path/query/credentials. */
+function cursorHostLabel(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return "cursor";
+  }
+}
+
+/** Redact a Cursor error message for diagnostic output. Cursor error strings can carry raw
+ * credential key=value pairs beyond what redactSecretString covers; safeCursorErrorMessage
+ * already applies the full sanitizer plus the classified prefix, so reuse it verbatim. */
+function redactCursorForLog(message: string): string {
+  return safeCursorErrorMessage(message).slice(0, 300);
+}
+
+/** Extract the Connect end-stream `error.code` from the raw trailer frame payload without
+ * surfacing the (potentially secret-bearing) message — used for `[ocx:cursor:connect-end-stream]`
+ * diagnostics. Returns undefined when the payload is not the expected Connect error shape. */
+function cursorConnectErrorCode(payload: Uint8Array): string | undefined {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string } };
+    return parsed?.error?.code;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createLiveCursorTransport(input: CursorTransportFactoryInput): CursorTransport {

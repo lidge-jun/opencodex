@@ -73,7 +73,7 @@ describe("Cursor adapter live transport", () => {
       event => events.push(event),
     );
 
-    expect(requests[0]?.modelId).toBe("auto");
+    expect(requests[0]?.modelId).toBe("default");
     expect(writes).toEqual([]);
     expect(events).toEqual([
       { type: "thinking_delta", thinking: "검토 중" },

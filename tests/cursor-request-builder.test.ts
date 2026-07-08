@@ -14,7 +14,7 @@ describe("Cursor request builder", () => {
   test("normalizes cursor model prefix and never uses Responses response id as Cursor conversation id", () => {
     const request = createCursorRequest({ ...base, previousResponseId: "resp_123" });
 
-    expect(request.modelId).toBe("auto");
+    expect(request.modelId).toBe("default");
     // resp_* is an OpenAI Responses chain id, not a Cursor conversation id. Without a remembered
     // Cursor conversation (_cursorConversationId) we start a fresh one — never fall back to resp_*,
     // which would start an unrelated Cursor conversation and break tool-result continuation.

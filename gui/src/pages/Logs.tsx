@@ -32,6 +32,7 @@ interface LogEntry {
   status: number;
   durationMs: number;
   errorCode?: string;
+  upstreamError?: string;
   usageStatus?: LogUsageStatus;
   usage?: UsageBreakdown;
   totalTokens?: number;
@@ -204,6 +205,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               <span className="muted">{t("logs.col.model")}</span><span className="mono">{detail.resolvedModel ?? detail.model}</span>
               <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
               {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
+              {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
               <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
             </div>
             <div className="muted" style={{ fontSize: 12, margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>

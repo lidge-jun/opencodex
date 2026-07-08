@@ -11,6 +11,31 @@ function sanitize(value: string): string {
     .replace(ABSOLUTE_PATH_PATTERN, "[REDACTED_PATH]");
 }
 
+function errorMessage(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  return String(value ?? "");
+}
+
+function errorCode(value: unknown): string {
+  if (typeof value !== "object" || !value || !("code" in value)) return "";
+  const code = (value as { code?: unknown }).code;
+  return code === undefined || code === null ? "" : String(code);
+}
+
+/**
+ * True when Cursor intentionally cancelled the HTTP/2 stream after a client-tool suspend.
+ * These are expected between multi-turn Responses bridge cycles, not upstream failures.
+ */
+export function isCursorBenignCancelError(value: unknown): boolean {
+  const message = errorMessage(value).toLowerCase();
+  const code = errorCode(value).toUpperCase();
+  if (code === "NGHTTP2_CANCEL") return true;
+  if (message.includes("nghttp2_cancel")) return true;
+  if (message.includes("cursor stream suspended")) return true;
+  return false;
+}
+
 /**
  * Classify a Cursor transport/Connect/gRPC error message into an actionable category.
  * The returned prefix string is recognized by `src/lib/errors.ts` `classifyError` keywords,
@@ -19,13 +44,15 @@ function sanitize(value: string): string {
 export function classifyCursorError(message: string): string {
   const lower = message.toLowerCase();
 
+  if (isCursorBenignCancelError(message)) return "Cursor stream suspended";
+
   if (
     lower.includes("resource_exhausted") ||
     lower.includes("resource exhausted") ||
     lower.includes("rate limit") ||
     lower.includes("rate-limit") ||
     lower.includes("too many requests") ||
-    lower.includes("quota")
+    lower.includes("throttling")
   ) return "Cursor rate limit exceeded";
 
   if (

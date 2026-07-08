@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
+  filterCursorConfiguredModelsByLiveDiscovery,
   cursorModelContextWindows,
   cursorModelIds,
   cursorModelInputModalities,
@@ -388,6 +389,14 @@ describe("Codex catalog routed normalization", () => {
       globalThis.fetch = originalFetch;
       clearModelCache("cursor");
     }
+  });
+
+  test("Cursor live discovery keeps auto even when GetUsableModels omits it", () => {
+    const configured = [{ id: "auto" }, { id: "gpt-5.4" }, { id: "claude-fable-5" }];
+    expect(filterCursorConfiguredModelsByLiveDiscovery(configured, ["gpt-5.4-high"]).map(model => model.id)).toEqual([
+      "auto",
+      "gpt-5.4",
+    ]);
   });
 
   test("liveModels false ignores a fresh live-model cache", async () => {

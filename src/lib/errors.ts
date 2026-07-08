@@ -30,7 +30,10 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("rate limit") ||
     text.includes("rate limited") ||
     text.includes("too many requests") ||
-    text.includes("throttlingexception")
+    text.includes("resource_exhausted") ||
+    text.includes("resource exhausted") ||
+    text.includes("throttlingexception") ||
+    text.includes("throttling")
   ) {
     return { message, type: "rate_limit_error", code: "rate_limit_exceeded" };
   }
@@ -80,4 +83,104 @@ export function classifyError(status: number, type: string, message: string): Oc
     return { message, type: "invalid_request_error", code: "invalid_request_error" };
   }
   return { message, type, code: type || null };
+}
+
+/** Best-effort parse of a retry delay embedded in an upstream error message. */
+export function parseRetryAfterFromMessage(message: string): number | undefined {
+  const patterns = [
+    /try again in (\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i,
+    /retry after (\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i,
+    /retry[- ]after[:\s]+(\d+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (!match?.[1]) continue;
+    const seconds = Number.parseFloat(match[1]);
+    if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
+  }
+  return undefined;
+}
+
+/** Infer HTTP status from adapter terminal error text (provider-agnostic keyword matching). */
+export function inferHttpStatusFromAdapterMessage(message: string): number {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("resource_exhausted") ||
+    lower.includes("resource exhausted") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("throttling")
+  ) return 429;
+  if (
+    lower.includes("unauthenticated") ||
+    lower.includes("unauthorized") ||
+    lower.includes("permission_denied") ||
+    lower.includes("permission denied") ||
+    lower.includes("forbidden") ||
+    lower.includes("invalid token") ||
+    lower.includes("expired token") ||
+    lower.includes("authentication") ||
+    lower.includes("access denied")
+  ) return 401;
+  if (
+    lower.includes("unavailable") ||
+    lower.includes("overloaded") ||
+    lower.includes("temporarily") ||
+    lower.includes("server is busy")
+  ) return 503;
+  if (
+    lower.includes("invalid") ||
+    lower.includes("not found") ||
+    lower.includes("unsupported") ||
+    lower.includes("malformed") ||
+    lower.includes("unimplemented")
+  ) return 400;
+  if (
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("etimedout") ||
+    lower.includes("deadline")
+  ) return 504;
+  return 502;
+}
+
+/** Map an adapter terminal error message to HTTP status + classified Codex error payload. */
+export function adapterFailureFromMessage(message: string): { httpStatus: number; error: OcxErrorPayload } {
+  const httpStatus = inferHttpStatusFromAdapterMessage(message);
+  let finalMessage = message;
+  const retryAfterSeconds = parseRetryAfterFromMessage(message);
+  if (retryAfterSeconds && !/please try again in /i.test(message)) {
+    finalMessage = `${message} Please try again in ${retryAfterSeconds}s.`;
+  }
+  const errorType = httpStatus === 429
+    ? "rate_limit_error"
+    : httpStatus === 401
+      ? "authentication_error"
+      : httpStatus === 503 || httpStatus === 504
+        ? "server_error"
+        : httpStatus === 400
+          ? "invalid_request_error"
+          : "upstream_error";
+  return {
+    httpStatus,
+    error: classifyError(httpStatus, errorType, finalMessage),
+  };
+}
+
+/** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
+export function httpStatusFromTerminalError(error: {
+  type?: string;
+  code?: string | null;
+  message?: string;
+} | undefined): number {
+  if (!error) return 502;
+  if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
+  if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
+  if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
+  if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
+  if (error.type === "invalid_request_error") return 400;
+  if (error.type === "proxy_error") return 500;
+  const message = error.message ?? "";
+  if (message) return inferHttpStatusFromAdapterMessage(message);
+  return 502;
 }
