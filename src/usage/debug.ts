@@ -1,10 +1,15 @@
+/** Usage-shape diagnostic JSONL. Enable with `ocx debug usage on` or OPENCODEX_USAGE_DEBUG=1. */
+
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { DEBUG_ENV } from "../lib/debug-settings";
+import type { DebugLogEntry } from "../lib/debug-log-buffer";
 import { redactSecretString, redactSecrets } from "../lib/redact";
 import type { OcxUsage } from "../types";
 
-export const USAGE_DEBUG_ENV = "OPENCODEX_USAGE_DEBUG";
+export const USAGE_DEBUG_ENV = DEBUG_ENV.usage;
+export { isUsageDebugEnabled } from "../lib/debug-settings";
 export const USAGE_DEBUG_BODY_SAMPLE_BYTES = 2048;
 export const USAGE_DEBUG_MAX_LINES = 200;
 export const USAGE_DEBUG_KEEP_LINES = 100;
@@ -21,10 +26,6 @@ export interface UsageDebugRecord {
   bodyKind: UsageDebugBodyKind;
   bodySample: string;
   extractedUsage: OcxUsage | null;
-}
-
-export function isUsageDebugEnabled(): boolean {
-  return process.env[USAGE_DEBUG_ENV] === "1";
 }
 
 export function usageDebugPath(): string {
@@ -64,5 +65,29 @@ export function appendUsageDebug(record: UsageDebugRecord): void {
     if (existsSync(path)) trimRollingFile(path);
   } catch {
     /* debug capture must never break the proxy */
+  }
+}
+
+/** Tail usage-debug.jsonl for GUI / management API (same shape as provider debug buffer). */
+export function getUsageDebugLogEntries(options?: { since?: number; limit?: number }): DebugLogEntry[] {
+  const since = options?.since ?? 0;
+  const limit = options?.limit ?? 500;
+  try {
+    const content = readFileSync(usageDebugPath(), "utf8");
+    const entries: DebugLogEntry[] = [];
+    for (const line of content.split(/\r?\n/).filter(Boolean)) {
+      try {
+        const record = JSON.parse(line) as UsageDebugRecord;
+        const at = typeof record.ts === "number" ? record.ts : 0;
+        if (since > 0 && at <= since) continue;
+        entries.push({ at, line });
+      } catch {
+        entries.push({ at: 0, line });
+      }
+    }
+    if (entries.length <= limit) return entries;
+    return entries.slice(-limit);
+  } catch {
+    return [];
   }
 }

@@ -7,6 +7,7 @@ export const zh: Record<TKey, string> = {
   "nav.models": "模型",
   "nav.subagents": "子代理",
   "nav.logs": "日志",
+  "nav.debug": "调试",
   "nav.usage": "用量",
   "common.github": "GitHub",
   "common.save": "保存",
@@ -211,6 +212,18 @@ export const zh: Record<TKey, string> = {
   "logs.details": "查看详情",
   "logs.detailTitle": "请求详情",
   "logs.detailRaw": "原始日志",
+
+  "debug.title": "调试",
+  "debug.subtitle": "Provider transport 与 usage 提取诊断。与 ocx debug provider|usage 保持同步。",
+  "debug.debug": "Provider debug",
+  "debug.usage": "Usage 提取",
+  "debug.reset": "清除运行时覆盖",
+  "debug.refresh": "刷新",
+  "debug.follow": "跟随滚动",
+  "debug.streamProvider": "Provider",
+  "debug.streamUsage": "Usage",
+  "debug.empty": "启用 provider 或 usage debug 后可查看诊断行。",
+  "debug.noLines": "尚无 debug 行。发送请求或在 CLI 中启用 debug。",
 
   // usage page
   "usage.title": "用量",

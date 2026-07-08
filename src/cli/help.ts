@@ -54,6 +54,15 @@ const helpEntries: Record<string, HelpEntry> = {
   "sync-cache": { usage: "ocx sync-cache", summary: "Refresh Codex's model cache from the active catalog." },
   status: { usage: "ocx status", summary: "Check proxy server status." },
   doctor: { usage: "ocx doctor", summary: "Diagnose environment/network issues (paths, WSL /mnt, proxy env, ChatGPT reachability)." },
+  debug: {
+    usage: "ocx debug [provider on|off|status|reset|logs [-f]|usage on|off|status|reset|logs [-f]]",
+    summary: "Show or toggle runtime provider debug logging on the running proxy.",
+    details: [
+      "Provider: ocx debug provider on | off | status | reset | logs [-f]",
+      "Usage JSONL: ocx debug usage on | off | status | reset | logs [-f]",
+      "Env default: OCX_DEBUG=1 (legacy OCX_DEBUG_FRAMES still works)",
+    ],
+  },
   login: { usage: "ocx login <provider>", summary: "OAuth or API-key login for a provider." },
   logout: { usage: "ocx logout <provider>", summary: "Remove a stored provider login." },
   gui: { usage: "ocx gui", summary: "Open the opencodex dashboard." },
@@ -115,6 +124,8 @@ Usage:
   ocx sync-cache              Refresh Codex's model cache from the active catalog
   ocx status                  Check proxy server status
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
+  ocx debug [provider|usage ...]
+                              provider/usage on|off|status|reset|logs [-f]
   ocx login <provider>        OAuth login (xai) — opens browser, stores token in ~/.opencodex/auth.json
   ocx logout <provider>       Remove a stored OAuth login
   ocx gui                     Open the opencodex dashboard

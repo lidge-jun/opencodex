@@ -7,6 +7,7 @@ export const ko: Record<TKey, string> = {
   "nav.models": "모델",
   "nav.subagents": "서브에이전트",
   "nav.logs": "로그",
+  "nav.debug": "디버그",
   "nav.usage": "사용량",
   "common.github": "GitHub",
   "common.save": "저장",
@@ -211,6 +212,18 @@ export const ko: Record<TKey, string> = {
   "logs.details": "상세보기",
   "logs.detailTitle": "요청 상세",
   "logs.detailRaw": "원본 로그",
+
+  "debug.title": "디버그",
+  "debug.subtitle": "Provider transport 및 usage 추출 진단. ocx debug provider|usage와 동기화됩니다.",
+  "debug.debug": "Provider debug",
+  "debug.usage": "Usage 추출",
+  "debug.reset": "런타임 재정의 해제",
+  "debug.refresh": "새로고침",
+  "debug.follow": "Follow",
+  "debug.streamProvider": "Provider",
+  "debug.streamUsage": "Usage",
+  "debug.empty": "Provider 또는 usage debug를 켜면 진단 라인을 볼 수 있습니다.",
+  "debug.noLines": "아직 debug 라인이 없습니다. 요청을 보내거나 CLI에서 debug를 켜세요.",
 
   // usage page
   "usage.title": "사용량",

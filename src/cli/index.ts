@@ -449,6 +449,11 @@ switch (command) {
     await runDoctor();
     break;
   }
+  case "debug": {
+    const { handleDebugCommand } = await import("./debug");
+    await handleDebugCommand(args.slice(1));
+    break;
+  }
   case "ensure":
     await handleEnsure();
     break;

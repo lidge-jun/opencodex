@@ -7,6 +7,7 @@ export const en = {
   "nav.models": "Models",
   "nav.subagents": "Subagents",
   "nav.logs": "Logs",
+  "nav.debug": "Debug",
   "nav.usage": "Usage",
   "common.github": "GitHub",
   "common.save": "Save",
@@ -211,6 +212,19 @@ export const en = {
   "logs.details": "Details",
   "logs.detailTitle": "Request details",
   "logs.detailRaw": "Raw log entry",
+
+  // debug page
+  "debug.title": "Debug",
+  "debug.subtitle": "Provider transport and usage-extraction diagnostics. Stays in sync with ocx debug provider|usage.",
+  "debug.debug": "Provider debug",
+  "debug.usage": "Usage extraction",
+  "debug.reset": "Clear runtime overrides",
+  "debug.refresh": "Refresh",
+  "debug.follow": "Follow",
+  "debug.streamProvider": "Provider",
+  "debug.streamUsage": "Usage",
+  "debug.empty": "Enable provider or usage debug to view diagnostic lines.",
+  "debug.noLines": "No debug lines yet. Send a request or enable debug from the CLI.",
 
   // usage page
   "usage.title": "Usage",

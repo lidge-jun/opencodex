@@ -19,6 +19,7 @@ starts the proxy when needed and opens `http://localhost:<port>`.
 | Key providers | Expose API-key provider presets for setup and dashboard flows. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. |
 | Logs | Surface request/runtime logs for local diagnosis. |
+| Debug | Debug page (`/#debug`): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` (provider buffer); `GET /api/debug/usage-logs` (usage JSONL tail). CLI: `ocx debug provider|usage …`. |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
 
@@ -46,8 +47,18 @@ Missing usage is never treated as zero. The dashboard Usage tab renders the same
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
-For diagnosing upstream-shape issues set `OPENCODEX_USAGE_DEBUG=1`; the proxy then writes a
-rolling debug record per finalized request to `~/.opencodex/usage-debug.jsonl` (mode `0o600`,
-auto-trimmed to the most-recent 100 lines once it exceeds 200) with the upstream content-type,
-body kind (`sse / json / other / none`), a 2KB body sample, and the extracted usage. The flag
-is off by default and the hot path is guarded so production stays untouched.
+For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on` (or set
+`OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized
+request to `~/.opencodex/usage-debug.jsonl` (mode `0o600`, auto-trimmed to the most-recent 100 lines
+once it exceeds 200) with the upstream content-type, body kind (`sse / json / other / none`), a 2KB
+body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
+untouched.
+
+## Provider debug logging
+
+Provider transport diagnostics (dropped SSE frames, adapter dial/stream events, etc.) are opt-in:
+`ocx debug provider on` / `ocx debug provider off` on the running proxy, the Debug-page toggle, or `OCX_DEBUG=1` on
+the next start (legacy `OCX_DEBUG_FRAMES` still enables the same path). Lines
+use the `[ocx:<adapter>:<event>]` prefix, go to the proxy terminal, and are buffered for
+`ocx debug provider logs` / `ocx debug provider logs -f`. Usage JSONL tails with
+`ocx debug usage logs [-f]`. Separate from provider buffered logs above.
