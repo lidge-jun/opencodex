@@ -14,6 +14,7 @@ import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJa
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../providers/derive";
 import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import { CODEX_GPT5_IDENTITY_LINE } from "../adapters/identity";
+import { filterCursorConfiguredModelsByLiveDiscovery } from "../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../adapters/cursor/live-models";
 
 const BUNDLED_CATALOG_CACHE_MS = 60_000;
@@ -806,7 +807,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     if (cachedCursor) return applyConfigHintsToCachedModels(name, prov, cachedCursor);
     const liveIds = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
     if (liveIds) {
-      const available = configured.filter(m => liveIds.some(id => id === m.id || id.startsWith(`${m.id}-`)));
+      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveIds);
       const result = available.length > 0 ? available : configured;
       setCached(name, result);
       return result;

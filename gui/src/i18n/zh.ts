@@ -203,6 +203,7 @@ export const zh: Record<TKey, string> = {
   "logs.col.status": "状态",
   "logs.col.tokens": "Token 数",
   "logs.col.error": "错误",
+  "logs.col.upstreamReason": "上游原因",
   "logs.col.duration": "耗时",
   "logs.tokens.reported": "已上报",
   "logs.tokens.unreported": "未上报",

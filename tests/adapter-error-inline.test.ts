@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { createGoogleAdapter } from "../src/adapters/google";
-import { bridgeToResponsesSSE } from "../src/bridge";
+import { adapterFailureFromMessage, bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
@@ -57,5 +57,25 @@ describe("inline error envelope in a 200 stream (F1)", () => {
     expect(failed).toBeDefined();
     expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({ code: "rate_limit_exceeded" });
     expect(frames.some(f => f.event === "response.completed")).toBe(false);
+  });
+
+  test("Cursor resource_exhausted maps to 429 rate_limit_error in response.failed", async () => {
+    async function* gen(): AsyncGenerator<AdapterEvent> {
+      yield {
+        type: "error",
+        message: "Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests",
+      };
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(gen(), "cursor/gpt-5"));
+    const failed = frames.find(f => f.event === "response.failed");
+    expect(failed).toBeDefined();
+    expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({
+      type: "rate_limit_error",
+      code: "rate_limit_exceeded",
+    });
+    expect(adapterFailureFromMessage("Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests")).toMatchObject({
+      httpStatus: 429,
+      error: { type: "rate_limit_error", code: "rate_limit_exceeded" },
+    });
   });
 });

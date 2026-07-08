@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { classifyCursorError, safeCursorErrorMessage } from "../src/adapters/cursor/cursor-errors";
+import {
+  classifyCursorError,
+  isCursorBenignCancelError,
+  safeCursorErrorMessage,
+} from "../src/adapters/cursor/cursor-errors";
 
 describe("classifyCursorError", () => {
   test("rate limit / resource exhausted", () => {
@@ -33,8 +37,20 @@ describe("classifyCursorError", () => {
     expect(classifyCursorError("Stream closed with GOAWAY")).toBe("Cursor connection failed");
   });
 
+  test("client-tool suspend cancel is not a connection failure", () => {
+    expect(classifyCursorError("Cursor connection failed: Stream closed with error code NGHTTP2_CANCEL")).toBe("Cursor stream suspended");
+  });
+
   test("unknown / generic", () => {
     expect(classifyCursorError("something unexpected happened")).toBe("Cursor upstream error");
+  });
+});
+
+describe("isCursorBenignCancelError", () => {
+  test("recognizes NGHTTP2_CANCEL and suspension markers", () => {
+    expect(isCursorBenignCancelError(Object.assign(new Error("Stream closed with error code NGHTTP2_CANCEL"), { code: "ERR_HTTP2_STREAM_ERROR" }))).toBe(true);
+    expect(isCursorBenignCancelError("Cursor stream suspended after client tools")).toBe(true);
+    expect(isCursorBenignCancelError(new Error("read ECONNRESET"))).toBe(false);
   });
 });
 

@@ -51,6 +51,36 @@ export function normalizeCursorModels(models: readonly CursorModelInfo[]): Curso
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * True when a configured Cursor base model should remain exposed after live GetUsableModels filtering.
+ * Live ids are full effort-suffixed variants (`claude-4.6-opus-high`); base ids match exactly or by prefix.
+ */
+export function isCursorModelAvailableForAccount(modelId: string, liveIds: readonly string[]): boolean {
+  return liveIds.some(id => id === modelId || id.startsWith(`${modelId}-`));
+}
+
+/** Codex-facing id for Cursor's auto-router. Always kept in the catalog even when live discovery omits it. */
+export const CURSOR_AUTO_MODEL_ID = "auto";
+
+/** Wire id Cursor Connect expects for the auto-router (GetUsableModels returns `default`, not `auto`). */
+export const CURSOR_AUTO_WIRE_MODEL_ID = "default";
+
+/** Map a Codex-facing Cursor model id to the upstream wire id. */
+export function cursorCodexToWireModelId(modelId: string): string {
+  const normalized = modelId.startsWith("cursor/") ? modelId.slice("cursor/".length) : modelId;
+  return normalized === CURSOR_AUTO_MODEL_ID ? CURSOR_AUTO_WIRE_MODEL_ID : normalized;
+}
+
+/** Filter the static Cursor seed to models this account can use. */
+export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: string }>(
+  configured: readonly T[],
+  liveIds: readonly string[],
+): T[] {
+  return configured.filter(model =>
+    model.id === CURSOR_AUTO_MODEL_ID || isCursorModelAvailableForAccount(model.id, liveIds),
+  );
+}
+
 export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorModels([
   // Context windows and the model lineup mirror Cursor's public models/pricing docs plus the jawcode
   // SOT (../jawcode/packages/ai/src/models.json, `cursor` provider), which mirrors the real
@@ -62,7 +92,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // gemini/grok/kimi/gpt-5-mini are reasoning models in the SOT but are sent bare (no tier picker).
   { id: "auto", contextWindow: CONTEXT_200K, supportsReasoningEffort: false },
 
-  { id: "claude-sonnet-5", contextWindow: CONTEXT_200K },
+  { id: "claude-sonnet-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-4-sonnet", contextWindow: CONTEXT_200K },
   { id: "claude-4-sonnet-1m", contextWindow: CONTEXT_1M },
   { id: "claude-4.5-haiku", contextWindow: CONTEXT_200K },
@@ -108,7 +138,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "grok-build-0.1", contextWindow: CONTEXT_256K },
   { id: "grok-code-fast-1", contextWindow: CONTEXT_256K },
 
-  { id: "glm-5.2", contextWindow: CONTEXT_200K },
+  { id: "glm-5.2", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "kimi-k2.5", contextWindow: CONTEXT_262K },
 ]);
 

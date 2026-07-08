@@ -79,6 +79,8 @@ export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): 
       if (status !== 200) return close(null);
       try {
         const response = fromBinary(GetUsableModelsResponseSchema, new Uint8Array(Buffer.concat(chunks)));
+        // Account filtering uses wire `model_id` values only. Aliases like `composer-2-5` must not
+        // make stale configured ids such as `composer-2` look activated.
         const ids = (response.models ?? [])
           .map(model => (model as { modelId?: string }).modelId)
           .filter((id): id is string => typeof id === "string" && id.length > 0);

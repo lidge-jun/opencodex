@@ -8,6 +8,7 @@ import type {
 } from "../../types";
 import { namespacedToolName } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
+import { cursorCodexToWireModelId } from "./discovery";
 import { cursorEffortSuffix } from "./effort-map";
 
 /**
@@ -18,7 +19,7 @@ import { cursorEffortSuffix } from "./effort-map";
  * known effort base) passes through unchanged.
  */
 function normalizeCursorModelId(modelId: string, reasoning?: string): string {
-  const id = modelId.startsWith("cursor/") ? modelId.slice("cursor/".length) : modelId;
+  const id = cursorCodexToWireModelId(modelId);
   const suffix = cursorEffortSuffix(id, reasoning);
   return suffix ? `${id}-${suffix}` : id;
 }

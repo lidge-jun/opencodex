@@ -203,6 +203,7 @@ export const en = {
   "logs.col.status": "Status",
   "logs.col.tokens": "Tokens",
   "logs.col.error": "Error",
+  "logs.col.upstreamReason": "Upstream reason",
   "logs.col.duration": "Duration",
   "logs.tokens.reported": "reported",
   "logs.tokens.unreported": "unreported",

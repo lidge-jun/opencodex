@@ -43,4 +43,11 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/claude-4.6-opus-max", "low")).toBe("claude-4.6-opus-max");
     expect(cursorEffortSuffix("composer-2.5", "high")).toBeUndefined();
   });
+
+  test("claude-sonnet-5 and glm-5.2 map to live effort suffixes", () => {
+    expect(modelIdFor("cursor/claude-sonnet-5", "low")).toBe("claude-sonnet-5-low");
+    expect(modelIdFor("cursor/claude-sonnet-5", "high")).toBe("claude-sonnet-5-max");
+    expect(modelIdFor("cursor/glm-5.2", "low")).toBe("glm-5.2-high");
+    expect(modelIdFor("cursor/glm-5.2", "high")).toBe("glm-5.2-max");
+  });
 });

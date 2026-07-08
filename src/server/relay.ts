@@ -3,7 +3,7 @@ import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
   addFinalRequestLog,
-  httpStatusForTerminalStatus,
+  httpStatusForRequestLogTerminal,
   inspectResponseLogJson,
   inspectResponseLogSsePayload,
   type RequestLogContext,
@@ -249,7 +249,7 @@ export function responseWithDeferredRequestLog(
     status => {
       if (logged) return;
       logged = true;
-      addFinalRequestLog(requestId, start, logCtx, httpStatusForTerminalStatus(status), {
+      addFinalRequestLog(requestId, start, logCtx, httpStatusForRequestLogTerminal(status, logCtx), {
         terminalStatus: status,
         closeReason: "terminal",
       }, addLog);

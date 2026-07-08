@@ -44,6 +44,11 @@ describe("isRetryableCursorError", () => {
     expect(isRetryableCursorError(new Error("Cursor invalid request: bad model"))).toBe(false);
     expect(isRetryableCursorError(new Error("some unknown failure"))).toBe(false);
   });
+
+  test("does not retry rate limits or expected client-tool cancels", () => {
+    expect(isRetryableCursorError(new Error("Cursor rate limit exceeded: resource_exhausted"))).toBe(false);
+    expect(isRetryableCursorError(Object.assign(new Error("Stream closed with error code NGHTTP2_CANCEL"), { code: "ERR_HTTP2_STREAM_ERROR" }))).toBe(false);
+  });
 });
 
 describe("cursorRetryDelayMs", () => {
