@@ -32,6 +32,37 @@ export interface CursorAuthParams {
   loginUrl: string;
 }
 
+interface CursorJwtPayload {
+  sub?: unknown;
+  email?: unknown;
+  exp?: unknown;
+}
+
+function decodeCursorJwtPayload(token: string): CursorJwtPayload | undefined {
+  const parts = token.split(".");
+  const payload = parts[1];
+  if (parts.length !== 3 || !payload) return undefined;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as CursorJwtPayload;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Build OAuthCredentials from Cursor tokens, extracting stable identity from JWT `sub` for multiauth. */
+export function credentialsFromCursorTokens(accessToken: string, refreshToken: string): OAuthCredentials {
+  const payload = decodeCursorJwtPayload(accessToken) ?? decodeCursorJwtPayload(refreshToken);
+  const accountId = typeof payload?.sub === "string" && payload.sub.length > 0 ? payload.sub : undefined;
+  const email = typeof payload?.email === "string" && payload.email.length > 0 ? payload.email.toLowerCase() : undefined;
+  return {
+    access: accessToken,
+    refresh: refreshToken,
+    expires: getTokenExpiry(accessToken),
+    ...(accountId ? { accountId } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
 /** Generate PKCE params + the cursor.com deep-link login URL (challenge only — never the verifier). */
 export async function generateCursorAuthParams(): Promise<CursorAuthParams> {
   const { verifier, challenge } = await generatePKCE();
@@ -113,7 +144,7 @@ export async function loginCursor(
   ctrl.onAuth?.({ url: loginUrl, instructions: "Approve the Cursor login in your browser, then return here." });
   ctrl.onProgress?.("Waiting for Cursor login approval…");
   const { accessToken, refreshToken } = await pollCursorAuth(uuid, verifier, ctrl.signal, pollBaseDelayMs);
-  return { access: accessToken, refresh: refreshToken, expires: getTokenExpiry(accessToken) };
+  return credentialsFromCursorTokens(accessToken, refreshToken);
 }
 
 function isRetryableRefreshStatus(status: number): boolean {
@@ -160,7 +191,7 @@ export async function refreshCursorToken(refresh: string, signal?: AbortSignal):
     if (response.ok) {
       const data = (await response.json()) as { accessToken?: string; refreshToken?: string };
       if (!data.accessToken) throw new Error("Cursor refresh response missing access token");
-      return { access: data.accessToken, refresh: data.refreshToken || refresh, expires: getTokenExpiry(data.accessToken) };
+      return credentialsFromCursorTokens(data.accessToken, data.refreshToken || refresh);
     }
     if (!isRetryableRefreshStatus(response.status) || attempt === REFRESH_ATTEMPTS - 1) {
       throw new Error(`Cursor token refresh failed: ${response.status}`);
@@ -174,15 +205,7 @@ export async function refreshCursorToken(refresh: string, signal?: AbortSignal):
 
 /** Resolve a token's expiry (epoch ms) from its JWT `exp`, minus a 5-minute skew; ~1h fallback. */
 export function getTokenExpiry(token: string): number {
-  try {
-    const parts = token.split(".");
-    const payload = parts.length === 3 ? parts[1] : undefined;
-    if (payload) {
-      const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as { exp?: number };
-      if (typeof decoded.exp === "number") return decoded.exp * 1000 - EXPIRY_SKEW_MS;
-    }
-  } catch {
-    // fall through to the fixed fallback below
-  }
+  const decoded = decodeCursorJwtPayload(token);
+  if (typeof decoded?.exp === "number") return decoded.exp * 1000 - EXPIRY_SKEW_MS;
   return Date.now() + FALLBACK_TTL_MS;
 }

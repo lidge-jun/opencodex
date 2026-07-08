@@ -13,7 +13,7 @@ interface Config {
   providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; disabled?: boolean }>;
 }
 
-interface OAuthStatus { loggedIn: boolean; email?: string; error?: string }
+interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
 interface ProviderQuotaReport { provider: string; quota: AccountQuota; source: string; updatedAt: number }
 interface OAuthAccount { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
@@ -246,7 +246,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
         if (!s) continue;
         // For add-account flows the provider is already "logged in": wait for the account count to grow.
-        const completed = addAccount ? (s.accounts?.length ?? 0) > baselineCount : s.loggedIn;
+        // addAccount: wait for a new slot OR flow completion (same-account re-login won't grow count).
+        const completed = addAccount
+          ? ((s.accounts?.length ?? 0) > baselineCount || (s.done === true && !s.error))
+          : s.loggedIn;
         if (completed) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);

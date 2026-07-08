@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   generateCursorAuthParams,
+  credentialsFromCursorTokens,
   getTokenExpiry,
   loginCursor,
   pollCursorAuth,
@@ -12,9 +13,9 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function jwtWithExp(expSeconds: number): string {
+function jwtWithExp(expSeconds: number, extra: Record<string, unknown> = {}): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ exp: expSeconds, ...extra })).toString("base64url");
   return `${header}.${payload}.sig`;
 }
 
@@ -135,5 +136,23 @@ describe("Cursor OAuth core flow", () => {
     expect(authedUrl).toContain("cursor.com/loginDeepControl");
     expect(creds.access).toBeTruthy();
     expect(creds.refresh).toBe("ref");
+  });
+
+  test("credentialsFromCursorTokens extracts JWT sub as accountId for multiauth", () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const access = jwtWithExp(exp, { sub: "google-oauth2|user_01ABC", email: "dev@example.com" });
+    const creds = credentialsFromCursorTokens(access, "refresh-token");
+    expect(creds.accountId).toBe("google-oauth2|user_01ABC");
+    expect(creds.email).toBe("dev@example.com");
+    expect(creds.expires).toBe(exp * 1000 - 5 * 60 * 1000);
+  });
+
+  test("refreshCursorToken preserves accountId from the refreshed access token", async () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const access = jwtWithExp(exp, { sub: "google-oauth2|user_02XYZ" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({ accessToken: access, refreshToken: "newRef" }), { status: 200 })) as typeof fetch;
+    const out = await refreshCursorToken("rt");
+    expect(out.accountId).toBe("google-oauth2|user_02XYZ");
+    expect(out.refresh).toBe("newRef");
   });
 });

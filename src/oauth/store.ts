@@ -10,9 +10,10 @@
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
  *   for Codex pool logins, which have their own ledger (codex-accounts.json).
- * - Credentials without identity (no accountId/email — kimi, kiro, cursor) replace the
- *   active slot instead of appending: their refresh tokens rotate, so a derived id would
- *   duplicate the same human on every re-login.
+ * - Credentials without identity (no accountId/email — kimi, kiro) replace the active slot
+ *   instead of appending: their refresh tokens rotate, so a derived id would duplicate the
+ *   same human on every re-login. Cursor login extracts JWT `sub` as accountId so multiauth
+ *   can append distinct accounts.
  */
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, chmodSync } from "node:fs";

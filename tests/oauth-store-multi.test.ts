@@ -96,6 +96,13 @@ describe("multi-account auth store", () => {
     expect(getCredential("cursor")?.access).toBe("rotated");
   });
 
+  test("cursor with distinct accountIds appends a second account", () => {
+    saveCredential("cursor", cred({ accountId: "google-oauth2|user_a", access: "access-a" }));
+    saveCredential("cursor", cred({ accountId: "google-oauth2|user_b", access: "access-b" }));
+    expect(listAccounts("cursor").length).toBe(2);
+    expect(getCredential("cursor")?.access).toBe("access-b");
+  });
+
   test("chatgpt stays single-slot even with distinct identities", () => {
     saveCredential("chatgpt", cred({ email: "a@example.com", accountId: "one" }));
     saveCredential("chatgpt", cred({ email: "b@example.com", accountId: "two", access: "b-access" }));
