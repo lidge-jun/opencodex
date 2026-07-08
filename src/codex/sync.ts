@@ -1,4 +1,5 @@
 import { injectCodexConfig } from "./inject";
+import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
 import type { OcxConfig } from "../types";
@@ -11,6 +12,8 @@ export interface CodexSyncResult {
   cacheSynced: boolean;
   message: string;
   warning?: string;
+  projectConfigWarnings?: ProjectCodexConfigWarning[];
+  projectConfigGrouped?: { path: string; issues: string[]; bypass: string }[];
 }
 
 interface CodexSyncDeps {
@@ -58,6 +61,7 @@ export async function syncModelsToCodex(
 
   const result = await deps.injectCodexConfig(p, config, { catalogPath: catalogPathForInjection });
   log?.log(result.message);
+  const projectConfigWarnings = printProjectCodexConfigWarnings(log, { cwd: process.cwd() });
   return {
     ok: result.success,
     added,
@@ -66,5 +70,9 @@ export async function syncModelsToCodex(
     cacheSynced,
     message: result.message,
     ...(warning ? { warning } : {}),
+    ...(projectConfigWarnings.length > 0 ? {
+      projectConfigWarnings,
+      projectConfigGrouped: groupProjectCodexConfigWarningsByPath(projectConfigWarnings),
+    } : {}),
   };
 }

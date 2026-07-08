@@ -22,6 +22,18 @@ interface SyncResult {
   message: string;
   warning?: string;
   staleAppServerHint?: string;
+  projectConfigWarnings?: ProjectCodexConfigWarning[];
+}
+interface ProjectCodexConfigWarning {
+  path: string;
+  code: string;
+  detail: string;
+  message: string;
+}
+interface ProjectCodexConfigGroup {
+  path: string;
+  issues: string[];
+  bypass: string;
 }
 interface UpdateCheckData {
   currentVersion: string;
@@ -69,6 +81,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [projectConfigWarnings, setProjectConfigWarnings] = useState<ProjectCodexConfigGroup[]>([]);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>("latest");
   const [updateRestart, setUpdateRestart] = useState(true);
@@ -82,18 +95,25 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [hRes, pRes, sRes, scRes, uRes] = await Promise.all([
+        const [hRes, pRes, sRes, scRes, uRes, pcRes] = await Promise.all([
           fetch(`${apiBase}/healthz`),
           fetch(`${apiBase}/api/providers`),
           fetch(`${apiBase}/api/settings`),
           fetch(`${apiBase}/api/sidecar-settings`),
           fetch(`${apiBase}/api/usage?range=30d`),
+          fetch(`${apiBase}/api/diagnostics/project-config`),
         ]);
         setHealth(await hRes.json());
         setProviders(await pRes.json());
         setSettings(await sRes.json());
         setSidecar(await scRes.json());
         try { setUsage30d(uRes.ok ? await uRes.json() : null); } catch { setUsage30d(null); }
+        try {
+          const pcData = pcRes.ok ? await pcRes.json() as { grouped?: ProjectCodexConfigGroup[] } : null;
+          setProjectConfigWarnings(pcData?.grouped ?? []);
+        } catch {
+          setProjectConfigWarnings([]);
+        }
         setError(false);
       } catch {
         setError(true);
@@ -227,6 +247,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       const data = await res.json() as SyncResult | { error?: string };
       if (!res.ok) throw new Error("error" in data && data.error ? data.error : "sync failed");
       setSyncResult(data as SyncResult);
+      const grouped = (data as SyncResult & { projectConfigGrouped?: ProjectCodexConfigGroup[] }).projectConfigGrouped;
+      if (grouped) setProjectConfigWarnings(grouped);
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -316,6 +338,24 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           )}
         </div>
       </div>
+
+      {projectConfigWarnings.length > 0 && (
+        <div className="notice notice-err maintenance-notice" style={{ marginBottom: 24 }} role="alert">
+          <IconAlert />
+          <div>
+            <div style={{ fontWeight: 650 }}>{t("dash.projectConfigTitle")}</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{t("dash.projectConfigHint")}</div>
+            <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13 }}>
+              {projectConfigWarnings.map(g => (
+                <li key={g.path} style={{ marginBottom: 8 }}>
+                  <code>{g.path}</code> — {g.issues.join(", ")}
+                  <div className="muted" style={{ marginTop: 2 }}>{g.bypass}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       <div className="panel maintenance-panel" style={{ marginBottom: 24 }}>
         <div className="spread maintenance-head">

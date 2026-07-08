@@ -1,6 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
 import type { OcxConfig } from "../src/types";
+
+const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
+const TEST_CODEX_HOME = join(TEST_DIR, "codex");
+let prevCodexHome: string | undefined;
 
 const config = {
   port: 10100,
@@ -9,6 +15,19 @@ const config = {
 } as OcxConfig;
 
 describe("GUI/CLI Codex sync backend", () => {
+  beforeEach(() => {
+    prevCodexHome = process.env.CODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_CODEX_HOME, { recursive: true });
+    process.env.CODEX_HOME = TEST_CODEX_HOME;
+    writeFileSync(join(TEST_CODEX_HOME, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+  });
+
+  afterEach(() => {
+    if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prevCodexHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
   test("returns the structured sync result used by POST /api/sync", async () => {
     let injectedPort = 0;
     let injectedCatalogPath: string | null | undefined;

@@ -15,6 +15,7 @@ import { readCodexTokens } from "../codex/auth-collision";
 import { resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
+import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 export { resolveCodexHomeDir } from "../codex/home";
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -371,6 +372,16 @@ export async function runDoctor(): Promise<void> {
     console.log("  ok     no legacy opencodex-tagged threads pending");
   } else {
     console.log(`  --     ${pending.pendingRows} thread(s) still tagged opencodex, ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"}`);
+  }
+
+  console.log("\nProject Codex configs");
+  const projectWarnings = collectProjectCodexConfigWarnings();
+  if (projectWarnings.length === 0) {
+    console.log("  ok     no project-local provider bypass detected");
+  } else {
+    for (const line of formatProjectCodexConfigWarningsForDoctor(projectWarnings)) {
+      console.log(line);
+    }
   }
 
   const dual = collectWslDualInstall();

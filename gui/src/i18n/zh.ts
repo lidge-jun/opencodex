@@ -58,6 +58,8 @@ export const zh: Record<TKey, string> = {
   "dash.syncOk": "同步完成。已追加 {count} 个模型。",
   "dash.syncStaleHint": "如果 Codex App 仍显示旧列表，请重启长期运行的 app-server 进程。",
   "dash.syncFailed": "同步失败：{error}",
+  "dash.projectConfigTitle": "项目 Codex 配置绕过了 OpenCodex",
+  "dash.projectConfigHint": "这些仓库级设置会覆盖 OpenCodex 代理（例如直接走 OpenCode Go）。请移除它们，以便该项目使用 ~/.codex/config.toml 的代理路由。",
   "dash.checkUpdate": "检查更新",
   "dash.updateTitle": "更新 opencodex",
   "dash.updateDesc": "检查所选 npm 频道的最新版本，然后选择安装后是否重启代理。",

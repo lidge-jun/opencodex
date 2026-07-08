@@ -89,6 +89,12 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     return jsonResponse({ ok: true, codexAutoStart: codexAutoStartEnabled(config) });
   }
 
+  if (url.pathname === "/api/diagnostics/project-config" && req.method === "GET") {
+    const { collectProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath } = await import("../codex/project-config-warnings");
+    const warnings = collectProjectCodexConfigWarnings();
+    return jsonResponse({ warnings, grouped: groupProjectCodexConfigWarningsByPath(warnings) });
+  }
+
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../codex/sync");
     const result = await syncModelsToCodex(undefined, config, null);
