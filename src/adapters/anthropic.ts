@@ -482,9 +482,71 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   const converted = tools.map(t => ({
     name: toolNames.toWire(namespacedToolName(t.namespace, t.name)),
     description: t.description,
-    input_schema: t.parameters,
+    input_schema: normalizeAnthropicInputSchema(t.parameters),
   }));
   return converted;
+}
+
+function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
+  const obj = schema && typeof schema === "object" && !Array.isArray(schema)
+    ? schema as Record<string, unknown>
+    : {};
+  /*
+   * [Decision Log]
+   * - 목적: Anthropic Messages API가 tool input_schema 루트의 type 누락과 oneOf/anyOf/allOf를 400으로 거부하는 것을 방지한다.
+   * - 대안 분석: (1) t.parameters 원본 유지: OpenAI 호환성은 좋지만 Anthropic에서 실패한다. (2) Kiro sanitizer 재사용: 루트 보정은 맞지만 additionalProperties 등 Anthropic이 받을 수 있는 정보를 과하게 삭제한다. (3) Anthropic 루트만 정규화: 실패 조건만 제거하고 중첩 스키마와 부가 키는 보존한다.
+   * - 선택 근거: Anthropic 어댑터의 wire 요구사항만 해결하는 좁은 수정이며, root composition required 병합도 oneOf/anyOf를 과도하게 강제하지 않는다.
+   */
+  const compositionKeys = ["oneOf", "anyOf", "allOf"] as const;
+  const hasRootComposition = compositionKeys.some(key => Array.isArray(obj[key]));
+  const type = obj.type;
+  const rootObjectType = type === "object" || (Array.isArray(type) && type.includes("object"));
+
+  if (!hasRootComposition) {
+    const normalized: Record<string, unknown> = rootObjectType && type === "object"
+      ? { ...obj }
+      : { ...obj, type: "object" };
+    if (normalized.properties === undefined || normalized.properties === null) {
+      normalized.properties = {};
+    }
+    return normalized;
+  }
+
+  const properties: Record<string, unknown> = {};
+  const required = new Set<string>();
+  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+    Object.assign(properties, obj.properties as Record<string, unknown>);
+  }
+  if (Array.isArray(obj.required)) {
+    for (const item of obj.required) if (typeof item === "string") required.add(item);
+  }
+
+  for (const key of compositionKeys) {
+    const variants = obj[key];
+    if (!Array.isArray(variants)) continue;
+    const mergeRequired = key === "allOf";
+    for (const variant of variants) {
+      if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
+      const v = variant as Record<string, unknown>;
+      if (v.properties && typeof v.properties === "object" && !Array.isArray(v.properties)) {
+        Object.assign(properties, v.properties as Record<string, unknown>);
+      }
+      if (mergeRequired && Array.isArray(v.required)) {
+        for (const item of v.required) if (typeof item === "string") required.add(item);
+      }
+    }
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "oneOf" || key === "anyOf" || key === "allOf") continue;
+    if (key === "type" || key === "properties" || key === "required") continue;
+    normalized[key] = value;
+  }
+  normalized.type = "object";
+  normalized.properties = properties;
+  if (required.size > 0) normalized.required = [...required];
+  return normalized;
 }
 
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
