@@ -1,18 +1,20 @@
-// Lightweight, zero-dependency i18n for the dashboard (en / ko / zh-CN).
-// en.ts is the source of truth; ko/zh are compile-checked against its keys.
+// Lightweight, zero-dependency i18n for the dashboard (en / de / ko / zh-CN).
+// en.ts is the source of truth; de/ko/zh are compile-checked against its keys.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { en, type TKey } from "./en";
+import { de } from "./de";
 import { ko } from "./ko";
 import { zh } from "./zh";
 
-export type Locale = "en" | "ko" | "zh";
+export type Locale = "en" | "de" | "ko" | "zh";
 export type { TKey };
 
-const DICTS: Record<Locale, Record<TKey, string>> = { en, ko, zh };
+const DICTS: Record<Locale, Record<TKey, string>> = { en, de, ko, zh };
 
 // Display order + native names (own script — never flags, per i18n best practice) + <html lang>.
 export const LOCALES: { code: Locale; name: string; htmlLang: string }[] = [
   { code: "en", name: "English", htmlLang: "en" },
+  { code: "de", name: "Deutsch", htmlLang: "de" },
   { code: "ko", name: "한국어", htmlLang: "ko" },
   { code: "zh", name: "中文", htmlLang: "zh-CN" },
 ];
@@ -22,9 +24,10 @@ const LANG_KEY = "ocx-lang";
 function detectInitial(): Locale {
   try {
     const stored = localStorage.getItem(LANG_KEY);
-    if (stored === "en" || stored === "ko" || stored === "zh") return stored;
+    if (stored === "en" || stored === "de" || stored === "ko" || stored === "zh") return stored;
   } catch { /* ignore */ }
   const nav = typeof navigator !== "undefined" ? navigator.language.toLowerCase() : "en";
+  if (nav.startsWith("de")) return "de";
   if (nav.startsWith("ko")) return "ko";
   if (nav.startsWith("zh")) return "zh";
   return "en";

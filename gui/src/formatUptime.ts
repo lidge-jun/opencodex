@@ -2,6 +2,7 @@ import type { Locale } from "./i18n";
 
 const UPTIME_UNITS: Record<Locale, { day: string; hour: string; minute: string; second: string }> = {
   en: { day: "d", hour: "h", minute: "m", second: "s" },
+  de: { day: "T", hour: "Std", minute: "Min", second: "Sek" },
   ko: { day: "일", hour: "시간", minute: "분", second: "초" },
   zh: { day: "天", hour: "小时", minute: "分钟", second: "秒" },
 };

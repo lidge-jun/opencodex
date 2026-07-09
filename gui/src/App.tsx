@@ -9,7 +9,8 @@ import Usage from "./pages/Usage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconKey, IconGithub, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower } from "./icons";
-import { useI18n, useT, LOCALES, type TKey } from "./i18n";
+import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
+import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
@@ -94,12 +95,6 @@ export default function App() {
   const ThemeIcon = THEME_ICON[theme];
   const displayedVersion = runtimeVersion ?? __APP_VERSION__;
 
-  const langName = LOCALES.find(l => l.code === locale)?.name ?? "English";
-  const cycleLang = () => {
-    const order = LOCALES.map(l => l.code);
-    setLocale(order[(order.indexOf(locale) + 1) % order.length]);
-  };
-
   const [stopping, setStopping] = useState(false);
   const handleStop = async () => {
     if (!confirm(t("dash.stopConfirm"))) return;
@@ -124,10 +119,16 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <button type="button" className="theme-toggle" onClick={cycleLang}
-            aria-label={`${t("lang.label")}: ${langName}`} title={`${t("lang.label")}: ${langName}`}>
-            <IconGlobe /> <span className="mode">{langName}</span>
-          </button>
+          <div className="lang-toggle">
+            <IconGlobe aria-hidden />
+            <Select
+              value={locale}
+              options={LOCALES.map(l => ({ value: l.code, label: l.name }))}
+              onChange={v => setLocale(v as Locale)}
+              label={t("lang.label")}
+              style={{ flex: 1, minWidth: 0, width: "100%" }}
+            />
+          </div>
           <button type="button" className="theme-toggle" onClick={cycleTheme}
             aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
             <ThemeIcon /> <span className="mode">{t(THEME_TKEY[theme])}</span>
