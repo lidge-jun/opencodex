@@ -75,8 +75,13 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
 }
 
 /** Verbatim upstream Proactive text (codex-rs core/src/context/multi_agent_mode_instructions.rs). */
-const PROACTIVE_MULTI_AGENT_MODE_TEXT =
-  "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.";
+const PROACTIVE_MULTI_AGENT_MODE_TEXT = [
+  "Proactive multi-agent delegation is active.",
+  "Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies.",
+  "Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently.",
+  "Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself.",
+  "This mode remains active until a later multi-agent mode developer message changes it.",
+].join(" ");
 
 /**
  * True when this turn runs the v1 collab surface, judged from the request's own tool list
@@ -98,19 +103,39 @@ export function isV1CollabSurface(parsed: OcxParsedRequest): boolean {
 }
 
 /**
- * Multi-agent guidance for this turn, or null when nothing applies. codex-rs only emits
- * its Proactive delegation developer message on the v2 surface, so when a v1-surface turn
- * arrives at the synthetic top tier (codex converts ultra -> max on the wire, so max
- * arrival means the user picked the top rung) the proxy supplies the same one-liner,
- * wrapped in codex's own <multi_agent_mode> tags (v1 turns never carry that fragment, so
- * there is nothing to collide with). Ultra is always advertised, so the guidance fires
- * regardless of the multi_agent_v2 toggle.
+ * Multi-agent guidance for this turn, or null when nothing applies.
+ *
+ * codex-rs only emits its Proactive delegation developer message on the v2 surface,
+ * so when a v1-surface turn arrives at the synthetic top tier (codex converts
+ * ultra -> max on the wire, so max arrival means the user picked the top rung) the
+ * proxy supplies the same one-liner, wrapped in codex's own <multi_agent_mode> tags
+ * (v1 turns never carry that fragment, so there is nothing to collide with).
+ * Ultra is always advertised, so the guidance fires regardless of the multi_agent_v2
+ * toggle.
+ *
+ * Dynamic model injection: when the user has configured a specific injectionModel,
+ * the prompt names it so the agent knows which routed model to delegate to.
+ *
+ * Effort gate relaxation: when an injectionModel is set, the prompt fires at every
+ * effort level, not just max/ultra — the user opted into delegation.
  */
-export async function multiAgentGuidanceText(parsed: OcxParsedRequest): Promise<string | null> {
+export async function multiAgentGuidanceText(parsed: OcxParsedRequest, injectionModel?: string): Promise<string | null> {
   if (!isV1CollabSurface(parsed)) return null;
   const effort = parsed.options.reasoning;
-  if (effort !== "max" && effort !== "ultra") return null;
-  return `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
+  // When the user has selected a specific injection model, fire the delegation prompt
+  // at ANY effort level. Otherwise preserve the original gate: top tier only (max/ultra).
+  if (!injectionModel && effort !== "max" && effort !== "ultra") return null;
+
+  let text = PROACTIVE_MULTI_AGENT_MODE_TEXT;
+
+  // Append the selected model when the user has configured a specific injection target.
+  if (injectionModel) {
+    text += `\n\nA routed model is configured as the preferred sub-agent: "${injectionModel}". `
+      + "To delegate work to it, use spawn_agent with this model id. "
+      + "Use it for tasks that benefit from this model's strengths.";
+  }
+
+  return `<multi_agent_mode>${text}</multi_agent_mode>`;
 }
 
 /**
@@ -322,7 +347,7 @@ export async function handleResponses(
       const rewritten = sanitizeEncryptedContentInPlace(raw?.input);
       if (rewritten > 0) console.warn(`[opencodex] ${route.modelId}: rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (routed-parent spawn compatibility)`);
     }
-    const guidance = await multiAgentGuidanceText(parsed);
+    const guidance = await multiAgentGuidanceText(parsed, config.injectionModel);
     if (guidance) injectDeveloperMessage(parsed, guidance);
   }
 

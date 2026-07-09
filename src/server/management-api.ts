@@ -517,6 +517,31 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     return jsonResponse({ providers: deriveProviderPresets() });
   }
 
+  // Subagent prompt injection model: single routed model whose info is dynamically
+  // injected into the v1 ultra proactive prompt. GET returns the current pick + available
+  // routed models; PUT sets or clears the pick.
+  if (url.pathname === "/api/injection-model" && req.method === "GET") {
+    const models = await fetchAllModels(config);
+    const disabled = new Set(config.disabledModels ?? []);
+    const { listCatalogNativeSlugs } = await import("../codex/catalog");
+    const nativeModels = listCatalogNativeSlugs()
+      .filter(slug => !disabled.has(slug))
+      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
+    const routedModels = models
+      .map(m => ({ provider: m.provider, model: m.id, namespaced: `${m.provider}/${m.id}` }))
+      .filter(m => !disabled.has(m.namespaced));
+    return jsonResponse({ model: config.injectionModel ?? null, available: [...nativeModels, ...routedModels] });
+  }
+  if (url.pathname === "/api/injection-model" && req.method === "PUT") {
+    let body: { model?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const model = typeof body.model === "string" && body.model.length > 0 ? body.model : undefined;
+    if (model) config.injectionModel = model;
+    else delete config.injectionModel;
+    saveConfig(config);
+    return jsonResponse({ ok: true, model: config.injectionModel ?? null });
+  }
+
   // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
   // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {

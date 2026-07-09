@@ -77,6 +77,53 @@ describe("multiAgentGuidanceText", () => {
     }));
     expect(text).toContain("<multi_agent_mode>");
   });
+
+  test("injectionModel is named in the dynamic section", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ reasoning: "max", tools: [{ name: "spawn_agent", namespace: "agents" }] }),
+      "anthropic/claude-sonnet-5",
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).toContain('"anthropic/claude-sonnet-5"');
+    expect(text).toContain("spawn_agent");
+  });
+
+  test("no injectionModel produces base prompt only at max", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ reasoning: "max", tools: [{ name: "spawn_agent", namespace: "agents" }] }),
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).not.toContain("routed model");
+  });
+
+  test("injectionModel fires prompt even at low effort", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ reasoning: "high", tools: [{ name: "spawn_agent", namespace: "agents" }] }),
+      "opencode-go/glm-5.2",
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).toContain('"opencode-go/glm-5.2"');
+  });
+
+  test("injectionModel fires prompt even without effort set", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent", namespace: "agents" }] }),
+      "anthropic/claude-opus-4-6",
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+  });
+
+  test("without injectionModel, low effort stays silent", async () => {
+    codexHomeFixture(V2_OFF);
+    const v1Tools = [{ name: "spawn_agent", namespace: "agents" }];
+    expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "high", tools: v1Tools }))).toBeNull();
+    expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "medium", tools: v1Tools }))).toBeNull();
+    expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: v1Tools }))).not.toBeNull();
+  });
 });
 
 describe("injectDeveloperMessage", () => {

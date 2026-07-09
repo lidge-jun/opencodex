@@ -86,6 +86,9 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [maMode, setMaMode] = useState<"v1" | "default" | "v2">("default");
   const [maBusy, setMaBusy] = useState(false);
   const [maHelpOpen, setMaHelpOpen] = useState(false);
+  const [injectionModel, setInjectionModel] = useState<string>("");
+  const [injectionAvailable, setInjectionAvailable] = useState<Array<{ provider: string; model: string; namespaced: string }>>([]);
+  const [injectionSaving, setInjectionSaving] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [projectConfigWarnings, setProjectConfigWarnings] = useState<ProjectCodexConfigGroup[]>([]);
@@ -122,6 +125,14 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             const v2Data = await v2Res.json();
             if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") setMaMode(v2Data.multiAgentMode);
             else setMaMode("default");
+          }
+        } catch { /* old server */ }
+        try {
+          const imRes = await fetch(`${apiBase}/api/injection-model`);
+          if (imRes.ok) {
+            const imData = await imRes.json() as { model?: string | null; available?: Array<{ provider: string; model: string; namespaced: string }> };
+            setInjectionModel(imData.model ?? "");
+            setInjectionAvailable(imData.available ?? []);
           }
         } catch { /* old server */ }
       } catch {
@@ -421,6 +432,44 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           </div>
         </div>
       )}
+
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="spread setting-row" style={{ alignItems: "flex-start" }}>
+          <div className="setting-copy" style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontWeight: 650 }}>{t("dash.injectionLabel")}</span>
+              {injectionModel && <span className="badge badge-green" style={{ fontSize: 10 }}>{t("dash.injectionActive")}</span>}
+            </div>
+            <div className="muted setting-hint">{t("dash.injectionHint")}</div>
+          </div>
+          <Select
+            value={injectionModel}
+            options={[
+              { value: "", label: t("dash.injectionNone") },
+              ...injectionAvailable.map(m => ({ value: m.namespaced, label: `${m.provider} / ${m.model}` })),
+            ]}
+            onChange={async (v) => {
+              if (injectionSaving) return;
+              setInjectionSaving(true);
+              setInjectionModel(v);
+              try {
+                const res = await fetch(`${apiBase}/api/injection-model`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ model: v || null }),
+                });
+                if (res.ok) {
+                  const data = await res.json() as { model?: string | null };
+                  setInjectionModel(data.model ?? "");
+                }
+              } catch { /* ignore */ }
+              finally { setInjectionSaving(false); }
+            }}
+            disabled={injectionSaving}
+            label={t("dash.injectionLabel")}
+          />
+        </div>
+      </div>
 
       <div className="panel maintenance-panel" style={{ marginBottom: 24 }}>
         <div className="spread maintenance-head">

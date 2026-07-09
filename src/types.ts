@@ -244,6 +244,7 @@ export interface OcxConfig {
    * Codex's spawn_agent only advertises the first 5 routed models, so this picks which 5 appear.
    */
   subagentModels?: string[];
+  injectionModel?: string;
   /**
    * Models hidden from Codex. Routed ids are namespaced ("<provider>/<model>") and are excluded
    * from the catalog + /v1/models entirely. BARE ids (no "/") are native GPT passthrough slugs:

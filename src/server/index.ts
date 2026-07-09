@@ -158,11 +158,11 @@ export function startServer(port?: number) {
     config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
     saveConfig(config);
   }
-  // Sidecar model migration (KST 2026-06-10 06:00 = UTC 2026-06-09 21:00): auto-migrate the old
+  // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
   // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
   // still on the old default — explicit user choices are preserved.
   {
-    const SIDECAR_MIGRATION_CUTOFF = Date.UTC(2026, 5, 9, 21, 0); // June 9 21:00 UTC = KST June 10 06:00
+    const SIDECAR_MIGRATION_CUTOFF = Date.UTC(2026, 6, 9, 21, 0); // July 9 21:00 UTC = KST July 10 06:00
     if (Date.now() >= SIDECAR_MIGRATION_CUTOFF) {
       let migrated = false;
       if (config.webSearchSidecar?.model === "gpt-5.4-mini") {
