@@ -332,4 +332,72 @@ describe("request log metadata", () => {
       usage: { inputTokens: 133_900, outputTokens: 0, estimated: true },
     });
   });
+
+  test("deferred SSE logging surfaces upstream_stall_timeout reason as upstreamError", async () => {
+    const entries: RequestLogEntry[] = [];
+    const incompletePayload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        status: "incomplete",
+        incomplete_details: { reason: "upstream_stall_timeout" },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${incompletePayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-stall-timeout",
+      Date.now(),
+      { model: "cursor/kimi-k2.7-code", provider: "cursor" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "incomplete",
+      status: 502,
+      errorCode: "upstream_server_error",
+    });
+    expect(entries[0].upstreamError).toContain("upstream_stall_timeout");
+    expect(entries[0].upstreamError).toContain("Upstream stalled");
+  });
+
+  test("deferred SSE logging surfaces adapter_eof reason as upstreamError", async () => {
+    const entries: RequestLogEntry[] = [];
+    const incompletePayload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        status: "incomplete",
+        incomplete_details: { reason: "adapter_eof" },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${incompletePayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-adapter-eof",
+      Date.now(),
+      { model: "cursor/kimi-k2.7-code", provider: "cursor" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "incomplete",
+      status: 502,
+      errorCode: "upstream_server_error",
+    });
+    expect(entries[0].upstreamError).toContain("adapter_eof");
+    expect(entries[0].upstreamError).toContain("ended unexpectedly");
+  });
 });

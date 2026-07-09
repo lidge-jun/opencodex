@@ -261,7 +261,10 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
       type?: unknown;
       error?: { message?: unknown };
       last_error?: { message?: unknown };
-      response?: { error?: { type?: unknown; code?: unknown; message?: unknown } };
+      response?: {
+        error?: { type?: unknown; code?: unknown; message?: unknown };
+        incomplete_details?: { reason?: unknown };
+      };
     };
     captureTerminalHttpStatus(logCtx, json);
     const message = json?.error?.message
@@ -269,9 +272,30 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
       ?? json?.response?.error?.message;
     if (typeof message === "string" && message.trim()) {
       logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+      return;
+    }
+    // No human-readable error message: fall back to the structured incomplete reason emitted by
+    // the bridge on a stall-timeout or adapter EOF (response.incomplete). Maps the raw reason to a
+    // reader-facing label so a generic 502 in /api/logs explains WHY the turn ended, not just the
+    // mapped HTTP code.
+    const reason = json?.response?.incomplete_details?.reason;
+    if (typeof reason === "string" && reason.trim()) {
+      logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
     }
   } catch {
     /* not JSON; nothing to capture */
+  }
+}
+
+/** Map a raw `incomplete_details.reason` (emitted by the bridge) to a reader-facing label. */
+function incompleteReasonLabel(reason: string): string {
+  switch (reason) {
+    case "upstream_stall_timeout":
+      return `Upstream stalled: no data for the stall-timeout window (${reason})`;
+    case "adapter_eof":
+      return `Upstream stream ended unexpectedly without a terminal event (${reason})`;
+    default:
+      return `Upstream incomplete: ${reason}`;
   }
 }
 
