@@ -13,19 +13,24 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
     name: "azure-openai",
 
     async buildRequest(parsed: OcxParsedRequest) {
+      if (provider.authMode === "forward") {
+        throw new Error("azure-openai does not support forward auth mode");
+      }
+      if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
+        throw new Error("azure-openai requires a non-empty apiKey");
+      }
+
       const request = await inner.buildRequest(parsed);
+      const unresolvedPlaceholder = request.url.match(/\{[^}]*\}/)?.[0] ?? request.url.match(/[{}]/)?.[0];
+      if (unresolvedPlaceholder) {
+        throw new Error(`azure-openai baseUrl contains unresolved ${unresolvedPlaceholder} — set your real resource URL`);
+      }
+
       const headers = { ...request.headers };
-      if (provider.apiKey) {
-        headers["api-key"] = provider.apiKey;
-        delete headers["Authorization"];
-      }
-      let url = request.url;
-      if (!url.includes("/v1/")) {
-        const apiVersion = (provider.headers?.["api-version"]) ?? "2025-04-01-preview";
-        const separator = url.includes("?") ? "&" : "?";
-        url = `${url}${separator}api-version=${apiVersion}`;
-      }
-      return { ...request, url, headers };
+      headers["api-key"] = provider.apiKey;
+      delete headers["Authorization"];
+      // The inner adapter always targets Azure's v1 API here, which needs no api-version query.
+      return { ...request, headers };
     },
   };
 }

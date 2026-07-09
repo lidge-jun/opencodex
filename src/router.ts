@@ -97,11 +97,17 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
   const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
   const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
+  const registryBaseUrlIsTemplate = /\{[^}]*\}/.test(registryEntry.baseUrl);
+  const userBaseUrlIsResolved = typeof provider.baseUrl === "string"
+    && provider.baseUrl.trim().length > 0
+    && !/\{[^}]*\}/.test(provider.baseUrl);
+  // Registry template URLs are presets; a resolved user URL is the canonical endpoint for them.
+  const baseUrl = registryBaseUrlIsTemplate && userBaseUrlIsResolved ? provider.baseUrl : registryEntry.baseUrl;
 
   return {
     ...provider,
     adapter: registryEntry.adapter,
-    baseUrl: registryEntry.baseUrl,
+    baseUrl,
     authMode: canonicalAuthMode,
     apiKey: resolveEnvValue(provider.apiKey),
     // Backfill the Google wire mode + Vertex project/location from the registry when the user

@@ -228,7 +228,30 @@ export type ConfigDiagnostics = {
   config: OcxConfig;
   source: "default" | "file" | "fallback";
   error: string | null;
+  /** Non-fatal config concerns; absent when there are no warnings. */
+  warnings?: string[];
 };
+
+function configPlaceholderWarnings(config: OcxConfig): string[] {
+  const warnings: string[] = [];
+  for (const [name, provider] of Object.entries(config.providers)) {
+    const placeholder = provider.baseUrl.match(/\{[^}]*\}/)?.[0];
+    if (placeholder) {
+      warnings.push(`providers.${name}.baseUrl contains unresolved ${placeholder}; set the real provider URL`);
+    }
+  }
+  return warnings;
+}
+
+function validFileConfigDiagnostics(config: OcxConfig): ConfigDiagnostics {
+  const warnings = configPlaceholderWarnings(config);
+  return {
+    config,
+    source: "file",
+    error: null,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
+}
 
 function mergeConfigDefaults(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -261,12 +284,12 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      return { config: result.data as OcxConfig, source: "file", error: null };
+      return validFileConfigDiagnostics(result.data as OcxConfig);
     }
 
     const retryResult = configSchema.safeParse(mergeConfigDefaults(parsed));
     if (retryResult.success) {
-      return { config: retryResult.data as OcxConfig, source: "file", error: null };
+      return validFileConfigDiagnostics(retryResult.data as OcxConfig);
     }
 
     return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };
