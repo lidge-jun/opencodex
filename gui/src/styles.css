@@ -155,13 +155,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-link:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
 .sidebar-link svg { width: 16px; height: 16px; }
 
-.lang-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; color: var(--muted); font-size: 13px; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
+.lang-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; color: var(--muted); font-size: 13px; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; position: relative; }
 .lang-toggle:hover { background: var(--accent-soft); color: var(--text); }
 .lang-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
-.lang-toggle .custom-select { width: 100%; }
+.lang-toggle .custom-select { width: 100%; position: static !important; }
 .lang-toggle .select-trigger { width: 100%; justify-content: space-between; border: none; background: none; color: inherit; font-size: 13px; padding: 0; min-height: auto; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .lang-toggle .select-trigger:hover:not(:disabled) { border: none; background: none; color: inherit; box-shadow: none; }
 .lang-toggle .select-dropdown { background: var(--glass-rail); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+.lang-toggle .select-dropdown-beside { top: 0; left: calc(100% + 6px); right: auto; min-width: 10rem; }
 .theme-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; text-align: left; background: none; border: none; cursor: pointer; color: var(--muted); font: inherit; font-size: 13px; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
 .theme-toggle:hover { background: var(--accent-soft); color: var(--text); }
 .theme-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
