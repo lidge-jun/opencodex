@@ -214,7 +214,7 @@ export const zh: Record<TKey, string> = {
   "logs.detailRaw": "原始日志",
 
   "debug.title": "调试",
-  "debug.subtitle": "Provider transport 与 usage 提取诊断。与 ocx debug provider|usage 保持同步。",
+  "debug.subtitle": "可选的 provider transport 与 usage 提取诊断。请求错误和 502 在 Logs 页面。",
   "debug.debug": "Provider debug",
   "debug.usage": "Usage 提取",
   "debug.reset": "清除运行时覆盖",
@@ -222,8 +222,11 @@ export const zh: Record<TKey, string> = {
   "debug.follow": "跟随滚动",
   "debug.streamProvider": "Provider",
   "debug.streamUsage": "Usage",
-  "debug.empty": "启用 provider 或 usage debug 后可查看诊断行。",
-  "debug.noLines": "尚无 debug 行。发送请求或在 CLI 中启用 debug。",
+  "debug.loading": "正在加载调试设置…",
+  "debug.emptyTitle": "调试日志已关闭",
+  "debug.empty": "请在上方卡片中开启 Provider debug 或 Usage extraction。通过代理发送请求后，诊断行会显示在这里。",
+  "debug.noLinesTitle": "等待诊断行",
+  "debug.noLines": "调试已开启但尚未捕获任何行。请通过 Codex 发送请求，或运行 ocx debug provider logs -f。",
 
   // usage page
   "usage.title": "用量",

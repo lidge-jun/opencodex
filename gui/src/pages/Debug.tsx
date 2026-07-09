@@ -139,7 +139,9 @@ export default function Debug({ apiBase }: { apiBase: string }) {
       </div>
       <p className="page-sub">{t("debug.subtitle")}</p>
 
-      {debug && (
+      {!debug ? (
+        <div className="empty">{t("debug.loading")}</div>
+      ) : (
         <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
@@ -188,13 +190,19 @@ export default function Debug({ apiBase }: { apiBase: string }) {
         </div>
       )}
 
-      {!streamEnabled ? (
-        <div className="empty">{t("debug.empty")}</div>
-      ) : lines.length === 0 ? (
-        <div className="empty">{t("debug.noLines")}</div>
-      ) : (
+      {debug && !streamEnabled ? (
+        <div className="empty">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
+          <div className="muted" style={{ fontSize: 13, maxWidth: 560 }}>{t("debug.empty")}</div>
+        </div>
+      ) : debug && streamEnabled && lines.length === 0 ? (
+        <div className="empty">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
+          <div className="muted" style={{ fontSize: 13, maxWidth: 560 }}>{t("debug.noLines")}</div>
+        </div>
+      ) : debug && streamEnabled ? (
         <pre ref={logRef} className="log-detail-json" style={{ maxHeight: "calc(100vh - 280px)" }}>{lines.join("\n")}</pre>
-      )}
+      ) : null}
     </>
   );
 }

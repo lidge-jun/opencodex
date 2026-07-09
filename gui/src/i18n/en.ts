@@ -215,7 +215,7 @@ export const en = {
 
   // debug page
   "debug.title": "Debug",
-  "debug.subtitle": "Provider transport and usage-extraction diagnostics. Stays in sync with ocx debug provider|usage.",
+  "debug.subtitle": "Opt-in provider transport and usage-extraction diagnostics. Request errors and 502s stay on Logs.",
   "debug.debug": "Provider debug",
   "debug.usage": "Usage extraction",
   "debug.reset": "Clear runtime overrides",
@@ -223,8 +223,11 @@ export const en = {
   "debug.follow": "Follow",
   "debug.streamProvider": "Provider",
   "debug.streamUsage": "Usage",
-  "debug.empty": "Enable provider or usage debug to view diagnostic lines.",
-  "debug.noLines": "No debug lines yet. Send a request or enable debug from the CLI.",
+  "debug.loading": "Loading debug settings…",
+  "debug.emptyTitle": "Debug logging is off",
+  "debug.empty": "Turn on Provider debug or Usage extraction in the card above. Lines appear here after you send a request through the proxy.",
+  "debug.noLinesTitle": "Waiting for lines",
+  "debug.noLines": "Debug is on but nothing has been captured yet. Send a chat/request through Codex, or run ocx debug provider logs -f in a terminal.",
 
   // usage page
   "usage.title": "Usage",
