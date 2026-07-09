@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { formatTokens } from "../format-tokens";
 import { EmptyState } from "../ui";
+import { modelLabel } from "../model-display";
 
 type Range = "all" | "30d" | "7d";
 
@@ -304,7 +305,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
                           {d.models.slice(0, 8).map(m => (
                             <div key={`${m.provider}/${m.model}`} className="daybar-tip-row">
                               <span className="daybar-tip-swatch" style={{ background: modelColor(m.model, m.provider) }} />
-                              <span className="daybar-tip-name">{m.model}</span>
+                              <span className="daybar-tip-name">{modelLabel(m.model)}</span>
                               <span className="daybar-tip-val">{formatTokens(m.totalTokens, locale)}</span>
                             </div>
                           ))}
@@ -386,7 +387,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
                 <tbody>
                   {filteredModels.map(m => (
                     <tr key={`${m.provider}/${m.model}/${m.resolvedModel ?? ""}`}>
-                      <td className="mono">{m.resolvedModel ?? m.model}</td>
+                      <td className="mono">{modelLabel(m.resolvedModel ?? m.model)}</td>
                       <td className="muted">{m.provider}</td>
                       <td className="num">{m.requests}</td>
                       <td className="num">{m.measuredRequests}</td>

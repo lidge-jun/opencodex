@@ -3,6 +3,7 @@ import { useI18n, LOCALES } from "../i18n";
 import { formatTokens } from "../format-tokens";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
+import { modelLabel } from "../model-display";
 import { EmptyState } from "../ui";
 
 interface UsageBreakdown {
@@ -164,7 +165,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log)}>
                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                     <span>{log.resolvedModel ?? log.model}</span>
+                    <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
@@ -203,7 +204,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             <div className="log-detail-grid">
               <span className="muted">{t("logs.col.time")}</span><span className="mono">{new Date(detail.timestamp).toLocaleString(localeTag)}</span>
               <span className="muted">{t("logs.col.request")}</span><span className="mono log-detail-break">{detail.requestId ?? "-"}</span>
-              <span className="muted">{t("logs.col.model")}</span><span className="mono">{detail.resolvedModel ?? detail.model}</span>
+              <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
               <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
               {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
               {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}

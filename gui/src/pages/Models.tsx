@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select } from "../ui";
 import { IconChevron, IconBoxes } from "../icons";
 import { useT } from "../i18n";
+import { modelLabel } from "../model-display";
 
 interface ModelRow {
   provider: string;
@@ -498,7 +499,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   return (
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
                       <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.id} />
-                      <code className="mono" style={{ fontSize: 13, color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.id}</code>
+                      <code className="mono" style={{ fontSize: 13, color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{modelLabel(m.id)}</code>
                       {m.contextCapped && <span className="muted mono" style={{ fontSize: 11, padding: "1px 6px", border: "1px solid var(--border)", borderRadius: 999 }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </div>
                   );
