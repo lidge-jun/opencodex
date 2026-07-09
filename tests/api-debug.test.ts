@@ -162,7 +162,8 @@ describe("management API /api/debug/logs", () => {
     setDebugSettings({ debug: true });
     debugProviderDiagnostic("cursor", "dial", {
       host: "api2.cursor.sh",
-      authorization: "Bearer super-secret-token",
+      // Placeholder token shape is constrained by scripts/privacy-scan.ts's tests/ allowlist.
+      authorization: "Bearer access-token-value-testonly123",
     });
 
     const server = startServer(0);
@@ -171,7 +172,7 @@ describe("management API /api/debug/logs", () => {
       const entries = await res.json() as { line: string }[];
       expect(entries).toHaveLength(1);
       expect(entries[0]!.line).toContain("api2.cursor.sh");
-      expect(entries[0]!.line).not.toContain("super-secret-token");
+      expect(entries[0]!.line).not.toContain("access-token-value-testonly123");
       expect(entries[0]!.line).toContain("[REDACTED]");
     } finally {
       await server.stop(true);
@@ -231,7 +232,8 @@ describe("management API /api/debug/usage-logs", () => {
       upstreamContentType: "application/json",
       upstreamStatus: 200,
       bodyKind: "json",
-      bodySample: "Bearer wire-secret-token-abcdef",
+      // Placeholder token shape is constrained by scripts/privacy-scan.ts's tests/ allowlist.
+      bodySample: "Bearer usage-debug-token-value-testonly123",
       extractedUsage: null,
     });
 
@@ -239,11 +241,10 @@ describe("management API /api/debug/usage-logs", () => {
     try {
       const res = await fetch(new URL("/api/debug/usage-logs", server.url));
       const entries = await res.json() as { line: string }[];
-      expect(entries[0]!.line).not.toContain("wire-secret-token");
+      expect(entries[0]!.line).not.toContain("usage-debug-token-value-testonly123");
       expect(entries[0]!.line).toContain("[REDACTED]");
     } finally {
       await server.stop(true);
     }
   });
 });
-
