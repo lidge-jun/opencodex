@@ -14,6 +14,7 @@ opencodex 通过 `~/.opencodex/config.json` 进行配置。它由 `ocx init` 和
 | `defaultProvider` | `string` | `"openai"` | 当路由找不到更优匹配时使用的 provider。 |
 | `subagentModels?` | `string[]` | — | 最多 5 个 `provider/model` id,会在 Codex 的 subagent 选择器中优先展示。 |
 | `disabledModels?` | `string[]` | — | 从 Codex 中隐藏的模型。已路由 `provider/model` id 会从目录和 `/v1/models` 中排除；bare 原生 GPT slug（如 `gpt-5.4`）的目录条目会翻转为 `visibility: "hide"`，并从 bare `/v1/models` 列表中移除。可在仪表盘 Models 页面按模型开关。 |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 三态 multi-agent surface override。`"v1"` 会强制所有模型使用 v1 surface（覆盖 upstream pins）；`"default"` 遵循 upstream model pins（sol/terra=v2,luna=v1）；`"v2"` 会强制所有模型使用 v2。可从仪表盘 Models 页面或 `ocx v2 mode` 设置。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。设为 `"0.0.0.0"` 可暴露到 LAN（需要 `OPENCODEX_API_AUTH_TOKEN`；见下文 [远程访问](#远程访问)）。 |
 | `websockets?` | `boolean` | `false` | 广告 `supports_websockets`，让 Codex 使用 Responses WebSocket 路径。省略或设为 `false` 会保持 HTTP/SSE。 |
 | `syncResumeHistory?` | `boolean` | `false` | Codex App 历史兼容模式。启用后,opencodex 会备份原始 Codex thread metadata,把旧的 OpenAI interactive row remap 到 `opencodex`,并临时把 opencodex 创建的 `exec` row 提升为 App 可见的 source。`ocx stop` / `ocx restore` 会恢复已备份的 OpenAI row,并把剩余的 opencodex user thread eject 到 OpenAI,这样在 `config.toml` 中移除 proxy provider 后 native Codex 仍可 resume。 |

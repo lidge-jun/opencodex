@@ -19,6 +19,7 @@ opencodex는 `~/.opencodex/config.json`으로 설정됩니다. 이 파일은 `oc
 | `defaultProvider` | `string` | `"openai"` | 라우팅에서 더 나은 매치를 찾지 못했을 때 사용하는 프로바이더. |
 | `subagentModels?` | `string[]` | — | Codex의 서브에이전트 선택기에서 가장 먼저 노출되는 최대 5개의 `provider/model` id. |
 | `disabledModels?` | `string[]` | — | Codex에서 숨기는 모델. 라우팅된 `provider/model` id는 카탈로그와 `/v1/models`에서 제외되고, bare 네이티브 GPT slug(예: `gpt-5.4`)는 카탈로그 항목이 `visibility: "hide"`로 바뀌며 bare `/v1/models` 목록에서 빠집니다. 대시보드 Models 페이지에서 모델별로 토글할 수 있습니다. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 3단계 multi-agent surface override. `"v1"`은 모든 모델을 v1 surface로 강제합니다(업스트림 pin보다 우선). `"default"`는 업스트림 model pin을 따릅니다(sol/terra=v2, luna=v1). `"v2"`는 모든 모델을 v2로 강제합니다. 대시보드 Models 페이지 또는 `ocx v2 mode`에서 설정할 수 있습니다. |
 | `websockets?` | `boolean` | `false` | Codex가 Responses WebSocket 경로를 사용하도록 `supports_websockets`를 광고합니다. 생략하거나 `false`로 두면 HTTP/SSE를 유지합니다. |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 히스토리 호환 모드. opencodex가 원래 Codex thread metadata를 백업하고, 기존 OpenAI interactive row를 `opencodex`로 remap하며, opencodex가 만든 `exec` row를 App에 보이는 source로 임시 승격합니다. `ocx stop` / `ocx restore`는 백업된 OpenAI row를 복원하고, 남은 opencodex user thread는 OpenAI로 eject합니다. `false`로 설정하면 히스토리 remap을 끕니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 대시보드가 관리하는 ChatGPT/Codex pool 계정 metadata. 시크릿은 별도의 `codex-accounts.json`에 저장됩니다. |

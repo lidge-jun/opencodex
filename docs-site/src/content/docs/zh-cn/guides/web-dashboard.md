@@ -28,6 +28,7 @@ bun run dev:gui
 | **OAuth login** | 打开提供商的认证页面并轮询，直到令牌到位；或导入已有的本地 CLI/钥匙串令牌。 |
 | **Subagent models** | 选择 Codex 的 `spawn_agent` 所展示的 ≤5 个路由模型。 |
 | **Models** | 启用/禁用单个路由模型（被隐藏的模型会从目录和 `/v1/models` 中排除）。 |
+| **Multi-agent mode** | Models 页面上的三段选择器（All v1 / Default / All v2），用于强制所有模型的 multi-agent surface。Default 会遵循 upstream pins（sol/terra=v2,luna=v1）。 |
 | **Request log** | 自动刷新的近期请求视图（模型、提供商、状态）。 |
 | **Stop** | 侧栏按钮，可一键优雅地关闭 proxy、停止后台服务（如已安装）并恢复原生 Codex（`POST /api/stop`）。 |
 

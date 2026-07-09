@@ -62,6 +62,26 @@ opencodex 也可以作为 documented native additions 添加 `gpt-5.6-sol`、`gp
 tier 暴露。模型名出现在选择器中只表示 opencodex 已准备好目录；实际请求是否成功仍取决于连接账号或
 provider 的 preview 权限。
 
+## Multi-agent surface mode
+
+opencodex 增加了一个三态 multi-agent surface override,用于控制每个目录条目上的
+`multi_agent_version` 字段：
+
+| Mode | Effect |
+| --- | --- |
+| **All v1** | 强制每个模型使用 v1 multi-agent surface,覆盖 upstream pins（包括 sol/terra）。 |
+| **Default**（安装默认值） | 遵循 upstream model pins：sol/terra 使用 v2,luna 使用 v1,其他所有模型跟随 codex 的 `multi_agent_v2` feature flag。 |
+| **All v2** | 强制每个模型使用 v2 multi-agent surface,覆盖 upstream pins（包括 luna）。 |
+
+可以从仪表盘 Models 页面（三段控件）、`ocx v2 mode v1|default|v2` 或
+带 `{ "multiAgentMode": "v1" }` 的 `PUT /api/v2` 设置该模式。变更会应用到新的 Codex session。
+
+## Ultra reasoning
+
+无论 `multi_agent_v2` toggle 状态如何,目录中都会始终广告 Ultra。v2 toggle 只控制
+multi-agent collab surface,不控制 ultra 可见性。在 wire 上,opencodex 会通过
+`nativeEffortClamp` 将 ultra 限制到每个模型真实的最高档位（例如 gpt-5.5 ultra 会变成 xhigh）。
+
 ## Subagent 选择
 
 Codex 的 `spawn_agent` 只会展示目录中优先级最高的前 5 个模型。你可以通过 `subagentModels` 或

@@ -92,6 +92,32 @@ emails, and account identities.
 
 ### `ocx sync`
 
+### `ocx v2 [subcommand]`
+
+Manage the Codex `multi_agent_v2` feature flag and the 3-state multi-agent surface mode.
+
+| Subcommand | Action |
+| --- | --- |
+| `status` (default) | Report the current v2 flag, multi-agent mode, and thread concurrency. |
+| `on` | Enable the `multi_agent_v2` feature in `$CODEX_HOME/config.toml` and resync the catalog. |
+| `off` | Disable the `multi_agent_v2` feature and resync. |
+| `mode v1` | Force ALL models to the v1 multi-agent surface (overrides upstream pins). |
+| `mode default` | Respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag). Install default. |
+| `mode v2` | Force ALL models to the v2 multi-agent surface (overrides upstream pins). |
+| `threads <n>` | Set `max_concurrent_threads_per_session` (integer >= 1, v2 only). |
+
+```bash
+ocx v2 status
+ocx v2 mode v1
+ocx v2 mode default
+ocx v2 on
+ocx v2 threads 16
+```
+
+The `mode` subcommand writes `multiAgentMode` to the opencodex config and resyncs the Codex catalog.
+The `on`/`off` subcommands flip the codex-rs feature flag via `codex features enable|disable`.
+Changes apply to new Codex sessions; running sessions keep their pinned surface.
+
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
 

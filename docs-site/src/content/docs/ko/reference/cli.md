@@ -44,6 +44,32 @@ ocx start --port 8080
 
 ### `ocx sync`
 
+### `ocx v2 [subcommand]`
+
+Codex의 `multi_agent_v2` 기능 플래그와 3단계 multi-agent surface mode를 관리합니다.
+
+| Subcommand | Action |
+| --- | --- |
+| `status` (기본값) | 현재 v2 플래그, multi-agent mode, thread concurrency를 보고합니다. |
+| `on` | `$CODEX_HOME/config.toml`에서 `multi_agent_v2` 기능을 켜고 카탈로그를 다시 동기화합니다. |
+| `off` | `multi_agent_v2` 기능을 끄고 다시 동기화합니다. |
+| `mode v1` | 모든 모델을 v1 multi-agent surface로 강제합니다(업스트림 pin보다 우선). |
+| `mode default` | 업스트림 model pin을 따릅니다(sol/terra=v2, luna=v1, 나머지=codex 플래그). 설치 기본값입니다. |
+| `mode v2` | 모든 모델을 v2 multi-agent surface로 강제합니다(업스트림 pin보다 우선). |
+| `threads <n>` | `max_concurrent_threads_per_session`을 설정합니다(정수 >= 1, v2 전용). |
+
+```bash
+ocx v2 status
+ocx v2 mode v1
+ocx v2 mode default
+ocx v2 on
+ocx v2 threads 16
+```
+
+`mode` 하위 명령은 opencodex config에 `multiAgentMode`를 기록하고 Codex 카탈로그를 다시 동기화합니다.
+`on`/`off` 하위 명령은 `codex features enable|disable`로 codex-rs 기능 플래그를 전환합니다.
+변경 사항은 새 Codex 세션에 적용됩니다. 실행 중인 세션은 고정된 surface를 유지합니다.
+
 설정된 모든 프로바이더로부터 실시간 모델 목록을 가져와 병합된 카탈로그를 Codex에 다시 주입합니다.
 프로바이더를 추가한 후, 또는 사용 가능한 모델을 새로 고치려 할 때 실행하세요.
 

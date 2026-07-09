@@ -71,6 +71,26 @@ reasoning; Terra and Luna default to `medium`. `ultra` follows upstream Codex se
 reasoning with proactive multi-agent delegation, sent to the backend as `max`. If the upstream
 account is not enabled for the model, the request still fails upstream normally.
 
+## Multi-agent surface mode
+
+opencodex adds a 3-state multi-agent surface override that controls the `multi_agent_version` field
+on every catalog entry:
+
+| Mode | Effect |
+| --- | --- |
+| **All v1** | Force every model to the v1 multi-agent surface, overriding upstream pins (including sol/terra). |
+| **Default** (install default) | Respect upstream model pins: sol/terra use v2, luna uses v1, everything else follows the codex `multi_agent_v2` feature flag. |
+| **All v2** | Force every model to the v2 multi-agent surface, overriding upstream pins (including luna). |
+
+Set the mode from the dashboard Models page (segmented control), `ocx v2 mode v1|default|v2`, or
+`PUT /api/v2` with `{ "multiAgentMode": "v1" }`. Changes apply to new Codex sessions.
+
+## Ultra reasoning
+
+Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle state. The v2
+toggle controls only the multi-agent collab surface, not ultra visibility. On the wire, opencodex
+clamps ultra to each model's real top rung (e.g. gpt-5.5 ultra becomes xhigh) via `nativeEffortClamp`.
+
 ## Fast tier rules
 
 Codex currently stores fast mode as:

@@ -31,6 +31,7 @@ bun run dev:gui
 | **Codex Auth** | ChatGPT/Codex pool 계정을 추가하고, 다음 세션 계정을 고르고, 5시간 / 주간 / 30일 할당량을 다시 조회하며, auto-switch / failover 임계값을 설정합니다. |
 | **Subagent models** | Codex의 `spawn_agent`가 광고할 라우팅된 모델 ≤5개를 선택합니다. |
 | **Models** | 개별 라우팅된 모델을 활성화/비활성화합니다(숨겨진 항목은 카탈로그와 `/v1/models`에서 제외됩니다). |
+| **Multi-agent mode** | Models 페이지의 3단계 선택기(All v1 / Default / All v2)입니다. 모든 모델의 multi-agent surface를 강제할 수 있습니다. Default는 업스트림 pin을 따릅니다(sol/terra=v2, luna=v1). |
 | **Request log** | 최근 요청(모델, 프로바이더, 상태)을 자동 갱신으로 보여주는 뷰. |
 | **Stop** | 프록시를 정상 종료하고, 설치된 백그라운드 서비스를 중지한 뒤, 네이티브 Codex를 복원하는 사이드바 버튼입니다 — 한 번의 클릭으로 모두 수행됩니다 (`POST /api/stop`). |
 

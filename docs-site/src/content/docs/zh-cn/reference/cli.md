@@ -41,6 +41,32 @@ provider、Codex 自动启动设置、服务状态和 shim 状态。
 
 从每个已配置的 provider 获取实时模型列表,并将合并后的目录重新注入到 Codex 中。在添加 provider 后运行它,或用于刷新可用模型。
 
+### `ocx v2 [subcommand]`
+
+管理 Codex 的 `multi_agent_v2` feature flag 和三态 multi-agent surface mode。
+
+| Subcommand | Action |
+| --- | --- |
+| `status`（默认） | 报告当前 v2 flag、multi-agent mode 和 thread concurrency。 |
+| `on` | 在 `$CODEX_HOME/config.toml` 中启用 `multi_agent_v2` feature,并重新同步目录。 |
+| `off` | 禁用 `multi_agent_v2` feature,并重新同步目录。 |
+| `mode v1` | 强制所有模型使用 v1 multi-agent surface（会覆盖 upstream pins）。 |
+| `mode default` | 遵循 upstream model pins（sol/terra=v2,luna=v1,其余模型跟随 codex flag）。安装默认值。 |
+| `mode v2` | 强制所有模型使用 v2 multi-agent surface（会覆盖 upstream pins）。 |
+| `threads <n>` | 设置 `max_concurrent_threads_per_session`（整数 >= 1,仅 v2）。 |
+
+```bash
+ocx v2 status
+ocx v2 mode v1
+ocx v2 mode default
+ocx v2 on
+ocx v2 threads 16
+```
+
+`mode` subcommand 会把 `multiAgentMode` 写入 opencodex 配置,并重新同步 Codex 目录。
+`on`/`off` subcommands 会通过 `codex features enable|disable` 切换 codex-rs feature flag。
+变更会应用到新的 Codex session；正在运行的 session 会保持已固定的 surface。
+
 ## 认证
 
 ### `ocx login <provider>`

@@ -63,6 +63,27 @@ GPT-5.6 Sol, Terra, Luna는 preview-gated rollout으로 처리됩니다. opencod
 노출합니다. 이름이 선택기에 보인다는 뜻은 opencodex가 카탈로그를 준비했다는 의미이며, 실제 요청 성공은
 연결된 계정 또는 프로바이더의 preview 권한에 달려 있습니다.
 
+## Multi-agent surface mode
+
+opencodex는 모든 카탈로그 항목의 `multi_agent_version` 필드를 제어하는 3단계 multi-agent surface
+override를 추가합니다:
+
+| Mode | Effect |
+| --- | --- |
+| **All v1** | 모든 모델을 v1 multi-agent surface로 강제합니다. 업스트림 pin(sol/terra 포함)보다 우선합니다. |
+| **Default** (설치 기본값) | 업스트림 model pin을 따릅니다. sol/terra는 v2, luna는 v1을 사용하고, 나머지는 codex의 `multi_agent_v2` 기능 플래그를 따릅니다. |
+| **All v2** | 모든 모델을 v2 multi-agent surface로 강제합니다. 업스트림 pin(luna 포함)보다 우선합니다. |
+
+대시보드 Models 페이지의 segmented control, `ocx v2 mode v1|default|v2`, 또는
+`PUT /api/v2`와 `{ "multiAgentMode": "v1" }`로 설정할 수 있습니다. 변경 사항은 새 Codex 세션에
+적용됩니다.
+
+## Ultra reasoning
+
+Ultra는 `multi_agent_v2` 토글 상태와 관계없이 항상 카탈로그에 광고됩니다. v2 토글은 ultra 표시 여부가
+아니라 multi-agent collab surface만 제어합니다. wire에서는 opencodex가 `nativeEffortClamp`로 ultra를
+각 모델의 실제 최상위 단계에 맞춥니다(예: gpt-5.5 ultra는 xhigh).
+
 ## 서브에이전트 선택
 
 Codex의 `spawn_agent`는 카탈로그에서 우선순위가 높은 처음 5개 모델만 노출합니다. `subagentModels`

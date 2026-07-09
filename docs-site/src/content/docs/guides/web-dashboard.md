@@ -32,6 +32,7 @@ bun run dev:gui
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, choose the next-session account, refresh 5h / weekly / 30d quotas, and set auto-switch / failover thresholds. |
 | **Subagent models** | Pick the ≤5 routed models Codex's `spawn_agent` advertises. |
 | **Models** | Enable/disable individual routed models (hidden ones are excluded from the catalog and `/v1/models`). |
+| **Multi-agent mode** | A 3-position selector (All v1 / Default / All v2) on the Models page that forces the multi-agent surface for all models. Default respects upstream pins (sol/terra=v2, luna=v1). |
 | **Request log** | Auto-refreshing view of recent requests (model, provider, status). |
 | **Stop** | A sidebar button that gracefully shuts down the proxy, stops the background service if installed, and restores native Codex — all in one click (`POST /api/stop`). |
 
