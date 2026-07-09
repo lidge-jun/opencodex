@@ -1,3 +1,5 @@
+import { cursorModelEffortLadder } from "./effort-map";
+
 export interface CursorModelInfo {
   id: string;
   contextWindow?: number;
@@ -22,6 +24,7 @@ export function inferCursorContextWindow(modelId: string): number {
   if (id.startsWith("gemini-")) return CONTEXT_1M;
   if (id === "glm-5.2") return CONTEXT_1M;
   if (id.startsWith("gpt-5") || id === "gpt-5-codex") return CONTEXT_272K;
+  if (id.startsWith("grok-4.5")) return 500_000;
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
@@ -54,7 +57,7 @@ export function normalizeCursorModels(models: readonly CursorModelInfo[]): Curso
 // Live GetUsableModels ids append effort tiers to the base id (`claude-4.6-opus-high`). Only
 // these suffixes may activate a base model — otherwise a sibling model like `claude-4-sonnet-1m`
 // would falsely activate `claude-4-sonnet` (PR #73 review finding).
-const LIVE_EFFORT_SUFFIXES = ["low", "medium", "high", "max", "xhigh"] as const;
+const LIVE_EFFORT_SUFFIXES = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /**
  * True when a configured Cursor base model should remain exposed after live GetUsableModels filtering.
@@ -142,13 +145,15 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "gpt-5.5-extra", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
 
   // 260709 refresh: stale grok/composer/kimi/gpt ids dropped per current cursor.com docs; the
-  // grok-4.5 addition is DEFERRED until live GetUsableModels confirms its id form (dot vs dash) —
-  // see devlog/model_update/260709_model_refresh/010_phase1_static_update.md (A fold-back B1).
+  // 260709 note: grok-4.5 was deferred; confirmed live 260708 (cursor.com/models, xAI launch).
 
   // Conflict resolution (260709): keep the refreshed 1M context + kimi-k2.7-code from de12fc8,
   // take PR #73's supportsReasoningEffort for glm-5.2 (its effort-map tiers landed with the PR).
   { id: "glm-5.2", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "kimi-k2.7-code", contextWindow: CONTEXT_262K },
+
+  { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
+  { id: "grok-4.5-fast", contextWindow: 500_000 },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {
@@ -177,7 +182,9 @@ export function cursorModelReasoningEfforts(
   return Object.fromEntries(
     normalizeCursorModels(models).map(model => [
       model.id,
-      model.supportsReasoningEffort === true ? [...CURSOR_REASONING_EFFORTS] : [],
+      model.supportsReasoningEffort === true
+        ? cursorModelEffortLadder(model.id) ?? [...CURSOR_REASONING_EFFORTS]
+        : [],
     ]),
   );
 }

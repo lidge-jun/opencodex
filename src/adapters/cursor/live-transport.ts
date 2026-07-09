@@ -54,7 +54,7 @@ import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from 
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
 
 const CURSOR_RUN_PATH = "/agent.v1.AgentService/Run";
-const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
+const CURSOR_CLIENT_VERSION = "cli-2026.07.08-0c04a8a";
 const HEARTBEAT_MS = 5_000;
 const CURSOR_FIRST_FRAME_TIMEOUT_MS = 30_000;
 const CLIENT_TOOL_FINALIZE_GRACE_MS = 50;

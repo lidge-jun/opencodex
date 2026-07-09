@@ -10,7 +10,7 @@ import type { OcxProviderConfig } from "../types";
 /** Providers whose listed model ids must be driven over the Anthropic wire even if the provider's
  *  configured adapter is something else (the upstream only speaks Anthropic for these models). */
 const ANTHROPIC_WIRE_MODELS: Record<string, Set<string>> = {
-  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"]),
+  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3"]),
 };
 
 /** Return a provider config whose adapter is forced to "anthropic" when the model id is wire-pinned. */

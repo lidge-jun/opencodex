@@ -81,6 +81,17 @@ describe("Cursor static Codex catalog", () => {
     expect(entries.find(item => item.slug === "cursor/glm-5.2")?.context_window).toBe(1_000_000);
     expect(entries.find(item => item.slug === "cursor/composer-2.5-fast")?.context_window).toBe(200_000);
     expect(entries.find(item => item.slug === "cursor/gpt-5.5")?.supported_reasoning_levels)
-      .toMatchObject([{ effort: "low" }, { effort: "medium" }, { effort: "high" }]);
+      .toMatchObject([{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "max" }, { effort: "ultra" }]);
+    expect(entries.find(item => item.slug === "cursor/claude-opus-4-8")?.supported_reasoning_levels)
+      .toMatchObject([
+        { effort: "low" },
+        { effort: "medium" },
+        { effort: "high" },
+        { effort: "xhigh" },
+        { effort: "max" },
+        { effort: "ultra" },
+      ]);
+    expect(entries.find(item => item.slug === "cursor/glm-5.2")?.supported_reasoning_levels)
+      .toMatchObject([{ effort: "high" }, { effort: "max" }, { effort: "ultra" }]);
   });
 });

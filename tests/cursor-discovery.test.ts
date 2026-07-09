@@ -110,12 +110,16 @@ describe("Cursor discovery metadata", () => {
     const efforts = cursorModelReasoningEfforts([
       { id: "auto", supportsReasoningEffort: false },
       { id: "gpt-5.5", supportsReasoningEffort: true },
+      { id: "claude-opus-4-8", supportsReasoningEffort: true },
+      { id: "glm-5.2", supportsReasoningEffort: true },
       { id: "grok-4.3", supportsReasoningEffort: true },
       { id: "composer-2.5", supportsReasoningEffort: false },
     ]);
 
     expect(efforts.auto).toEqual([]);
     expect(efforts["gpt-5.5"]).toEqual(["low", "medium", "high"]);
+    expect(efforts["claude-opus-4-8"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(efforts["glm-5.2"]).toEqual(["high", "max"]);
     expect(efforts["grok-4.3"]).toEqual(["low", "medium", "high"]);
     expect(efforts["composer-2.5"]).toEqual([]);
   });
