@@ -58,11 +58,27 @@ function npmSpawnTarget(bin: string): { bin: string; shell: boolean } {
   return { bin: "npm.cmd", shell: true };
 }
 
+const LATEST_VERSION_ATTEMPTS = 3;
+const LATEST_VERSION_RETRY_MS = 500;
+
+function sleepMs(ms: number): void {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { /* sync backoff between npm view retries */ }
+}
+
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
-export function latestVersion(tag: string): string | null {
+export function latestVersion(tag: string, options?: { attempts?: number }): string | null {
+  const attempts = Math.max(1, options?.attempts ?? LATEST_VERSION_ATTEMPTS);
   const npm = npmSpawnTarget("npm");
-  const r = spawnSync(npm.bin, ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell });
-  return r.status === 0 ? r.stdout.trim() : null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const r = spawnSync(npm.bin, ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell });
+    if (r.status === 0) {
+      const version = r.stdout.trim();
+      if (version) return version;
+    }
+    if (attempt < attempts - 1) sleepMs(LATEST_VERSION_RETRY_MS * (attempt + 1));
+  }
+  return null;
 }
 
 /** The global-install command opencodex would run to update on this channel. */

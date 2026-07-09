@@ -79,6 +79,7 @@ export const en = {
   "dash.updateCommand": "Command",
   "dash.updateSource": "This is a source checkout. Update it from the terminal with the shown command.",
   "dash.updateUnavailable": "Could not read the latest version from npm. Try again later.",
+  "dash.updateRetry": "Retry",
   "dash.updateRestart": "Restart after update",
   "dash.updateRestartHint": "Recommended. The current GUI keeps running the old code until the proxy restarts.",
   "dash.runUpdate": "Update",

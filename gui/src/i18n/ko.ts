@@ -79,6 +79,7 @@ export const ko: Record<TKey, string> = {
   "dash.updateCommand": "명령",
   "dash.updateSource": "현재는 소스 체크아웃입니다. 표시된 명령을 터미널에서 실행해 업데이트하세요.",
   "dash.updateUnavailable": "npm에서 최신 버전을 읽지 못했습니다. 잠시 후 다시 시도하세요.",
+  "dash.updateRetry": "Retry",
   "dash.updateRestart": "업데이트 후 재시작",
   "dash.updateRestartHint": "권장. 프록시를 재시작하기 전까지 현재 GUI는 이전 코드로 계속 실행됩니다.",
   "dash.runUpdate": "업데이트",

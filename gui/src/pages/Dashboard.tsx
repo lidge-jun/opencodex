@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatUptime } from "../formatUptime";
 import { IconAlert, IconExternal, IconRefresh, IconX } from "../icons";
 import { useI18n, Trans } from "../i18n";
@@ -98,6 +98,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>("latest");
   const [updateRestart, setUpdateRestart] = useState(true);
   const [updateLoading, setUpdateLoading] = useState(false);
+  const updateRetryRef = useRef(0);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckData | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
@@ -317,14 +318,25 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       const data = await res.json() as UpdateCheckData | { error?: string };
       if (!res.ok) throw new Error("error" in data && data.error ? data.error : "update check failed");
       setUpdateCheck(data as UpdateCheckData);
+      updateRetryRef.current = 0;
     } catch (err) {
       setUpdateError(err instanceof Error ? err.message : String(err));
     } finally {
       setUpdateLoading(false);
+
+      setUpdateCheck(prev => {
+        if (!prev || prev.reason !== "latest_unavailable") return prev;
+        const max = 2;
+        if (updateRetryRef.current >= max) return prev;
+        updateRetryRef.current += 1;
+        setTimeout(() => { void fetchUpdateCheck(channel); }, 800 * updateRetryRef.current);
+        return prev;
+      });
     }
   };
 
   const openUpdateDialog = () => {
+    updateRetryRef.current = 0;
     const channel = defaultUpdateChannel(health?.version);
     setUpdateChannel(channel);
     setUpdateRestart(true);
@@ -333,6 +345,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   };
 
   const changeUpdateChannel = (channel: UpdateChannel) => {
+    updateRetryRef.current = 0;
     setUpdateChannel(channel);
     fetchUpdateCheck(channel);
   };
@@ -689,7 +702,18 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                   <div className="notice-warn" role="status"><IconAlert /> {t("dash.updateSource")}</div>
                 )}
                 {updateCheck.reason === "latest_unavailable" && (
-                  <div className="notice-warn" role="status"><IconAlert /> {t("dash.updateUnavailable")}</div>
+                  <div className="notice-warn" role="status">
+                    <IconAlert /> {t("dash.updateUnavailable")}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={updateLoading}
+                      onClick={() => { void fetchUpdateCheck(updateChannel); }}
+                      style={{ marginLeft: 12 }}
+                    >
+                      <IconRefresh /> {t("dash.updateRetry")}
+                    </button>
+                  </div>
                 )}
                 {updateCheck.canUpdate && (
                   <div className="spread update-restart">

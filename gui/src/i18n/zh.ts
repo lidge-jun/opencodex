@@ -79,6 +79,7 @@ export const zh: Record<TKey, string> = {
   "dash.updateCommand": "命令",
   "dash.updateSource": "当前是源码检出。请在终端运行显示的命令进行更新。",
   "dash.updateUnavailable": "无法从 npm 读取最新版本。请稍后重试。",
+  "dash.updateRetry": "Retry",
   "dash.updateRestart": "更新后重启",
   "dash.updateRestartHint": "推荐开启。代理重启前，当前 GUI 仍运行旧代码。",
   "dash.runUpdate": "更新",
