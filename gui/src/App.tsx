@@ -126,6 +126,7 @@ export default function App() {
               options={LOCALES.map(l => ({ value: l.code, label: l.name }))}
               onChange={v => setLocale(v as Locale)}
               label={t("lang.label")}
+              placement="right"
               style={{ flex: 1, minWidth: 0, width: "100%" }}
             />
           </div>

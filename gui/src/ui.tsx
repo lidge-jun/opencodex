@@ -23,7 +23,7 @@ export function Notice({ tone, children }: { tone: "ok" | "err"; children: React
 
 export interface SelectOption { value: string; label: React.ReactNode }
 
-export function Select({ value, options, onChange, disabled, label, style, align, dropdownStyle }: {
+export function Select({ value, options, onChange, disabled, label, style, align, placement, dropdownStyle }: {
   value: string;
   options: SelectOption[];
   onChange: (value: string) => void;
@@ -31,6 +31,7 @@ export function Select({ value, options, onChange, disabled, label, style, align
   label?: string;
   style?: CSSProperties;
   align?: "left" | "right";
+  placement?: "below" | "right";
   dropdownStyle?: CSSProperties;
 }) {
   const [open, setOpen] = useState(false);
@@ -61,7 +62,7 @@ export function Select({ value, options, onChange, disabled, label, style, align
         <IconChevron style={{ width: 12, height: 12, color: "var(--muted)", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
       </button>
       {open && (
-        <div className={`select-dropdown${align === "right" ? " select-dropdown-right" : ""}`} role="listbox" aria-label={label} style={dropdownStyle}>
+        <div className={`select-dropdown${align === "right" ? " select-dropdown-right" : ""}${placement === "right" ? " select-dropdown-beside" : ""}`} role="listbox" aria-label={label} style={dropdownStyle}>
           {options.map(o => (
             <button
               key={o.value}
