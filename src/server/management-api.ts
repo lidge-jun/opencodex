@@ -90,9 +90,9 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   if (url.pathname === "/api/diagnostics/project-config" && req.method === "GET") {
-    const { collectProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath } = await import("../codex/project-config-warnings");
-    const warnings = collectProjectCodexConfigWarnings();
-    return jsonResponse({ warnings, grouped: groupProjectCodexConfigWarningsByPath(warnings) });
+    const { getCachedProjectConfigDiagnostics } = await import("../codex/project-config-warnings");
+    const { warnings, grouped } = getCachedProjectConfigDiagnostics();
+    return jsonResponse({ warnings, grouped });
   }
 
   if (url.pathname === "/api/sync" && req.method === "POST") {

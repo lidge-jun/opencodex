@@ -5,6 +5,7 @@ import { defaultCodexHome } from "./home";
 import { readRootTomlString } from "./paths";
 
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
+const DIAGNOSTICS_CACHE_TTL_MS = 30_000;
 
 function resolveCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -17,10 +18,19 @@ export type ProjectCodexConfigIssueCode = "model_providers_table" | "profile_sel
 export interface ProjectCodexConfigWarning {
   path: string;
   code: ProjectCodexConfigIssueCode;
-  /** Provider id, profile name, or model_provider value when relevant. */
+  /** Effective provider id that bypasses OpenCodex. */
   detail: string;
+  /** Profile name when the bypass is selected via profile = "…". */
+  profileName?: string;
   message: string;
 }
+
+interface TomlDocument {
+  root: Record<string, string>;
+  sections: Map<string, Record<string, string>>;
+}
+
+let diagnosticsCache: { at: number; warnings: ProjectCodexConfigWarning[] } | null = null;
 
 function hasInjectedOpenaiBaseUrl(content: string): boolean {
   const lines = content.split("\n");
@@ -30,6 +40,94 @@ function hasInjectedOpenaiBaseUrl(content: string): boolean {
     if (/^\s*openai_base_url\s*=/.test(lines[i]) && lines[i - 1].includes(OCX_SECTION_MARKER)) return true;
   }
   return false;
+}
+
+function parseTomlString(raw: string): string {
+  if (raw.startsWith("\"")) {
+    try {
+      return JSON.parse(raw) as string;
+    } catch {
+      return raw.slice(1, -1);
+    }
+  }
+  return raw.slice(1, -1);
+}
+
+/** Lightweight TOML parse for root keys and [section] tables (Codex config shape). */
+export function parseTomlDocument(content: string): TomlDocument {
+  const root: Record<string, string> = {};
+  const sections = new Map<string, Record<string, string>>();
+  let current = root;
+
+  for (const line of content.split("\n")) {
+    const table = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (table) {
+      const name = table[1]!.trim();
+      const section = sections.get(name) ?? {};
+      sections.set(name, section);
+      current = section;
+      continue;
+    }
+    const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*("(?:\\.|[^"])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);
+    if (kv) current[kv[1]!] = parseTomlString(kv[2]!);
+  }
+
+  return { root, sections };
+}
+
+function profileSectionKeys(profileName: string): string[] {
+  return [
+    `profiles.${profileName}`,
+    `profiles."${profileName}"`,
+    `profiles.'${profileName}'`,
+  ];
+}
+
+function readProfileModelProvider(sections: Map<string, Record<string, string>>, profileName: string): string | null {
+  for (const key of profileSectionKeys(profileName)) {
+    const provider = sections.get(key)?.model_provider;
+    if (provider) return provider;
+  }
+  return null;
+}
+
+function hasModelProviderTable(sections: Map<string, Record<string, string>>, provider: string): boolean {
+  return sections.has(`model_providers.${provider}`);
+}
+
+/** Built-in openai provider still routes through the proxy under Design B (marker-owned openai_base_url). */
+function isProxyCompatibleProvider(provider: string): boolean {
+  return provider === "opencodex" || provider === "openai";
+}
+
+export interface EffectiveProjectModelRouting {
+  provider: string | null;
+  profileName: string | null;
+  via: "profile" | "root" | null;
+}
+
+/** Resolve the provider Codex would actually use from a project .codex/config.toml. */
+export function resolveEffectiveProjectModelProvider(content: string): EffectiveProjectModelRouting {
+  const { root, sections } = parseTomlDocument(content);
+  const rootProfile = root.profile ?? null;
+  const rootProvider = root.model_provider ?? null;
+
+  if (rootProfile) {
+    const fromProfile = readProfileModelProvider(sections, rootProfile);
+    if (fromProfile) {
+      return { provider: fromProfile, profileName: rootProfile, via: "profile" };
+    }
+    if (rootProvider) {
+      return { provider: rootProvider, profileName: rootProfile, via: "root" };
+    }
+    return { provider: null, profileName: rootProfile, via: null };
+  }
+
+  if (rootProvider) {
+    return { provider: rootProvider, profileName: null, via: "root" };
+  }
+
+  return { provider: null, profileName: null, via: null };
 }
 
 /** True when global Codex config routes through the opencodex proxy. */
@@ -48,77 +146,66 @@ export function isGlobalOpencodexRoutingActive(
   }
   if (hasInjectedOpenaiBaseUrl(text)) return true;
   if (readRootTomlString(text, "model_provider") === "opencodex") return true;
-  if (text.includes("[model_providers.opencodex]")) return true;
   return false;
 }
 
 export function parseTrustedProjectPathsFromCodexConfig(content: string): string[] {
+  const { sections } = parseTomlDocument(content);
   const paths: string[] = [];
-  const re = /^\[projects\.(?:'([^']*)'|"([^"]*)")\]/gm;
-  for (const match of content.matchAll(re)) {
-    const raw = (match[1] ?? match[2] ?? "").trim();
-    if (raw) paths.push(raw);
+
+  for (const [name, keys] of sections) {
+    const quoted = name.match(/^projects\.(?:'([^']*)'|"([^"]*)")$/);
+    if (!quoted) continue;
+    const raw = (quoted[1] ?? quoted[2] ?? "").trim();
+    if (!raw) continue;
+    if ((keys.trust_level ?? "").toLowerCase() !== "trusted") continue;
+    paths.push(raw);
   }
+
   return paths;
 }
 
 export function analyzeProjectCodexConfig(content: string, configPath: string): ProjectCodexConfigWarning[] {
-  const warnings: ProjectCodexConfigWarning[] = [];
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { sections } = parseTomlDocument(content);
+  const routing = resolveEffectiveProjectModelProvider(content);
+  const provider = routing.provider;
 
-  for (let i = 0; i < lines.length; i++) {
-    const table = lines[i].match(/^\s*\[model_providers\.([^\]]+)\]\s*$/);
-    if (!table) continue;
-    const provider = table[1]!.trim();
-    if (provider === "opencodex") continue;
-    warnings.push({
+  if (!provider || isProxyCompatibleProvider(provider)) return [];
+
+  const rel = relPath(configPath);
+  if (hasModelProviderTable(sections, provider)) {
+    return [{
       path: configPath,
       code: "model_providers_table",
       detail: provider,
+      profileName: routing.profileName ?? undefined,
       message:
-        `Project Codex config defines [model_providers.${provider}] (${relPath(configPath)}). `
-        + "That routes this trusted project away from the OpenCodex proxy. "
-        + "Remove the provider table (and any profile = line that selects it) so global routing from "
-        + "~/.codex/config.toml applies.",
-    });
+        `Project Codex config selects provider "${provider}" via `
+        + `${routing.via === "profile" ? `profile = "${routing.profileName}"` : "model_provider"} and defines `
+        + `[model_providers.${provider}] (${rel}). That routes this trusted project away from the OpenCodex proxy.`,
+    }];
   }
 
-  for (let i = 0; i < rootEnd; i++) {
-    const profileMatch = lines[i].match(/^\s*profile\s*=\s*("(?:\\.|[^"])*"|'[^']*')\s*$/);
-    if (profileMatch) {
-      const profile = parseTomlString(profileMatch[1]!);
-      if (profile && profile !== "opencodex") {
-        warnings.push({
-          path: configPath,
-          code: "profile_selector",
-          detail: profile,
-          message:
-            `Project Codex config sets profile = "${profile}" (${relPath(configPath)}). `
-            + "Profiles can bypass the OpenCodex proxy for this project. "
-            + "Remove the profile line or switch to global proxy routing only.",
-        });
-      }
-      continue;
-    }
-    const providerMatch = lines[i].match(/^\s*model_provider\s*=\s*("(?:\\.|[^"])*"|'[^']*')\s*$/);
-    if (providerMatch) {
-      const provider = parseTomlString(providerMatch[1]!);
-      if (provider && provider !== "opencodex") {
-        warnings.push({
-          path: configPath,
-          code: "model_provider_root",
-          detail: provider,
-          message:
-            `Project Codex config sets model_provider = "${provider}" (${relPath(configPath)}). `
-            + "Use global ~/.codex/config.toml for OpenCodex routing instead of a project-local provider override.",
-        });
-      }
-    }
+  if (routing.via === "profile" && routing.profileName) {
+    return [{
+      path: configPath,
+      code: "profile_selector",
+      detail: provider,
+      profileName: routing.profileName,
+      message:
+        `Project Codex config profile "${routing.profileName}" sets model_provider = "${provider}" (${rel}). `
+        + "That routes this trusted project away from the OpenCodex proxy.",
+    }];
   }
 
-  return dedupeRelatedProjectCodexWarnings(warnings);
+  return [{
+    path: configPath,
+    code: "model_provider_root",
+    detail: provider,
+    message:
+      `Project Codex config sets model_provider = "${provider}" (${rel}). `
+      + "Use global ~/.codex/config.toml for OpenCodex routing instead of a project-local provider override.",
+  }];
 }
 
 /** profile/model_provider that selects an already-flagged [model_providers.X] table is one bypass, not two. */
@@ -134,17 +221,6 @@ export function dedupeRelatedProjectCodexWarnings(
     if (w.code === "model_provider_root" && providerTables.has(w.detail)) return false;
     return true;
   });
-}
-
-function parseTomlString(raw: string): string {
-  if (raw.startsWith("\"")) {
-    try {
-      return JSON.parse(raw) as string;
-    } catch {
-      return raw.slice(1, -1);
-    }
-  }
-  return raw.slice(1, -1);
 }
 
 function relPath(abs: string): string {
@@ -211,12 +287,28 @@ export function collectProjectCodexConfigWarnings(options: {
   return warnings;
 }
 
+export function invalidateProjectConfigDiagnosticsCache(): void {
+  diagnosticsCache = null;
+}
+
+export function getCachedProjectConfigDiagnostics(): {
+  warnings: ProjectCodexConfigWarning[];
+  grouped: ProjectCodexConfigWarningGroup[];
+} {
+  const now = Date.now();
+  if (!diagnosticsCache || now - diagnosticsCache.at > DIAGNOSTICS_CACHE_TTL_MS) {
+    diagnosticsCache = { at: now, warnings: collectProjectCodexConfigWarnings() };
+  }
+  const warnings = diagnosticsCache.warnings;
+  return { warnings, grouped: groupProjectCodexConfigWarningsByPath(warnings) };
+}
+
 export function summarizeProjectCodexIssue(warning: ProjectCodexConfigWarning): string {
   switch (warning.code) {
     case "model_providers_table":
       return `[model_providers.${warning.detail}]`;
     case "profile_selector":
-      return `profile="${warning.detail}"`;
+      return warning.profileName ? `profile="${warning.profileName}"` : `model_provider="${warning.detail}"`;
     case "model_provider_root":
       return `model_provider="${warning.detail}"`;
   }

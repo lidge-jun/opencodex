@@ -95,25 +95,18 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [hRes, pRes, sRes, scRes, uRes, pcRes] = await Promise.all([
+        const [hRes, pRes, sRes, scRes, uRes] = await Promise.all([
           fetch(`${apiBase}/healthz`),
           fetch(`${apiBase}/api/providers`),
           fetch(`${apiBase}/api/settings`),
           fetch(`${apiBase}/api/sidecar-settings`),
           fetch(`${apiBase}/api/usage?range=30d`),
-          fetch(`${apiBase}/api/diagnostics/project-config`),
         ]);
         setHealth(await hRes.json());
         setProviders(await pRes.json());
         setSettings(await sRes.json());
         setSidecar(await scRes.json());
         try { setUsage30d(uRes.ok ? await uRes.json() : null); } catch { setUsage30d(null); }
-        try {
-          const pcData = pcRes.ok ? await pcRes.json() as { grouped?: ProjectCodexConfigGroup[] } : null;
-          setProjectConfigWarnings(pcData?.grouped ?? []);
-        } catch {
-          setProjectConfigWarnings([]);
-        }
         setError(false);
       } catch {
         setError(true);
@@ -121,6 +114,21 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
     };
     fetchData();
     const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, [apiBase]);
+
+  useEffect(() => {
+    const fetchDiagnostics = async () => {
+      try {
+        const pcRes = await fetch(`${apiBase}/api/diagnostics/project-config`);
+        const pcData = pcRes.ok ? await pcRes.json() as { grouped?: ProjectCodexConfigGroup[] } : null;
+        setProjectConfigWarnings(pcData?.grouped ?? []);
+      } catch {
+        setProjectConfigWarnings([]);
+      }
+    };
+    void fetchDiagnostics();
+    const interval = setInterval(() => void fetchDiagnostics(), 30_000);
     return () => clearInterval(interval);
   }, [apiBase]);
 

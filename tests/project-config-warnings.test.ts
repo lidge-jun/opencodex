@@ -1,131 +1,193 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   analyzeProjectCodexConfig,
   collectProjectCodexConfigWarnings,
-  dedupeRelatedProjectCodexWarnings,
-  discoverProjectCodexConfigPaths,
-  groupProjectCodexConfigWarningsByPath,
+  getCachedProjectConfigDiagnostics,
   isGlobalOpencodexRoutingActive,
+  invalidateProjectConfigDiagnosticsCache,
   parseTrustedProjectPathsFromCodexConfig,
+  resolveEffectiveProjectModelProvider,
 } from "../src/codex/project-config-warnings";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-project-config-warnings");
-const TEST_CODEX_HOME = join(TEST_DIR, "codex");
-const TEST_PROJECT = join(TEST_DIR, "streamer-content");
+let testDir = "";
+let previousHome: string | undefined;
 
-let prevCodexHome: string | undefined;
+beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
+  testDir = join(tmpdir(), `ocx-proj-warn-${Date.now()}`);
+  mkdirSync(testDir, { recursive: true });
+  process.env.OPENCODEX_HOME = testDir;
+  invalidateProjectConfigDiagnosticsCache();
+});
 
-describe("project config warnings", () => {
-  beforeEach(() => {
-    prevCodexHome = process.env.CODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(join(TEST_PROJECT, ".codex"), { recursive: true });
-    process.env.CODEX_HOME = TEST_CODEX_HOME;
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  invalidateProjectConfigDiagnosticsCache();
+  rmSync(testDir, { recursive: true, force: true });
+});
+
+function writeGlobalRoutingConfig(extra = ""): void {
+  const codexDir = join(testDir, ".codex");
+  mkdirSync(codexDir, { recursive: true });
+  writeFileSync(join(codexDir, "config.toml"), `
+model_provider = "opencodex"
+${extra}
+`);
+}
+
+describe("isGlobalOpencodexRoutingActive", () => {
+  test("detects injected openai_base_url marker", () => {
+    const text = `
+# Auto-injected by opencodex
+openai_base_url = "http://127.0.0.1:10100/v1"
+model_provider = "opencodex"
+`;
+    expect(isGlobalOpencodexRoutingActive("unused", text)).toBe(true);
   });
 
-  afterEach(() => {
-    if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = prevCodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  test("does not treat dormant model_providers.opencodex table as active routing", () => {
+    const text = `
+[model_providers.opencodex]
+name = "opencodex"
+base_url = "http://127.0.0.1:10100/v1"
+`;
+    expect(isGlobalOpencodexRoutingActive("unused", text)).toBe(false);
+  });
+});
+
+describe("parseTrustedProjectPathsFromCodexConfig", () => {
+  test("collects only trusted project paths", () => {
+    const text = `
+[projects.'C:\\repo-a']
+trust_level = "trusted"
+
+[projects.'C:\\repo-b']
+trust_level = "untrusted"
+
+[projects.'C:\\repo-c']
+`;
+    expect(parseTrustedProjectPathsFromCodexConfig(text)).toEqual(["C:\\repo-a"]);
+  });
+});
+
+describe("resolveEffectiveProjectModelProvider", () => {
+  test("resolves provider from selected profile", () => {
+    const text = `
+profile = "work"
+model_provider = "openai"
+
+[profiles.work]
+model_provider = "anthropic"
+`;
+    expect(resolveEffectiveProjectModelProvider(text)).toEqual({
+      provider: "anthropic",
+      profileName: "work",
+      via: "profile",
+    });
   });
 
-  test("detects model_providers tables in project config", () => {
-    const content = [
-      'profile = "opencode_go"',
-      "",
-      "[model_providers.opencode_go]",
-      'name = "OpenCode Go"',
-      'base_url = "https://opencode.ai/zen/go/v1"',
-      "",
-    ].join("\n");
-    const warnings = analyzeProjectCodexConfig(content, "/repo/.codex/config.toml");
-    expect(warnings.some(w => w.code === "model_providers_table" && w.detail === "opencode_go")).toBe(true);
-    expect(warnings.some(w => w.code === "profile_selector")).toBe(false);
+  test("root model_provider applies when profile has no model_provider", () => {
+    const text = `
+profile = "work"
+model_provider = "anthropic"
+
+[profiles.work]
+approval_policy = "on-request"
+`;
+    expect(resolveEffectiveProjectModelProvider(text)).toEqual({
+      provider: "anthropic",
+      profileName: "work",
+      via: "root",
+    });
+  });
+});
+
+describe("analyzeProjectCodexConfig", () => {
+  test("ignores dormant provider tables", () => {
+    const text = `
+[model_providers.anthropic]
+name = "anthropic"
+base_url = "https://api.anthropic.com"
+`;
+    expect(analyzeProjectCodexConfig(text, "C:\\repo\\.codex\\config.toml")).toEqual([]);
   });
 
-  test("keeps profile warning when no matching provider table exists", () => {
-    const warnings = analyzeProjectCodexConfig('profile = "opencode_go"\n', "/repo/.codex/config.toml");
+  test("ignores profile without model_provider override", () => {
+    const text = `
+profile = "work"
+
+[profiles.work]
+approval_policy = "on-request"
+`;
+    expect(analyzeProjectCodexConfig(text, "C:\\repo\\.codex\\config.toml")).toEqual([]);
+  });
+
+  test("warns when effective provider bypasses proxy", () => {
+    const text = `
+profile = "work"
+
+[profiles.work]
+model_provider = "anthropic"
+
+[model_providers.anthropic]
+name = "anthropic"
+`;
+    const warnings = analyzeProjectCodexConfig(text, "C:\\repo\\.codex\\config.toml");
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.code).toBe("profile_selector");
+    expect(warnings[0]!.code).toBe("model_providers_table");
+    expect(warnings[0]!.detail).toBe("anthropic");
+    expect(warnings[0]!.profileName).toBe("work");
   });
 
-  test("ignores opencodex provider table in project config", () => {
-    const warnings = analyzeProjectCodexConfig("[model_providers.opencodex]\n", "/repo/.codex/config.toml");
-    expect(warnings).toHaveLength(0);
+  test("does not warn for openai provider under Design B", () => {
+    const text = `
+model_provider = "openai"
+`;
+    expect(analyzeProjectCodexConfig(text, "C:\\repo\\.codex\\config.toml")).toEqual([]);
+  });
+});
+
+describe("collectProjectCodexConfigWarnings", () => {
+  test("skips untrusted projects even when they define bypass config", () => {
+    const escaped = testDir.replace(/\\/g, "\\\\");
+    const projectDir = join(testDir, "proj");
+    writeGlobalRoutingConfig(`
+[projects.'${escaped}\\proj']
+trust_level = "untrusted"
+`);
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(join(projectDir, ".codex", "config.toml"), `
+model_provider = "anthropic"
+[model_providers.anthropic]
+name = "anthropic"
+`);
+    expect(collectProjectCodexConfigWarnings()).toEqual([]);
   });
 
-  test("parses trusted project paths from global config", () => {
-    const content = [
-      "[projects.'c:/users/jk/repo']",
-      "trust_level = \"trusted\"",
-      "",
-    ].join("\n");
-    expect(parseTrustedProjectPathsFromCodexConfig(content)).toEqual(["c:/users/jk/repo"]);
-  });
-
-  test("collects warnings only when global opencodex routing is active", () => {
-    mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    writeFileSync(join(TEST_CODEX_HOME, "config.toml"), [
-      "# Auto-injected by opencodex",
-      'openai_base_url = "http://127.0.0.1:10100/v1"',
-      "",
-      `[projects.'${TEST_PROJECT.replace(/\\/g, "\\\\")}']`,
-      'trust_level = "trusted"',
-      "",
-    ].join("\n"), "utf8");
-    writeFileSync(join(TEST_PROJECT, ".codex", "config.toml"), [
-      "[model_providers.opencode_go]",
-      'name = "OpenCode Go"',
-      "",
-    ].join("\n"), "utf8");
-
-    const active = isGlobalOpencodexRoutingActive(join(TEST_CODEX_HOME, "config.toml"));
-    expect(active).toBe(true);
-
-    const warnings = collectProjectCodexConfigWarnings({
-      cwd: TEST_PROJECT,
-      codexConfigPath: join(TEST_CODEX_HOME, "config.toml"),
-    });
-    expect(warnings.some(w => w.code === "model_providers_table")).toBe(true);
-  });
-
-  test("returns no warnings when global routing is inactive", () => {
-    mkdirSync(TEST_CODEX_HOME, { recursive: true });
-    writeFileSync(join(TEST_CODEX_HOME, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
-    writeFileSync(join(TEST_PROJECT, ".codex", "config.toml"), "[model_providers.opencode_go]\n", "utf8");
-
-    const warnings = collectProjectCodexConfigWarnings({
-      cwd: TEST_PROJECT,
-      codexConfigPath: join(TEST_CODEX_HOME, "config.toml"),
-    });
-    expect(warnings).toHaveLength(0);
-  });
-
-  test("discovers project config from cwd walk", () => {
-    writeFileSync(join(TEST_PROJECT, ".codex", "config.toml"), "model = \"gpt-5.5\"\n", "utf8");
-    const nested = join(TEST_PROJECT, "src", "app");
-    mkdirSync(nested, { recursive: true });
-    const paths = discoverProjectCodexConfigPaths({
-      cwd: nested,
-      codexConfigPath: join(TEST_CODEX_HOME, "config.toml"),
-    });
-    expect(paths).toContain(join(TEST_PROJECT, ".codex", "config.toml"));
-  });
-
-  test("groups warnings by project path for compact output", () => {
-    const warnings = analyzeProjectCodexConfig([
-      'profile = "opencode_go"',
-      "",
-      "[model_providers.opencode_go]",
-      'name = "OpenCode Go"',
-      "",
-    ].join("\n"), "/repo/.codex/config.toml");
-    const grouped = groupProjectCodexConfigWarningsByPath(warnings);
-    expect(grouped).toHaveLength(1);
-    expect(grouped[0]?.issues).toEqual(["[model_providers.opencode_go]"]);
-    expect(grouped[0]?.bypass).toContain("OpenCode Go");
-    expect(grouped[0]?.bypass).toContain("Overrides OpenCodex");
+  test("caches diagnostics for repeated API reads", () => {
+    const escaped = testDir.replace(/\\/g, "\\\\");
+    const projectDir = join(testDir, "proj");
+    writeGlobalRoutingConfig(`
+[projects.'${escaped}\\proj']
+trust_level = "trusted"
+`);
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(join(projectDir, ".codex", "config.toml"), `
+model_provider = "anthropic"
+[model_providers.anthropic]
+name = "anthropic"
+`);
+    const first = getCachedProjectConfigDiagnostics();
+    expect(first.warnings.length).toBe(1);
+    writeFileSync(join(projectDir, ".codex", "config.toml"), `model_provider = "openai"`);
+    const second = getCachedProjectConfigDiagnostics();
+    expect(second.warnings.length).toBe(1);
+    invalidateProjectConfigDiagnosticsCache();
+    const third = getCachedProjectConfigDiagnostics();
+    expect(third.warnings).toEqual([]);
   });
 });
