@@ -68,6 +68,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [maMode, setMaMode] = useState<"v1" | "default" | "v2">("default");
+  const [maBusy, setMaBusy] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -96,6 +98,15 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         setSidecar(await scRes.json());
         try { setUsage30d(uRes.ok ? await uRes.json() : null); } catch { setUsage30d(null); }
         setError(false);
+        // Best-effort v2 mode fetch (independent of core health)
+        try {
+          const v2Res = await fetch(`${apiBase}/api/v2`);
+          if (v2Res.ok) {
+            const v2Data = await v2Res.json();
+            if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") setMaMode(v2Data.multiAgentMode);
+            else setMaMode("default");
+          }
+        } catch { /* old server */ }
       } catch {
         setError(true);
       }
@@ -196,6 +207,20 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   };
 
   const toggleCodexAutoStart = async () => {
+  const switchMaMode = async (mode: "v1" | "default" | "v2") => {
+    if (maBusy || maMode === mode) return;
+    setMaBusy(true);
+    try {
+      const r = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ multiAgentMode: mode }),
+      });
+      if (r.ok) setMaMode(mode);
+    } catch { /* ignore */ }
+    finally { setMaBusy(false); }
+  };
+
     if (!settings || settingsSaving) return;
     const next = !settings.codexAutoStart;
     setSettingsSaving(true);
@@ -297,6 +322,25 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       <p className="page-sub">{t("dash.subtitle")}</p>
 
       <div className="stat-row">
+        <div className="stat">
+          <div className="label">{t("dash.multiAgent")}</div>
+          <div className="value" style={{ display: "flex", gap: 4 }}>
+            <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)" }}>
+              {(["v1", "default", "v2"] as const).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={maMode === mode}
+                  className={`btn btn-sm${maMode === mode ? " btn-primary" : " btn-ghost"}`}
+                  style={{ borderRadius: 0, minWidth: 44, fontSize: 11, padding: "3px 8px" }}
+                  disabled={maBusy}
+                  onClick={() => void switchMaMode(mode)}
+                >{mode === "default" ? "base" : mode}</button>
+              ))}
+            </div>
+          </div>
+        </div>
         <div className="stat">
           <div className="label">{t("dash.status")}</div>
           <div className="value" style={{ display: "flex", alignItems: "center", gap: 9, color: online ? "var(--green)" : "var(--red)" }}>

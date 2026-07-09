@@ -60,6 +60,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const v2BusyRef = useRef(false);
   const [threadsCustom, setThreadsCustom] = useState("");
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
+  const [v2HelpOpen, setV2HelpOpen] = useState(false);
 
   const loadV2 = async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
@@ -346,9 +347,31 @@ export default function Models({ apiBase }: { apiBase: string }) {
               </button>
             ))}
           </div>
-          <span className="muted mono" style={{ fontSize: 12 }}>
-            {t(`models.v2ModeDesc_${v2.multiAgentMode ?? "default"}` as keyof typeof import("../i18n/en").en)}
-          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ width: 22, height: 22, padding: 0, borderRadius: 999, fontSize: 12, fontWeight: 700, color: "var(--muted)" }}
+            onClick={() => setV2HelpOpen(o => !o)}
+            aria-label="Help"
+            title={t(`models.v2ModeDesc_${v2.multiAgentMode ?? "default"}` as keyof typeof import("../i18n/en").en)}
+          >?</button>
+          {v2HelpOpen && (
+            <div style={{ position: "relative" }}>
+              <div
+                style={{
+                  position: "absolute", top: 4, left: 0, zIndex: 10,
+                  background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)",
+                  borderRadius: 8, padding: "12px 16px", maxWidth: 360, fontSize: 13,
+                  lineHeight: 1.5, whiteSpace: "pre-line", boxShadow: "0 4px 16px rgba(0,0,0,.12)",
+                }}
+              >
+                {t("models.v2Help")}
+                <div style={{ marginTop: 8, textAlign: "right" }}>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setV2HelpOpen(false)} style={{ fontSize: 11 }}>OK</button>
+                </div>
+              </div>
+            </div>
+          )}
           {v2.enabled && (
             <>
               <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>{t("models.v2ThreadsLabel")}</span>
