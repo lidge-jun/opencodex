@@ -1,9 +1,6 @@
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { DEBUG_ENV, type DebugSettingsView } from "../lib/debug-settings";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
-import { getConfigDir } from "../config";
-import { join } from "node:path";
-import { readFileSync, statSync } from "node:fs";
 
 type DebugScope = "provider" | "usage";
 
@@ -56,8 +53,7 @@ function printScopeStatus(scope: DebugScope, view: DebugSettingsView): void {
   } else {
     console.log(`Usage debug: ${view.usage ? "ON" : "off"}`);
     console.log(`  env=${view.env.usage ? "on" : "off"}, runtime=${view.runtimeOverride.usage === undefined ? "env/default" : view.runtimeOverride.usage ? "on" : "off"}`);
-    console.log(`  File: ${join(getConfigDir(), "usage-debug.jsonl")}`);
-    console.log("  Tail: ocx debug usage logs [-f]");
+    console.log("  Tail: ocx debug usage logs [-f] (via running proxy API)");
   }
 }
 
@@ -70,16 +66,16 @@ async function printProviderLogs(follow: boolean): Promise<void> {
   const live = await requireLiveProxy();
   const base = `http://${probeHostname(live.hostname)}:${live.port}/api/debug/logs`;
 
-  let since = 0;
+  let after = 0;
   try {
     const res = await fetch(`${base}?limit=500`, { headers: runningProxyUpdateHeaders() });
     if (!res.ok) {
       console.error(`Failed to read debug logs (${res.status})`);
       process.exit(1);
     }
-    const entries = await res.json() as { at: number; line: string }[];
+    const entries = await res.json() as { seq: number; line: string }[];
     for (const entry of entries) console.log(entry.line);
-    if (entries.length > 0) since = entries[entries.length - 1]!.at;
+    if (entries.length > 0) after = entries[entries.length - 1]!.seq;
   } catch (err) {
     console.error(`Failed to read debug logs: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -90,11 +86,11 @@ async function printProviderLogs(follow: boolean): Promise<void> {
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-      const res = await fetch(`${base}?since=${since}&limit=500`, { headers: runningProxyUpdateHeaders() });
+      const res = await fetch(`${base}?after=${after}&limit=500`, { headers: runningProxyUpdateHeaders() });
       if (!res.ok) continue;
-      const entries = await res.json() as { at: number; line: string }[];
+      const entries = await res.json() as { seq: number; line: string }[];
       for (const entry of entries) console.log(entry.line);
-      if (entries.length > 0) since = entries[entries.length - 1]!.at;
+      if (entries.length > 0) after = entries[entries.length - 1]!.seq;
     } catch {
       /* keep following */
     }
@@ -102,40 +98,38 @@ async function printProviderLogs(follow: boolean): Promise<void> {
 }
 
 async function printUsageLogs(follow: boolean): Promise<void> {
-  const path = join(getConfigDir(), "usage-debug.jsonl");
-  if (!follow) {
-    try {
-      const content = readFileSync(path, "utf8");
-      const lines = content.split("\n").filter(Boolean);
-      const tail = lines.slice(-100);
-      for (const line of tail) console.log(line);
-      if (lines.length === 0) console.log("(empty — enable with: ocx debug usage on)");
-    } catch {
-      console.log("(no file yet — enable with: ocx debug usage on)");
-      console.log(`  path: ${path}`);
+  const live = await requireLiveProxy();
+  const base = `http://${probeHostname(live.hostname)}:${live.port}/api/debug/usage-logs`;
+
+  let after = 0;
+  try {
+    const res = await fetch(`${base}?limit=500`, { headers: runningProxyUpdateHeaders() });
+    if (!res.ok) {
+      console.error(`Failed to read usage debug logs (${res.status})`);
+      process.exit(1);
     }
-    return;
+    const entries = await res.json() as { seq: number; line: string }[];
+    for (const entry of entries) console.log(entry.line);
+    if (entries.length === 0) console.log("(empty — enable with: ocx debug usage on)");
+    if (entries.length > 0) after = entries[entries.length - 1]!.seq;
+  } catch (err) {
+    console.error(`Failed to read usage debug logs: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
 
-  let offset = 0;
-  try {
-    offset = statSync(path).size;
-  } catch {
-    console.log(`Waiting for ${path} … (enable with: ocx debug usage on)`);
-  }
+  if (!follow) return;
 
   while (true) {
-    try {
-      const content = readFileSync(path, "utf8");
-      if (content.length > offset) {
-        const chunk = content.slice(offset);
-        offset = content.length;
-        for (const line of chunk.split("\n").filter(Boolean)) console.log(line);
-      }
-    } catch {
-      /* file may not exist yet */
-    }
     await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const res = await fetch(`${base}?after=${after}&limit=500`, { headers: runningProxyUpdateHeaders() });
+      if (!res.ok) continue;
+      const entries = await res.json() as { seq: number; line: string }[];
+      for (const entry of entries) console.log(entry.line);
+      if (entries.length > 0) after = entries[entries.length - 1]!.seq;
+    } catch {
+      /* keep following */
+    }
   }
 }
 

@@ -11,6 +11,7 @@ interface DebugSettings {
 }
 
 interface DebugLogEntry {
+  seq: number;
   at: number;
   line: string;
 }
@@ -25,7 +26,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   const [lines, setLines] = useState<string[]>([]);
   const [follow, setFollow] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const sinceRef = useRef(0);
+  const afterRef = useRef(0);
   const logRef = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
@@ -52,13 +53,13 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   const fetchLogs = useCallback(async (initial: boolean) => {
     if (!streamEnabled) {
       setLines([]);
-      sinceRef.current = 0;
+      afterRef.current = 0;
       return;
     }
     setRefreshing(true);
     try {
       const params = new URLSearchParams({ limit: "500" });
-      if (!initial && sinceRef.current > 0) params.set("since", String(sinceRef.current));
+      if (!initial && afterRef.current > 0) params.set("after", String(afterRef.current));
       const res = await fetch(`${logsPath}?${params}`);
       if (!res.ok) return;
       const entries = await res.json() as DebugLogEntry[];
@@ -66,14 +67,14 @@ export default function Debug({ apiBase }: { apiBase: string }) {
       setLines(prev => initial
         ? entries.map(entry => entry.line)
         : [...prev, ...entries.map(entry => entry.line)].slice(-2000));
-      sinceRef.current = entries[entries.length - 1]!.at;
+      afterRef.current = entries[entries.length - 1]!.seq;
     } catch { /* ignore */ } finally {
       setRefreshing(false);
     }
   }, [logsPath, streamEnabled]);
 
   useEffect(() => {
-    sinceRef.current = 0;
+    afterRef.current = 0;
     setLines([]);
     void fetchLogs(true);
   }, [stream, streamEnabled, fetchLogs]);

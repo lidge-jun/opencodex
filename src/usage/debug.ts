@@ -69,20 +69,22 @@ export function appendUsageDebug(record: UsageDebugRecord): void {
 }
 
 /** Tail usage-debug.jsonl for GUI / management API (same shape as provider debug buffer). */
-export function getUsageDebugLogEntries(options?: { since?: number; limit?: number }): DebugLogEntry[] {
-  const since = options?.since ?? 0;
+export function getUsageDebugLogEntries(options?: { after?: number; limit?: number }): DebugLogEntry[] {
+  const after = options?.after ?? 0;
   const limit = options?.limit ?? 500;
   try {
     const content = readFileSync(usageDebugPath(), "utf8");
     const entries: DebugLogEntry[] = [];
+    let seq = 0;
     for (const line of content.split(/\r?\n/).filter(Boolean)) {
+      seq += 1;
+      if (after > 0 && seq <= after) continue;
       try {
         const record = JSON.parse(line) as UsageDebugRecord;
         const at = typeof record.ts === "number" ? record.ts : 0;
-        if (since > 0 && at <= since) continue;
-        entries.push({ at, line });
+        entries.push({ seq, at, line });
       } catch {
-        entries.push({ at: 0, line });
+        entries.push({ seq, at: 0, line });
       }
     }
     if (entries.length <= limit) return entries;

@@ -68,9 +68,7 @@ import {
 export {
   addFinalRequestLog,
   filterRequestLogs,
-  httpStatusForRequestLogTerminal,
   httpStatusForTerminalStatus,
-  httpStatusFromTerminalError,
   nextRequestLogId,
   requestLogErrorCode,
   requestLogSpeedLabel,

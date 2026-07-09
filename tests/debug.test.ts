@@ -116,13 +116,30 @@ describe("debug frame logging", () => {
     }
   });
 
-  test("appendDebugLogLine supports since/limit queries", () => {
+  test("appendDebugLogLine supports after/limit queries with monotonic seq", () => {
     appendDebugLogLine("[ocx:test:one]");
     appendDebugLogLine("[ocx:test:two]");
     const all = getDebugLogEntries();
     expect(all).toHaveLength(2);
-    const since = getDebugLogEntries({ since: all[0]!.at - 1, limit: 10 });
-    expect(since.length).toBeGreaterThanOrEqual(1);
-    expect(since[since.length - 1]!.line).toContain("two");
+    expect(all[0]!.seq).toBe(1);
+    expect(all[1]!.seq).toBe(2);
+    const tail = getDebugLogEntries({ after: all[0]!.seq, limit: 10 });
+    expect(tail).toHaveLength(1);
+    expect(tail[0]!.line).toContain("two");
+  });
+
+  test("same-millisecond bursts keep every line via seq cursor", () => {
+    const now = Date.now();
+    const spy = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      appendDebugLogLine("[ocx:test:a]");
+      appendDebugLogLine("[ocx:test:b]");
+      const all = getDebugLogEntries();
+      const tail = getDebugLogEntries({ after: all[0]!.seq, limit: 10 });
+      expect(tail).toHaveLength(1);
+      expect(tail[0]!.line).toContain("b");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

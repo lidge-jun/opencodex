@@ -19,7 +19,7 @@ starts the proxy when needed and opens `http://localhost:<port>`.
 | Key providers | Expose API-key provider presets for setup and dashboard flows. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. |
 | Logs | Surface request/runtime logs for local diagnosis. |
-| Debug | Debug page (`/#debug`): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` (provider buffer); `GET /api/debug/usage-logs` (usage JSONL tail). CLI: `ocx debug provider|usage …`. |
+| Debug | Debug page (`/#debug`): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` (monotonic `after` cursor, legacy `since` accepted). CLI: `ocx debug provider|usage …` (both streams via running proxy API). |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
 

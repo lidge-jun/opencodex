@@ -50,6 +50,15 @@ export const VERSION = (() => {
   }
 })();
 
+function parseDebugLogQuery(url: URL): { after: number; limit: number } {
+  const after = Number(url.searchParams.get("after") ?? url.searchParams.get("since") ?? "0");
+  const limit = Number(url.searchParams.get("limit") ?? "500");
+  return {
+    after: Number.isFinite(after) && after > 0 ? after : 0,
+    limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : 500,
+  };
+}
+
 export async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): Promise<Response | null> {
   if (!isAllowedRequestOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
@@ -183,21 +192,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   if (url.pathname === "/api/debug/logs" && req.method === "GET") {
-    const since = Number(url.searchParams.get("since") ?? "0");
-    const limit = Number(url.searchParams.get("limit") ?? "500");
-    return jsonResponse(getDebugLogEntries({
-      since: Number.isFinite(since) && since > 0 ? since : 0,
-      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : 500,
-    }));
+    const { after, limit } = parseDebugLogQuery(url);
+    return jsonResponse(getDebugLogEntries({ after, limit }));
   }
 
   if (url.pathname === "/api/debug/usage-logs" && req.method === "GET") {
-    const since = Number(url.searchParams.get("since") ?? "0");
-    const limit = Number(url.searchParams.get("limit") ?? "500");
-    return jsonResponse(getUsageDebugLogEntries({
-      since: Number.isFinite(since) && since > 0 ? since : 0,
-      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : 500,
-    }));
+    const { after, limit } = parseDebugLogQuery(url);
+    return jsonResponse(getUsageDebugLogEntries({ after, limit }));
   }
 
   if (url.pathname === "/api/debug" && req.method === "PUT") {
