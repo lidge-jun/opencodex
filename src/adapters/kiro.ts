@@ -5,7 +5,7 @@ import { resolveKiroApiRegion, resolveKiroProfileArn } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";
 import { parseKiroEvent } from "./kiro-events";
-import { safeKiroErrorMessage } from "./kiro-errors";
+import { safeKiroErrorMessage, safeKiroHttpErrorMessage } from "./kiro-errors";
 import { appendFallbackText, toolCallFallbackText, toolResultFallbackText } from "./kiro-tool-fallback";
 import { KiroThinkingParser } from "./kiro-thinking";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "./kiro-truncation";
@@ -550,6 +550,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
 
     fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
       return fetchKiroWithRetry(request, ctx);
+    },
+
+    formatErrorBody(status: number, headers: Headers, payloadText: string): string {
+      return safeKiroHttpErrorMessage(status, headers, payloadText);
     },
 
     // Non-streaming path used by the web-search sidecar loop (loop.ts runs each iteration

@@ -27,7 +27,7 @@ console warning, and starts with defaults. Missing files also fall back to a def
 | `providerContextCaps?` | `Record<string,number>` | `{}` | Per-provider Codex-visible context caps. A cap only lowers known context windows. |
 | `contextCapValue?` | `number` | `350000` | Value used by the dashboard's context-cap controls; changing it updates every enabled entry in `providerContextCaps`. |
 | `stallTimeoutSec?` | `number` | `90` | Seconds without upstream data before the bridge aborts and emits `response.incomplete`. Minimum 1. |
-| `connectTimeoutMs?` | `number` | `200000` | Per-attempt deadline for DNS/TCP/TLS and response headers. |
+| `connectTimeoutMs?` | `number` | `200000` | Per-attempt deadline for DNS/TCP/TLS and final response headers only; it ends before response-body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise `supports_websockets` so Codex uses the Responses WebSocket path. Omit or set `false` to keep HTTP/SSE. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Additional generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Managed by the dashboard; entry fields are listed below. |
@@ -246,7 +246,14 @@ with those explicit additions, or set it to `false` to expose only `models`.
 | `model?` | `string` | `gpt-5.6-luna` | The sidecar model running real `web_search` (must be a native ChatGPT model). Explicit legacy `gpt-5.4-mini` values are migrated on start. |
 | `reasoning?` | `string` | `low` | Reasoning effort for the sidecar (`minimal` is rejected with web search). |
 | `maxSearchesPerTurn?` | `number` | `3` | Total real searches per main-model turn (loop guard). |
-| `timeoutMs?` | `number` | `200000` | Sidecar fetch timeout. |
+| `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only continuous raw response-byte inactivity deadline for each routed-model iteration. Must be an integer from `1` through `2147483647`; every non-empty response-body chunk resets it. |
+| `timeoutMs?` | `number` | `200000` | Separate deadline for one hosted web-search request. |
+
+The web-search path has four clocks: the base bridge event-stall budget (`stallTimeoutSec`), the
+DNS/TCP/TLS/final-header budget (`connectTimeoutMs`), routed-model raw-byte inactivity
+(`routedModelStallTimeoutMs`), and one hosted search (`timeoutMs`). Its effective bridge watchdog is
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 seconds`. The routed
+stall is an inactivity guard, not a total generation timeout.
 
 ### `visionSidecar` (`OcxVisionSidecarConfig`)
 
@@ -285,7 +292,11 @@ with those explicit additions, or set it to `false` to expose only `models`.
   "subagentModels": ["anthropic/claude-opus-4-8", "ollama-cloud/glm-5.2"],
   "disabledModels": [],
   "websockets": false,
-  "webSearchSidecar": { "maxSearchesPerTurn": 3 },
+  "webSearchSidecar": {
+    "maxSearchesPerTurn": 3,
+    "routedModelStallTimeoutMs": 200000,
+    "timeoutMs": 200000
+  },
   "visionSidecar": { "enabled": true }
 }
 ```

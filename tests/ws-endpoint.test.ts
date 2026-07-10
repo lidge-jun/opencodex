@@ -41,6 +41,8 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(source).toContain("const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;");
     expect(source).toContain("websocket: {");
     expect(source).toContain("idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,");
+    expect(source).toContain("finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {");
+    expect(source).toContain("if (!logged) finalizeLog(turnAbort.signal.aborted ? 499 : response.status);");
   });
 
   test("generate=false warmup completes locally without upstream and forces full next request", () => {

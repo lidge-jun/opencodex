@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
-import { fetchVertexWithRetry } from "../src/adapters/google-http";
+import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "../src/adapters/google-http";
 import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../src/adapters/google-errors";
 
 const realFetch = globalThis.fetch;
@@ -30,6 +30,37 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  test("successful response bodies survive beyond the response-header timeout", async () => {
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      async start(controller) {
+        await Bun.sleep(20);
+        controller.enqueue(new TextEncoder().encode("late body"));
+        controller.close();
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const res = await fetchVertexWithRetry(request, { timeoutMs: 1 });
+    expect(await res.text()).toBe("late body");
+  });
+
+  test("parent abort after headers still cancels the returned body", async () => {
+    const parent = new AbortController();
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000, abortSignal: parent.signal });
+    const read = res.body!.getReader().read();
+    const reason = new DOMException("client closed", "AbortError");
+    parent.abort(reason);
+    await expect(read).rejects.toBe(reason);
+  });
+
   test("retries 503 then returns the successful response", async () => {
     const mock = mockFetch([
       new Response(vertexError(503, "UNAVAILABLE", "overloaded"), { status: 503, headers: { "Retry-After": "0" } }),
@@ -39,6 +70,33 @@ describe("vertex retry fetch", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
     expect(mock.calls).toHaveLength(2);
+  });
+
+  test("retries without waiting for retryable response body cancellation", async () => {
+    const first = new Response("overloaded", { status: 503, headers: { "Retry-After": "0" } });
+    const neverSettles = new Promise<void>(() => {});
+    let rejectionObserved = false;
+    const originalCatch = neverSettles.catch.bind(neverSettles);
+    Object.defineProperty(neverSettles, "catch", {
+      value: (onRejected: (reason: unknown) => unknown) => {
+        rejectionObserved = true;
+        return originalCatch(onRejected);
+      },
+    });
+    Object.defineProperty(first.body!, "cancel", {
+      value: () => neverSettles,
+    });
+    const mock = mockFetch([first, new Response("ok", { status: 200 })]);
+
+    const res = await Promise.race([
+      fetchVertexWithRetry(request, { timeoutMs: 5_000 }),
+      Bun.sleep(250).then(() => { throw new Error("retry waited for response body cancellation"); }),
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(2);
+    expect(rejectionObserved).toBe(true);
   });
 
   test("retries a thrown network error then succeeds", async () => {
@@ -73,6 +131,36 @@ describe("vertex retry fetch", () => {
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Vertex AI invalid request");
     expect(mock.calls).toHaveLength(1);
+  });
+
+  test("raw mode preserves final error body and headers without normalization", async () => {
+    const raw = vertexError(400, "INVALID_ARGUMENT", "provider-private-detail");
+    const mock = mockFetch([new Response(raw, { status: 400, headers: { "x-provider-error": "raw" } })]);
+    const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
+    expect(res.headers.get("x-provider-error")).toBe("raw");
+    expect(await res.text()).toBe(raw);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("raw quota errors keep bounded retry counts without body peeking", async () => {
+    const raw = vertexError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for billing");
+    const mock = mockFetch([
+      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
+      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
+      new Response(raw, { status: 429, headers: { "Retry-After": "0", "x-final": "yes" } }),
+    ]);
+    const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
+    expect(mock.calls).toHaveLength(3);
+    expect(res.headers.get("x-final")).toBe("yes");
+    expect(await res.text()).toBe(raw);
+  });
+
+  test("Antigravity normal mode retains classified redacted errors", async () => {
+    mockFetch([new Response(vertexError(400, "INVALID_ARGUMENT", "bad Authorization: Bearer secret-token"), { status: 400 })]);
+    const res = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+    const text = await res.text();
+    expect(text).toContain("Antigravity invalid request");
+    expect(text).not.toContain("secret-token");
   });
 
   test("does not retry 401/403 (single attempt)", async () => {
@@ -127,6 +215,22 @@ describe("adapter fetchResponse wiring", () => {
     const vertex = createGoogleAdapter({ adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as never);
     const aistudio = createGoogleAdapter({ adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "k" } as never);
     expect(typeof vertex.fetchResponse).toBe("function");
+    expect(typeof vertex.formatErrorBody).toBe("function");
     expect(aistudio.fetchResponse).toBeUndefined();
+    expect(aistudio.formatErrorBody).toBeUndefined();
+  });
+
+  test("Vertex and Antigravity formatter hooks are provider-classified and leak-negative", async () => {
+    const { createGoogleAdapter } = await import("../src/adapters/google");
+    const payload = vertexError(400, "INVALID_ARGUMENT", "Bearer secret-token at /Users/example/key.json");
+    const vertex = createGoogleAdapter({ adapter: "google", googleMode: "vertex" } as never);
+    const antigravity = createGoogleAdapter({ adapter: "google", googleMode: "cloud-code-assist" } as never);
+    for (const [adapter, label] of [[vertex, "Vertex AI"], [antigravity, "Antigravity"]] as const) {
+      const text = adapter.formatErrorBody!(400, new Headers({ authorization: "Bearer header-secret" }), payload);
+      expect(text).toContain(`${label} invalid request`);
+      expect(text).not.toContain("secret-token");
+      expect(text).not.toContain("header-secret");
+      expect(text).not.toContain("/Users/example/key.json");
+    }
   });
 });

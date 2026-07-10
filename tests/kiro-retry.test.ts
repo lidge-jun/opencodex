@@ -106,11 +106,47 @@ describe("kiro retry fetch", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  test("retries without waiting for retryable response body cancellation", async () => {
+    const first = new Response("temporarily unavailable", { status: 503, headers: { "Retry-After": "0" } });
+    const neverSettles = new Promise<void>(() => {});
+    let rejectionObserved = false;
+    const originalCatch = neverSettles.catch.bind(neverSettles);
+    Object.defineProperty(neverSettles, "catch", {
+      value: (onRejected: (reason: unknown) => unknown) => {
+        rejectionObserved = true;
+        return originalCatch(onRejected);
+      },
+    });
+    Object.defineProperty(first.body!, "cancel", {
+      value: () => neverSettles,
+    });
+    const mock = mockFetch([first, new Response("ok", { status: 200 })]);
+
+    const res = await Promise.race([
+      fetchKiroWithRetry(request, { timeoutMs: 5_000 }),
+      Bun.sleep(250).then(() => { throw new Error("retry waited for response body cancellation"); }),
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(2);
+    expect(rejectionObserved).toBe(true);
+  });
+
   test("does not retry non-retryable 400", async () => {
     const mock = mockFetch([new Response("bad request", { status: 400 })]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Kiro invalid request");
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("raw mode preserves final error body and headers without normalization", async () => {
+    const raw = JSON.stringify({ __type: "ValidationException", message: "provider-private-detail" });
+    const mock = mockFetch([new Response(raw, { status: 400, headers: { "x-provider-error": "raw" } })]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
+    expect(res.headers.get("x-provider-error")).toBe("raw");
+    expect(await res.text()).toBe(raw);
     expect(mock.calls).toHaveLength(1);
   });
 
@@ -161,5 +197,19 @@ describe("kiro retry fetch", () => {
     ac.abort(new DOMException("client closed", "AbortError"));
     await expect(fetchKiroWithRetry(request, { abortSignal: ac.signal, timeoutMs: 5_000 })).rejects.toThrow();
     expect(mock.calls).toHaveLength(0);
+  });
+});
+
+describe("kiro adapter error formatter", () => {
+  test("is classified, redacted, and does not copy secret headers", async () => {
+    const { createKiroAdapter } = await import("../src/adapters/kiro");
+    const adapter = createKiroAdapter({ adapter: "kiro", apiKey: "unused" } as never);
+    const text = adapter.formatErrorBody!(403, new Headers({
+      authorization: "Bearer header-secret",
+    }), JSON.stringify({ __type: "AccessDeniedException", message: "expired Bearer payload-secret at /Users/example/key.json" }));
+    expect(text).toContain("Kiro authentication failed");
+    expect(text).not.toContain("header-secret");
+    expect(text).not.toContain("payload-secret");
+    expect(text).not.toContain("/Users/example/key.json");
   });
 });

@@ -138,20 +138,175 @@ function hangUntilAbort(ctx?: AdapterFetchContext): Promise<Response> {
   });
 }
 
-/** Adapter whose first non-stream pass returns the events, and every later (forceAnswer) pass a text answer. */
+/** Adapter whose first streamed pass returns the events, and every later (forceAnswer) pass a text answer. */
 function scriptedAdapter(firstPass: AdapterEvent[]): ProviderAdapter {
   let pass = 0;
   return {
     name: "mock",
     buildRequest: () => ({ url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" }),
-    async *parseStream() { /* unused */ },
+    async *parseStream() {
+      const events: AdapterEvent[] = pass++ === 0
+        ? firstPass
+        : [{ type: "text_delta", text: "final answer" }, { type: "done" }];
+      for (const event of events) yield event;
+      if (!events.some(event => event.type === "done" || event.type === "error")) {
+        yield { type: "done" };
+      }
+    },
     async parseResponse() {
-      pass++;
-      if (pass === 1) return firstPass;
-      return [{ type: "text_delta", text: "final answer" }, { type: "done" }];
+      throw new Error("parseResponse must be unreachable");
     },
   };
 }
+
+describe("BUG-R86 routed web-search timeout semantics", () => {
+  test("routed iterations use upstream streaming and never call parseResponse", async () => {
+    const seenStream: boolean[] = [];
+    let parseStreamCalls = 0;
+    let parseResponseCalls = 0;
+    const adapter: ProviderAdapter = {
+      name: "stream-only",
+      buildRequest(parsed) {
+        seenStream.push(parsed.stream);
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        parseStreamCalls++;
+        yield { type: "text_delta", text: "healthy" };
+        yield { type: "done" };
+      },
+      async parseResponse() {
+        parseResponseCalls++;
+        throw new Error("parseResponse must be unreachable");
+      },
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+    expect(seenStream).toEqual([true]);
+    expect(parseStreamCalls).toBe(1);
+    expect(parseResponseCalls).toBe(0);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+  });
+
+  test("fast headers plus raw byte progress can outlive connectTimeoutMs", async () => {
+    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    let bodyCancelled = 0;
+    const adapter: ProviderAdapter = {
+      name: "slow-healthy-stream",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async (_request, ctx) => {
+        const body = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            for (const chunk of ["a", "b", "c", "d", "e"]) {
+              await delay(12);
+              if (ctx?.abortSignal?.aborted) {
+                controller.error(ctx.abortSignal.reason);
+                return;
+              }
+              controller.enqueue(encoder.encode(chunk));
+            }
+            controller.close();
+          },
+          cancel() { bodyCancelled++; },
+        });
+        return new Response(body, { status: 200 });
+      },
+      async *parseStream(response) {
+        expect(await response.text()).toBe("abcde");
+        yield { type: "text_delta", text: "healthy after slow generation" };
+        yield { type: "done" };
+      },
+      async parseResponse(response) {
+        await response.text();
+        return [{ type: "text_delta", text: "legacy non-stream result" }, { type: "done" }];
+      },
+    };
+
+    const started = performance.now();
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+      connectTimeoutMs: 25,
+    });
+
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(50);
+    expect(bodyCancelled).toBe(0);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+  }, 1_000);
+
+  test("a buffered web_search followed by error never dispatches the hosted sidecar", async () => {
+    let sidecarCalls = 0;
+    globalThis.fetch = (async () => {
+      sidecarCalls++;
+      return new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"must not run"}\n\n'
+          + 'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
+
+    let streamPass = 0;
+    let responsePass = 0;
+    const badPass: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_bad", name: "web_search" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ query: "must not run" }) },
+      { type: "tool_call_end" },
+      { type: "error", message: "routed model failed" },
+    ];
+    const finalPass: AdapterEvent[] = [
+      { type: "text_delta", text: "fallback answer" },
+      { type: "done" },
+    ];
+    const adapter: ProviderAdapter = {
+      name: "search-then-error",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        const events = streamPass++ === 0 ? badPass : finalPass;
+        for (const event of events) yield event;
+      },
+      async parseResponse() {
+        return responsePass++ === 0 ? badPass : finalPass;
+      },
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+    expect(sidecarCalls).toBe(0);
+    expect(frames.filter(frame => frame.event === "response.failed")).toHaveLength(1);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+});
 
 describe("web-search sidecar native web_search_call emission", () => {
   test("loop 429 triggers on429 rotation and succeeds with the rebuilt adapter", async () => {
@@ -172,8 +327,11 @@ describe("web-search sidecar native web_search_call emission", () => {
       name: "mock-rotated",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
       fetchResponse: async () => new Response("{}", { status: 200 }),
-      async *parseStream() { /* unused */ },
-      async parseResponse() { return [{ type: "text_delta", text: "answer from rotated key" }, { type: "done" }] as AdapterEvent[]; },
+      async *parseStream() {
+        yield { type: "text_delta", text: "answer from rotated key" };
+        yield { type: "done" };
+      },
+      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
     };
     let rotations = 0;
 
@@ -315,9 +473,9 @@ describe("web-search sidecar native web_search_call emission", () => {
 
     const response = await pending;
     expect(iterationSignal.aborted).toBe(true);
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(499);
     const body = await response.json() as { error?: { message?: string } };
-    expect(body.error?.message ?? "").toContain("superseded");
+    expect(body.error?.message).toBe("client closed request during web-search");
   }, 1_000);
 
   test("signed thinking before a web_search call survives into the replayed assistant turn", async () => {
@@ -339,21 +497,24 @@ describe("web-search sidecar native web_search_call emission", () => {
         seenBodies.push(p.context.messages);
         return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
       },
-      async *parseStream() { /* unused */ },
-      async parseResponse() {
+      async *parseStream() {
         pass++;
         if (pass === 1) {
-          return [
+          const events: AdapterEvent[] = [
             { type: "thinking_delta", thinking: "I should search" },
             { type: "thinking_signature", signature: "RealSig1234567890==" },
             { type: "tool_call_start", id: "call_t", name: "web_search" },
             { type: "tool_call_delta", arguments: JSON.stringify({ query: "docs" }) },
             { type: "tool_call_end" },
             { type: "done" },
-          ] as AdapterEvent[];
+          ];
+          for (const event of events) yield event;
+          return;
         }
-        return [{ type: "text_delta", text: "final" }, { type: "done" }] as AdapterEvent[];
+        yield { type: "text_delta", text: "final" };
+        yield { type: "done" };
       },
+      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
     };
 
     const response = await runWithWebSearch({
@@ -455,12 +616,16 @@ function capturingAdapter(firstPass: AdapterEvent[]): { adapter: ProviderAdapter
       messagesPerPass.push(parsed.context.messages);
       return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
     },
-    async *parseStream() { /* unused */ },
-    async parseResponse() {
-      pass++;
-      if (pass === 1) return firstPass;
-      return [{ type: "text_delta", text: "final answer" }, { type: "done" }];
+    async *parseStream() {
+      const events: AdapterEvent[] = pass++ === 0
+        ? firstPass
+        : [{ type: "text_delta", text: "final answer" }, { type: "done" }];
+      for (const event of events) yield event;
+      if (!events.some(event => event.type === "done" || event.type === "error")) {
+        yield { type: "done" };
+      }
     },
+    async parseResponse() { throw new Error("parseResponse must be unreachable"); },
   };
   return { adapter, messagesPerPass };
 }
@@ -899,7 +1064,10 @@ describe("web-search stall deadline", () => {
     expect(planWebSearch(config({ stallTimeoutSec: 600 }), parsed, false, auth, routedProvider, "model")?.stallTimeoutSec).toBe(630);
     // small unit budgets -> the bridge's 90s default dominates
     expect(planWebSearch(
-      config({ connectTimeoutMs: 30_000, webSearchSidecar: { timeoutMs: 30_000 } }),
+      config({
+        connectTimeoutMs: 30_000,
+        webSearchSidecar: { timeoutMs: 30_000, routedModelStallTimeoutMs: 30_000 },
+      }),
       parsed, false, auth, routedProvider, "model",
     )?.stallTimeoutSec).toBe(120);
   });

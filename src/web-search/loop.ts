@@ -3,9 +3,11 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, Ocx
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
-import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
+import { clearableDeadline } from "../lib/abort";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { formatWebSearchResults } from "./format-result";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 const SSE_HEADERS = {
@@ -168,13 +170,14 @@ export interface WebSearchLoopDeps {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
-  /** Per-iteration deadline for routed model calls (mirrors the normal path's connectTimeoutMs). */
+  /** Cumulative per-iteration deadline for DNS/TCP/TLS and final response headers only. */
   connectTimeoutMs?: number;
+  /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
+  routedModelStallTimeoutMs?: number;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
-   * (webSearchStallTimeoutSec) to cover the loop's bounded silent units — a non-streaming model
-   * iteration (connectTimeoutMs) or one sidecar search (settings.timeoutMs) — so a legitimately
-   * slow-but-bounded unit never trips the bridge's 90s default upstream_stall_timeout.
+   * (webSearchStallTimeoutSec) to cover response-header wait, routed-model body inactivity, and one
+   * sidecar search, so a legitimately slow-but-progressing unit never trips the bridge watchdog.
    */
   stallTimeoutSec?: number;
   /**
@@ -185,16 +188,15 @@ export interface WebSearchLoopDeps {
 }
 
 /**
- * Run the main (non-OpenAI) model in a small agentic loop. Each iteration is a NON-streaming adapter
- * call; if the model invokes web_search, run it via the gpt-mini sidecar, inject the answer as a
- * tool_result, and loop (bounded by `maxSearches`). Otherwise bridge the final events to Codex as a
- * streamed Responses SSE. web_search calls are executed internally and never relayed to Codex.
+ * Run the main (non-OpenAI) model in a small agentic loop. Each upstream iteration is streamed and
+ * fully buffered internally so raw byte progress is observable without leaking a synthetic tool or
+ * preliminary assistant output. If the model invokes web_search, run it via the hosted sidecar,
+ * inject the answer as a tool_result, and loop (bounded by `maxSearches`).
  */
 export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Response> {
   const { parsed, selectedForwardHeaders, forwardProvider, hostedTool, settings, maxSearches, abortSignal, recordSidecarOutcome } = deps;
   // Mutable: 429 key-failover (deps.on429) can swap in a rebuilt adapter mid-loop.
   let adapter = deps.adapter;
-  if (!adapter.parseResponse) return jsonError(500, "web-search sidecar requires a non-streaming adapter");
 
   const messages: OcxMessage[] = [...parsed.context.messages];
   const loopT0 = Date.now();
@@ -221,16 +223,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   const HARD_CAP = maxSearches + 2;
+  const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
+  const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
 
-  // Run one model iteration: build the request, fetch it, parse to adapter events. RETURNS the
-  // scanned split (generator return value, not a yield). Throws `LoopError` on a hard
-  // provider/parse failure so the EAGER first call can turn it into a non-200 jsonError
-  // (preserving the status contract), while later iterations — already inside the 200 SSE —
-  // surface it as an in-stream error event. A generator so the 429 key-failover loop can YIELD a
-  // heartbeat between bounded retry fetches: the iteration-wide AbortSignal.timeout bounds the
-  // plain-fetch path, but adapters with their own fetchResponse timeout handling could otherwise
-  // chain silent retries past the bridge stall deadline.
-  const runIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, { calls: WebSearchCall[]; passthrough: AdapterEvent[]; hasRealToolCall: boolean }> {
+  interface IterationResponse {
+    response: Response;
+    responseAdapter: ProviderAdapter;
+  }
+  type IterationSplit = ReturnType<typeof scanEventsForWebSearch>;
+
+  // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
+  // connect/header/HTTP failure stays a non-2xx JSON response. Its successful BODY is deliberately
+  // left unread until the downstream Responses SSE bridge exists.
+  const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
     // On the forced-answer pass the synthetic web_search tool is gone, so the model MUST answer
     // from the results already in `messages`. A weak model can still produce a thin answer that
     // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
@@ -240,82 +245,126 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ? [...messages, forcedAnswerNudge()]
       : messages;
     const iterParsed: OcxParsedRequest = {
-      ...parsed, stream: false,
+      ...parsed, stream: true,
       context: { ...parsed.context, messages: iterMessages, tools: forceAnswer ? toolsNoWebSearch : allTools },
     };
-    // Per-iteration deadline: routed calls elsewhere carry connectTimeoutMs; without it a hung
-    // upstream would stall the whole loop until the client gives up.
-    const iterationTimeout = deps.connectTimeoutMs
-      ? signalWithTimeout(deps.connectTimeoutMs, signal)
-      : null;
-    const iterationSignal = iterationTimeout?.signal ?? signal;
+    // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
+    // clear() stops only its timer after final headers; the direct turn signal remains attached to
+    // the returned response body through AbortSignal.any().
+    const headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     try {
-      const fetchOnce = async (): Promise<Response> => {
-        const request = await adapter.buildRequest(iterParsed, { headers: selectedForwardHeaders });
-        try {
-          return adapter.fetchResponse
-            ? await adapter.fetchResponse(request, { abortSignal: iterationSignal, ...(deps.connectTimeoutMs ? { timeoutMs: deps.connectTimeoutMs } : {}) })
-            : await fetchWithResetRetry(
-                () => fetch(request.url, {
-                  method: request.method,
-                  headers: request.headers,
-                  body: request.body,
-                  signal: iterationSignal,
-                }),
-                { abortSignal: iterationSignal, label: "web-search-loop" },
-              );
-        } catch (e) {
-          if (!signal.aborted && iterationSignal.aborted) {
-            throw new LoopError(504, `Provider timeout after ${deps.connectTimeoutMs}ms during web-search`);
-          }
-          throw new LoopError(502, `Provider unreachable: ${e instanceof Error ? e.message : String(e)}`);
-        }
+      const fetchOnce = async (requestAdapter: ProviderAdapter): Promise<IterationResponse> => {
+        const request = await requestAdapter.buildRequest(iterParsed, {
+          headers: selectedForwardHeaders,
+          abortSignal: headerDeadline.signal,
+        });
+        const response = requestAdapter.fetchResponse
+          ? await requestAdapter.fetchResponse(request, {
+              abortSignal: headerDeadline.signal,
+              timeoutMs: connectTimeoutMs,
+              returnRawErrors: true,
+            })
+          : await fetchWithResetRetry(
+              () => fetch(request.url, {
+                method: request.method,
+                headers: request.headers,
+                body: request.body,
+                signal: headerDeadline.signal,
+              }),
+              { abortSignal: headerDeadline.signal, label: "web-search-loop" },
+            );
+        return { response, responseAdapter: requestAdapter };
       };
-      let resp = await fetchOnce();
+
+      let prepared = await fetchOnce(adapter);
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
-      while (resp.status === 429 && deps.on429) {
-        const rotated = deps.on429(resp.headers.get("retry-after"));
-        if (!rotated?.parseResponse) break;
-        try { void resp.body?.cancel(); } catch { /* already consumed */ }
+      while (prepared.response.status === 429 && deps.on429) {
+        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+        if (!rotated) break;
+        // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
+        // it, but proceed immediately to the rotated fetch under the SAME deadline signal.
+        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
-        resp = await fetchOnce();
+        prepared = await fetchOnce(adapter);
       }
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => "");
-        throw new LoopError(resp.status, `Provider error ${resp.status}: ${t.slice(0, 400)}`);
+
+      // Final headers have arrived. Clear only the deadline timer before ANY body read.
+      headerDeadline.clear();
+      if (!prepared.response.ok) {
+        let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
+        try {
+          body = await readBoundedResponseBody(prepared.response, { signal });
+        } catch {
+          // The response status is authoritative even when its untrusted error body fails while
+          // being read (including a synchronous getReader() failure). Never route that failure
+          // through the adapter formatter or the generic transport error, which could expose its
+          // raw message. A parent/client cancellation still owns the request lifecycle as 499.
+          if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
+        }
+        let formatted = "";
+        if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
+          try {
+            formatted = prepared.responseAdapter.formatErrorBody(
+              prepared.response.status,
+              prepared.response.headers,
+              body.text,
+            ).trim();
+          } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
+        }
+        const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
+        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
       }
-      // The fetch above carries `signal`; when the turn is superseded/cancelled, Bun aborts the
-      // response body stream. If parseResponse hasn't attached a reader yet, the body's pending read is
-      // orphaned off the awaited path and surfaces as `unhandledRejection: TypeError: null is not an
-      // object` (native-only stack). Proactively cancel the body on abort so WE settle it, and guard
-      // the drain so a mid-decode abort/stream error ends cleanly instead of throwing.
-      const detachBodyGuard = cancelBodyOnAbort(resp.body, signal);
-      let events: AdapterEvent[];
-      try {
-        events = await adapter.parseResponse!(resp);
-      } catch (e) {
-        await resp.body?.cancel().catch(() => {});
-        if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-        throw new LoopError(502, `Provider stream error: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        detachBodyGuard();
+      return prepared;
+    } catch (error) {
+      if (headerDeadline.didExpire()) {
+        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
-      return scanEventsForWebSearch(events);
+      if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      if (error instanceof LoopError) throw error;
+      throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      iterationTimeout?.cleanup();
+      headerDeadline.clear();
     }
   };
 
-  // Drain an iteration OUTSIDE the bridge (eager first call): the stall deadline is not armed
-  // before bridgeToResponsesSSE exists, so seam heartbeats have nowhere to go — discard them.
-  const runIterationDrained = async (forceAnswer: boolean): Promise<{ calls: WebSearchCall[]; passthrough: AdapterEvent[]; hasRealToolCall: boolean }> => {
-    const it = runIterationEvents(forceAnswer);
+  const prepareIterationDrained = async (forceAnswer: boolean): Promise<IterationResponse> => {
+    const it = prepareIterationEvents(forceAnswer);
     let r = await it.next();
     while (!r.done) r = await it.next();
     return r.value;
+  };
+
+  // Consume and validate one successful response body under a resettable raw-byte inactivity guard.
+  // Only invisible heartbeat events escape while semantic output remains buffered for safe scanning.
+  const consumeIterationEvents = async function* (prepared: IterationResponse): AsyncGenerator<AdapterEvent, IterationSplit> {
+    const events: AdapterEvent[] = [];
+    try {
+      const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
+      for await (const event of parseStreamWithProgress(prepared.response, parse, {
+        signal,
+        inactivityTimeoutMs: routedModelStallTimeoutMs,
+      })) {
+        if (event.type === "heartbeat") yield event;
+        else events.push(event);
+      }
+    } catch (error) {
+      if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
+      throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const terminalIndexes = events.flatMap((event, index) => event.type === "done" || event.type === "error" ? [index] : []);
+    if (terminalIndexes.length !== 1 || terminalIndexes[0] !== events.length - 1) {
+      throw new LoopError(502, `Web-search adapter stream protocol error: expected one final terminal event, received ${terminalIndexes.length}`);
+    }
+    const terminal = events[terminalIndexes[0]!];
+    if (terminal.type === "error") throw new LoopError(502, terminal.message);
+    return scanEventsForWebSearch(events);
   };
 
   // Execute one model-requested web_search call. The call may batch several queries (native
@@ -403,11 +452,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     }
   }
 
-  // Eagerly run the FIRST iteration so a hard provider failure becomes a non-200 jsonError before any
-  // streaming starts (the status contract Codex relies on). Later iterations run live inside the SSE.
-  let first: { calls: WebSearchCall[]; passthrough: AdapterEvent[]; hasRealToolCall: boolean };
+  // Eagerly acquire only the FIRST iteration's final headers so connect/header/HTTP failures remain
+  // non-2xx JSON. A successful body is consumed inside the bridge, where byte progress can keep the
+  // downstream turn alive and body failures are correctly in-stream.
+  let firstPrepared: IterationResponse;
   try {
-    first = await runIterationDrained(false);
+    firstPrepared = await prepareIterationDrained(false);
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     if (e instanceof LoopError) return jsonError(e.status, e.message);
@@ -427,44 +477,47 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // real sidecar timing, the final answer's passthrough events come last — matching native ordering
   // (search cell BEFORE the assistant message). Iteration 2+ failures surface as an in-stream error.
   async function* produce(): AsyncGenerator<AdapterEvent> {
-    let split = first;
-    for (let i = 0; i < HARD_CAP; i++) {
-      const forceAnswer = searchesExecuted >= maxSearches;
-      // First loop turn reuses the eager result; subsequent turns run a fresh iteration here.
-      if (i > 0) {
+    let prepared = firstPrepared;
+    try {
+      for (let i = 0; i < HARD_CAP; i++) {
+        const forceAnswer = searchesExecuted >= maxSearches;
         try {
-          // Stall-watchdog seam before each in-stream iteration (placeholder search turns emit no
-          // cell, so consecutive non-streaming iterations would otherwise be one silent span).
-          yield { type: "heartbeat" };
-          // Delegate so seam heartbeats reach the bridge, the scanned split returns here, and an
-          // outer consumer close propagates into the iteration generator's cleanup.
-          split = yield* runIterationEvents(forceAnswer);
+          // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
+          if (i > 0) {
+            yield { type: "heartbeat" };
+            prepared = yield* prepareIterationEvents(forceAnswer);
+          }
+          // Raw-byte progress heartbeats reach the bridge; semantic events remain buffered.
+          const split = yield* consumeIterationEvents(prepared);
+
+          // Loop (search + re-ask) ONLY when the model's actionable output is purely web_search. A real
+          // tool call (e.g. shell/apply_patch) means this turn is terminal for Codex — finalize so those
+          // calls reach Codex. forceAnswer also finalizes.
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+          if (!shouldLoop) {
+            if (executedSearchCount > 0) {
+              const failedCount = failedQueries.size;
+              console.warn(
+                `[web-search-loop] done — ${executedSearchCount} search${executedSearchCount > 1 ? "es" : ""}`
+                + (failedCount > 0 ? ` (${failedCount} failed)` : "")
+                + `, ${i + 1} iteration${i > 0 ? "s" : ""}, ${Date.now() - loopT0}ms`,
+              );
+            }
+            yield* replay(split.passthrough);
+            return;
+          }
+          // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
+          const iterationThinking = extractIterationThinking(split.passthrough);
+          for (const [callIndex, call] of split.calls.entries()) {
+            yield* runSearchCall(call, callIndex === 0 ? iterationThinking : null);
+          }
         } catch (e) {
           yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
           return;
         }
       }
-      // Loop (search + re-ask) ONLY when the model's actionable output is purely web_search. A real
-      // tool call (e.g. shell/apply_patch) means this turn is terminal for Codex — finalize so those
-      // calls reach Codex. forceAnswer also finalizes.
-      const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
-     if (!shouldLoop) {
-        if (executedSearchCount > 0) {
-          const failedCount = failedQueries.size;
-          console.warn(
-            `[web-search-loop] done — ${executedSearchCount} search${executedSearchCount > 1 ? "es" : ""}`
-            + (failedCount > 0 ? ` (${failedCount} failed)` : "")
-            + `, ${i + 1} iteration${i > 0 ? "s" : ""}, ${Date.now() - loopT0}ms`,
-          );
-        }
-        yield* replay(split.passthrough);
-        return;
-      }
-      // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
-      const iterationThinking = extractIterationThinking(split.passthrough);
-      for (const [callIndex, call] of split.calls.entries()) {
-        yield* runSearchCall(call, callIndex === 0 ? iterationThinking : null);
-      }
+    } finally {
+      if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
   }
 

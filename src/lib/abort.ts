@@ -3,6 +3,46 @@ export interface LinkedAbortSignal {
   cleanup: () => void;
 }
 
+export interface ClearableDeadline {
+  /** Parent-linked signal passed to fetch; remains parent-linked after clear(). */
+  signal: AbortSignal;
+  /** Stable reason object used when this deadline wins the abort race. */
+  timeoutReason: DOMException;
+  /** True only when this deadline, rather than the parent, fired first. */
+  didExpire: () => boolean;
+  /** Clear only the timer. Never aborts the deadline controller or detaches the parent. */
+  clear: () => void;
+}
+
+/**
+ * Response-header deadline whose timer can be cleared without severing body-lifetime cancellation.
+ *
+ * `signalWithTimeout().cleanup()` intentionally removes its parent listener and is therefore suited
+ * to operations that are completely finished at cleanup. A fetch response body is different: once
+ * headers arrive the deadline ends, but the original parent/client signal must remain attached to
+ * the body. `AbortSignal.any()` supplies that direct lifetime link while `clear()` owns only the
+ * timer.
+ */
+export function clearableDeadline(timeoutMs: number, parent?: AbortSignal): ClearableDeadline {
+  const deadline = new AbortController();
+  const timeoutReason = new DOMException("Timeout elapsed", "TimeoutError");
+  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+    timer = undefined;
+    if (!deadline.signal.aborted) deadline.abort(timeoutReason);
+  }, timeoutMs);
+  const signal = parent ? AbortSignal.any([parent, deadline.signal]) : deadline.signal;
+
+  return {
+    signal,
+    timeoutReason,
+    didExpire: () => signal.aborted && signal.reason === timeoutReason,
+    clear: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
+}
+
 export function signalWithTimeout(timeoutMs: number, parent?: AbortSignal): LinkedAbortSignal {
   const controller = new AbortController();
   const timeout = setTimeout(() => {

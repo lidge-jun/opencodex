@@ -10,6 +10,12 @@ export interface ProviderAdapter {
   name: string;
 
   /**
+   * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
+   * return fully redacted output: callers may pass untrusted provider headers and payload text.
+   */
+  formatErrorBody?(status: number, headers: Headers, payloadText: string): string;
+
+  /**
    * Build the upstream request. May be async: adapters that resolve a short-lived credential
    * (e.g. Vertex AI ADC token) return a Promise. Sync adapters return the object directly; callers
    * must `await` the result (awaiting a non-Promise is a no-op).
@@ -39,6 +45,10 @@ export interface AdapterRequest {
 }
 
 export interface AdapterFetchContext {
+  /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
+  /** Deadline for receiving response headers on each attempt, not for consuming the response body. */
   timeoutMs?: number;
+  /** Return final non-2xx responses untouched so the caller can own the error-body read. */
+  returnRawErrors?: boolean;
 }

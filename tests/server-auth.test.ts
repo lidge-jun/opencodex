@@ -1026,9 +1026,9 @@ describe("server local API auth", () => {
 
     const server = startServer(0);
     try {
-      // codex-rs endpoint clients (alpha/search, images/*, memories/*) must get a clean 404
+      // codex-rs endpoint clients for unsupported paths must get a clean 404
       // instead of a 200 HTML page that fails serde with a confusing decode error.
-      for (const path of ["/v1/alpha/search", "/v1/images/generations", "/v1/memories/trace_summarize"]) {
+      for (const path of ["/v1/alpha/search", "/v1/images/variations", "/v1/memories/trace_summarize"]) {
         const response = await fetch(new URL(path, server.url), { method: "POST" });
         expect(response.status).toBe(404);
         expect(response.headers.get("content-type")).toContain("application/json");

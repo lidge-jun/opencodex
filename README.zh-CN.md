@@ -102,6 +102,7 @@ npm install -g @bitkyc08/opencodex   # 不要加 --ignore-scripts、--omit=optio
 - **委派给合适的模型。** 在仪表盘或 config 中把最多 5 个路由/原生模型放进 Codex 的 subagent 选择器 —— 复杂任务交给 reasoning 模型，快速任务交给便宜模型。在 v2 多智能体表面（GPT-5.6 Sol/Terra）上，代理会注入精简的委派指引：首选子智能体模型与 effort（`injectionModel` / `injectionEffort`）、featured 模型清单及各自支持的 effort 阶梯，以及让跨模型 `spawn_agent` 调用真正生效的 `fork_turns` 规则。想自定义文案，可在 `injectionPrompt` 中使用 `{{model}}` / `{{effort}}` / `{{roster}}` 占位符。
 - **为 preview-gated OpenAI rollout 做好准备。** GPT-5.6 Sol/Terra/Luna 条目采用与 upstream 完全一致的规格（Sol/Terra 到 `ultra`，Luna 到 `max`；372k 可用上下文），覆盖 ChatGPT passthrough、OpenAI API key 和 OpenRouter 路由。
 - **给任意模型超能力。** 非 OpenAI 模型也能通过你的 ChatGPT 登录上运行的 `gpt-5.4-mini` sidecar 获得真正的网页搜索和图片理解。
+- **原生生成图片。** Codex 的独立 `image_gen` 工具通过 `POST /v1/images/generations` 生成图片、通过 `POST /v1/images/edits` 编辑图片；它独立于 hosted Responses 的 `image_generation` 工具。
 - **看清正在发生什么。** Web 仪表盘展示 provider、OAuth 状态、模型选择和实时请求日志；当上游返回时，也会包含 cached/cache-write token 计数 —— 不必再猜测请求为何失败。
 - **后台运行。** 安装为系统服务（launchd / systemd / Task Scheduler）后开机自启，无需操心。
 - **干净退出，零残留。** `ocx stop`（或仪表盘的 Stop 按钮）会关闭代理、停止已安装的后台服务，并将 Codex 恢复为原始配置。之后 `codex` 就像从未安装过 opencodex 一样工作 —— 无残留配置，无僵尸进程。
@@ -303,7 +304,7 @@ WebSocket 传输默认关闭。只有当你希望 Codex 使用 Responses WebSock
 
 默认情况下 opencodex 绑定到 `127.0.0.1`（回环）且无需额外认证。
 如果你设置 `"hostname": "0.0.0.0"` 把代理暴露到局域网，opencodex 会要求一个 bearer token 来同时保护管理
-API（`/api/*`）和数据平面（`/v1/responses`）：
+API（`/api/*`）和数据平面（`/v1/responses`、`/v1/images/generations`、`/v1/images/edits`）：
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
@@ -350,8 +351,8 @@ bun x tsc --noEmit   # 类型检查
 ```
 
 `bun run dev` 作为 `bun run dev:proxy` 的别名保留以兼容旧用法。在源码检出中，代理 API 暴露 `/healthz`、
-`/v1/responses`、`/api/*`；只有在 `bun run build:gui` 生成 `gui/dist` 之后，`GET /` 才会提供打包后的仪表盘。
-开发前端时请单独运行：
+`/v1/responses`、`POST /v1/images/generations`、`POST /v1/images/edits`、`/api/*`；只有在
+`bun run build:gui` 生成 `gui/dist` 之后，`GET /` 才会提供打包后的仪表盘。开发前端时请单独运行：
 
 ```bash
 bun run dev:gui

@@ -27,6 +27,10 @@ Sidecar 通过 `forward`（ChatGPT 透传）路径运行，该路径支持托管
    search 工具并强制生成最终答案。如果模型调用 `apply_patch` 或 shell 等真实客户端工具，当前
    turn 会结束，以便这些调用到达 Codex。
 
+路由模型的每次迭代都会向上游请求 `stream: true`，但 opencodex 会在决定搜索还是返回最终答案前，
+在内部完整缓冲所有语义 event。只有第一次迭代的最终 header/status 和 429 key rotation 会被提前
+取得。因此，合成搜索调用和中间输出不会作为模型输出暴露给客户端。
+
 注入结果会包裹在不可信数据边界中，限制长度，并按来源 URL 去重。在结构化输出 turn
 （`json_schema` / `json_object`）中，结果会以紧凑 JSON 而不是普通文本传入。若路由模型是纯文本
 模型，search 模型还会收到指令，用文字描述相关图像并附上来源 URL。
@@ -38,6 +42,7 @@ Sidecar 通过 `forward`（ChatGPT 透传）路径运行，该路径支持托管
     "model": "gpt-5.6-luna",
     "reasoning": "low",
     "maxSearchesPerTurn": 3,
+    "routedModelStallTimeoutMs": 200000,
     "timeoutMs": 200000
   }
 }
@@ -45,6 +50,15 @@ Sidecar 通过 `forward`（ChatGPT 透传）路径运行，该路径支持托管
 
 托管后端不允许在 `minimal` reasoning 下使用工具，因此默认值为 `low`。搜索失败时，路由模型会
 收到长度受限的错误结果，仍可依据已有上下文继续回答。
+
+此路径采用四个相互独立的时钟。`stallTimeoutSec` 是基础 bridge event-stall 预算。
+`connectTimeoutMs`（默认 `200000`）只限制 DNS/TCP/TLS 和最终响应 header。仅可在配置文件中
+设置的 `webSearchSidecar.routedModelStallTimeoutMs`（默认 `200000`，整数
+`1..2147483647`）限制每次路由模型迭代中原始响应 byte 连续无活动的时间，并在收到每个非空 byte
+时重置。`webSearchSidecar.timeoutMs` 独立限制单次托管搜索请求。实际 bridge watchdog 为
+`max(基础 stall, connect timeout, 路由模型 stall, sidecar timeout) + 30 秒`。路由模型 stall
+不是总生成 timeout。SSE 开始前的失败会返回非 2xx JSON；响应 header 开始后发生的生成失败则以
+`response.failed` SSE 传递。
 
 ## Vision sidecar
 

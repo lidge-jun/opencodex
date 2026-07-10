@@ -77,8 +77,8 @@ describe("sidecar abort propagation", () => {
     expect(signal.aborted).toBe(false);
     turn.abort("replacement turn");
     expect(signal.aborted).toBe(true);
-    // The eager first iteration's fetch rejects on abort → non-200 jsonError (status contract).
-    expect((await response).status).toBe(502);
+    // The eager first iteration's fetch rejects on abort → explicit client-close status.
+    expect((await response).status).toBe(499);
   });
 
   test("web-search sidecar fetch observes the WebSocket turn abort signal", async () => {
@@ -146,14 +146,16 @@ describe("sidecar abort propagation", () => {
     const adapter: ProviderAdapter = {
       name: "mock",
       buildRequest: () => ({ url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" }),
-      async *parseStream() { /* unused */ },
-      async parseResponse() {
-        return [
+      async *parseStream() {
+        const events = [
           { type: "tool_call_start", id: "call_1", name: "web_search" },
           { type: "tool_call_delta", id: "call_1", arguments: JSON.stringify({ query: "current docs" }) },
           { type: "tool_call_end", id: "call_1" },
-        ];
+          { type: "done" },
+        ] as const;
+        for (const event of events) yield event;
       },
+      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
     };
 
     const response = await runWithWebSearch({

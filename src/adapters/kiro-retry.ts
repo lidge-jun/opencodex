@@ -1,5 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { safeKiroHttpErrorMessage } from "./kiro-errors";
+import { clearableDeadline } from "../lib/abort";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import { abortError, isConnectionResetError, sleepWithAbort } from "../lib/upstream-retry";
 
 const KIRO_RETRY_ATTEMPTS = 3;
@@ -27,18 +29,28 @@ function retryDelayMs(attempt: number, headers?: Headers): number {
   return Math.floor(exp * (0.8 + Math.random() * 0.4));
 }
 
-function signalWithAttemptTimeout(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return parent ? AbortSignal.any([parent, timeout]) : timeout;
+function cancelResponseBodyBestEffort(res: Response): void {
+  try {
+    const cancellation = res.body?.cancel();
+    if (cancellation) void cancellation.catch(() => {});
+  } catch {
+    // Cancellation is cleanup only; retries must not wait for or fail because of it.
+  }
 }
 
 function retryableKiroFetchError(err: unknown): boolean {
   return isConnectionResetError(err) || (err instanceof Error && err.name === "TimeoutError");
 }
 
-async function normalizeFinalKiroHttpError(res: Response): Promise<Response> {
+async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
   if (res.ok) return res;
-  const payloadText = await res.clone().text().catch(() => "");
+  let payloadText = "";
+  try {
+    const body = await readBoundedResponseBody(res, { signal });
+    if (body.displaySafe) payloadText = body.text;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   const headers = new Headers(res.headers);
   headers.delete("content-encoding");
   headers.delete("content-length");
@@ -55,14 +67,22 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFe
   for (let attempt = 0; attempt < KIRO_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     try {
-      const res = await fetch(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-        signal: signalWithAttemptTimeout(ctx.abortSignal, timeoutMs),
-      });
-      if (!retryableKiroStatus(res.status) || attempt === KIRO_RETRY_ATTEMPTS - 1) return normalizeFinalKiroHttpError(res);
-      await res.body?.cancel().catch(() => {});
+      const attemptTimeout = clearableDeadline(timeoutMs, ctx.abortSignal);
+      let res: Response;
+      try {
+        res = await fetch(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          signal: attemptTimeout.signal,
+        });
+      } finally {
+        attemptTimeout.clear();
+      }
+      if (!retryableKiroStatus(res.status) || attempt === KIRO_RETRY_ATTEMPTS - 1) {
+        return ctx.returnRawErrors ? res : normalizeFinalKiroHttpError(res, ctx.abortSignal);
+      }
+      cancelResponseBodyBestEffort(res);
       await sleepWithAbort(retryDelayMs(attempt, res.headers), ctx.abortSignal);
     } catch (err) {
       if (ctx.abortSignal?.aborted) throw err;

@@ -26,7 +26,7 @@ opencodex는 `~/.opencodex/config.json`에서 설정을 읽습니다. `ocx init`
 | `providerContextCaps?` | `Record<string,number>` | `{}` | 프로바이더별 Codex 표시 context cap. 알려진 context window를 낮추기만 합니다. |
 | `contextCapValue?` | `number` | `350000` | 대시보드 context-cap control에서 쓸 값. 바꾸면 `providerContextCaps`에서 활성화된 모든 항목을 갱신합니다. |
 | `stallTimeoutSec?` | `number` | `90` | 업스트림 데이터가 오지 않을 때 bridge가 중단하고 `response.incomplete`를 내보내기까지의 초. 최소 1. |
-| `connectTimeoutMs?` | `number` | `200000` | DNS/TCP/TLS 연결과 응답 헤더를 기다리는 시도별 deadline. |
+| `connectTimeoutMs?` | `number` | `200000` | DNS/TCP/TLS와 최종 응답 헤더만 기다리는 시도별 deadline. 응답 body 생성 전 종료됩니다. |
 | `shutdownTimeoutMs?` | `number` | `5000` | 진행 중인 turn을 중단하기 전 graceful drain deadline. |
 | `websockets?` | `boolean` | `false` | `supports_websockets`를 알려 Codex가 Responses WebSocket 경로를 쓰게 합니다. 생략하거나 `false`이면 HTTP/SSE를 유지합니다. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 비-loopback 바인드에서 관리 API와 data plane 인증에 추가로 허용할 생성형 `ocx_…` 자격 증명. 대시보드가 관리하며 항목 필드는 아래에 설명합니다. |
@@ -245,7 +245,14 @@ reasoning을 알리되 `xhigh`와 구분합니다. 실시간 프로바이더 결
 | `model?` | `string` | `gpt-5.6-luna` | 실제 `web_search`를 실행할 사이드카 모델(네이티브 ChatGPT 모델이어야 함). 명시적으로 남은 기존 `gpt-5.4-mini` 값은 시작할 때 마이그레이션합니다. |
 | `reasoning?` | `string` | `low` | 사이드카 reasoning effort(`minimal`은 웹 검색과 함께 쓸 수 없음). |
 | `maxSearchesPerTurn?` | `number` | `3` | 메인 모델 한 turn에서 실행할 실제 검색 총횟수(loop guard). |
-| `timeoutMs?` | `number` | `200000` | 사이드카 fetch timeout. |
+| `routedModelStallTimeoutMs?` | `number` | `200000` | 설정 파일에서만 지정할 수 있는 라우팅 모델 반복별 원시 응답 byte 연속 무활동 deadline. `1`부터 `2147483647`까지의 정수여야 하며, 비어 있지 않은 응답 body chunk가 올 때마다 다시 시작됩니다. |
+| `timeoutMs?` | `number` | `200000` | 호스팅 웹 검색 요청 하나를 제한하는 별도 deadline. |
+
+웹 검색 경로에는 네 가지 clock이 있습니다. 기본 bridge event stall 예산(`stallTimeoutSec`),
+DNS/TCP/TLS/최종 header 예산(`connectTimeoutMs`), 라우팅 모델의 원시 byte 무활동
+(`routedModelStallTimeoutMs`), 호스팅 검색 하나의 제한(`timeoutMs`)입니다. 실제 bridge watchdog은
+`max(기본 stall, connect timeout, 라우팅 모델 stall, 사이드카 timeout) + 30초`입니다. 라우팅 모델
+stall은 무활동 감시 장치이며 전체 생성 timeout이 아닙니다.
 
 ### `visionSidecar` (`OcxVisionSidecarConfig`)
 
@@ -284,7 +291,11 @@ reasoning을 알리되 `xhigh`와 구분합니다. 실시간 프로바이더 결
   "subagentModels": ["anthropic/claude-opus-4-8", "ollama-cloud/glm-5.2"],
   "disabledModels": [],
   "websockets": false,
-  "webSearchSidecar": { "maxSearchesPerTurn": 3 },
+  "webSearchSidecar": {
+    "maxSearchesPerTurn": 3,
+    "routedModelStallTimeoutMs": 200000,
+    "timeoutMs": 200000
+  },
   "visionSidecar": { "enabled": true }
 }
 ```

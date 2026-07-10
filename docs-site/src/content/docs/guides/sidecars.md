@@ -28,6 +28,11 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
 
+Every routed-model iteration requests upstream `stream: true`, but opencodex fully buffers semantic
+events internally before deciding whether to search or return the final answer. Only the first
+iteration's final headers/status and 429 key rotations are acquired eagerly. Thus synthetic search
+calls and preliminary output are never exposed as client-visible model output.
+
 The injected result is wrapped in an untrusted-data boundary, length-capped, and de-duplicated by
 source URL. In structured-output turns (`json_schema` / `json_object`) it is handed over as compact
 JSON instead of prose. For text-only routed models, the search model is also told to describe
@@ -40,6 +45,7 @@ relevant images in words and include their source URLs.
     "model": "gpt-5.6-luna",
     "reasoning": "low",
     "maxSearchesPerTurn": 3,
+    "routedModelStallTimeoutMs": 200000,
     "timeoutMs": 200000
   }
 }
@@ -48,6 +54,16 @@ relevant images in words and include their source URLs.
 `minimal` reasoning is not used because the hosted backend rejects tools at that effort. A failed
 search is returned to the routed model as a bounded error result, allowing it to answer from the
 context it already has.
+
+Four separate clocks apply. `stallTimeoutSec` is the base bridge event-stall budget.
+`connectTimeoutMs` (default `200000`) covers only DNS/TCP/TLS and final response headers.
+Config-file-only `webSearchSidecar.routedModelStallTimeoutMs` (default `200000`, integer
+`1..2147483647`) bounds continuous raw response-byte inactivity for each routed-model iteration and
+resets on every non-empty byte. `webSearchSidecar.timeoutMs` separately bounds one hosted search
+request. The effective bridge watchdog is
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 seconds`. The routed
+stall is not a total generation timeout. Failures before SSE starts return non-2xx JSON; generation
+failures after response headers have started are delivered as `response.failed` SSE.
 
 ## Vision sidecar
 

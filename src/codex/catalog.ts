@@ -1042,6 +1042,27 @@ function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, m
   return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
 }
 
+/**
+ * TRUE when `liveId` is a dated release of the configured alias `configuredId`:
+ * `<configuredId>-YYYYMMDD` (Anthropic's convention for superseded-but-callable models).
+ */
+export function isDatedVariantId(liveId: string, configuredId: string): boolean {
+  if (!liveId.startsWith(`${configuredId}-`)) return false;
+  return /^\d{8}$/.test(liveId.slice(configuredId.length + 1));
+}
+
+// Same-signature dedupe: Codex polls /v1/models frequently, and an unchanged drop list
+// repeated on every poll is pure noise. Warn once per provider until the id set changes.
+const lastDropWarnSignature = new Map<string, string>();
+function warnDroppedConfiguredIdsOnce(name: string, droppedConfiguredIds: string[]): void {
+  const signature = [...droppedConfiguredIds].sort().join(",");
+  if (lastDropWarnSignature.get(name) === signature) return;
+  lastDropWarnSignature.set(name, signature);
+  console.warn(
+    `[opencodex] Provider model discovery for "${name}" omitted configured model ids; dropping them from the authoritative live catalog: ${droppedConfiguredIds.join(", ")}.`,
+  );
+}
+
 function isGlm52ModelId(id: string): boolean {
   const normalized = id.toLowerCase();
   return normalized === "glm-5.2" || normalized === "glm-5.2[1m]";
@@ -1148,15 +1169,28 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       ...catalogHintsFromModelsApiItem(name, m),
     }, contextCap));
     const liveIds = new Set(live.map(m => m.id));
-    const droppedConfiguredIds = configured.filter(m => !liveIds.has(m.id)).map(m => m.id);
+    // Dated-release aliases (Anthropic pattern): older models may appear in the live catalog
+    // ONLY under their dated id (claude-haiku-4-5-20251001) while the config names the
+    // API-valid alias (claude-haiku-4-5). Such aliases are real, callable models — keep them
+    // in the authoritative catalog (alias id, hints from the dated live entry) instead of
+    // dropping them and warning on every poll.
+    const droppedConfiguredIds: string[] = [];
+    for (const m of configured) {
+      if (liveIds.has(m.id)) continue;
+      const dated = live.find(l => isDatedVariantId(l.id, m.id));
+      if (dated) {
+        // Reapply config hints so alias-keyed overrides (modelContextWindows etc.) win.
+        live.push(applyProviderConfigHints(name, prov, { ...dated, id: m.id }, contextCap));
+      } else {
+        droppedConfiguredIds.push(m.id);
+      }
+    }
     if (live.length === 0) {
       console.warn(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     } else if (droppedConfiguredIds.length > 0) {
-      console.warn(
-        `[opencodex] Provider model discovery for "${name}" omitted configured model ids; dropping them from the authoritative live catalog: ${droppedConfiguredIds.join(", ")}.`,
-      );
+      warnDroppedConfiguredIdsOnce(name, droppedConfiguredIds);
     }
     setCached(name, live);
     return live;

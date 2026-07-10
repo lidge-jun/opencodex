@@ -184,6 +184,7 @@ next Codex session. opencodex keeps two separate behaviors:
 - **Delegate to the right model.** Feature up to five routed or native models in Codex's subagent picker from the dashboard or config — route complex tasks to a reasoning model, fast tasks to a cheap one. On the v2 multi-agent surface (GPT-5.6 Sol/Terra) the proxy injects compact delegation guidance: a preferred sub-agent model and effort (`injectionModel` / `injectionEffort`), the featured-model roster with the effort ladder each supports, and the `fork_turns` rules that make cross-model `spawn_agent` calls actually stick. Want your own wording? Set `injectionPrompt` with `{{model}}` / `{{effort}}` / `{{roster}}` placeholders.
 - **Prepare for preview-gated OpenAI rollouts.** GPT-5.6 Sol/Terra/Luna entries ship with the exact upstream spec (Sol/Terra reach `ultra`, Luna caps at `max`; 372k usable context) for ChatGPT passthrough, OpenAI API key, and OpenRouter routes when upstream access is available.
 - **Give any model superpowers.** Non-OpenAI models get real web search and image understanding via a `gpt-5.4-mini` sidecar over your ChatGPT login.
+- **Generate images natively.** Codex's standalone `image_gen` tool uses `POST /v1/images/generations` for generation and `POST /v1/images/edits` for edits; it is separate from the hosted Responses `image_generation` tool.
 - **See what's happening.** The web dashboard shows providers, OAuth status, model selection, and a live request log, including cached/cache-write token counts when upstream reports them — no more guessing why a request failed.
 - **Runs in the background.** Install as a system service (launchd / systemd / Task Scheduler) and forget about it. The proxy starts on boot and stays out of your way.
 - **Clean exit, zero residue.** `ocx stop` (or the dashboard's Stop button) shuts down the proxy, stops the background service if one is installed, and restores Codex to its original configuration. Plain `codex` works exactly as it did before — no leftover config, no orphaned processes.
@@ -341,7 +342,8 @@ WebSocket transport is off by default. Set `"websockets": true` only if you want
 
 By default opencodex binds to `127.0.0.1` (loopback) and requires no extra authentication.
 If you set `"hostname": "0.0.0.0"` to expose the proxy on the LAN, opencodex requires a bearer token
-to protect both the management API (`/api/*`) and the data-plane (`/v1/responses`):
+to protect both the management API (`/api/*`) and the data-plane (`/v1/responses`,
+`/v1/images/generations`, and `/v1/images/edits`):
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
@@ -392,9 +394,9 @@ bun x tsc --noEmit   # typecheck
 ```
 
 `bun run dev` remains an alias for `bun run dev:proxy` for compatibility. In a source checkout,
-the proxy API exposes `/healthz`, `/v1/responses`, and `/api/*`; `GET /` serves the packaged
-dashboard only after `bun run build:gui` has produced `gui/dist`. While hacking on the dashboard,
-run the frontend separately:
+the proxy API exposes `/healthz`, `/v1/responses`, `POST /v1/images/generations`,
+`POST /v1/images/edits`, and `/api/*`; `GET /` serves the packaged dashboard only after
+`bun run build:gui` has produced `gui/dist`. While hacking on the dashboard, run the frontend separately:
 
 ```bash
 bun run dev:gui

@@ -13,6 +13,21 @@ the allowed Codex/OpenAI auth/session headers.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+## Standalone Images
+
+Codex's local `image_gen.imagegen` tool makes a second Images request after the model calls it:
+`POST /v1/images/generations` for generation or `POST /v1/images/edits` for reference-image edits.
+These are standalone Images API routes, not the hosted Responses `image_generation` tool.
+
+`src/server/images.ts` selects only an enabled forward-mode `openai-responses` provider, resolves
+the same thread-affined Codex account as Responses, and relays the bounded opaque body without
+rewriting Codex's JSON edit schema or a compatible multipart body. Each paid Images POST receives
+one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
+existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+
+On non-loopback binds, data-plane authentication and origin policy cover both Images routes just as
+they cover `/v1/responses`; clients must send the configured `x-opencodex-api-key`.
+
 ## WebSocket
 
 The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
@@ -46,12 +61,21 @@ closes the stream with `response.incomplete` / `upstream_stall_timeout` and canc
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
 
-The web-search loop's silent work units are individually bounded but longer than 90 s (one
-non-streaming model iteration: `connectTimeoutMs`, default 200 s; one sidecar search: sidecar
-`timeoutMs`, default 200 s), so its bridge call widens the deadline to
-`max(stallTimeoutSec ?? 90, connectTimeoutMs/1000, sidecar timeoutMs/1000) + 30 s` (230 s at
-defaults) and yields seam heartbeats between units (sequential batched queries, placeholder
-outcomes, in-stream iterations, 429 key rotations) so no silent span ever exceeds one unit budget.
+The web-search loop requests `stream: true` for every routed-model iteration, but fully buffers its
+semantic adapter events internally so synthetic search calls and preliminary answers never leak to
+the client. Only the first iteration's final response headers/status and any 429 key rotations are
+handled eagerly. A failure before downstream SSE starts returns non-2xx JSON; once headers have
+started the final response, a generation failure is emitted as `response.failed` SSE.
+
+Four independent clocks bound this path. `stallTimeoutSec` is the base bridge event-stall budget.
+`connectTimeoutMs` (default 200 s) covers only DNS/TCP/TLS and the wait for final response headers,
+not response-body generation. Config-file-only
+`webSearchSidecar.routedModelStallTimeoutMs` (default 200 s, integer 1..2147483647) bounds continuous
+raw response-byte inactivity for a routed-model iteration and resets on every non-empty byte.
+`webSearchSidecar.timeoutMs` (default 200 s) separately bounds one hosted search request. The
+effective web-search bridge watchdog is
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (230 s at defaults),
+with seam heartbeats between bounded units. None of these clocks is a total generation deadline.
 
 ## Reasoning and tool-result compatibility
 
@@ -107,7 +131,7 @@ request needs that capability.
 
 | Sidecar | Default model | Activation |
 | --- | --- | --- |
-| `web-search/` | `gpt-5.4-mini` | Hosted `web_search` requested by a non-passthrough routed model. |
+| `web-search/` | `gpt-5.6-luna` | Hosted `web_search` requested by a non-passthrough routed model. |
 | `vision/` | `gpt-5.4-mini` | Input contains images for a model listed in `noVisionModels`. |
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.

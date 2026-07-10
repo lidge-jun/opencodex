@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -405,6 +405,45 @@ describe("Codex catalog routed normalization", () => {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
     }
+  });
+
+  test("configured alias with a dated live variant is retained (Anthropic haiku pattern)", async () => {
+    clearModelCache("dated-provider");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "claude-sonnet-5" },
+        { id: "claude-haiku-4-5-20251001" },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "dated-provider": {
+            baseUrl: "https://example.invalid",
+            adapter: "openai-chat",
+            authMode: "key",
+            apiKey: "k",
+            models: ["claude-sonnet-5", "claude-haiku-4-5", "claude-gone-3"],
+          },
+        },
+      });
+      const ids = models.map(m => m.id);
+      expect(ids).toContain("claude-haiku-4-5"); // alias kept: dated variant proves it is live
+      expect(ids).toContain("claude-haiku-4-5-20251001"); // dated id stays too (authoritative)
+      expect(ids).not.toContain("claude-gone-3"); // genuinely missing ids still drop
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("dated-provider");
+    }
+  });
+
+  test("isDatedVariantId matches only <alias>-YYYYMMDD", () => {
+    expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
+    expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
+    expect(isDatedVariantId("claude-haiku-4-5-latest", "claude-haiku-4-5")).toBe(false);
+    expect(isDatedVariantId("claude-haiku-4-5", "claude-haiku-4-5")).toBe(false);
+    expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4")).toBe(false);
   });
 
   test("disabled providers are excluded from routed model gathering", async () => {

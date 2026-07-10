@@ -377,6 +377,11 @@ export interface OcxWebSearchSidecarConfig {
   maxSearchesPerTurn?: number;
   /** Sidecar fetch timeout (ms). */
   timeoutMs?: number;
+  /**
+   * Config-file-only deadline (ms) for continuous routed-model response-body raw-byte inactivity
+   * during a web-search turn. Default 200000. Must be an integer from 1 through 2147483647.
+   */
+  routedModelStallTimeoutMs?: number;
 }
 
 export interface OcxProviderConfig {
