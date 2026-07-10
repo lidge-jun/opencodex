@@ -42,13 +42,25 @@ describe("kiro retry fetch", () => {
 
   test("retries the per-attempt TimeoutError raised by AbortSignal.timeout", async () => {
     let calls = 0;
+    const timeoutReasons: unknown[] = [];
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       calls += 1;
       if (calls > 1) return new Response("ok", { status: 200 });
+      const signal = init?.signal;
+      if (!signal) throw new Error("expected per-attempt signal");
+
+      // Reproduce the Windows runner race: the 1ms signal may abort before a
+      // fetch implementation subscribes. EventTarget does not replay abort.
+      await Bun.sleep(10);
+      if (signal.aborted) {
+        timeoutReasons.push(signal.reason);
+        throw signal.reason;
+      }
       return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) throw new Error("expected per-attempt signal");
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener("abort", () => {
+          timeoutReasons.push(signal.reason);
+          reject(signal.reason);
+        }, { once: true });
       });
     }) as typeof fetch;
 
@@ -56,6 +68,8 @@ describe("kiro retry fetch", () => {
 
     expect(res.status).toBe(200);
     expect(calls).toBe(2);
+    expect(timeoutReasons).toHaveLength(1);
+    expect((timeoutReasons[0] as Error).name).toBe("TimeoutError");
   });
 
   test("rethrows deterministic fetch and URL errors without retrying", async () => {

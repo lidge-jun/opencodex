@@ -20,12 +20,20 @@ on:
       - ".github/workflows/service-lifecycle.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: service-lifecycle-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux-systemd:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
 
@@ -34,8 +42,9 @@ jobs:
       # systemd user session needs XDG_RUNTIME_DIR
       - name: Enable systemd user session
         run: |
-          sudo loginctl enable-linger $(whoami)
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          sudo loginctl enable-linger "$(whoami)"
+          user_id="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/${user_id}"
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
 
       # Write a minimal config so ocx start doesn't fail on missing providers
@@ -45,58 +54,108 @@ jobs:
           echo '{"port":10199,"providers":{}}' > ~/.opencodex/config.json
 
       - name: Install service
-        run: |
-          bun run src/cli/index.ts service install
-          sleep 2
+        run: bun run src/cli/index.ts service install
 
       - name: Verify service is running
         run: |
-          systemctl --user status opencodex-proxy --no-pager
-          curl -sf http://127.0.0.1:10199/healthz || echo "healthz not ready yet"
+          ready=false
+          for attempt in $(seq 1 20); do
+            if systemctl --user is-active --quiet opencodex-proxy \
+              && curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              ready=true
+              break
+            fi
+            echo "waiting for systemd service health ($attempt/20)"
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            systemctl --user status opencodex-proxy --no-pager || true
+            journalctl --user-unit opencodex-proxy --no-pager -n 200 || true
+            echo "::error::systemd service did not become healthy"
+            exit 1
+          fi
 
       - name: ocx stop should stop the service too
         run: |
           bun run src/cli/index.ts stop
-          sleep 1
-          # Service should NOT be active after ocx stop
-          if systemctl --user is-active opencodex-proxy 2>/dev/null; then
-            echo "❌ FAIL: service still active after ocx stop"
+          stopped=false
+          for attempt in $(seq 1 10); do
+            if ! systemctl --user is-active --quiet opencodex-proxy \
+              && ! curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              stopped=true
+              break
+            fi
+            echo "waiting for systemd service stop ($attempt/10)"
+            sleep 1
+          done
+          if [ "$stopped" != true ]; then
+            systemctl --user status opencodex-proxy --no-pager || true
+            journalctl --user-unit opencodex-proxy --no-pager -n 200 || true
+            echo "::error::service or health endpoint survived ocx stop"
             exit 1
           fi
-          echo "✅ Service stopped by ocx stop"
 
       - name: Restart service and verify crash-restart
         run: |
           bun run src/cli/index.ts service start
-          sleep 2
-          PID=$(cat ~/.opencodex/ocx.pid 2>/dev/null || echo "")
-          if [ -n "$PID" ]; then
-            kill -9 "$PID" 2>/dev/null || true
-            sleep 8
-            # systemd Restart=on-failure should bring it back
-            if systemctl --user is-active opencodex-proxy 2>/dev/null; then
-              echo "✅ Service restarted after crash"
-            else
-              echo "❌ Service did not restart after crash"
+          old_pid="$(systemctl --user show opencodex-proxy --property MainPID --value)"
+          case "$old_pid" in
+            ""|0|*[!0-9]*)
+              echo "::error::systemd service has no positive MainPID before crash test"
               exit 1
+              ;;
+          esac
+          kill -9 "$old_pid"
+
+          restarted=false
+          for attempt in $(seq 1 20); do
+            new_pid="$(systemctl --user show opencodex-proxy --property MainPID --value 2>/dev/null || true)"
+            if systemctl --user is-active --quiet opencodex-proxy \
+              && [ -n "$new_pid" ] \
+              && [ "$new_pid" != 0 ] \
+              && [ "$new_pid" != "$old_pid" ] \
+              && curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              restarted=true
+              break
             fi
+            echo "waiting for systemd crash restart ($attempt/20)"
+            sleep 1
+          done
+          if [ "$restarted" != true ]; then
+            systemctl --user status opencodex-proxy --no-pager || true
+            journalctl --user-unit opencodex-proxy --no-pager -n 200 || true
+            echo "::error::systemd service did not restart healthy with a new MainPID"
+            exit 1
           fi
 
       - name: Uninstall service
+        if: ${{ !cancelled() }}
         run: |
           bun run src/cli/index.ts service uninstall
-          sleep 1
-          if systemctl --user is-active opencodex-proxy 2>/dev/null; then
-            echo "❌ FAIL: service still active after uninstall"
+          removed=false
+          for attempt in $(seq 1 10); do
+            if [ ! -e "$HOME/.config/systemd/user/opencodex-proxy.service" ] \
+              && ! systemctl --user is-active --quiet opencodex-proxy \
+              && ! curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              removed=true
+              break
+            fi
+            echo "waiting for systemd uninstall cleanup ($attempt/10)"
+            sleep 1
+          done
+          if [ "$removed" != true ]; then
+            systemctl --user status opencodex-proxy --no-pager || true
+            journalctl --user-unit opencodex-proxy --no-pager -n 200 || true
+            echo "::error::systemd artifact or proxy survived uninstall"
             exit 1
           fi
-          echo "✅ Service uninstalled"
 
   macos-launchd:
     runs-on: macos-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
 
@@ -108,40 +167,75 @@ jobs:
           echo '{"port":10199,"providers":{}}' > ~/.opencodex/config.json
 
       - name: Install service
-        run: |
-          bun run src/cli/index.ts service install
-          sleep 3
+        run: bun run src/cli/index.ts service install
 
-      - name: Verify launchd agent loaded
+      - name: Verify launchd service is healthy
         run: |
-          if launchctl list | grep -q com.opencodex.proxy; then
-            echo "✅ LaunchAgent loaded"
-          else
-            echo "❌ LaunchAgent not found"
+          ready=false
+          for attempt in $(seq 1 20); do
+            if launchctl list | grep -q com.opencodex.proxy \
+              && curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              ready=true
+              break
+            fi
+            echo "waiting for launchd service health ($attempt/20)"
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            launchctl list | grep com.opencodex.proxy || true
+            tail -n 200 "$HOME/.opencodex/service.log" || true
+            echo "::error::launchd service did not become healthy"
             exit 1
           fi
 
       - name: ocx stop should unload the agent
         run: |
           bun run src/cli/index.ts stop
-          sleep 2
-          echo "✅ ocx stop completed"
-
-      - name: Uninstall service
-        run: |
-          bun run src/cli/index.ts service uninstall
-          sleep 1
-          if launchctl list | grep -q com.opencodex.proxy; then
-            echo "❌ LaunchAgent still loaded after uninstall"
+          stopped=false
+          for attempt in $(seq 1 10); do
+            if ! launchctl list | grep -q com.opencodex.proxy \
+              && ! curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              stopped=true
+              break
+            fi
+            echo "waiting for launchd service stop ($attempt/10)"
+            sleep 1
+          done
+          if [ "$stopped" != true ]; then
+            launchctl list | grep com.opencodex.proxy || true
+            tail -n 200 "$HOME/.opencodex/service.log" || true
+            echo "::error::launchd label or health endpoint survived ocx stop"
             exit 1
           fi
-          echo "✅ LaunchAgent removed"
+
+      - name: Uninstall service
+        if: ${{ !cancelled() }}
+        run: |
+          bun run src/cli/index.ts service uninstall
+          removed=false
+          for attempt in $(seq 1 10); do
+            if [ ! -e "$HOME/Library/LaunchAgents/com.opencodex.proxy.plist" ] \
+              && ! launchctl list | grep -q com.opencodex.proxy \
+              && ! curl --max-time 2 -sf http://127.0.0.1:10199/healthz >/dev/null; then
+              removed=true
+              break
+            fi
+            echo "waiting for launchd uninstall cleanup ($attempt/10)"
+            sleep 1
+          done
+          if [ "$removed" != true ]; then
+            launchctl list | grep com.opencodex.proxy || true
+            tail -n 200 "$HOME/.opencodex/service.log" || true
+            echo "::error::launchd artifact or proxy survived uninstall"
+            exit 1
+          fi
 
   windows-schtasks:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
 
@@ -155,39 +249,79 @@ jobs:
 
       - name: Install service
         shell: pwsh
-        run: |
-          bun run src/cli/index.ts service install
-          Start-Sleep -Seconds 3
+        run: bun run src/cli/index.ts service install
 
-      - name: Verify scheduled task exists
+      - name: Verify scheduled task is healthy
         shell: pwsh
         run: |
-          $task = schtasks /query /tn opencodex-proxy 2>&1
-          if ($task -match "opencodex-proxy") {
-            Write-Host "✅ Task registered"
-          } else {
-            Write-Host "❌ Task not found"
-            exit 1
+          $ready = $false
+          for ($attempt = 1; $attempt -le 20; $attempt++) {
+            $task = Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue
+            $healthy = $false
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:10199/healthz -TimeoutSec 2
+              $healthy = $response.StatusCode -eq 200
+            } catch {}
+            if ($null -ne $task -and $task.State -eq "Running" -and $healthy) {
+              $ready = $true
+              break
+            }
+            Write-Host "waiting for scheduled task health ($attempt/20)"
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) {
+            Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue | Format-List *
+            Get-Content "$env:USERPROFILE\.opencodex\service.log" -Tail 200 -ErrorAction SilentlyContinue
+            throw "scheduled task did not become healthy"
           }
 
       - name: ocx stop should end the task
         shell: pwsh
         run: |
           bun run src/cli/index.ts stop
-          Start-Sleep -Seconds 2
-          Write-Host "✅ ocx stop completed"
+          $stopped = $false
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            $task = Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue
+            $healthy = $false
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:10199/healthz -TimeoutSec 2
+              $healthy = $response.StatusCode -eq 200
+            } catch {}
+            if ($null -ne $task -and $task.State -ne "Running" -and -not $healthy) {
+              $stopped = $true
+              break
+            }
+            Write-Host "waiting for scheduled task stop ($attempt/10)"
+            Start-Sleep -Seconds 1
+          }
+          if (-not $stopped) {
+            Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue | Format-List *
+            Get-Content "$env:USERPROFILE\.opencodex\service.log" -Tail 200 -ErrorAction SilentlyContinue
+            throw "scheduled task or health endpoint survived ocx stop"
+          }
 
       - name: Uninstall service
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           bun run src/cli/index.ts service uninstall
-          Start-Sleep -Seconds 1
-          $found = $true
-          try { $task = schtasks /query /tn opencodex-proxy 2>&1 } catch { $found = $false }
-          if ($LASTEXITCODE -ne 0) { $found = $false }
-          if ($found -and ($task -match "opencodex-proxy")) {
-            Write-Host "❌ Task still exists after uninstall"
-            exit 1
+          $removed = $false
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            $task = Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue
+            $healthy = $false
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:10199/healthz -TimeoutSec 2
+              $healthy = $response.StatusCode -eq 200
+            } catch {}
+            if ($null -eq $task -and -not $healthy) {
+              $removed = $true
+              break
+            }
+            Write-Host "waiting for scheduled task uninstall cleanup ($attempt/10)"
+            Start-Sleep -Seconds 1
           }
-          Write-Host "✅ Task removed"
-          exit 0
+          if (-not $removed) {
+            Get-ScheduledTask -TaskName opencodex-proxy -ErrorAction SilentlyContinue | Format-List *
+            Get-Content "$env:USERPROFILE\.opencodex\service.log" -Tail 200 -ErrorAction SilentlyContinue
+            throw "scheduled task or proxy survived uninstall"
+          }
