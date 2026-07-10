@@ -11,6 +11,8 @@
 - forces strict Codex catalog fields required by the current parser;
 - hides `disabledModels` (routed namespaced ids are excluded; BARE native slugs flip the
   catalog entry to `visibility: "hide"` and drop from the bare `/v1/models` list);
+- applies exact provider/model compatibility exclusions after live discovery and metadata
+  augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless explicitly enabled;
 - backs up the pristine catalog once to `~/.opencodex/catalog-backup.json`;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.

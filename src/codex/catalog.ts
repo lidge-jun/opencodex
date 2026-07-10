@@ -304,6 +304,20 @@ type RawCatalog = { models?: RawEntry[]; [k: string]: unknown };
 const JAWCODE_CATALOG_AUGMENT_PROVIDERS = new Set(["opencode-go"]);
 
 /**
+ * Exact provider/model pairs whose discovery endpoint advertises them but whose inference backend
+ * rejects them. Apply this after live/static/metadata sources converge so no source can resurrect
+ * an uncallable picker row. Remove an entry once authenticated inference proves it usable again.
+ */
+const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
+  // Issue #82: Zen Go /models advertises HY3, but Console Go rejects it as outside the lite list.
+  "opencode-go/hy3-preview",
+]);
+
+function isRoutedModelCompatibilityExcluded(slug: string): boolean {
+  return ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS.has(slug);
+}
+
+/**
  * Image/video GENERATION model families. opencodex routes chat/coding models into Codex; media-
  * generation models (Grok image/video, DALL·E, Imagen, Sora, Veo, …) are useless to a coding agent
  * and must never surface in the dashboard, /v1/models, or the routed catalog. The metadata has no
@@ -328,6 +342,7 @@ export function isMediaGenerationModelId(id: string): boolean {
 }
 
 function shouldExposeRoutedModel(model: CatalogModel): boolean {
+  if (isRoutedModelCompatibilityExcluded(`${model.provider}/${model.id}`)) return false;
   if (model.provider === "cursor" && model.id === "gemini-3-pro-image-preview") return true;
   return !isMediaGenerationModelId(model.id);
 }
@@ -1329,9 +1344,10 @@ export function mergeCatalogEntriesForSync(
   }
 
   let finalRoutedEntries = routedEntries;
-  if (routedEntries.length === 0 && catalogModels.some(m => typeof m.slug === "string" && (m.slug as string).includes("/"))) {
+  const preservingExistingRouted = routedEntries.length === 0
+    && catalogModels.some(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
+  if (preservingExistingRouted) {
     finalRoutedEntries = catalogModels.filter(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
-    console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
   } else {
     const freshSlugs = new Set(routedEntries.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []));
     const preservedForeignRouted = catalogModels.filter(m => {
@@ -1340,6 +1356,14 @@ export function mergeCatalogEntriesForSync(
       return !gatheredProviderNames.has(provider) && !freshSlugs.has(m.slug);
     });
     finalRoutedEntries = [...routedEntries, ...preservedForeignRouted];
+  }
+  // Reapply final catalog policy to rows preserved from disk. Those rows bypass
+  // gatherRoutedModels, so filtering only the freshly gathered list can resurrect an excluded id.
+  finalRoutedEntries = finalRoutedEntries.filter(entry =>
+    typeof entry.slug !== "string" || !isRoutedModelCompatibilityExcluded(entry.slug)
+  );
+  if (preservingExistingRouted) {
+    console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
   }
 
   const mergedEntries = [...native, ...finalRoutedEntries].map(m => {

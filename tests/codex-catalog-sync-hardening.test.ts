@@ -118,6 +118,31 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.5");
   });
 
+  test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        routedEntry("kiro/claude-opus-4.8", 5),
+        routedEntry("opencode-go/glm-5.2", 6),
+        routedEntry("opencode-go/hy3-preview", 7),
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+
+    const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
+    expect(slugs).toContain("kiro/claude-opus-4.8");
+    expect(slugs).toContain("opencode-go/glm-5.2");
+    expect(slugs).not.toContain("opencode-go/hy3-preview");
+  });
+
   test("preserves existing routed entries for providers absent from the current sync config", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");

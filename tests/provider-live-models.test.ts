@@ -8,6 +8,8 @@ import type { OcxConfig } from "../src/types";
 // authority/fallback contract of fetchProviderModels through the public gatherRoutedModels seam.
 
 const PROVIDER = "xai-live-test";
+const HY3_PROVIDER = "opencode-go";
+const HY3_CONTROL_PROVIDER = "hy3-control-live-test";
 
 function config(): OcxConfig {
   return {
@@ -29,6 +31,8 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearModelCache(PROVIDER);
+  clearModelCache(HY3_PROVIDER);
+  clearModelCache(HY3_CONTROL_PROVIDER);
 });
 
 describe("live provider model discovery (authority + fallback)", () => {
@@ -65,6 +69,45 @@ describe("live provider model discovery (authority + fallback)", () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  test("HY3 compatibility guard hides only opencode-go/hy3-preview from live discovery", async () => {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const isOpenCodeGo = String(url).startsWith("https://opencode-go.test/");
+      return new Response(JSON.stringify({
+        data: isOpenCodeGo
+          ? [
+              { id: "glm-5.2" },
+              { id: "hy3-preview" },
+              { id: "future-live-model" },
+            ]
+          : [{ id: "hy3-preview" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      providers: {
+        [HY3_PROVIDER]: {
+          baseUrl: "https://opencode-go.test/v1",
+          adapter: "openai-chat",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["glm-5.2"],
+        },
+        [HY3_CONTROL_PROVIDER]: {
+          baseUrl: "https://hy3-control.test/v1",
+          adapter: "openai-chat",
+          authMode: "key",
+          apiKey: "sk-test",
+        },
+      },
+    } as unknown as OcxConfig);
+    const slugs = models.map(model => `${model.provider}/${model.id}`);
+
+    expect(slugs).not.toContain("opencode-go/hy3-preview");
+    expect(slugs).toContain("opencode-go/glm-5.2");
+    expect(slugs).toContain("opencode-go/future-live-model");
+    expect(slugs).toContain("hy3-control-live-test/hy3-preview");
   });
 
   test("fetch failure falls back to the configured static list", async () => {
