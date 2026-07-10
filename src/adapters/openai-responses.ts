@@ -175,6 +175,46 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
 }
 
 /**
+ * Hosted tool types whose server-side function names collide with the client tools Codex
+ * declares for the matching app skill. Codex sends BOTH (e.g. hosted `image_generation` plus a
+ * declared `image_gen.imagegen` function/namespace tool for the imagegen skill). The ChatGPT
+ * backend tolerates the pair, but the platform `/v1/responses` rejects it:
+ * `Invalid Value: 'tools'. Function 'image_gen.imagegen' conflicts with a hosted tool in the
+ * same request.` Keyed hosted-type → conflicting client tool-name prefix; the hosted entry is
+ * dropped (the declared tool wins — Codex executes the skill client-side either way).
+ */
+const HOSTED_TOOL_NAME_CONFLICTS: ReadonlyArray<{ hostedType: string; namePrefix: string }> = [
+  { hostedType: "image_generation", namePrefix: "image_gen" },
+];
+
+/**
+ * Drop hosted tools whose names collide with declared function/namespace tools (see
+ * HOSTED_TOOL_NAME_CONFLICTS). Only applies on the API-key platform path: the ChatGPT backend
+ * ("forward" mode) accepts the pair, and stripping there would disable native imagegen. No-op
+ * (returns the original reference) when nothing matches.
+ */
+function stripConflictingHostedTools(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
+  const allTools = body.tools;
+
+  const conflicting = HOSTED_TOOL_NAME_CONFLICTS.filter(c =>
+    allTools.some(t => {
+      if (!isPlainObject(t) || typeof t.name !== "string") return false;
+      if (t.type === "namespace") return t.name === c.namePrefix;
+      return t.name === c.namePrefix || t.name.startsWith(`${c.namePrefix}.`);
+    }),
+  );
+  if (conflicting.length === 0) return body;
+
+  const tools = allTools.filter(t => {
+    const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
+    if (!type) return true;
+    return !conflicting.some(c => c.hostedType === type);
+  });
+  return tools.length === allTools.length ? body : { ...body, tools };
+}
+
+/**
  * Remove hosted tool entries the target native slug rejects, so the OAuth-passthrough body never
  * carries a tool the upstream model 400s on. No-op (returns the original reference) when nothing
  * matches, keeping the common path allocation-free.
@@ -236,6 +276,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         forward || parsed._previousResponseInputExpanded === true,
       );
       if (forward) outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      else outBody = stripConflictingHostedTools(outBody);
       return {
         url,
         method: "POST",

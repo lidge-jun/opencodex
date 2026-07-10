@@ -265,3 +265,108 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input[0]).toMatchObject({ type: "reasoning", id: "rs_1" });
   });
 });
+
+describe("OpenAI Responses hosted-tool name conflicts", () => {
+  const keyedProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.openai.example/v1",
+    authMode: "key" as const,
+    apiKey: "sk-test",
+  };
+  const meta = { headers: new Headers({ authorization: "Bearer token" }) };
+
+  test("keyed platform strips hosted image_generation that collides with a declared image_gen.imagegen tool", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [],
+        tools: [
+          { type: "function", name: "image_gen.imagegen", parameters: {} },
+          { type: "image_generation" },
+          { type: "web_search" },
+        ],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as { tools: { type: string; name?: string }[] };
+
+    // Hosted image_generation dropped; the declared client tool wins and unrelated hosted tools stay.
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(false);
+    expect(body.tools.some(t => t.type === "function" && t.name === "image_gen.imagegen")).toBe(true);
+    expect(body.tools.some(t => t.type === "web_search")).toBe(true);
+  });
+
+  test("keyed platform strips hosted image_generation when the skill is declared as an image_gen namespace tool", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [],
+        tools: [
+          { type: "namespace", name: "image_gen" },
+          { type: "image_generation" },
+        ],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as { tools: { type: string; name?: string }[] };
+
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]).toMatchObject({ type: "namespace", name: "image_gen" });
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(false);
+  });
+
+  test("keyed platform keeps hosted image_generation when no conflicting tool is declared", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [],
+        tools: [
+          { type: "function", name: "shell", parameters: {} },
+          { type: "image_generation" },
+        ],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as { tools: { type: string }[] };
+
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(true);
+  });
+
+  test("forward backend preserves the image_generation + image_gen.imagegen pair", () => {
+    // The ChatGPT backend tolerates the pair; stripping there would disable native imagegen.
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          { type: "function", name: "image_gen.imagegen", parameters: {} },
+          { type: "image_generation" },
+        ],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as { tools: { type: string; name?: string }[] };
+
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools.some(t => t.type === "image_generation")).toBe(true);
+    expect(body.tools.some(t => t.type === "function" && t.name === "image_gen.imagegen")).toBe(true);
+  });
+});
