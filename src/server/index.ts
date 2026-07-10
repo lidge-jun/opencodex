@@ -118,6 +118,7 @@ export {
 import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";
 export { disableResponsesRequestTimeout, linkAbortSignal } from "./responses";
 import { handleImages } from "./images";
+import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -331,6 +332,33 @@ export function startServer(port?: number) {
         return withCors(response, req, config);
       }
 
+      if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) {
+          return new Response("Service shutting down", {
+            status: 503,
+            headers: { ...corsHeaders(req, config), "Retry-After": "5" },
+          });
+        }
+        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: "web_search", provider: "unknown" };
+        const response = await handleSearch(req, config, logCtx);
+        addFinalRequestLog(
+          requestId,
+          start,
+          logCtx,
+          response.status,
+          response.status === 499 ? { closeReason: "client_cancel" } : undefined,
+        );
+        return withCors(response, req, config);
+      }
+
       if (url.pathname === "/v1/responses" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
@@ -370,7 +398,7 @@ export function startServer(port?: number) {
 
       // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
-      // endpoint clients — alpha/search, memories/*, realtime/* — would surface confusing
+      // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
       if (url.pathname.startsWith("/v1/")) {
         return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);

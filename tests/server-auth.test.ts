@@ -1026,10 +1026,10 @@ describe("server local API auth", () => {
 
     const server = startServer(0);
     try {
-      // codex-rs endpoint clients (alpha/search, memories/*, realtime/*) must get a clean 404
+      // Unsupported codex-rs endpoint clients (memories/*, realtime/*) must get a clean 404
       // instead of a 200 HTML page that fails serde with a confusing decode error.
-      // (/v1/images/* is a real relay route now — covered in server-images.test.ts.)
-      for (const path of ["/v1/alpha/search", "/v1/realtime/sessions", "/v1/memories/trace_summarize"]) {
+      // (/v1/images/* and /v1/alpha/search are real relay routes covered by dedicated tests.)
+      for (const path of ["/v1/realtime/sessions", "/v1/memories/trace_summarize"]) {
         const response = await fetch(new URL(path, server.url), { method: "POST" });
         expect(response.status).toBe(404);
         expect(response.headers.get("content-type")).toContain("application/json");
