@@ -408,33 +408,37 @@ select.input { appearance: none; }
 /* ---- switch ---- */
 .switch {
   width: 34px;
-  height: 19px;
+  height: 20px;
   border-radius: 99px;
   border: 1px solid var(--border);
   cursor: pointer;
   background: var(--raised);
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
   flex-shrink: 0;
+  line-height: 0;
+  vertical-align: middle;
   transition: background 0.15s, border-color 0.15s;
-  padding: 0;
   appearance: none;
   -webkit-appearance: none;
 }
 .switch.on { background: var(--accent); border-color: var(--accent); }
 .switch:disabled { opacity: 0.6; cursor: default; }
 .switch .knob {
-  position: absolute;
-  top: 50%;
-  left: 2px;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: light-dark(#ffffff, #ececec);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.3);
-  transform: translateY(-50%);
-  transition: left 0.15s, background 0.15s, transform 0.15s;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, 0.08), 0 1px 1px rgba(16, 24, 40, 0.18);
+  transform: translateX(0);
+  transition: transform 0.15s, background 0.15s;
 }
-.switch.on .knob { left: 17px; background: var(--accent-ink); transform: translateY(-50%); }
+.switch.on .knob {
+  transform: translateX(14px);
+  background: var(--accent-ink);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
 
 /* ---- misc ---- */
 .muted { color: var(--muted); }
