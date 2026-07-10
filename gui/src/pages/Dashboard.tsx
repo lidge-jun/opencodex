@@ -73,6 +73,15 @@ function defaultUpdateChannel(version: string | undefined): UpdateChannel {
   return version?.includes("-preview.") ? "preview" : "latest";
 }
 
+function updateReasonLabel(reason: string | undefined, t: (key: import("../i18n").TKey) => string): string {
+  switch (reason) {
+    case "source_checkout": return t("dash.updateReason.source_checkout");
+    case "latest_unavailable": return t("dash.updateReason.latest_unavailable");
+    case "already_latest": return t("dash.updateReason.already_latest");
+    default: return t("dash.updateReason.unknown");
+  }
+}
+
 export default function Dashboard({ apiBase }: { apiBase: string }) {
   const { locale, t } = useI18n();
   const [health, setHealth] = useState<HealthData | null>(null);
@@ -700,7 +709,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="modal-card">
             <div className="modal-head">
               <h3 id="update-title">{t("dash.updateTitle")}</h3>
-              <button type="button" className="btn-icon" onClick={closeUpdateDialog} aria-label={t("common.cancel")}>
+              <button type="button" className="btn btn-ghost btn-icon" onClick={closeUpdateDialog} aria-label={t("common.cancel")}>
                 <IconX />
               </button>
             </div>
@@ -752,6 +761,21 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                     </button>
                   </div>
                 )}
+                {!updateCheck.canUpdate && updateCheck.reason !== "latest_unavailable" && updateCheck.reason !== "source_checkout" && (
+                  <div className="update-recheck">
+                    <span className="muted update-recheck-reason">
+                      {t("dash.updateCannotAuto", { reason: updateReasonLabel(updateCheck.reason, t) })}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={updateLoading}
+                      onClick={() => { void fetchUpdateCheck(updateChannel, true); }}
+                    >
+                      <IconRefresh /> {updateLoading ? t("dash.updateChecking") : t("dash.updateRecheck")}
+                    </button>
+                  </div>
+                )}
                 {updateCheck.canUpdate && (
                   <div className="spread update-restart">
                     <div>
@@ -791,7 +815,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
               <h3>{t("dash.multiAgent")}</h3>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setMaHelpOpen(false)} aria-label="Close">&times;</button>
+              <button type="button" className="btn btn-ghost btn-icon" onClick={() => setMaHelpOpen(false)} aria-label="Close"><IconX /></button>
             </div>
             <div className="modal-desc" style={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
               {t("models.v2Help")}
