@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
@@ -27,8 +28,22 @@ async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
 }
 
+function windowsBatchValue(value: string): string {
+  return value
+    .replace(/%/g, "%%")
+    .replace(/\^/g, "^^")
+    .replace(/"/g, "")
+    .replace(/[\r\n]/g, "");
+}
+
 function pathVariants(path: string): string[] {
-  return [...new Set([path, path.replace(/\\/g, "\\\\")])];
+  const batchPath = windowsEnvIndirectBatchValue(path, windowsBatchValue);
+  return [...new Set([
+    path,
+    path.replace(/\\/g, "\\\\"),
+    batchPath,
+    batchPath.replace(/\\/g, "\\\\"),
+  ])];
 }
 
 function expectTextToContainPath(text: string, path: string): void {

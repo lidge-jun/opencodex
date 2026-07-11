@@ -1,7 +1,6 @@
 import { fromBinary, create } from "@bufbuild/protobuf";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Real child-process spawns resolve packages through bun's install cache; Windows CI runners
@@ -62,7 +61,7 @@ describe("Cursor MCP live stdio integration", () => {
   let manager: CursorMcpManager;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "ocx-mcp-stdio-"));
+    dir = mkdtempSync(join(import.meta.dir, ".tmp-mcp-stdio-"));
     scriptPath = join(dir, "server.mjs");
     writeFileSync(scriptPath, SERVER_SOURCE, "utf8");
     // No transportFactory => real StdioClientTransport spawns this script via the current runtime.
