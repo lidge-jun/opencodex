@@ -28,6 +28,7 @@ import { stopProxy } from "../lib/process-control";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { drainAndShutdown, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
+import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -197,6 +198,8 @@ async function handleStart(options: { block?: boolean } = {}) {
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
   await injectSystemEnv(port, config).catch(() => {});
+  // Auto-install .zshrc hook (idempotent — skips if already present).
+  installShellHook();
 
   await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
@@ -214,13 +217,15 @@ async function handleEnsure() {
     return;
   }
   const live = await findLiveProxy();
-  if (live) {
-    await syncModelsToCodex(live.port).catch(e => {
-      console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
-    });
-    console.log(`✅ Proxy running on port ${live.port}`);
-    return;
-  }
+    if (live) {
+      await syncModelsToCodex(live.port).catch(e => {
+        console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
+      });
+      // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
+      await injectSystemEnv(live.port, config).catch(() => {});
+      console.log(`✅ Proxy running on port ${live.port}`);
+      return;
+    }
 
   const child = spawn(process.execPath, [process.argv[1], "start"], {
     detached: true,
@@ -331,6 +336,11 @@ async function handleUninstall() {
   await runStep("system env vars reverted", () => {
     const r = revertSystemEnv();
     if (!r.reverted && r.reason !== "no tracking file" && r.reason !== "not macOS") throw new Error(r.reason ?? "revert failed");
+  });
+
+  await runStep("shell hook removed", () => {
+    const r = uninstallShellHook();
+    if (!r.removed && r.reason !== "not installed" && r.reason !== "not macOS") throw new Error(r.reason ?? "remove failed");
   });
 
   try {

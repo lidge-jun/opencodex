@@ -74,7 +74,8 @@ describe("system environment injection", () => {
     expect(commands).toContain("launchctl setenv ANTHROPIC_BASE_URL http://127.0.0.1:4567");
     expect(commands).toContain("launchctl setenv _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL 1");
     expect(commands).toContain("launchctl setenv CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1");
-    expect(writeSpy).toHaveBeenCalledTimes(1);
+    // Two writes: shell env file + tracking file
+    expect(writeSpy).toHaveBeenCalledTimes(2);
     expect(JSON.parse(trackingFile!)).toMatchObject({ pid: process.pid, port: 4567 });
   });
 
@@ -141,9 +142,10 @@ describe("system environment cleanup", () => {
       "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
       "ANTHROPIC_AUTH_TOKEN",
     ]) {
-      expect(execSpy.mock.calls.map(call => call[0])).toContain(`launchctl unsetenv ${name}`);
+    expect(execSpy.mock.calls.map(call => call[0])).toContain(`launchctl unsetenv ${name}`);
     }
-    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    // Two deletes: shell env file + tracking file
+    expect(unlinkSpy).toHaveBeenCalledTimes(2);
   });
 
   test("revertSystemEnv skips variables it does not own", () => {
@@ -160,6 +162,7 @@ describe("system environment cleanup", () => {
     globalThis.fetch = mock(async () => { throw new Error("connection refused"); }) as unknown as typeof fetch;
 
     expect(await cleanStaleSystemEnv()).toEqual({ cleaned: true });
-    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    // Two deletes: shell env file + tracking file
+    expect(unlinkSpy).toHaveBeenCalledTimes(2);
   });
 });

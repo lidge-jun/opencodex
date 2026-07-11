@@ -35,6 +35,48 @@ function removeShellEnvFile(): void {
   try { unlinkSync(getShellEnvFilePath()); } catch { /* already gone */ }
 }
 
+// ---------------------------------------------------------------------------
+// .zshrc hook auto-install: adds a one-liner that sources claude-env.sh.
+// Idempotent — skips if the hook line already exists.
+// ---------------------------------------------------------------------------
+
+const SHELL_HOOK_MARKER = "# opencodex claude-env hook";
+const SHELL_HOOK_LINE = `${SHELL_HOOK_MARKER}\n[ -f ~/.opencodex/claude-env.sh ] && source ~/.opencodex/claude-env.sh`;
+
+export function installShellHook(): { installed: boolean; reason?: string } {
+  if (process.platform !== "darwin") return { installed: false, reason: "not macOS" };
+  const home = process.env.HOME;
+  if (!home) return { installed: false, reason: "no HOME" };
+  const zshrcPath = join(home, ".zshrc");
+  try {
+    let content = "";
+    try { content = readFileSync(zshrcPath, "utf8"); } catch { /* file doesn't exist yet */ }
+    if (content.includes(SHELL_HOOK_MARKER)) return { installed: false, reason: "already installed" };
+    const addition = `\n${SHELL_HOOK_LINE}\n`;
+    writeFileSync(zshrcPath, content + addition, { encoding: "utf8", mode: 0o644 });
+    return { installed: true };
+  } catch (err) {
+    return { installed: false, reason: `write failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+export function uninstallShellHook(): { removed: boolean; reason?: string } {
+  if (process.platform !== "darwin") return { removed: false, reason: "not macOS" };
+  const home = process.env.HOME;
+  if (!home) return { removed: false, reason: "no HOME" };
+  const zshrcPath = join(home, ".zshrc");
+  try {
+    const content = readFileSync(zshrcPath, "utf8");
+    if (!content.includes(SHELL_HOOK_MARKER)) return { removed: false, reason: "not installed" };
+    // Remove the hook block (marker line + source line + surrounding newlines)
+    const cleaned = content.replace(/\n?# opencodex claude-env hook\n\[.*claude-env\.sh.*\n?/g, "\n");
+    writeFileSync(zshrcPath, cleaned, { encoding: "utf8", mode: 0o644 });
+    return { removed: true };
+  } catch {
+    return { removed: false, reason: "read/write failed" };
+  }
+}
+
 const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_BASE_URL",
   "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
