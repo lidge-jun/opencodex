@@ -410,6 +410,21 @@ export async function handleResponses(
   body = expandPreviousResponseInput(body);
   const previousResponseInputExpanded = body !== originalBody;
 
+  // Spawn-message compatibility (both directions): agent_message task payloads ride in
+  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
+  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
+  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
+  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
+  {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0)
+      console.warn(
+        `[opencodex] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
+      );
+  }
+
   let parsed;
   try {
     parsed = parseRequest(body);
@@ -452,15 +467,6 @@ export async function handleResponses(
   // Runs BEFORE the mock-max clamp below so the synthetic top tier (ultra arrives
   // as max on the codex wire) is still visible. Both request shapes are rewritten.
   {
-    const requestedModelId = logCtx.requestedModel ?? route.modelId;
-    // Cross-provider spawn poison fix: native-bound requests may carry plaintext parked in
-    // encrypted_content slots (spawn messages minted under a routed parent). Rewrite them
-    // to input_text before the passthrough serializes _rawBody verbatim.
-    if (!requestedModelId.includes("/")) {
-      const raw = parsed._rawBody as { input?: unknown } | undefined;
-      const rewritten = sanitizeEncryptedContentInPlace(raw?.input);
-      if (rewritten > 0) console.warn(`[opencodex] ${route.modelId}: rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (routed-parent spawn compatibility)`);
-    }
     const guidance = await multiAgentGuidanceText(parsed, config.injectionModel, config.injectionEffort, config.subagentModels, config.injectionPrompt);
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
