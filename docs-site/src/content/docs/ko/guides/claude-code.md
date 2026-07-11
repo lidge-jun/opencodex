@@ -62,6 +62,16 @@ ocx claude
 지정할 수 있어요.
 
 ## /model 선택기("From gateway")
+각 항목은 `gemini-3-pro (gemini)` 같은 정직한 표시 이름과 함께, 공식 ModelInfo 형태의 모델
+능력 정보(추론 강도 사다리, thinking 타입)를 실어 보냅니다 — Claude Desktop의 서드파티
+게이트웨이 모드가 추론 강도 선택 UI를 열 수 있게 하기 위해서입니다. 실제 Anthropic 모델은
+원래 id를 그대로 유지합니다. 합성된 2026 날짜는 내부 슬롯이며 출시일이 아닙니다. 구버전의
+해시 별칭과 `claude-ocx-<provider>--<model>` 별칭도 계속 해석됩니다. 컨텍스트가 1M인 모델에는
+`…[1m]` 행이 하나 더 생깁니다 — 이걸 고르면 Claude Code가 그 모델의 컨텍스트를 1M로 계산합니다
+(자동 요약 유지, 프록시가 표식을 떼고 라우팅). 선택하면 Claude Code의
+`settings.json` `model` 필드에 저장되고, 인바운드 요청에서
+별칭이 라우팅 모델로 되돌려집니다. 구버전 Claude Code에서는 `ANTHROPIC_MODEL`로 슬롯을
+지정하거나 `/model`에 라우팅 id를 직접 입력하세요 (Claude Code는 문자열을 그대로 통과시킵니다).
 
 Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 모델을 찾아 기본 `/model`
 선택기의 "From gateway" 항목에 표시해요. 선택기는 `claude` 또는 `anthropic`으로 시작하는 ID만
