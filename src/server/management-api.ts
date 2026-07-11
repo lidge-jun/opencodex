@@ -46,7 +46,8 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxProviderConfig } from "../types";
+import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxProviderConfig } from "../types";
+import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
@@ -1082,6 +1083,56 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
+  if (url.pathname === "/api/claude-desktop" && req.method === "GET") {
+    try {
+      return jsonResponse(await buildClaudeDesktopState(config));
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/claude-desktop" && req.method === "PUT") {
+    let body: { profile?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try {
+      const { parseDesktopProfile, reconcileDesktopProfile } = await import("../claude/desktop-profile");
+      const parsed = parseDesktopProfile(body.profile);
+      const state = await buildClaudeDesktopState(config, parsed);
+      config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
+      saveConfig(config);
+      return jsonResponse({ ok: true, ...await buildClaudeDesktopState(config) });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
+    try {
+      const state = await buildClaudeDesktopState(config);
+      config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
+      saveConfig(config);
+      const { writeDesktop3pConfig } = await import("../claude/desktop-3p");
+      const { visibleNativeSlugs } = await import("../codex/catalog");
+      const routed = state.models
+        .filter(model => model.available && !model.route.startsWith("native/"))
+        .map(model => {
+          const slash = model.route.indexOf("/");
+          return { provider: model.route.slice(0, slash), id: model.route.slice(slash + 1), contextWindow: model.contextWindow };
+        });
+      const result = writeDesktop3pConfig(
+        config.port,
+        [...visibleNativeSlugs(config)],
+        routed,
+        config.apiKeys?.[0]?.key,
+        "static",
+        state.profile,
+      );
+      if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
+      return jsonResponse({ ok: true, saved: true, applied: true, path: result.path });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+
+  // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../codex/catalog");
@@ -1647,4 +1698,34 @@ function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProviderConfi
   if (!matchesRegistryStaticHeaders) return provider;
   const { headers: _headers, ...rest } = provider;
   return rest;
+
+/** Shared Desktop profile DTO builder for the management API and CLI. */
+export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxClaudeDesktopProfile) {
+  const { filterCatalogVisibleModels, visibleNativeSlugs } = await import("../codex/catalog");
+  const { reconcileDesktopProfile, renderDesktopProfile } = await import("../claude/desktop-profile");
+  const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
+  const profileModels: DesktopProfileModel[] = [
+    ...visibleNativeSlugs(config).map(id => ({ route: `native/${id}`, label: `${id} (native)` })),
+    ...routed.map(model => ({
+      route: `${model.provider}/${model.id}`,
+      label: `${model.id} (${model.provider})`,
+      ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
+    })),
+  ];
+  const profile = reconcileDesktopProfile(stored ?? config.claudeCode?.desktopProfile, profileModels);
+  const available = new Set(profileModels.map(model => model.route));
+  const modelByRoute = new Map(profileModels.map(model => [model.route, model]));
+  const models = Object.keys(profile.assignments).sort().map(route => ({
+    route,
+    label: modelByRoute.get(route)?.label ?? route,
+    available: available.has(route),
+    ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
+    assignment: profile.assignments[route]!,
+  }));
+  return {
+    profile,
+    models,
+    rendered: renderDesktopProfile(profile, profileModels),
+    port: config.port,
+  };
 }

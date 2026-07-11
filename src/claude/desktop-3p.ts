@@ -1,12 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { atomicWriteFile } from "../config";
+import type { OcxClaudeDesktopProfile } from "../types";
+import {
+  reconcileDesktopProfile,
+  renderDesktopProfile,
+  type DesktopProfileModel,
+} from "./desktop-profile";
 
 export interface Desktop3pModelEntry {
   name: string;
   labelOverride: string;
-  anthropicFamilyTier: "opus";
+  anthropicFamilyTier: "opus" | "fable" | "sonnet" | "haiku";
   isFamilyDefault?: boolean;
   /**
    * Desktop's documented 1M-context capability assertion. Set ONLY from an
@@ -59,6 +66,7 @@ interface Desktop3pMetadata {
 }
 
 let desktop3pRegistry = new Map<string, string>();
+let desktop3pAliasesByRoute = new Map<string, string>();
 
 /** Derive a stable letter-first, three-character base36 code from a route key. */
 export function deriveDesktop3pCode(route: string): string {
@@ -102,6 +110,7 @@ function displayModelId(modelId: string): string {
 function collectDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): { models: Desktop3pModelEntry[]; registry: Map<string, string> } {
   const registry = new Map<string, string>();
   const models: Desktop3pModelEntry[] = [];
@@ -109,6 +118,35 @@ function collectDesktop3pModels(
     ...nativeSlugs.map(id => ({ provider: "native", id })),
     ...routedModels,
   ];
+
+  if (profile) {
+    const profileModels = candidates.map(({ provider, id, contextWindow }) => ({
+      route: `${provider}/${id}`,
+      label: `${displayModelId(id)} (${provider})`,
+      ...(typeof contextWindow === "number" ? { contextWindow } : {}),
+    } satisfies DesktopProfileModel));
+    const reconciled = reconcileDesktopProfile(profile, profileModels);
+    const rendered = renderDesktopProfile(reconciled, profileModels);
+    const aliasesByRoute = new Map<string, string>();
+    for (const model of rendered) {
+      aliasesByRoute.set(model.route, model.name);
+      if (!model.route.startsWith("anthropic/claude-")) registry.set(model.name, model.route);
+      const providerEnd = model.route.indexOf("/");
+      const provider = model.route.slice(0, providerEnd);
+      const id = model.route.slice(providerEnd + 1);
+      const legacy = legacyDesktop3pAlias(provider, id);
+      if (!registry.has(legacy)) registry.set(legacy, model.route);
+      models.push({
+        name: model.name,
+        labelOverride: model.label,
+        anthropicFamilyTier: model.family,
+        ...(model.isFamilyDefault ? { isFamilyDefault: true } : {}),
+        ...(model.supports1m ? { supports1m: true } : {}),
+      });
+    }
+    desktop3pAliasesByRoute = aliasesByRoute;
+    return { models, registry };
+  }
 
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
@@ -147,6 +185,7 @@ function collectDesktop3pModels(
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
+  desktop3pAliasesByRoute = new Map(candidates.map(({ provider, id }) => [`${provider}/${id}`, desktop3pAlias(provider, id)]));
   return { models, registry };
 }
 
@@ -154,8 +193,9 @@ function collectDesktop3pModels(
 export function buildDesktop3pRegistry(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): Map<string, string> {
-  const { registry } = collectDesktop3pModels(nativeSlugs, routedModels);
+  const { registry } = collectDesktop3pModels(nativeSlugs, routedModels, profile);
   desktop3pRegistry = registry;
   return registry;
 }
@@ -164,8 +204,9 @@ export function buildDesktop3pRegistry(
 export function generateDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): Desktop3pModelEntry[] {
-  const { models, registry } = collectDesktop3pModels(nativeSlugs, routedModels);
+  const { models, registry } = collectDesktop3pModels(nativeSlugs, routedModels, profile);
   desktop3pRegistry = registry;
   return models;
 }
@@ -173,6 +214,11 @@ export function generateDesktop3pModels(
 /** Resolve an alias using the most recently generated Desktop model registry. */
 export function resolveDesktop3pAlias(alias: string): string | null {
   return desktop3pRegistry.get(alias) ?? null;
+}
+
+/** Alias selected by the installed profile registry, falling back to the legacy hash shape. */
+export function activeDesktop3pAlias(provider: string, modelId: string): string {
+  return desktop3pAliasesByRoute.get(`${provider}/${modelId}`) ?? desktop3pAlias(provider, modelId);
 }
 
 /**
@@ -189,6 +235,7 @@ export function generateDesktop3pConfig(
   routedModels: Array<Desktop3pRoutedModel>,
   apiKey = "ocx",
   mode: Desktop3pConfigMode = "static",
+  profile?: OcxClaudeDesktopProfile,
 ): object {
   const base = {
     inferenceProvider: "gateway",
@@ -198,13 +245,13 @@ export function generateDesktop3pConfig(
   };
   if (mode === "discovery") {
     // Build/refresh the decode registry even though no static list is emitted.
-    buildDesktop3pRegistry(nativeSlugs, routedModels);
+    buildDesktop3pRegistry(nativeSlugs, routedModels, profile);
     return { ...base, modelDiscoveryEnabled: true };
   }
   return {
     ...base,
     modelDiscoveryEnabled: mode === "hybrid",
-    inferenceModels: generateDesktop3pModels(nativeSlugs, routedModels),
+    inferenceModels: generateDesktop3pModels(nativeSlugs, routedModels, profile),
   };
 }
 
@@ -222,8 +269,10 @@ export function writeDesktop3pConfig(
   routedModels: Array<Desktop3pRoutedModel>,
   apiKey?: string,
   mode: Desktop3pConfigMode = "static",
+  profile?: OcxClaudeDesktopProfile,
 ): { written: boolean; path: string; reason?: string } {
-  const libraryPath = join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+  const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
+    || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
   const metadataPath = join(libraryPath, "_meta.json");
   let configPath = libraryPath;
 
@@ -238,17 +287,24 @@ export function writeDesktop3pConfig(
       ? metadata.entries.map(current => current === existing ? entry : current)
       : [...metadata.entries, entry];
 
-    writeFileSync(configPath, JSON.stringify(generateDesktop3pConfig(port, nativeSlugs, routedModels, apiKey, mode), null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    writeFileSync(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    const configJson = JSON.stringify(generateDesktop3pConfig(port, nativeSlugs, routedModels, apiKey, mode, profile), null, 2) + "\n";
+    atomicReplaceDesktopConfig(configPath, configJson);
+    atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
     return { written: true, path: configPath };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { written: false, path: configPath, reason };
   }
+}
+
+/** Backup an existing owned config then atomically replace it. Exported for failure-path tests. */
+export function atomicReplaceDesktopConfig(
+  path: string,
+  content: string,
+  writer: (path: string, content: string) => void = atomicWriteFile,
+): { backupPath?: string } {
+  const backupPath = `${path}.bak`;
+  if (existsSync(path)) copyFileSync(path, backupPath);
+  writer(path, content);
+  return existsSync(backupPath) ? { backupPath } : {};
 }

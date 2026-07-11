@@ -11,17 +11,20 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 let testDir = "";
 let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
+let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-mgmt-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-mgmt-"));
   process.env.OPENCODEX_HOME = testDir;
   // These API tests intentionally toggle agent injection off. Never let that
   // prune the developer's real ~/.claude/agents directory.
   process.env.CLAUDE_CONFIG_DIR = join(testDir, "claude");
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   saveConfig({
     port: 0,
     defaultProvider: "mock",
@@ -36,6 +39,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+  if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -414,6 +419,54 @@ test("PUT validation rejects bad shapes", async () => {
       expect(((await r.json()) as { error: string }).error).toBe(error);
     }
     expect(loadConfig().claudeCode).toBeUndefined(); // nothing persisted on rejects
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop profile GET, PUT and apply round-trip four-family assignments", async () => {
+  const server = startServer(0);
+  try {
+    const initial = await fetch(new URL("/api/claude-desktop", server.url)).then(r => r.json()) as Record<string, any>;
+    expect(initial.profile.version).toBe(1);
+    expect(initial.models.some((model: { route: string }) => model.route === "mock/test-model")).toBe(true);
+    expect(initial.profile.assignments["mock/test-model"].family).toBe("opus");
+
+    const edited = structuredClone(initial.profile);
+    edited.assignments["mock/test-model"].family = "sonnet";
+    edited.defaults.opus = Object.keys(edited.assignments)
+      .filter(route => edited.assignments[route].family === "opus")
+      .sort()[0] ?? null;
+    edited.defaults.sonnet = "mock/test-model";
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: edited }),
+    });
+    expect(put.status).toBe(200);
+    expect(loadConfig().claudeCode?.desktopProfile?.defaults.sonnet).toBe("mock/test-model");
+
+    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
+    expect(apply.status).toBe(200);
+    const result = await apply.json() as { path: string; applied: boolean };
+    expect(result.applied).toBe(true);
+    expect(result.path.startsWith(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!)).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop PUT rejects invalid JSON profile without mutating saved config", async () => {
+  const server = startServer(0);
+  try {
+    const before = structuredClone(loadConfig());
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: { version: 1, assignments: {}, defaults: { opus: "missing", fable: null, sonnet: null, haiku: null } } }),
+    });
+    expect(put.status).toBe(400);
+    expect(loadConfig()).toEqual(before);
   } finally {
     server.stop(true);
   }
