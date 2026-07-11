@@ -414,3 +414,32 @@ describe("sanitizeEncryptedContentInPlace", () => {
     expect(parts[0]).toEqual({ type: "encrypted_content", encrypted_content: fernet });
   });
 });
+
+describe("spawn-message delivery (agent_message + encrypted slot)", () => {
+  test("sanitize-then-parse delivers the spawn task payload as a user message on routed paths", () => {
+    // Mirrors handleResponses order: sanitize and normalize the RAW input, then parseRequest.
+    // Regression for spawned sub-agents receiving empty task payloads when the routed parser
+    // does not understand agent_message and its task rides in a plaintext encrypted slot.
+    const body = {
+      model: "anthropic/claude-fable-5",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "env context" }] },
+        { type: "agent_message", author: "/root", recipient: "/root/worker", content: [
+          { type: "input_text", text: "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n" },
+          { type: "encrypted_content", encrypted_content: "TASK: build the thing exactly as specified." },
+        ] },
+      ],
+    };
+    expect(sanitizeEncryptedContentInPlace(body.input)).toBe(1);
+    expect(body.input[1]).toMatchObject({ type: "message", role: "user" });
+    const parsed = parseRequest(body);
+    const users = parsed.context.messages.filter(m => m.role === "user");
+    expect(users).toHaveLength(2);
+    const content = users[1].content;
+    const flat = typeof content === "string"
+      ? content
+      : (content as Array<{ type: string; text?: string }>).map(p => p.text ?? "").join("");
+    expect(flat).toContain("Message Type: NEW_TASK");
+    expect(flat).toContain("TASK: build the thing exactly as specified.");
+  });
+});

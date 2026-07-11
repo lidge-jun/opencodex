@@ -278,6 +278,34 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         continue;
       }
 
+      if (effectiveType === "agent_message") {
+        const agentMessage = item as {
+          author?: string;
+          recipient?: string;
+          content?: unknown;
+        };
+
+        const content = inputContentParts(
+          agentMessage.content as unknown[] | string | undefined,
+        );
+
+        const hasContent =
+          typeof content === "string"
+            ? content.trim().length > 0
+            : content.length > 0;
+
+        // An agent_message is external input delivered to the parent agent.
+        // Preserve it as a user-role turn so signed Anthropic thinking blocks
+        // on either side are never merged into one modified assistant response.
+        messages.push({
+          role: "user",
+          content: hasContent ? content : "(sub-agent message received)",
+          timestamp: now,
+        });
+
+        continue;
+      }
+
       if (effectiveType === "message") {
         const msg = item as { role?: string; content?: unknown };
         switch (msg.role) {
