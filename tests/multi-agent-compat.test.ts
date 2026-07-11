@@ -417,9 +417,9 @@ describe("sanitizeEncryptedContentInPlace", () => {
 
 describe("spawn-message delivery (agent_message + encrypted slot)", () => {
   test("sanitize-then-parse delivers the spawn task payload as a user message on routed paths", () => {
-    // Mirrors handleResponses order: sanitizeEncryptedContentInPlace on the RAW input,
-    // then parseRequest. Regression for spawned sub-agents receiving empty task payloads
-    // (agent_message payload rides in a plaintext encrypted_content slot).
+    // Mirrors handleResponses order: sanitize and normalize the RAW input, then parseRequest.
+    // Regression for spawned sub-agents receiving empty task payloads when the routed parser
+    // does not understand agent_message and its task rides in a plaintext encrypted slot.
     const body = {
       model: "anthropic/claude-fable-5",
       input: [
@@ -431,6 +431,7 @@ describe("spawn-message delivery (agent_message + encrypted slot)", () => {
       ],
     };
     expect(sanitizeEncryptedContentInPlace(body.input)).toBe(1);
+    expect(body.input[1]).toMatchObject({ type: "message", role: "user" });
     const parsed = parseRequest(body);
     const users = parsed.context.messages.filter(m => m.role === "user");
     expect(users).toHaveLength(2);
