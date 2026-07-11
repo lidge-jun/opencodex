@@ -31,7 +31,7 @@ bun run build
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Short Linux + Windows quality gate. `test` job (Bun) runs typecheck/tests/GUI build; `npm-global-smoke` job (Node only, **no setup-bun**) packs and `npm install -g`s the tarball, then runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
+| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test tests`, the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
 | `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli/index.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
@@ -76,9 +76,9 @@ Invariants:
 ## Release workflow
 
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
-typecheck and GUI build, and `scripts/release.ts` handles version bump, commit/push, waiting for
-Cross-platform CI, and dispatching the GitHub Release workflow. Docs publishing is separate from npm
-release publishing.
+typecheck and GUI build, and `scripts/release.ts` now runs local typecheck, `bun test tests`, and
+`bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
+Release workflow dispatch. Docs publishing is separate from npm release publishing.
 
 ## Release metadata invariants
 
@@ -114,19 +114,30 @@ version through `scripts/release.ts`.
 ## Cross-platform CI
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. It runs on
-Linux and Windows only, using the intentionally short command set:
+Linux, Windows, and macOS with two job families:
 
 ```bash
 bun install --frozen-lockfile
 bun x tsc --noEmit
 bun test tests
+bun run privacy:scan
 bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
+cd gui && bun install --frozen-lockfile && bun run lint && bun run build
 bun run src/cli/index.ts help
 ```
 
-The CI intentionally does not build docs, build the GUI, run coverage, run macOS, or perform remote
-Ubuntu/RDP smoke tests. Those stay outside the default gate until a concrete regression justifies the
-extra runtime.
+and the Node-only global-install smoke path:
+
+```bash
+npm install
+npm run build:gui
+npm pack --json > pack.json
+npm install -g ./bitkyc08-opencodex-*.tgz
+ocx help
+```
+
+The CI intentionally does not build docs, run coverage, or perform remote Ubuntu/RDP smoke tests.
+Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
 The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
 checks that the exact release commit (`GITHUB_SHA`) already has a successful Cross-platform CI run.

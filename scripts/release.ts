@@ -4,7 +4,7 @@
  *
  * Usage:
  *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
- *       Preflight (clean tree on main + typecheck) → bump package.json → commit → push →
+ *       Preflight (clean tree + typecheck + tests + privacy scan) → bump package.json → commit → push →
  *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
  *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
  *       Pass --publish to publish.
@@ -212,7 +212,7 @@ if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
 }
 const dryRun = !args.includes("--publish");
 
-// 1. Preflight — must be on main or preview, and typecheck must pass.
+// 1. Preflight — must be on main or preview, and local verification must pass.
 const branch = (await $`git rev-parse --abbrev-ref HEAD`.text()).trim();
 const allowedBranches = ["main", "preview"];
 const expectedTag = branch === "preview" ? "preview" : "latest";
@@ -236,6 +236,10 @@ console.log(`→ release metadata preflight (${packageName}@${version})`);
 await assertUnusedReleaseVersion(packageName, version);
 console.log("→ typecheck");
 await $`bun x tsc --noEmit`;
+console.log("→ test suite");
+await $`bun test tests`;
+console.log("→ privacy scan");
+await $`bun run privacy:scan`;
 
 // 2. Bump package.json only; the workflow creates the version tag after npm publish.
 console.log(`→ bump package.json → ${version}`);

@@ -381,6 +381,8 @@ See the **[Configuration reference](https://lidge-jun.github.io/opencodex/refere
 The public docs — install, providers, routing, sidecars, Codex integration, Codex App model picker, and CLI/config reference — are built from [`docs-site/`](./docs-site) and published to **[lidge-jun.github.io/opencodex](https://lidge-jun.github.io/opencodex/)**.
 
 Maintainer source-of-truth notes live under [`structure/`](./structure). Historical investigations remain under [`docs/`](./docs).
+Contributor setup lives in [`CONTRIBUTING.md`](./CONTRIBUTING.md), and security reporting guidance
+lives in [`SECURITY.md`](./SECURITY.md).
 
 ## Development
 
@@ -402,7 +404,7 @@ the proxy API exposes `/healthz`, `/v1/responses`, `POST /v1/images/generations`
 bun run dev:gui
 ```
 
-See **[Contributing](https://lidge-jun.github.io/opencodex/contributing/)**.
+See **[Contributing](./CONTRIBUTING.md)**.
 
 ## Disclaimer
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 type Finding = {
   file: string;
@@ -127,6 +127,7 @@ function scanFile(file: string): Finding[] {
 }
 
 const findings = gitLsFiles()
+  .filter(existsSync)
   .filter(shouldScan)
   .flatMap(scanFile);
 
