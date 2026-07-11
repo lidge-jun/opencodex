@@ -1096,6 +1096,21 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     try {
       const { parseDesktopProfile, reconcileDesktopProfile } = await import("../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
+      const current = await buildClaudeDesktopState(config);
+      for (const model of current.models.filter(item => !item.available)) {
+        const before = current.profile.assignments[model.route];
+        const after = parsed.assignments[model.route];
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          throw new Error(`현재 사용할 수 없는 모델은 옮길 수 없습니다: ${model.route}`);
+        }
+      }
+      for (const family of ["opus", "fable", "sonnet", "haiku"] as const) {
+        const nextDefault = parsed.defaults[family];
+        const target = nextDefault ? current.models.find(model => model.route === nextDefault) : undefined;
+        if (target && !target.available && current.profile.defaults[family] !== nextDefault) {
+          throw new Error(`현재 사용할 수 없는 모델은 기본값으로 지정할 수 없습니다: ${nextDefault}`);
+        }
+      }
       const state = await buildClaudeDesktopState(config, parsed);
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
       saveConfig(config);

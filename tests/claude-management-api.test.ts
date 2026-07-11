@@ -446,6 +446,10 @@ test("Claude Desktop profile GET, PUT and apply round-trip four-family assignmen
     expect(put.status).toBe(200);
     expect(loadConfig().claudeCode?.desktopProfile?.defaults.sonnet).toBe("mock/test-model");
 
+    const alias = loadConfig().claudeCode?.desktopProfile?.assignments["mock/test-model"]?.alias;
+    const discovery = await fetch(new URL("/v1/models?flavor=anthropic", server.url)).then(r => r.json()) as { data: Array<{ id: string }> };
+    expect(discovery.data.some(model => model.id === alias)).toBe(true);
+
     const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
     expect(apply.status).toBe(200);
     const result = await apply.json() as { path: string; applied: boolean };
@@ -467,6 +471,39 @@ test("Claude Desktop PUT rejects invalid JSON profile without mutating saved con
     });
     expect(put.status).toBe(400);
     expect(loadConfig()).toEqual(before);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop PUT retains but cannot move an unavailable route", async () => {
+  const seeded = loadConfig();
+  seeded.claudeCode = {
+    desktopProfile: {
+      version: 1,
+      assignments: {
+        "missing/old-model": { family: "opus", alias: "claude-opus-4-8-20260101" },
+      },
+      defaults: { opus: "missing/old-model", fable: null, sonnet: null, haiku: null },
+    },
+  };
+  saveConfig(seeded);
+  const server = startServer(0);
+  try {
+    const state = await fetch(new URL("/api/claude-desktop", server.url)).then(r => r.json()) as Record<string, any>;
+    expect(state.models.find((model: { route: string }) => model.route === "missing/old-model")?.available).toBe(false);
+    const edited = structuredClone(state.profile);
+    edited.assignments["missing/old-model"].family = "haiku";
+    edited.defaults.opus = Object.keys(edited.assignments).filter(route => edited.assignments[route].family === "opus").sort()[0] ?? null;
+    edited.defaults.haiku = "missing/old-model";
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: edited }),
+    });
+    expect(put.status).toBe(400);
+    expect((await put.json() as { error: string }).error).toContain("사용할 수 없는 모델");
+    expect(loadConfig().claudeCode?.desktopProfile?.assignments["missing/old-model"]?.family).toBe("opus");
   } finally {
     server.stop(true);
   }
