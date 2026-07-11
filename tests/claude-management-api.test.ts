@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
@@ -455,6 +455,8 @@ test("Claude Desktop profile GET, PUT and apply round-trip four-family assignmen
     const result = await apply.json() as { path: string; applied: boolean };
     expect(result.applied).toBe(true);
     expect(result.path.startsWith(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!)).toBe(true);
+    const appliedConfig = JSON.parse(readFileSync(result.path, "utf8")) as { inferenceGatewayBaseUrl: string };
+    expect(appliedConfig.inferenceGatewayBaseUrl).toBe(new URL(server.url).origin);
   } finally {
     server.stop(true);
   }

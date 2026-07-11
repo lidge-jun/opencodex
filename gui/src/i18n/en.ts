@@ -1021,6 +1021,7 @@ export const en = {
   "claudeDesktop.modelCountOne": "{count} model",
   "claudeDesktop.modelCountMany": "{count} models",
   "claudeDesktop.chooseDefault": "Choose a default",
+  "claudeDesktop.temporaryDefault": "Temporary default",
   "claudeDesktop.laneEmpty": "Drop a model here or use its Move control.",
   "claudeDesktop.available": "Available",
   "claudeDesktop.unavailable": "Unavailable",

@@ -1020,6 +1020,7 @@ export const ko: Record<TKey, string> = {
   "claudeDesktop.modelCountOne": "모델 {count}개",
   "claudeDesktop.modelCountMany": "모델 {count}개",
   "claudeDesktop.chooseDefault": "기본 모델 선택",
+  "claudeDesktop.temporaryDefault": "임시 기본 모델",
   "claudeDesktop.laneEmpty": "모델을 여기에 놓거나 이동 컨트롤을 사용하세요.",
   "claudeDesktop.available": "사용 가능",
   "claudeDesktop.unavailable": "사용 불가",

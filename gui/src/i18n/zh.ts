@@ -1020,6 +1020,7 @@ export const zh: Record<TKey, string> = {
   "claudeDesktop.modelCountOne": "{count} 个模型",
   "claudeDesktop.modelCountMany": "{count} 个模型",
   "claudeDesktop.chooseDefault": "选择默认模型",
+  "claudeDesktop.temporaryDefault": "临时默认模型",
   "claudeDesktop.laneEmpty": "将模型拖到这里，或使用移动控件。",
   "claudeDesktop.available": "可用",
   "claudeDesktop.unavailable": "不可用",

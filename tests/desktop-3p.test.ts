@@ -13,7 +13,7 @@ import {
   parseDesktop3pModeArgs,
   resolveDesktop3pAlias,
 } from "../src/claude/desktop-3p";
-import { moveDesktopRoute, reconcileDesktopProfile } from "../src/claude/desktop-profile";
+import { moveDesktopRoute, reconcileDesktopProfile, setDesktopFamilyDefault } from "../src/claude/desktop-profile";
 import { resolveInboundModel } from "../src/claude/inbound";
 
 describe("Claude Desktop 3P models", () => {
@@ -216,6 +216,27 @@ describe("Claude Desktop 3P models", () => {
       expect(readFileSync(`${path}.bak`, "utf8")).toBe("stable bytes\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy hash collisions stay bound to the same route when default ordering changes", () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const routed = [
+        { provider: "test", id: "model-123" },
+        { provider: "test", id: "model-155" },
+      ];
+      let profile = reconcileDesktopProfile(undefined, routed.map(model => ({
+        route: `${model.provider}/${model.id}`,
+        label: model.id,
+      })));
+      profile = setDesktopFamilyDefault(profile, "opus", "test/model-155");
+      generateDesktop3pModels([], routed, profile);
+      expect(legacyDesktop3pAlias("test", "model-123")).toBe(legacyDesktop3pAlias("test", "model-155"));
+      expect(resolveDesktop3pAlias(legacyDesktop3pAlias("test", "model-123"))).toBe("test/model-123");
+      expect(warning.mock.calls.flat().join(" ")).toContain("stays bound to test/model-123");
+    } finally {
+      warning.mockRestore();
     }
   });
 });

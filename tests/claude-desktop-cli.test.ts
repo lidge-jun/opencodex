@@ -20,7 +20,7 @@ beforeEach(() => {
     port: 10100,
     defaultProvider: "mock",
     providers: {
-      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", models: ["test-model"] },
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, models: ["test-model"] },
     },
   } as OcxConfig);
 });

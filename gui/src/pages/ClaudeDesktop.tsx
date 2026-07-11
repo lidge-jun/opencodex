@@ -134,6 +134,16 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     return grouped;
   }, [data, profile]);
 
+  const effectiveDefaults = useMemo(() => {
+    const result = {} as Record<Family, string | null>;
+    for (const family of FAMILIES) {
+      const active = modelsByFamily[family].filter(model => model.available).map(model => model.route).sort();
+      const stored = profile?.defaults[family] ?? null;
+      result[family] = stored && active.includes(stored) ? stored : (active[0] ?? null);
+    }
+    return result;
+  }, [modelsByFamily, profile]);
+
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;
     setProfile(current => {
@@ -281,6 +291,9 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
                 <span>{t(modelsByFamily[family].length === 1 ? "claudeDesktop.modelCountOne" : "claudeDesktop.modelCountMany", { count: modelsByFamily[family].length })}</span>
               </div>
               {modelsByFamily[family].length > 0 && profile.defaults[family] === null && <span className="claude-default-needed">{t("claudeDesktop.chooseDefault")}</span>}
+              {effectiveDefaults[family] && effectiveDefaults[family] !== profile.defaults[family] && (
+                <span className="claude-default-needed" title={effectiveDefaults[family]!}>{t("claudeDesktop.temporaryDefault")}</span>
+              )}
             </header>
 
             <div className="claude-lane-models">
@@ -307,6 +320,9 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
                       </span>
                     </div>
                     {context && <span className="claude-model-context">{context}</span>}
+                    {effectiveDefaults[family] === model.route && profile.defaults[family] !== model.route && (
+                      <span className="claude-effective-default">{t("claudeDesktop.temporaryDefault")}</span>
+                    )}
 
                     <div className="claude-field">
                       <span>{t("claudeDesktop.alias")}</span>

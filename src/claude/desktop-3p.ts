@@ -131,11 +131,6 @@ function collectDesktop3pModels(
     for (const model of rendered) {
       aliasesByRoute.set(model.route, model.name);
       if (!model.route.startsWith("anthropic/claude-")) registry.set(model.name, model.route);
-      const providerEnd = model.route.indexOf("/");
-      const provider = model.route.slice(0, providerEnd);
-      const id = model.route.slice(providerEnd + 1);
-      const legacy = legacyDesktop3pAlias(provider, id);
-      if (!registry.has(legacy)) registry.set(legacy, model.route);
       models.push({
         name: model.name,
         labelOverride: model.label,
@@ -143,6 +138,21 @@ function collectDesktop3pModels(
         ...(model.isFamilyDefault ? { isFamilyDefault: true } : {}),
         ...(model.supports1m ? { supports1m: true } : {}),
       });
+    }
+    // Legacy hashes are compatibility-only and can collide. Bind them in stable route order so
+    // changing a family default or rendered ordering can never silently rebind an old Desktop id.
+    for (const model of [...rendered].sort((a, b) => a.route.localeCompare(b.route))) {
+      if (model.route.startsWith("anthropic/claude-")) continue;
+      const providerEnd = model.route.indexOf("/");
+      const provider = model.route.slice(0, providerEnd);
+      const id = model.route.slice(providerEnd + 1);
+      const legacy = legacyDesktop3pAlias(provider, id);
+      const existing = registry.get(legacy);
+      if (existing && existing !== model.route) {
+        console.warn(`[opencodex] Claude Desktop legacy alias collision: ${legacy} stays bound to ${existing}; ignoring ${model.route}`);
+        continue;
+      }
+      registry.set(legacy, model.route);
     }
     desktop3pAliasesByRoute = aliasesByRoute;
     return { models, registry };

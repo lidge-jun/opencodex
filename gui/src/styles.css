@@ -1038,6 +1038,7 @@ button.prov-account-row.active { cursor: default; }
 .claude-lane-head > div > span { display: block; margin-top: 1px; color: var(--muted); font-size: 11.5px; }
 .claude-default-radio { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; cursor: pointer; }
 .claude-default-needed { color: var(--amber); font-size: 11.5px; font-weight: 550; }
+.claude-effective-default { display: inline-block; margin-top: 6px; color: var(--amber); font-size: 11px; font-weight: 550; }
 .claude-lane-models { display: flex; flex-direction: column; gap: 9px; min-height: 104px; padding: 10px; }
 .claude-lane-empty {
   display: grid; place-items: center; min-height: 82px; padding: 12px; border: 1px dashed var(--border);

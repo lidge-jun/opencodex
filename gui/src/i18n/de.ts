@@ -1000,6 +1000,7 @@ export const de = {
   "claudeDesktop.modelCountOne": "{count} Modell",
   "claudeDesktop.modelCountMany": "{count} Modelle",
   "claudeDesktop.chooseDefault": "Standard wählen",
+  "claudeDesktop.temporaryDefault": "Temporärer Standard",
   "claudeDesktop.laneEmpty": "Modell hier ablegen oder die Verschieben-Steuerung verwenden.",
   "claudeDesktop.available": "Verfügbar",
   "claudeDesktop.unavailable": "Nicht verfügbar",
