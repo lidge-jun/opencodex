@@ -142,7 +142,8 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
   if (process.platform !== "darwin") return { injected: false, reason: "not macOS" };
   if (config.claudeCode?.enabled === false) return { injected: false, reason: "claude disabled" };
 
-  if (config.claudeCode?.systemEnv === false) return { injected: false, reason: "systemEnv disabled" };
+  // Default OFF — only inject when explicitly enabled by the user.
+  if (config.claudeCode?.systemEnv !== true) return { injected: false, reason: "systemEnv disabled" };
 
   await cleanStaleSystemEnv();
 

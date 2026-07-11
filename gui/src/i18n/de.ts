@@ -418,6 +418,8 @@ export const de = {
   "claude.enabledHint": "Stellt POST /v1/messages (+ count_tokens) und Gateway-Modellerkennung bereit. Wenn aus, erhalten Claude-Code-Anfragen 403.",
   "claude.systemEnv": "Systemumgebung",
   "claude.systemEnvDesc": "Injiziert Umgebungsvariablen, damit ein einfacher claude-Aufruf über den Proxy geleitet wird.",
+  "claude.systemEnvWarning": "⚠️ Dies ändert Ihre ~/.zshrc und injiziert Umgebungsvariablen.\n\nNeue Terminalfenster leiten claude über den Proxy.\nBereits geöffnete Terminals sind NICHT betroffen — öffnen Sie einen neuen Tab.\n\nProxy-Neustart erforderlich (ocx stop && ocx start).\n\nFortfahren?",
+  "claude.systemEnvRestart": "Neustart erforderlich: ocx stop && ocx start. Nur neue Terminals betroffen.",
   "claude.quickstart": "Schnellstart",
   "claude.quickstartHint": "{cmd} startet bei Bedarf den Proxy und öffnet Claude Code damit verbunden (Basis-URL + Modellerkennung); dein claude.ai-Login und die Connectors bleiben aktiv.",
   "claude.manualEnv": "Manuelle Einrichtung (ohne ocx)",

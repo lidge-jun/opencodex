@@ -439,6 +439,8 @@ export const en = {
   "claude.enabledHint": "Serves POST /v1/messages (+ count_tokens) and gateway model discovery. When off, Claude Code requests get 403.",
   "claude.systemEnv": "System Environment",
   "claude.systemEnvDesc": "Inject environment variables so plain claude routes through the proxy.",
+  "claude.systemEnvWarning": "⚠️ Enabling this will modify your ~/.zshrc and inject environment variables.\n\nNew terminal windows will route claude through the proxy.\nAlready-open terminals are NOT affected — open a new tab after enabling.\n\nRequires proxy restart (ocx stop && ocx start) to take effect.\n\nContinue?",
+  "claude.systemEnvRestart": "Requires restart: ocx stop && ocx start. Only new terminals are affected.",
   "claude.quickstart": "Quickstart",
   "claude.quickstartHint": "{cmd} starts the proxy if needed and launches Claude Code wired to it (base URL + model discovery); your claude.ai login and connectors stay active.",
   "claude.manualEnv": "Manual setup (without ocx)",

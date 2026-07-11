@@ -438,6 +438,8 @@ export const zh: Record<TKey, string> = {
   "claude.enabledHint": "提供 POST /v1/messages（+ count_tokens）和网关模型发现。关闭后 Claude Code 请求将收到 403。",
   "claude.systemEnv": "系统环境变量",
   "claude.systemEnvDesc": "注入环境变量，使直接运行 claude 时通过代理路由。",
+  "claude.systemEnvWarning": "⚠️ 启用后将修改 ~/.zshrc 并注入环境变量。\n\n新终端窗口中的 claude 将通过代理路由。\n已打开的终端不受影响 — 启用后请打开新标签页。\n\n需要重启代理 (ocx stop && ocx start) 才能生效。\n\n是否继续？",
+  "claude.systemEnvRestart": "需要重启：ocx stop && ocx start。仅新终端生效。",
   "claude.quickstart": "快速开始",
   "claude.quickstartHint": "{cmd} 会按需启动代理，并注入基础 URL + 模型发现后启动 Claude Code；你的 claude.ai 登录和连接器保持有效。",
   "claude.manualEnv": "手动配置（不使用 ocx）",

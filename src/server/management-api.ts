@@ -661,7 +661,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       model: config.claudeCode?.model ?? "",
       smallFastModel: config.claudeCode?.smallFastModel ?? "",
       modelMap: config.claudeCode?.modelMap ?? {},
-      systemEnv: config.claudeCode?.systemEnv !== false,
+      systemEnv: config.claudeCode?.systemEnv === true,
       available,
       aliases,
       port: config.port,

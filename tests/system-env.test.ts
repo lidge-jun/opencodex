@@ -15,6 +15,7 @@ const baseConfig = {
   port: 4096,
   providers: {},
   defaultProvider: "test",
+  claudeCode: { systemEnv: true },
 } satisfies OcxConfig;
 
 let execSpy: ReturnType<typeof spyOn>;
