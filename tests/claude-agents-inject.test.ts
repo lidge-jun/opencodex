@@ -60,6 +60,8 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     expect(fields.model).toBe(def!.model);
     expect(typeof fields.description).toBe("string");
     expect(body).toContain("generated-by: opencodex");
+    expect(body).toContain(`ocx-route: ${def!.model}`);
+    expect(body).toContain("IDENTITY: your ACTUAL underlying model");
   });
 });
 
