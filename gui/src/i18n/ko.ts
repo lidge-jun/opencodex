@@ -262,11 +262,14 @@ export const ko: Record<TKey, string> = {
   "debug.follow": "Follow",
   "debug.streamProvider": "Provider",
   "debug.streamUsage": "Usage",
+  "debug.streamInjection": "Injection",
   "debug.loading": "디버그 설정 로딩 중…",
   "debug.emptyTitle": "디버그 로깅 꺼짐",
   "debug.empty": "위 카드에서 Provider debug 또는 Usage extraction을 켜세요. 프록시로 요청을 보낸 뒤 라인이 표시됩니다.",
   "debug.noLinesTitle": "라인 대기 중",
-  "debug.noLines": "디버그는 켜져 있지만 아직 캡처된 라인이 없습니다. Codex로 요청을 보내거나 ocx debug provider logs -f를 실행하세요.",
+  "debug.noLines.provider": "공급자 디버그는 켜져 있지만 전송 이상(드롭되거나 잘못된 프레임, Cursor dial/retry 이벤트)만 기록합니다. Anthropic 같은 공급자로의 정상 요청은 라인을 생성하지 않을 수 있습니다.",
+  "debug.noLines.usage": "사용량 추출은 켜져 있지만 아직 캡처된 항목이 없습니다. Codex로 요청을 보내면 여기에 표시됩니다.",
+  "debug.noLines.injection": "주입 로그는 켜져 있지만 아직 캡처된 항목이 없습니다. Collab 및 서브 에이전트 턴의 멀티 에이전트 가이던스 주입과 effort-cap 결정을 기록합니다.",
 
   // usage page
   "usage.title": "사용량",

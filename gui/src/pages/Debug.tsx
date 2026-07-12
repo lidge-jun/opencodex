@@ -17,14 +17,19 @@ interface DebugLogEntry {
   line: string;
 }
 
-type LogStream = "provider" | "usage";
+type LogStream = "provider" | "usage" | "injection";
+
+const STREAMS = ["provider", "usage", "injection"] as const;
+
+const formatLogTime = (at: number): string =>
+  at > 0 ? `[${new Date(at).toLocaleTimeString()}] ` : "";
 
 export default function Debug({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
   const [debug, setDebug] = useState<DebugSettings | null>(null);
   const [debugBusy, setDebugBusy] = useState(false);
   const [stream, setStream] = useState<LogStream>("provider");
-  const [lines, setLines] = useState<string[]>([]);
+  const [entries, setEntries] = useState<DebugLogEntry[]>([]);
   const [follow, setFollow] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const afterRef = useRef(0);
@@ -42,27 +47,31 @@ export default function Debug({ apiBase }: { apiBase: string }) {
     return () => clearInterval(interval);
   }, [apiBase]);
 
-  useEffect(() => {
-    if (!debug) return;
-    const nextStream =
-      debug.enabled && stream === "usage" && !debug.usage
-        ? "provider"
-        : debug.usage && stream === "provider" && !debug.enabled
-          ? "usage"
-          : stream;
-    if (nextStream === stream) return;
-    const timeout = window.setTimeout(() => {
-      setStream(nextStream);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [debug, stream]);
+  const streamIsOn = useCallback(
+    (s: LogStream): boolean =>
+      s === "provider" ? !!debug?.enabled : s === "usage" ? !!debug?.usage : !!debug?.injection,
+    [debug],
+  );
 
-  const streamEnabled = stream === "provider" ? !!debug?.enabled : !!debug?.usage;
-  const logsPath = stream === "provider" ? `${apiBase}/api/debug/logs` : `${apiBase}/api/debug/usage-logs`;
+  useEffect(() => {
+    if (!debug || streamIsOn(stream)) return;
+    const next = STREAMS.find(streamIsOn);
+    if (!next) return;
+    const timeout = window.setTimeout(() => setStream(next), 0);
+    return () => window.clearTimeout(timeout);
+  }, [debug, stream, streamIsOn]);
+
+  const streamEnabled = streamIsOn(stream);
+  const logsPath =
+    stream === "provider"
+      ? `${apiBase}/api/debug/logs`
+      : stream === "usage"
+        ? `${apiBase}/api/debug/usage-logs`
+        : `${apiBase}/api/debug/injection-logs`;
 
   const fetchLogs = useCallback(async (initial: boolean) => {
     if (!streamEnabled) {
-      setLines([]);
+      setEntries([]);
       afterRef.current = 0;
       return;
     }
@@ -72,12 +81,10 @@ export default function Debug({ apiBase }: { apiBase: string }) {
       if (!initial && afterRef.current > 0) params.set("after", String(afterRef.current));
       const res = await fetch(`${logsPath}?${params}`);
       if (!res.ok) return;
-      const entries = await res.json() as DebugLogEntry[];
-      if (entries.length === 0) return;
-      setLines(prev => initial
-        ? entries.map(entry => entry.line)
-        : [...prev, ...entries.map(entry => entry.line)].slice(-2000));
-      afterRef.current = entries[entries.length - 1]!.seq;
+      const next = await res.json() as DebugLogEntry[];
+      if (next.length === 0) return;
+      setEntries(prev => (initial ? next : [...prev, ...next]).slice(-2000));
+      afterRef.current = next[next.length - 1]!.seq;
     } catch { /* ignore */ } finally {
       setRefreshing(false);
     }
@@ -86,7 +93,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     afterRef.current = 0;
     const timeout = window.setTimeout(() => {
-      setLines([]);
+      setEntries([]);
       void fetchLogs(true);
     }, 0);
     return () => window.clearTimeout(timeout);
@@ -101,7 +108,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     if (!follow || !logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [lines, follow]);
+  }, [entries, follow]);
 
   const setDebugFlag = async (flag: "debug" | "usage" | "injection", enabled: boolean) => {
     setDebugBusy(true);
@@ -178,7 +185,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
             </button>
           </div>
 
-          {(debug.enabled || debug.usage) && (
+          {(debug.enabled || debug.usage || debug.injection) && (
             <div style={{ display: "inline-flex", gap: 6, marginTop: 12 }}>
               {debug.enabled && (
                 <button
@@ -198,6 +205,15 @@ export default function Debug({ apiBase }: { apiBase: string }) {
                   {t("debug.streamUsage")}
                 </button>
               )}
+              {debug.injection && (
+                <button
+                  type="button"
+                  className={`btn btn-sm${stream === "injection" ? " btn-primary" : " btn-ghost"}`}
+                  onClick={() => setStream("injection")}
+                >
+                  {t("debug.streamInjection")}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -206,15 +222,17 @@ export default function Debug({ apiBase }: { apiBase: string }) {
       {debug && !streamEnabled ? (
         <div className="empty">
           <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
-          <div className="muted" style={{ fontSize: 13, maxWidth: 560 }}>{t("debug.empty")}</div>
+          <div className="muted" style={{ fontSize: 13, maxWidth: 560, marginInline: "auto" }}>{t("debug.empty")}</div>
         </div>
-      ) : debug && streamEnabled && lines.length === 0 ? (
+      ) : debug && streamEnabled && entries.length === 0 ? (
         <div className="empty">
           <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
-          <div className="muted" style={{ fontSize: 13, maxWidth: 560 }}>{t("debug.noLines")}</div>
+          <div className="muted" style={{ fontSize: 13, maxWidth: 560, marginInline: "auto" }}>{t(`debug.noLines.${stream}`)}</div>
         </div>
       ) : debug && streamEnabled ? (
-        <pre ref={logRef} className="log-detail-json" style={{ maxHeight: "calc(100vh - 280px)" }}>{lines.join("\n")}</pre>
+        <pre ref={logRef} className="log-detail-json" style={{ maxHeight: "calc(100vh - 280px)" }}>
+          {entries.map(entry => `${formatLogTime(entry.at)}${entry.line}`).join("\n")}
+        </pre>
       ) : null}
     </>
   );

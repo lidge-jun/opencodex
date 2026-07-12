@@ -6,6 +6,7 @@ import { saveConfig } from "../src/config";
 import { appendDebugLogLine, getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { clearDebugSettings, setDebugSettings } from "../src/lib/debug-settings";
 import { debugProviderDiagnostic } from "../src/lib/debug";
+import { getInjectionDebugLogEntries, injectionDebugLog, resetInjectionDebugLogBufferForTests } from "../src/lib/injection-debug-log";
 import { startServer } from "../src/server";
 import { appendUsageDebug } from "../src/usage/debug";
 import type { OcxConfig } from "../src/types";
@@ -41,6 +42,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
   resetDebugLogBufferForTests();
+  resetInjectionDebugLogBufferForTests();
   clearDebugSettings();
   delete process.env.OCX_DEBUG;
   delete process.env.OPENCODEX_USAGE_DEBUG;
@@ -52,6 +54,7 @@ afterEach(() => {
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   resetDebugLogBufferForTests();
+  resetInjectionDebugLogBufferForTests();
   clearDebugSettings();
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
@@ -210,6 +213,44 @@ describe("management API /api/debug/logs", () => {
       const entries = await res.json() as unknown[];
       expect(entries.length).toBeLessThanOrEqual(2000);
       expect(entries.length).toBe(getDebugLogEntries().length);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("management API /api/debug/injection-logs", () => {
+  test("returns buffered injection lines with seq cursor and limit", async () => {
+    setDebugSettings({ injection: true });
+    injectionDebugLog("[opencodex] gpt-5.4: multi-agent guidance injected (surface=collab, 128 chars)");
+    injectionDebugLog("[opencodex] gpt-5.4: effort cap applied (ultra -> high, main turn)");
+
+    const server = startServer(0);
+    try {
+      const all = await fetch(new URL("/api/debug/injection-logs?limit=500", server.url));
+      expect(all.status).toBe(200);
+      const entries = await all.json() as { seq: number; line: string }[];
+      expect(entries).toHaveLength(2);
+      expect(entries[0]!.seq).toBe(1);
+      expect(entries[1]!.line).toContain("effort cap applied");
+
+      const tail = await fetch(new URL(`/api/debug/injection-logs?after=${entries[0]!.seq}&limit=500`, server.url));
+      const tailEntries = await tail.json() as { seq: number; line: string }[];
+      expect(tailEntries).toHaveLength(1);
+      expect(tailEntries[0]!.line).toContain("effort cap applied");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("caps limit query param at 2000", async () => {
+    for (let i = 0; i < 5; i += 1) injectionDebugLog(`[opencodex] inj:${i}`);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/debug/injection-logs?limit=99999", server.url));
+      const entries = await res.json() as unknown[];
+      expect(entries.length).toBeLessThanOrEqual(2000);
+      expect(entries.length).toBe(getInjectionDebugLogEntries().length);
     } finally {
       await server.stop(true);
     }

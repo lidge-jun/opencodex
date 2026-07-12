@@ -66,6 +66,23 @@ describe("decodeRequestBody", () => {
     expect(() => decodeRequestBody(compressed, "zstd")).toThrow(DecompressedBodyTooLargeError);
   });
 
+  test("aborts DURING inflation via maxOutputLength — activation per codec (injected cap)", () => {
+    // Review finding (PR #96): the cap must fire inside zlib, not after full allocation.
+    // A small injected cap keeps the test cheap while exercising the exact
+    // ERR_BUFFER_TOO_LARGE -> DecompressedBodyTooLargeError path.
+    const CAP = 1024;
+    const inflates64k = new Uint8Array(64 * 1024);
+    expect(() => decodeRequestBody(Bun.zstdCompressSync(inflates64k), "zstd", CAP)).toThrow(DecompressedBodyTooLargeError);
+    expect(() => decodeRequestBody(Bun.gzipSync(inflates64k), "gzip", CAP)).toThrow(DecompressedBodyTooLargeError);
+    expect(() => decodeRequestBody(Bun.deflateSync(inflates64k), "deflate", CAP)).toThrow(DecompressedBodyTooLargeError);
+  });
+
+  test("injected cap still admits bodies within the limit", () => {
+    const CAP = 1024 * 1024;
+    const compressed = Bun.zstdCompressSync(PAYLOAD_BYTES);
+    expect(new TextDecoder().decode(decodeRequestBody(compressed, "zstd", CAP))).toBe(JSON.stringify(PAYLOAD));
+  });
+
   test("decodes image-heavy bodies that exceed the old 64MB cap (regression)", () => {
     // The reported "Invalid JSON body" failure: ~12 screenshots inflate past the former 64MB cap.
     // 100MB is over the old limit and under the current one, so it must now decode.

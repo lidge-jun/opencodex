@@ -263,11 +263,14 @@ export const en = {
   "debug.follow": "Follow",
   "debug.streamProvider": "Provider",
   "debug.streamUsage": "Usage",
+  "debug.streamInjection": "Injection",
   "debug.loading": "Loading debug settings…",
   "debug.emptyTitle": "Debug logging is off",
   "debug.empty": "Turn on Provider debug or Usage extraction in the card above. Lines appear here after you send a request through the proxy.",
   "debug.noLinesTitle": "Waiting for lines",
-  "debug.noLines": "Debug is on but nothing has been captured yet. Send a chat/request through Codex, or run ocx debug provider logs -f in a terminal.",
+  "debug.noLines.provider": "Provider debug is on, but it only records transport anomalies (dropped or malformed frames, and Cursor dial/retry events). A clean request through a provider like Anthropic can produce no lines.",
+  "debug.noLines.usage": "Usage extraction is on but nothing has been captured yet. Send a chat/request through Codex and it appears here.",
+  "debug.noLines.injection": "Injection log is on but nothing has been captured yet. It records multi-agent guidance injection and effort-cap decisions on collab and sub-agent turns.",
 
   // usage page
   "usage.title": "Usage",

@@ -19,6 +19,7 @@ import {
   upsertOAuthProvider,
 } from "../oauth";
 import { removeCredential } from "../oauth/store";
+import { providerDestinationResolvedError } from "../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../oauth/key-providers";
 import { deriveProviderPresets } from "../providers/derive";
 import { fetchProviderQuotaReports } from "../providers/quota";
@@ -28,6 +29,7 @@ import { getUsageDebugLogEntries } from "../usage/debug";
 import { parseRange, summarizeUsage } from "../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../codex/auth-context";
 import { getDebugLogEntries } from "../lib/debug-log-buffer";
+import { getInjectionDebugLogEntries } from "../lib/injection-debug-log";
 import {
   clearDebugSettings,
   clearDebugSetting,
@@ -207,6 +209,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     return jsonResponse(getUsageDebugLogEntries({ after, limit }));
   }
 
+  if (url.pathname === "/api/debug/injection-logs" && req.method === "GET") {
+    const { after, limit } = parseDebugLogQuery(url);
+    return jsonResponse(getInjectionDebugLogEntries({ after, limit }));
+  }
+
   if (url.pathname === "/api/debug" && req.method === "PUT") {
     let body: { debug?: unknown; usage?: unknown; injection?: unknown; reset?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
@@ -288,6 +295,10 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     }
     const providerError = providerManagementConfigError(name, prov);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    // Hostname destinations additionally get a DNS-resolved SSRF check at write time —
+    // the sync check above only classifies literal IPs (review finding, PR #96).
+    const resolvedError = await providerDestinationResolvedError(name, prov);
+    if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
     // Catalog providers (e.g. ollama-cloud) carry a models + vision/reasoning classification the GUI
     // doesn't send — merge it in so the sidecars are gated correctly.
     enrichProviderFromCatalog(name, prov);

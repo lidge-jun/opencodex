@@ -1,3 +1,5 @@
+import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
+
 /**
  * Request-body decompression for the /v1/responses data plane.
  *
@@ -25,27 +27,54 @@ export class UnsupportedContentEncodingError extends Error {
 }
 
 export class DecompressedBodyTooLargeError extends Error {
-  constructor(readonly bytes: number) {
-    super(`Decompressed request body exceeds ${MAX_DECOMPRESSED_BODY_BYTES} bytes`);
+  constructor(readonly bytes: number, limit: number = MAX_DECOMPRESSED_BODY_BYTES) {
+    super(`Decompressed request body exceeds ${limit} bytes`);
   }
 }
 
-function assertBodySizeWithinLimit(body: Uint8Array): Uint8Array {
-  if (body.byteLength > MAX_DECOMPRESSED_BODY_BYTES) throw new DecompressedBodyTooLargeError(body.byteLength);
+function assertBodySizeWithinLimit(body: Uint8Array, maxBytes: number): Uint8Array {
+  if (body.byteLength > maxBytes) throw new DecompressedBodyTooLargeError(body.byteLength, maxBytes);
   return body;
 }
 
-export function decodeRequestBody(raw: Uint8Array, contentEncoding: string | null): Uint8Array {
+function inflateDeflateBody(compressed: Uint8Array<ArrayBuffer>, opts: { maxOutputLength: number }): Uint8Array {
+  // HTTP "deflate" appears both zlib-wrapped and raw in the wild (Bun.deflateSync emits raw,
+  // which the previous Bun.inflateSync accepted). Try zlib-wrapped first, fall back to raw —
+  // but never swallow the size-cap abort.
+  try {
+    return inflateSync(compressed, opts);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ERR_BUFFER_TOO_LARGE") throw err;
+    return inflateRawSync(compressed, opts);
+  }
+}
+
+export function decodeRequestBody(
+  raw: Uint8Array,
+  contentEncoding: string | null,
+  maxBytes: number = MAX_DECOMPRESSED_BODY_BYTES,
+): Uint8Array {
   const encoding = (contentEncoding ?? "").trim().toLowerCase();
-  if (encoding === "" || encoding === "identity") return assertBodySizeWithinLimit(raw);
+  if (encoding === "" || encoding === "identity") return assertBodySizeWithinLimit(raw, maxBytes);
   const compressed = raw as Uint8Array<ArrayBuffer>;
+  // `maxOutputLength` makes zlib abort DURING inflation (ERR_BUFFER_TOO_LARGE), so a
+  // decompression bomb never allocates beyond the cap — checking after the fact would
+  // already have paid the full allocation (review finding, PR #96).
+  const opts = { maxOutputLength: maxBytes };
   let decoded: Uint8Array;
-  if (encoding === "zstd") decoded = Bun.zstdDecompressSync(compressed);
-  else if (encoding === "gzip" || encoding === "x-gzip") decoded = Bun.gunzipSync(compressed);
-  else if (encoding === "deflate") decoded = Bun.inflateSync(compressed);
-  // Multi-codings ("zstd, gzip") and unknown tokens are rejected rather than guessed.
-  else throw new UnsupportedContentEncodingError(encoding);
-  return assertBodySizeWithinLimit(decoded);
+  try {
+    if (encoding === "zstd") decoded = zstdDecompressSync(compressed, opts);
+    else if (encoding === "gzip" || encoding === "x-gzip") decoded = gunzipSync(compressed, opts);
+    else if (encoding === "deflate") decoded = inflateDeflateBody(compressed, opts);
+    // Multi-codings ("zstd, gzip") and unknown tokens are rejected rather than guessed.
+    else throw new UnsupportedContentEncodingError(encoding);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ERR_BUFFER_TOO_LARGE") {
+      throw new DecompressedBodyTooLargeError(maxBytes + 1, maxBytes);
+    }
+    throw err;
+  }
+  return assertBodySizeWithinLimit(decoded, maxBytes);
 }
 
 /** Parse a JSON request body, transparently decoding compressed payloads. */

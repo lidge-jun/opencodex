@@ -10,6 +10,7 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
 import { isInjectionDebugEnabled } from "../lib/debug-settings";
+import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import {
@@ -298,10 +299,19 @@ function encryptedSlotParts(payload: string): Array<Record<string, string>> {
   return parts.length > 0 ? parts : [{ type: "input_text", text: payload }];
 }
 
+function hasEncryptedContentPart(content: unknown): boolean {
+  return Array.isArray(content) && content.some(part => (
+    part && typeof part === "object"
+    && (part as { type?: unknown }).type === "encrypted_content"
+  ));
+}
+
 /**
  * Rewrite non-ciphertext `{type:"encrypted_content"}` parts into `{type:"input_text"}`
- * throughout a native-bound request's input items (message content and
- * function_call_output content arrays share the part shape, codex-rs protocol/models.rs).
+ * throughout a request's input items (message content and function_call_output content
+ * arrays share the part shape, codex-rs protocol/models.rs). An `agent_message` whose
+ * payload becomes entirely plaintext is normalized to a user message so routed parsers
+ * that do not understand the internal item type still deliver the spawn task.
  * Genuine backend blobs are left byte-identical so replay/cache semantics survive, and
  * MIXED slots (plaintext preamble + embedded Fernet task body) are split so the backend
  * decrypts the blob while the prose passes as text. Returns the number of parts rewritten.
@@ -309,7 +319,8 @@ function encryptedSlotParts(payload: string): Array<Record<string, string>> {
 export function sanitizeEncryptedContentInPlace(input: unknown): number {
   if (!Array.isArray(input)) return 0;
   let rewritten = 0;
-  const visit = (node: unknown): void => {
+  const visit = (node: unknown): number => {
+    const before = rewritten;
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i += 1) {
         const child = node[i] as unknown;
@@ -327,13 +338,26 @@ export function sanitizeEncryptedContentInPlace(input: unknown): number {
             continue;
           }
         }
-        visit(child);
+        const childRewrites = visit(child);
+        if (
+          childRewrites > 0
+          && child && typeof child === "object"
+          && (child as { type?: unknown }).type === "agent_message"
+          && !hasEncryptedContentPart((child as { content?: unknown }).content)
+        ) {
+          const message = child as { type: string; role?: string; author?: unknown; recipient?: unknown };
+          message.type = "message";
+          message.role = "user";
+          delete message.author;
+          delete message.recipient;
+        }
       }
-      return;
+      return rewritten - before;
     }
     if (node && typeof node === "object") {
       for (const value of Object.values(node)) visit(value);
     }
+    return rewritten - before;
   };
   visit(input);
   return rewritten;
@@ -410,6 +434,21 @@ export async function handleResponses(
   body = expandPreviousResponseInput(body);
   const previousResponseInputExpanded = body !== originalBody;
 
+  // Spawn-message compatibility (both directions): agent_message task payloads ride in
+  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
+  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
+  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
+  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
+  {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0)
+      console.warn(
+        `[opencodex] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
+      );
+  }
+
   let parsed;
   try {
     parsed = parseRequest(body);
@@ -452,21 +491,12 @@ export async function handleResponses(
   // Runs BEFORE the mock-max clamp below so the synthetic top tier (ultra arrives
   // as max on the codex wire) is still visible. Both request shapes are rewritten.
   {
-    const requestedModelId = logCtx.requestedModel ?? route.modelId;
-    // Cross-provider spawn poison fix: native-bound requests may carry plaintext parked in
-    // encrypted_content slots (spawn messages minted under a routed parent). Rewrite them
-    // to input_text before the passthrough serializes _rawBody verbatim.
-    if (!requestedModelId.includes("/")) {
-      const raw = parsed._rawBody as { input?: unknown } | undefined;
-      const rewritten = sanitizeEncryptedContentInPlace(raw?.input);
-      if (rewritten > 0) console.warn(`[opencodex] ${route.modelId}: rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (routed-parent spawn compatibility)`);
-    }
     const guidance = await multiAgentGuidanceText(parsed, config.injectionModel, config.injectionEffort, config.subagentModels, config.injectionPrompt);
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
-      if (isInjectionDebugEnabled()) console.log(`[opencodex] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, ${guidance.length} chars)`);
+      if (isInjectionDebugEnabled()) injectionDebugLog(`[opencodex] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, ${guidance.length} chars)`);
     } else if (isInjectionDebugEnabled() && collabSurface(parsed) !== null) {
-      console.log(`[opencodex] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
+      injectionDebugLog(`[opencodex] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
     }
   }
 
@@ -489,11 +519,11 @@ export async function handleResponses(
       if (capped) {
         logCtx.requestedEffort = `${capped.from}->${capped.to}`;
         if (isInjectionDebugEnabled()) {
-          console.log(`[opencodex] ${route.modelId}: effort cap applied (${capped.from} -> ${capped.to}, ${capped.subagent ? "sub-agent" : "main"} turn)`);
+          injectionDebugLog(`[opencodex] ${route.modelId}: effort cap applied (${capped.from} -> ${capped.to}, ${capped.subagent ? "sub-agent" : "main"} turn)`);
         }
       }
     } else if (isInjectionDebugEnabled() && (config.effortCap || config.subagentEffortCap)) {
-      console.log(`[opencodex] ${route.modelId}: effort cap skipped (surface=${surface ?? "none"}, v2 feature only)`);
+      injectionDebugLog(`[opencodex] ${route.modelId}: effort cap skipped (surface=${surface ?? "none"}, v2 feature only)`);
     }
   }
 

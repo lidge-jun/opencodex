@@ -262,11 +262,14 @@ export const zh: Record<TKey, string> = {
   "debug.follow": "跟随滚动",
   "debug.streamProvider": "Provider",
   "debug.streamUsage": "Usage",
+  "debug.streamInjection": "Injection",
   "debug.loading": "正在加载调试设置…",
   "debug.emptyTitle": "调试日志已关闭",
   "debug.empty": "请在上方卡片中开启 Provider debug 或 Usage extraction。通过代理发送请求后，诊断行会显示在这里。",
   "debug.noLinesTitle": "等待诊断行",
-  "debug.noLines": "调试已开启但尚未捕获任何行。请通过 Codex 发送请求，或运行 ocx debug provider logs -f。",
+  "debug.noLines.provider": "提供商调试已开启，但仅记录传输异常（丢弃或格式错误的帧，以及 Cursor dial/retry 事件）。通过 Anthropic 等提供商的正常请求可能不会产生任何行。",
+  "debug.noLines.usage": "用量提取已开启但尚未捕获任何内容。请通过 Codex 发送请求，随后会显示在此处。",
+  "debug.noLines.injection": "注入日志已开启但尚未捕获任何内容。它记录协作和子代理回合中的多代理指导注入与 effort-cap 决策。",
 
   // usage page
   "usage.title": "用量",
