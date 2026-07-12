@@ -25,7 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Build with Astro
-        uses: withastro/action@56781b97402ce0487b7e61ce2cb960c0e2cc5289 # v3
+        uses: withastro/action@e84f40bd8d2caa9e768ec82ad30dd81f0b280853 # v6.1.2
         with:
           path: ./docs-site
           node-version: 22
