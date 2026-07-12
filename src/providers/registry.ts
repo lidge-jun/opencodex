@@ -236,6 +236,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ["grok-4.5", "grok-4.3", "grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
     noReasoningModels: ["grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
+    // Replay assistant reasoning_content for grok reasoning models: xAI documents dropped
+    // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
+    // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13 — devlog/_plan/260713_grok_caching).
+    // Models that never emit reasoning simply have no thinking parts to replay (no-op).
+    preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high control (no off tier upstream).
     modelReasoningEfforts: { "grok-4.5": ["low", "medium", "high"] },
     modelContextWindows: {

@@ -613,7 +613,7 @@ export async function handleResponses(
       return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
     }
   }
-  route.provider = resolveProviderTransport(route.providerName, route.provider);
+  route.provider = resolveProviderTransport(route.providerName, route.provider, parsed.options.promptCacheKey);
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
@@ -888,9 +888,11 @@ export async function handleResponses(
       on429: retryAfter => {
         const rotated = rotateKeyOn429(config, route.providerName, retryAfter, Date.now(), route.provider.apiKey);
         if (!rotated) return null;
-        route.provider = rotated;
+        // Re-resolve the auth-mode transport so the conv-id / subscription headers derived at
+        // line ~616 survive the key rotation (rotated providers come from raw config).
+        route.provider = resolveProviderTransport(route.providerName, rotated, parsed.options.promptCacheKey);
         return resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, rotated),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
           config.cacheRetention,
         );
       },
@@ -944,9 +946,11 @@ export async function handleResponses(
       // Release the failed response's socket before retrying; unread bodies otherwise linger
       // until runtime cleanup (one per rotated key under a rate-limit storm).
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-      route.provider = rotated;
+      // Same transport re-resolution as the streaming on429 path: keep conv-id + subscription
+      // headers on the retried request instead of silently reverting to the raw config provider.
+      route.provider = resolveProviderTransport(route.providerName, rotated, parsed.options.promptCacheKey);
       const retryAdapter = resolveAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, rotated),
+        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
         config.cacheRetention,
       );
       const retryRequest = await retryAdapter.buildRequest(parsed, { headers: selectedForwardHeaders });
