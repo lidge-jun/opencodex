@@ -1182,6 +1182,12 @@ export async function fetchWithHeaderTimeout(
   try {
     return await fetch(url, {
       ...init,
+      // Suppress automatic content-encoding negotiation (Bun adds Accept-Encoding: br,gzip,...
+      // by default; providers like OpenRouter respond with Brotli/gzip which Bun decompresses
+      // in blocks — causing SSE frames to be buffered until a full decompression block is ready
+      // rather than being yielded token-by-token). Requesting identity ensures chunks arrive
+      // unencoded and are forwarded to the client immediately.
+      headers: { "Accept-Encoding": "identity", ...init.headers },
       signal: AbortSignal.any([abortSignal, timeout.signal]),
     });
   } finally {
