@@ -28,6 +28,7 @@ import { readUsageEntries } from "../usage/log";
 import { getUsageDebugLogEntries } from "../usage/debug";
 import { parseRange, summarizeUsage } from "../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../codex/auth-context";
+import { getProviderRegistryEntry } from "../providers/registry";
 import { getDebugLogEntries } from "../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../lib/injection-debug-log";
 import {
@@ -403,7 +404,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     // let the (possibly new) apiKey join the pool as the active entry.
     const existingPool = config.providers[name]?.apiKeyPool;
     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
-    config.providers[name] = prov;
+    config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault) config.defaultProvider = name;
     save(config);
     if (prov.apiKey && prov.apiKeyPool) {
@@ -1179,4 +1180,16 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 export async function fetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../codex/catalog");
   return gatherRoutedModels(config);
+}
+
+function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProviderConfig): OcxProviderConfig {
+  const entry = getProviderRegistryEntry(name);
+  if (!entry?.staticHeaders || !provider.headers) return provider;
+  const headerEntries = Object.entries(provider.headers);
+  const staticEntries = Object.entries(entry.staticHeaders);
+  if (headerEntries.length !== staticEntries.length) return provider;
+  const matchesRegistryStaticHeaders = staticEntries.every(([key, value]) => provider.headers?.[key] === value);
+  if (!matchesRegistryStaticHeaders) return provider;
+  const { headers: _headers, ...rest } = provider;
+  return rest;
 }

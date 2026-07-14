@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
@@ -303,6 +303,37 @@ describe("server local API auth", () => {
       expect(await response.json()).toMatchObject({
         error: expect.stringContaining('authMode "forward"'),
       });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider management does not persist registry-only static auth headers for opencode-free", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "opencode-free",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://opencode.ai/zen/v1",
+            authMode: "key",
+          },
+        }),
+      });
+      expect(response.status).toBe(200);
+
+      const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
+      expect(saved.providers["opencode-free"]).toBeDefined();
+      expect(saved.providers["opencode-free"]?.headers).toBeUndefined();
+      expect(saved.providers["opencode-free"]?.keyOptional).toBe(true);
     } finally {
       await server.stop(true);
     }
