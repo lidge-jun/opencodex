@@ -21,7 +21,6 @@ const CLIENT_SECRET = process.env.GOOGLE_ANTIGRAVITY_CLIENT_SECRET
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API = "https://cloudcode-pa.googleapis.com";
-const DAILY_API = "https://daily-cloudcode-pa.googleapis.com";
 const API_VERSION = "v1internal";
 const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
@@ -106,7 +105,7 @@ async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal):
 async function onboardProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
   for (let attempt = 0; attempt < ONBOARD_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw signal.reason ?? new Error("Antigravity onboarding aborted");
-    const response = await fetch(`${DAILY_API}/${API_VERSION}:onboardUser`, {
+    const response = await fetch(`${PROD_API}/${API_VERSION}:onboardUser`, {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent(), "x-goog-api-client": ANTIGRAVITY_GOOG_API_CLIENT_UA },
       body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: antigravityUserAgent() } }),
