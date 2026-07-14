@@ -380,6 +380,17 @@ export interface OcxConfig {
    */
   disabledModels?: string[];
   /**
+   * Shadow call intercept: redirect Codex Desktop's hard-coded gpt-5.4-mini helper calls
+   * (title generation, commit messages, skill orchestration) to a user-chosen model.
+   * Opt-in; disabled by default. When enabled, effort is forced to low.
+   */
+  shadowCallIntercept?: {
+    /** When true, all gpt-5.4-mini* requests are rewritten to the configured model. */
+    enabled?: boolean;
+    /** Replacement model id (e.g. "gpt-5.5"). */
+    model?: string;
+  };
+  /**
    * 3-state multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)
    * - "default" | undefined: respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag)
@@ -668,10 +679,11 @@ export interface OcxProviderConfig {
   unsafeAllowNativeLocalExec?: boolean;
   /**
    * Cursor adapter only: native local exec policy mode (exec-policy.ts).
-   * "off" (default) rejects all server-driven local exec; "on" always allows
-   * (same as legacy unsafeAllowNativeLocalExec:true); "codex-sandbox" allows only
-   * when the request's instructions/developer text declares the Codex
-   * danger-full-access sandbox. NOTE: the declaration is CALLER-CONTROLLED prose —
+   * "codex-sandbox" (default) allows server-driven local exec only when the
+   * request's instructions/developer text declares the Codex danger-full-access
+   * sandbox (approves the normal full-access flow, denies undeclared requests);
+   * "off" rejects all server-driven local exec; "on" always allows (same as legacy
+   * unsafeAllowNativeLocalExec:true). NOTE: the declaration is CALLER-CONTROLLED prose —
    * the proxy cannot verify it. Enable "codex-sandbox" only where every client
    * that can reach the data plane is trusted: the default loopback bind admits
    * ANY process on this host without auth (including other local users on

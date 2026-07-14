@@ -63,19 +63,19 @@ describe("Cursor native exec sandbox policy", () => {
   test.each([
     ["explicit off beats legacy true", { ...baseProvider, nativeLocalExec: "off", unsafeAllowNativeLocalExec: true }, "off"],
     ["legacy true alone", { ...baseProvider, unsafeAllowNativeLocalExec: true }, "on"],
-    ["no setting", baseProvider, "off"],
+    ["no setting", baseProvider, "codex-sandbox"],
     ["explicit codex-sandbox", { ...baseProvider, nativeLocalExec: "codex-sandbox" }, "codex-sandbox"],
   ] as const)("resolves mode: %s", (_name, provider, expected) => {
     expect(resolveCursorNativeExecMode(provider)).toBe(expected);
   });
 
-  // Fail-closed default: with neither nativeLocalExec nor unsafeAllowNativeLocalExec set, native
-  // local exec must be denied even for a request that declares the Codex danger-full-access sandbox.
-  // Enabling requires an explicit provider opt-in (nativeLocalExec "codex-sandbox"|"on").
+  // Default "codex-sandbox" (approve most): with neither field set, native local exec is APPROVED
+  // for a request that declares the Codex danger-full-access sandbox and DENIED otherwise. Set
+  // nativeLocalExec "off" to deny all, or "on" to always allow.
   test.each([
-    ["unset default, declared", true, false],
+    ["unset default, declared full-access", true, true],
     ["unset default, not declared", false, false],
-  ] as const)("unset provider is fail-closed (%s)", (_name, declared, expected) => {
+  ] as const)("unset provider approves declared full-access (%s)", (_name, declared, expected) => {
     expect(effectiveCursorNativeExecAllow(baseProvider, declared)).toBe(expected);
   });
 
