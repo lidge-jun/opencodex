@@ -45,7 +45,9 @@
     "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
-    "release:watch": "bun scripts/release.ts watch"
+    "release:watch": "bun scripts/release.ts watch",
+    "prepush": "bun run typecheck && bun run test",
+    "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.12.0",
