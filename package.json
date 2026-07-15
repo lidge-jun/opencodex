@@ -46,7 +46,7 @@
     "prepublishOnly": "bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
-    "prepush": "bun run typecheck && bun run test",
+    "prepush": "bun run typecheck && bun run test && bun run privacy:scan",
     "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {

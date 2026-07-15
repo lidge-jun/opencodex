@@ -83,18 +83,26 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
     expect(readFileSync(join(agentsDir, "ocx-gpt-5-6-sol.md"), "utf8")).toBe("user replaced this — no marker");
   });
 
-  test("symlinks are never followed or pruned", () => {
+  // Capability probe: Windows without elevated symlink rights throws EPERM. Detect once
+  // so the test reports a visible skip instead of a silent pass-shaped early return.
+  const canSymlink = (() => {
+    const dir = tempDir();
+    try {
+      symlinkSync(join(dir, "probe-target"), join(dir, "probe-link"));
+      return true;
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
+      throw e;
+    }
+  })();
+
+  test.skipIf(!canSymlink)("symlinks are never followed or pruned", () => {
     const dir = tempDir();
     const agentsDir = join(dir, "agents");
     mkdirSync(agentsDir, { recursive: true });
     const victim = join(dir, "victim.md");
     writeFileSync(victim, "precious");
-    try {
-      symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
-    } catch (e: unknown) {
-      if ((e as NodeJS.ErrnoException).code === "EPERM") return; // skip on Windows without elevated symlink rights
-      throw e;
-    }
+    symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
     syncClaudeAgentDefs([], dir); // prune pass
     expect(readFileSync(victim, "utf8")).toBe("precious");
     expect(readdirSync(agentsDir)).toContain("ocx-linked.md");

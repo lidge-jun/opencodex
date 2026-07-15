@@ -1,6 +1,5 @@
 #!/usr/bin/env sh
-# Pre-push hook: typecheck then test.
+# Pre-push hook shim. The actual command list lives in package.json ("prepush").
 # Installed by: bun run setup:hooks
 set -e
-bun run typecheck
-bun run test
+exec bun run prepush
