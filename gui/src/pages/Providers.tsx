@@ -318,32 +318,57 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     notify(data.error || (disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
   };
 
-  if (!config) return <div className="muted">{t("prov.loadingConfig")}</div>;
+  if (!config) {
+    return (
+      <div className="providers-workspace-shell">
+        {status && (
+          <div className="providers-workspace-shell-banner">
+            <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
+          </div>
+        )}
+        <div className="muted" style={{ padding: "24px 20px" }}>
+          {status ? null : t("prov.loadingConfig")}
+        </div>
+      </div>
+    );
+  }
 
   if (layout === "workspace") {
     return (
-      <>
-        {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
-        <ProviderWorkspace
-          providers={config.providers}
-          apiBase={apiBase}
-          onAddProvider={() => setAdding(true)}
-          onUseLegacyView={() => setLayout("classic")}
-          onEditConfig={() => { setLayout("classic"); setEditing(true); }}
-          onSetDisabled={setProviderDisabled}
-          onRemoveProvider={removeProvider}
-          quotaReports={quotaReports}
-          oauthStatus={oauthStatus}
-        />
+      <div className="providers-workspace-shell">
+        {status && (
+          <div className="providers-workspace-shell-banner">
+            <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
+          </div>
+        )}
+        <div className="providers-workspace-shell-body">
+          <ProviderWorkspace
+            providers={config.providers}
+            apiBase={apiBase}
+            onAddProvider={() => setAdding(true)}
+            onUseLegacyView={() => setLayout("classic")}
+            onEditConfig={() => { setLayout("classic"); setEditing(true); }}
+            onSetDisabled={setProviderDisabled}
+            onRemoveProvider={removeProvider}
+            quotaReports={quotaReports}
+            oauthStatus={oauthStatus}
+          />
+        </div>
         {adding && (
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
             onClose={() => setAdding(false)}
-            onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+            onAdded={(name) => {
+              setAdding(false);
+              notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+              fetchConfig();
+              fetchOauth();
+              fetchProviderQuotas(true);
+            }}
           />
         )}
-      </>
+      </div>
     );
   }
 

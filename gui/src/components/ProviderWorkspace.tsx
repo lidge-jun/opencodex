@@ -121,6 +121,13 @@ function ProviderIcon({ name, adapter, baseUrl, cls }: {
 // Rail row
 // ---------------------------------------------------------------------------
 
+function railStatusCls(item: WorkspaceItem): string {
+  const s = binProviderStatus(item);
+  if (s === "disabled") return "providers-workspace-rail-status providers-workspace-rail-status--inactive";
+  if (s === "ready") return "providers-workspace-rail-status providers-workspace-rail-status--active";
+  return "providers-workspace-rail-status providers-workspace-rail-status--warning";
+}
+
 function RailRow({ item, selected, modelCount, onClick }: {
   item: WorkspaceItem;
   selected: boolean;
@@ -134,7 +141,7 @@ function RailRow({ item, selected, modelCount, onClick }: {
       onClick={onClick}
       role="option"
       aria-selected={selected}
-      aria-label={`Select provider ${item.name}`}
+      aria-label={`Select provider ${item.name}, ${statusLabel(item)}`}
     >
       <ProviderIcon
         name={item.name}
@@ -143,7 +150,8 @@ function RailRow({ item, selected, modelCount, onClick }: {
         cls="providers-workspace-rail-icon"
       />
       <span className="providers-workspace-rail-name">{item.name}</span>
-      {modelCount !== undefined && (
+      <span className={railStatusCls(item)} aria-hidden="true" title={statusLabel(item)} />
+      {modelCount !== undefined && modelCount > 0 && (
         <span className="providers-workspace-rail-model-count">{modelCount} models</span>
       )}
       <IconChevron className="providers-workspace-rail-chevron" aria-hidden="true" />
@@ -162,9 +170,10 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
 }) {
   const baseUrl = item.baseUrl?.trim() ? item.baseUrl : "—";
   const status = binProviderStatus(item);
-  const statusText = status === "ready" ? "Ready" : status === "needs-setup" ? "Needs setup" : "Disabled";
+  // Match design mock: connection cell uses "Connected" while the list uses Ready/Needs setup.
+  const statusText = status === "ready" ? "Connected" : status === "needs-setup" ? "Needs setup" : "Disabled";
   const configurationText = status === "ready"
-    ? "Configuration is ready"
+    ? "All systems operational"
     : status === "needs-setup" ? "Credentials required" : "Provider disabled";
   const statusCls = status === "ready"
     ? "pwi-connection-status pwi-connection-status--ok"
@@ -839,7 +848,7 @@ function OverviewPanel({
           </div>
         )}
         <div className="pwi-overview-section pwi-overview-recent">
-          <div className="pwi-overview-section-head">Most used (30d)</div>
+          <div className="pwi-overview-section-head">Recently used</div>
           {mostUsed.length === 0 ? (
             <div className="pwi-recent-empty muted">No usage recorded.</div>
           ) : mostUsed.map(entry => {
