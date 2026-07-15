@@ -35,16 +35,22 @@ interface FormState {
 }
 
 export default function AddProviderModal({
-  apiBase, existingNames, onClose, onAdded,
+  apiBase, existingNames, onClose, onAdded, initialCustom = false,
 }: {
   apiBase: string;
   existingNames: string[];
   onClose: () => void;
   onAdded: (name: string) => void;
+  /** Skip catalog picker and open the custom-provider form immediately. */
+  initialCustom?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const [preset, setPreset] = useState<Preset | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const [preset, setPreset] = useState<Preset | null>(initialCustom ? FALLBACK_PRESETS[0]! : null);
+  const [form, setForm] = useState<FormState | null>(
+    initialCustom
+      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "" }
+      : null,
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [oauthSupported, setOauthSupported] = useState<string[]>([]);
@@ -54,7 +60,7 @@ export default function AddProviderModal({
   const searchRef = useRef<HTMLInputElement>(null);
   const aliveRef = useRef(true);
 
-  useEffect(() => { searchRef.current?.focus(); }, []);
+  useEffect(() => { if (!initialCustom) searchRef.current?.focus(); }, [initialCustom]);
   useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };

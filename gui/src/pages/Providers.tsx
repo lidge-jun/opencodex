@@ -47,6 +47,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const [layout, setLayout] = useState<"workspace" | "classic">("workspace");
+  /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
+  const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
+  /** When true, AddProviderModal opens directly on the custom form. */
+  const [addCustom, setAddCustom] = useState(false);
   const aliveRef = useRef(true);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
@@ -205,11 +209,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timeout);
   }, [fetchAccountSets, oauthCardProviders]);
 
-  // Load key pools for key-auth providers that already have a key configured.
+  // Key pools for every key-auth provider (even without a key yet — so "Add API key" works).
   const keyCardProviders = useMemo(
     () => config
       ? Object.entries(config.providers)
-          .filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward")
+          .filter(([, p]) => p.authMode !== "oauth" && p.authMode !== "forward" && p.authMode !== "local")
           .map(([n]) => n)
       : [],
     [config],
@@ -233,14 +237,47 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       if (res.ok) {
         notify(t("prov.saved"), true);
         setEditing(false);
+        setJsonEditorOpen(false);
         fetchConfig();
         fetchProviderQuotas(true);
       } else {
-        notify(t("prov.saveFailed"), false);
+        // Full PUT may be disabled on newer proxies — surface the error body when present.
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        notify(data.error || t("prov.saveFailed"), false);
       }
     } catch {
       notify(t("prov.invalidJson"), false);
     }
+  };
+
+  const openJsonEditor = () => {
+    if (config) setDraft(JSON.stringify(config, null, 2));
+    setJsonEditorOpen(true);
+    setEditing(true);
+  };
+
+  const closeJsonEditor = () => {
+    setJsonEditorOpen(false);
+    setEditing(false);
+    if (config) setDraft(JSON.stringify(config, null, 2));
+  };
+
+  const handleAddApiKey = async (provider: string, key: string): Promise<boolean> => {
+    const res = await fetch(`${apiBase}/api/providers/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: provider, key }),
+    });
+    if (res.ok) {
+      notify(t("prov.keyAdded", { name: provider }), true);
+      fetchKeyPools(keyCardProviders.includes(provider) ? keyCardProviders : [...keyCardProviders, provider]);
+      fetchConfig();
+      fetchProviderQuotas(true);
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    notify(data.error || t("prov.keyAddFail"), false);
+    return false;
   };
 
   const loginOAuth = async (provider: string, addAccount = false) => {
@@ -375,29 +412,75 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <ProviderWorkspace
             providers={config.providers}
             apiBase={apiBase}
-            onAddProvider={() => setAdding(true)}
+            defaultProvider={config.defaultProvider}
+            onAddProvider={() => { setAddCustom(false); setAdding(true); }}
+            onAddCustomProvider={() => { setAddCustom(true); setAdding(true); }}
             onUseLegacyView={() => setLayout("classic")}
-            onEditConfig={() => { setLayout("classic"); setEditing(true); }}
+            onEditConfig={openJsonEditor}
             onSetDisabled={setProviderDisabled}
             onRemoveProvider={removeProvider}
             onUpdateProvider={updateProvider}
             quotaReports={quotaReports}
             oauthStatus={oauthStatus}
+            accountSets={accountSets}
+            keyPools={keyPools}
+            busyProvider={busy}
+            loginHint={loginInfo}
+            authHandlers={{
+              onLogin: (provider, addAccount) => { void loginOAuth(provider, !!addAccount); },
+              onLogout: (provider) => { void logoutOAuth(provider); },
+              onSwitchAccount: (provider, account) => { void switchAccount(provider, account); },
+              onRemoveAccount: (provider, account) => { void removeAccount(provider, account); },
+              onAddApiKey: handleAddApiKey,
+              onSwitchApiKey: (provider, entry) => { void switchApiKey(provider, entry); },
+              onRemoveApiKey: (provider, entry) => { void removeApiKey(provider, entry); },
+            }}
           />
         </div>
         {adding && (
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
-            onClose={() => setAdding(false)}
+            initialCustom={addCustom}
+            onClose={() => { setAdding(false); setAddCustom(false); }}
             onAdded={(name) => {
               setAdding(false);
+              setAddCustom(false);
               notify(t("prov.added", { name, cmd: "ocx sync" }), true);
               fetchConfig();
               fetchOauth();
               fetchProviderQuotas(true);
             }}
           />
+        )}
+        {jsonEditorOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("prov.editJson")}
+            className="modal-overlay"
+            onClick={closeJsonEditor}
+          >
+            <div className="modal-card pwi-json-modal" onClick={e => e.stopPropagation()}>
+              <div className="modal-head">
+                <h3 style={{ margin: 0, fontSize: 16 }}>{t("prov.editJson")}</h3>
+              </div>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+                Edit the live proxy config as JSON. Secrets are masked in this view — prefer per-provider Settings or Add API key for credentials.
+              </p>
+              <textarea
+                className="input mono pwi-json-textarea"
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                spellCheck={false}
+                aria-label={t("prov.editJson")}
+              />
+              <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+                <button type="button" className="btn btn-ghost" onClick={closeJsonEditor}>{t("common.cancel")}</button>
+                <button type="button" className="btn btn-primary" onClick={() => void saveConfig()}>{t("common.save")}</button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     );

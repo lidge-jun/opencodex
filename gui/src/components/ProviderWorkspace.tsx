@@ -42,6 +42,7 @@ import {
   IconChevron,
   IconExternal,
   IconActivity,
+  IconLock,
 } from "../icons";
 import { Switch } from "../ui";
 
@@ -49,13 +50,48 @@ import { Switch } from "../ui";
 // Public API
 // ---------------------------------------------------------------------------
 
+export type OAuthAccountRow = {
+  id: string;
+  email?: string;
+  active: boolean;
+  needsReauth?: boolean;
+};
+
+export type ApiKeyRow = {
+  id: string;
+  label?: string;
+  masked: string;
+  active: boolean;
+};
+
+export type LoginHint = {
+  provider: string;
+  url?: string;
+  instructions?: string;
+};
+
+export interface ProviderAuthHandlers {
+  onLogin: (provider: string, addAccount?: boolean) => void;
+  onLogout: (provider: string) => void;
+  onSwitchAccount: (provider: string, account: OAuthAccountRow) => void;
+  onRemoveAccount: (provider: string, account: OAuthAccountRow) => void;
+  onAddApiKey: (provider: string, key: string) => Promise<boolean>;
+  onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void;
+  onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void;
+}
+
 export interface ProviderWorkspaceProps {
   /** Provider map as returned from the proxy config API. */
   providers: Record<string, WorkspaceProvider>;
   /** Base URL for API calls, e.g. http://localhost:11434 */
   apiBase: string;
+  /** Name of the default routing provider (shows a Default label in the rail). */
+  defaultProvider?: string;
   onAddProvider: () => void;
+  /** Open the add-provider flow focused on a custom endpoint (not a catalog preset). */
+  onAddCustomProvider?: () => void;
   onUseLegacyView: () => void;
+  /** Open raw config JSON editor (workspace modal — do not leave workspace). */
   onEditConfig: () => void;
   onSetDisabled: (name: string, disabled: boolean) => void;
   onRemoveProvider: (name: string) => void;
@@ -63,6 +99,15 @@ export interface ProviderWorkspaceProps {
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   quotaReports?: Record<string, { updatedAt: number; source?: string; quota?: unknown }>;
   oauthStatus?: Record<string, { loggedIn: boolean; email?: string; error?: string }>;
+  /** OAuth multi-account sets keyed by provider name. */
+  accountSets?: Record<string, { activeAccountId: string | null; accounts: OAuthAccountRow[] }>;
+  /** API-key pools keyed by provider name. */
+  keyPools?: Record<string, ApiKeyRow[]>;
+  /** Provider currently running an OAuth browser flow. */
+  busyProvider?: string | null;
+  /** Live login hint (URL / instructions) for the busy OAuth provider. */
+  loginHint?: LoginHint | null;
+  authHandlers?: ProviderAuthHandlers;
 }
 
 export type ProviderUpdatePatch = {
@@ -160,10 +205,11 @@ function isLocalProvider(item: WorkspaceProvider): boolean {
   }
 }
 
-function RailRow({ item, selected, modelCount, onClick }: {
+function RailRow({ item, selected, modelCount, isDefault, onClick }: {
   item: WorkspaceItem;
   selected: boolean;
   modelCount?: number;
+  isDefault?: boolean;
   onClick: () => void;
 }) {
   const free = isFreeProvider(item);
@@ -175,7 +221,7 @@ function RailRow({ item, selected, modelCount, onClick }: {
       onClick={onClick}
       role="option"
       aria-selected={selected}
-      aria-label={`Select provider ${item.name}, ${statusLabel(item)}${local ? ", local" : free ? ", free" : ", paid"}`}
+      aria-label={`Select provider ${item.name}, ${statusLabel(item)}${isDefault ? ", default" : ""}${local ? ", local" : free ? ", free" : ""}`}
     >
       <ProviderIcon
         name={item.name}
@@ -184,7 +230,10 @@ function RailRow({ item, selected, modelCount, onClick }: {
         cls="providers-workspace-rail-icon"
       />
       <span className="providers-workspace-rail-name">{item.name}</span>
-      {/* Only label exceptions (Local / Free). Paid is the default — no badge. */}
+      {isDefault && (
+        <span className="pwi-rail-meta pwi-rail-meta--default" title="Default routing provider">Default</span>
+      )}
+      {/* Only label exceptions (Local / Free). Paid is the unmarked default. */}
       {local ? (
         <span className="pwi-rail-meta" title="Local runtime">Local</span>
       ) : free ? (
@@ -259,15 +308,7 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
         <div className="pwi-connection-actions">
           <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} aria-label={`Edit ${item.name}`}>
             <IconInfo style={{ width: 13, height: 13 }} aria-hidden="true" />
-            Edit
-          </button>
-          <button type="button" className="btn btn-ghost btn-sm" disabled title="No reconnect endpoint is available" aria-label={`Reconnect ${item.name}`}>
-            <IconRefresh style={{ width: 13, height: 13 }} aria-hidden="true" />
-            Reconnect
-          </button>
-          <button type="button" className="btn btn-danger btn-sm" disabled title="No disconnect endpoint is available" aria-label={`Disconnect ${item.name}`}>
-            <IconX style={{ width: 13, height: 13 }} aria-hidden="true" />
-            Disconnect
+            Edit settings
           </button>
         </div>
       </div>
@@ -286,7 +327,7 @@ function QuickActionsCard({ onSelectTab }: { onSelectTab: (tab: Tab) => void }) 
         <span className="providers-workspace-section-title">Quick actions</span>
       </div>
       <div className="providers-workspace-section-body">
-        <div className="pwi-qa-grid">
+        <div className="pwi-qa-grid pwi-qa-grid--2">
           <a className="pwi-qa-tile" href="#models" onClick={() => onSelectTab("models")} aria-label="Manage models">
             <IconServer style={{ width: 18, height: 18 }} aria-hidden="true" />
             <span className="pwi-qa-label">Manage models</span>
@@ -366,12 +407,21 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
 // Tab panels
 // ---------------------------------------------------------------------------
 
-function TabOverview({ item, usageTotals, quotaReport, onSelectTab, lastCheckedAt }: {
+function TabOverview({
+  item, usageTotals, quotaReport, onSelectTab, lastCheckedAt,
+  oauth, accounts, keys, busy, loginHint, authHandlers,
+}: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: { updatedAt: number; source?: string };
   onSelectTab: (tab: Tab) => void;
   lastCheckedAt?: number;
+  oauth?: { loggedIn: boolean; email?: string; error?: string };
+  accounts?: OAuthAccountRow[];
+  keys?: ApiKeyRow[];
+  busy?: boolean;
+  loginHint?: LoginHint | null;
+  authHandlers?: ProviderAuthHandlers;
 }) {
   return (
     <div className="pwi-overview-tab">
@@ -379,9 +429,245 @@ function TabOverview({ item, usageTotals, quotaReport, onSelectTab, lastCheckedA
       <div className="pwi-overview-layout">
         <div className="pwi-overview-main">
           <ConnectionCard item={item} onEdit={() => onSelectTab("settings")} lastCheckedAt={lastCheckedAt ?? quotaReport?.updatedAt} />
+          <AuthAccountsCard
+            item={item}
+            oauth={oauth}
+            accounts={accounts}
+            keys={keys}
+            busy={busy}
+            loginHint={loginHint}
+            authHandlers={authHandlers}
+          />
           <QuickActionsCard onSelectTab={onSelectTab} />
         </div>
         <StatsSidebar item={item} usageTotals={usageTotals} quotaReport={quotaReport} onViewUsage={() => onSelectTab("usage")} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Accounts / API keys (login-logout + multi-key) — new workspace style
+// ---------------------------------------------------------------------------
+
+function AuthAccountsCard({
+  item, oauth, accounts = [], keys = [], busy = false, loginHint, authHandlers,
+}: {
+  item: WorkspaceItem;
+  oauth?: { loggedIn: boolean; email?: string; error?: string };
+  accounts?: OAuthAccountRow[];
+  keys?: ApiKeyRow[];
+  busy?: boolean;
+  loginHint?: LoginHint | null;
+  authHandlers?: ProviderAuthHandlers;
+}) {
+  const [addingKey, setAddingKey] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  const mode = (item.authMode ?? "").toLowerCase();
+  const isOauth = mode === "oauth";
+  const isForward = mode === "forward";
+  const isLocal = mode === "local" || isLocalProvider(item);
+  // Key-auth: explicit key mode, or unspecified mode that is not oauth/forward/local.
+  const isKeyAuth = mode === "key" || (!isOauth && !isForward && !isLocal) || item.hasApiKey === true;
+
+  // Always show when handlers exist: oauth login, key pool, or at least a configured key/local note.
+  if (!authHandlers) return null;
+  if (isForward) return null; // ChatGPT passthrough — no multi-key / multi-account here
+  if (!isOauth && !isKeyAuth && !isLocal) return null;
+
+  const hintForThis = loginHint?.provider === item.name ? loginHint : null;
+
+  const submitKey = async () => {
+    const key = newKey.trim();
+    if (!key) return;
+    setKeyBusy(true);
+    const ok = await authHandlers.onAddApiKey(item.name, key);
+    setKeyBusy(false);
+    if (ok) {
+      setNewKey("");
+      setAddingKey(false);
+    }
+  };
+
+  return (
+    <div className="providers-workspace-section">
+      <div className="providers-workspace-section-head">
+        <span className="providers-workspace-section-title">
+          {isOauth ? "Account login" : "API keys"}
+        </span>
+      </div>
+      <div className="providers-workspace-section-body pwi-auth-body">
+        {isOauth && (
+          <>
+            <div className="pwi-auth-status-row">
+              <span className={`pwi-auth-dot ${oauth?.loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+              <span className="pwi-auth-status-text">
+                {oauth?.loggedIn
+                  ? (oauth.email ? oauth.email : "Logged in")
+                  : (oauth?.error || "Not logged in")}
+              </span>
+              <span className="pwi-auth-actions">
+                {oauth?.loggedIn ? (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onLogout(item.name)}>
+                    Logout
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => authHandlers.onLogin(item.name, false)}
+                    disabled={busy}
+                  >
+                    {busy
+                      ? <><span className="pwi-spin-inline" aria-hidden="true" /> Waiting for browser…</>
+                      : <><IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> Login</>}
+                  </button>
+                )}
+              </span>
+            </div>
+
+            {busy && hintForThis && (hintForThis.url || hintForThis.instructions) && (
+              <div className="pwi-auth-wait">
+                <span className="pwi-spin-inline pwi-spin-inline--lg" aria-hidden="true" />
+                <div className="pwi-auth-wait-copy">
+                  <div className="pwi-auth-wait-title">Waiting for browser…</div>
+                  {hintForThis.instructions && (
+                    <p className="pwi-auth-wait-hint muted">{hintForThis.instructions}</p>
+                  )}
+                  {hintForThis.url && (
+                    <a
+                      href={hintForThis.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="pwi-auth-open-link"
+                    >
+                      <IconExternal style={{ width: 13, height: 13 }} aria-hidden="true" />
+                      Didn&apos;t open? Click here
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {accounts.length > 0 && (
+              <div className="pwi-auth-list" role="list">
+                {accounts.map(account => (
+                  <div
+                    key={account.id}
+                    className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}
+                    role="listitem"
+                  >
+                    <button
+                      type="button"
+                      className="pwi-auth-row-main"
+                      onClick={() => authHandlers.onSwitchAccount(item.name, account)}
+                      disabled={account.active}
+                      title={account.active ? "Active account" : "Switch to this account"}
+                    >
+                      <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                      <span className="pwi-auth-row-label">{account.email ?? account.id}</span>
+                      {account.needsReauth && <span className="badge badge-amber">Re-auth</span>}
+                      {account.active && <span className="badge badge-primary">Active</span>}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm pwi-auth-row-remove"
+                      onClick={() => authHandlers.onRemoveAccount(item.name, account)}
+                      aria-label={`Remove account ${account.email ?? account.id}`}
+                    >
+                      <IconTrash style={{ width: 13, height: 13 }} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="pwi-auth-add"
+                  onClick={() => authHandlers.onLogin(item.name, true)}
+                  disabled={busy}
+                >
+                  {busy
+                    ? <><span className="pwi-spin-inline" aria-hidden="true" /> Waiting for browser…</>
+                    : <><IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" /> Add account</>}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {(isKeyAuth || (!isOauth && item.hasApiKey)) && (
+          <>
+            <div className="pwi-auth-status-row">
+              <span className={`pwi-auth-dot ${item.hasApiKey || keys.length > 0 ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+              <span className="pwi-auth-status-text">
+                {item.hasApiKey || keys.length > 0
+                  ? (keys.find(k => k.active)?.masked ?? "API key configured")
+                  : "No API key configured"}
+              </span>
+            </div>
+            {keys.length > 0 && (
+              <div className="pwi-auth-list" role="list">
+                {keys.map(entry => (
+                  <div
+                    key={entry.id}
+                    className={`pwi-auth-row${entry.active ? " pwi-auth-row--active" : ""}`}
+                    role="listitem"
+                  >
+                    <button
+                      type="button"
+                      className="pwi-auth-row-main"
+                      onClick={() => authHandlers.onSwitchApiKey(item.name, entry)}
+                      disabled={entry.active}
+                      title={entry.active ? "Active key" : "Switch to this key"}
+                    >
+                      <span className={`pwi-auth-dot ${entry.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                      <span className="pwi-auth-row-label mono">
+                        {entry.label ? `${entry.label} · ${entry.masked}` : entry.masked}
+                      </span>
+                      {entry.active && <span className="badge badge-primary">Active</span>}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm pwi-auth-row-remove"
+                      onClick={() => authHandlers.onRemoveApiKey(item.name, entry)}
+                      aria-label={`Remove key ${entry.label ?? entry.masked}`}
+                    >
+                      <IconTrash style={{ width: 13, height: 13 }} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {addingKey ? (
+              <div className="pwi-auth-keyform">
+                <input
+                  className="input mono"
+                  type="password"
+                  autoFocus
+                  placeholder="sk-… or $ENV_VAR"
+                  value={newKey}
+                  onChange={e => setNewKey(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") void submitKey();
+                    if (e.key === "Escape") { setAddingKey(false); setNewKey(""); }
+                  }}
+                />
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => void submitKey()} disabled={!newKey.trim() || keyBusy}>
+                  {keyBusy ? "Saving…" : "Save"}
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAddingKey(false); setNewKey(""); }}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="pwi-auth-add" onClick={() => setAddingKey(true)}>
+                <IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" />
+                Add API key
+              </button>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -669,12 +955,13 @@ function TabSettings({
 // ---------------------------------------------------------------------------
 
 function DetailPanel({
-  item, apiBase, onSetDisabled, onRemoveProvider, onDeselect, onUpdateProvider,
+  item, apiBase, defaultProvider, onSetDisabled, onRemoveProvider, onDeselect, onUpdateProvider,
   usageTotals, quotaReport, oauth, modelCount, availableModels, selectedModels,
-  onTestDone,
+  onTestDone, accounts, keys, busy, loginHint, authHandlers,
 }: {
   item: WorkspaceItem;
   apiBase: string;
+  defaultProvider?: string;
   onSetDisabled: (name: string, disabled: boolean) => void;
   onRemoveProvider: (name: string) => void;
   onDeselect: () => void;
@@ -686,6 +973,11 @@ function DetailPanel({
   availableModels: string[];
   selectedModels: string[];
   onTestDone?: () => void;
+  accounts?: OAuthAccountRow[];
+  keys?: ApiKeyRow[];
+  busy?: boolean;
+  loginHint?: LoginHint | null;
+  authHandlers?: ProviderAuthHandlers;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [testing, setTesting] = useState(false);
@@ -741,6 +1033,12 @@ function DetailPanel({
           quotaReport={quotaReport}
           onSelectTab={setTab}
           lastCheckedAt={lastCheckedAt}
+          oauth={oauth}
+          accounts={accounts}
+          keys={keys}
+          busy={busy}
+          loginHint={loginHint}
+          authHandlers={authHandlers}
         />
       );
       case "models": return (
@@ -786,6 +1084,9 @@ function DetailPanel({
         <div className="providers-workspace-detail-title-group">
           <div className="providers-workspace-detail-title-row">
             <div className="providers-workspace-detail-title">{item.name}</div>
+            {defaultProvider === item.name && (
+              <span className="pwi-rail-meta pwi-rail-meta--default" title="Default routing provider">Default</span>
+            )}
             {isLocalProvider(item) ? (
               <span className="pwi-rail-meta" title="Local runtime">Local</span>
             ) : isFreeProvider(item) ? (
@@ -867,7 +1168,13 @@ function DetailPanel({
 // Empty state
 // ---------------------------------------------------------------------------
 
-function EmptyState({ onAddProvider }: { onAddProvider: () => void }) {
+function EmptyState({
+  onAddProvider,
+  onAddCustomProvider,
+}: {
+  onAddProvider: () => void;
+  onAddCustomProvider?: () => void;
+}) {
   return (
     <div className="providers-workspace-empty-root">
       <div className="pwi-empty-left">
@@ -877,9 +1184,16 @@ function EmptyState({ onAddProvider }: { onAddProvider: () => void }) {
           </span>
           <p className="pwi-empty-card-title">No providers yet</p>
           <p className="pwi-empty-card-sub">Get started by connecting your first provider.</p>
-          <button type="button" className="btn btn-primary" onClick={onAddProvider} aria-label="Add a provider">
-            Add provider
-          </button>
+          <div className="pwi-empty-card-actions">
+            <button type="button" className="btn btn-primary" onClick={onAddProvider} aria-label="Add a provider">
+              Add provider
+            </button>
+            {onAddCustomProvider && (
+              <button type="button" className="btn btn-ghost" onClick={onAddCustomProvider} aria-label="Add custom provider">
+                Custom provider
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <div className="pwi-empty-right">
@@ -888,7 +1202,7 @@ function EmptyState({ onAddProvider }: { onAddProvider: () => void }) {
         </div>
         <h2 className="pwi-empty-right-title">Connect your first provider</h2>
         <p className="pwi-empty-right-sub">
-          Use cloud APIs, local models, or a compatible custom endpoint to get started.
+          Pick a catalog provider or wire any OpenAI-compatible endpoint.
         </p>
         <div className="pwi-empty-tiles">
           <button type="button" className="pwi-empty-tile" onClick={onAddProvider} aria-label="Browse providers">
@@ -896,15 +1210,15 @@ function EmptyState({ onAddProvider }: { onAddProvider: () => void }) {
             <span className="pwi-empty-tile-label">Browse providers</span>
             <span className="pwi-empty-tile-desc">Connect to popular cloud providers</span>
           </button>
-          <button type="button" className="pwi-empty-tile" onClick={onAddProvider} aria-label="Connect local provider">
-            <IconServer style={{ width: 20, height: 20 }} aria-hidden="true" />
-            <span className="pwi-empty-tile-label">Connect local provider</span>
-            <span className="pwi-empty-tile-desc">Set up Ollama, LM Studio or other local models</span>
-          </button>
-          <button type="button" className="pwi-empty-tile" onClick={onAddProvider} aria-label="Add custom endpoint">
+          <button
+            type="button"
+            className="pwi-empty-tile"
+            onClick={onAddCustomProvider ?? onAddProvider}
+            aria-label="Add custom provider"
+          >
             <IconExternal style={{ width: 20, height: 20 }} aria-hidden="true" />
-            <span className="pwi-empty-tile-label">Add custom endpoint</span>
-            <span className="pwi-empty-tile-desc">Connect any OpenAI compatible endpoint</span>
+            <span className="pwi-empty-tile-label">Custom provider</span>
+            <span className="pwi-empty-tile-desc">Any OpenAI-compatible base URL + key</span>
           </button>
         </div>
         <p className="pwi-empty-doc-link muted">
@@ -923,11 +1237,12 @@ function EmptyState({ onAddProvider }: { onAddProvider: () => void }) {
 // ---------------------------------------------------------------------------
 
 function OverviewPanel({
-  sections, onSelect, onAddProvider, onEditConfig, attentionItems, usageTotals
+  sections, onSelect, onAddProvider, onAddCustomProvider, onEditConfig, attentionItems, usageTotals
 }: {
   sections: WorkspaceSections;
   onSelect: (name: string) => void;
   onAddProvider: () => void;
+  onAddCustomProvider?: () => void;
   onEditConfig: () => void;
   attentionItems: AttentionItem[];
   usageTotals: Record<string, ProviderUsageTotals>;
@@ -964,17 +1279,22 @@ function OverviewPanel({
           <button type="button" className="pwi-oa-tile" onClick={onAddProvider} aria-label="Add provider">
             <IconPlus style={{ width: 18, height: 18 }} aria-hidden="true" />
             <span className="pwi-oa-label">Add provider</span>
-            <span className="pwi-oa-desc">Connect a new provider</span>
+            <span className="pwi-oa-desc">Browse catalog providers</span>
           </button>
-          <button type="button" className="pwi-oa-tile" onClick={onAddProvider} aria-label="Connect local provider">
-            <IconServer style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-oa-label">Connect local</span>
-            <span className="pwi-oa-desc">Set up a local model provider</span>
+          <button
+            type="button"
+            className="pwi-oa-tile"
+            onClick={onAddCustomProvider ?? onAddProvider}
+            aria-label="Add custom provider"
+          >
+            <IconExternal style={{ width: 18, height: 18 }} aria-hidden="true" />
+            <span className="pwi-oa-label">Custom provider</span>
+            <span className="pwi-oa-desc">Any OpenAI-compatible endpoint</span>
           </button>
-          <button type="button" className="pwi-oa-tile" onClick={onEditConfig} aria-label="Import config">
+          <button type="button" className="pwi-oa-tile" onClick={onEditConfig} aria-label="Edit JSON config">
             <IconList style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-oa-label">Import config</span>
-            <span className="pwi-oa-desc">Import providers from a config file</span>
+            <span className="pwi-oa-label">Edit JSON</span>
+            <span className="pwi-oa-desc">Edit the raw proxy config as JSON</span>
           </button>
         </div>
       </div>
@@ -1021,8 +1341,10 @@ function OverviewPanel({
 // ---------------------------------------------------------------------------
 
 export default function ProviderWorkspace({
-  providers, apiBase, onAddProvider, onUseLegacyView: _onUseLegacyView, onEditConfig,
+  providers, apiBase, defaultProvider, onAddProvider, onAddCustomProvider,
+  onUseLegacyView: _onUseLegacyView, onEditConfig,
   onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports = {}, oauthStatus = {},
+  accountSets = {}, keyPools = {}, busyProvider = null, loginHint = null, authHandlers,
 }: ProviderWorkspaceProps) {
   void _onUseLegacyView;
   const [search, setSearch] = useState("");
@@ -1145,18 +1467,28 @@ export default function ProviderWorkspace({
 
   const total = Object.keys(providers).length;
 
-  if (total === 0) return <EmptyState onAddProvider={onAddProvider} />;
+  if (total === 0) {
+    return <EmptyState onAddProvider={onAddProvider} onAddCustomProvider={onAddCustomProvider} />;
+  }
 
   return (
     <div className="providers-workspace-root">
       <aside className="providers-workspace-rail" aria-label="Provider list">
         <div className="providers-workspace-rail-header">
           <span className="providers-workspace-rail-title">Providers</span>
-          <button type="button" className="btn btn-ghost btn-sm pwi-rail-add-btn"
-            onClick={onAddProvider} aria-label="Add a provider">
-            <IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" />
-            Add provider
-          </button>
+          <div className="pwi-rail-header-actions">
+            <button type="button" className="btn btn-ghost btn-sm pwi-rail-add-btn"
+              onClick={onAddProvider} aria-label="Add a provider">
+              <IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" />
+              Add
+            </button>
+            {onAddCustomProvider && (
+              <button type="button" className="btn btn-ghost btn-sm pwi-rail-add-btn"
+                onClick={onAddCustomProvider} aria-label="Add custom provider" title="Custom provider">
+                Custom
+              </button>
+            )}
+          </div>
         </div>
         <div className="pwi-rail-search-row">
           <div className="pwi-rail-search-wrap">
@@ -1298,6 +1630,7 @@ export default function ProviderWorkspace({
                   <RailRow key={item.name} item={item}
                     selected={selectedName === item.name}
                     modelCount={modelCounts[item.name]}
+                    isDefault={defaultProvider === item.name}
                     onClick={() => setSelectedName(item.name)} />
                 ))}
               </div>
@@ -1310,6 +1643,7 @@ export default function ProviderWorkspace({
           <DetailPanel
             item={selectedItem}
             apiBase={apiBase}
+            defaultProvider={defaultProvider}
             onSetDisabled={onSetDisabled}
             onRemoveProvider={handleRemoveProvider}
             onDeselect={() => setSelectedName(null)}
@@ -1321,12 +1655,18 @@ export default function ProviderWorkspace({
             availableModels={availableModels[selectedItem.name] ?? []}
             selectedModels={selectedModels[selectedItem.name] ?? []}
             onTestDone={() => { void fetchModelCounts(); }}
+            accounts={accountSets[selectedItem.name]?.accounts}
+            keys={keyPools[selectedItem.name]}
+            busy={busyProvider === selectedItem.name}
+            loginHint={loginHint}
+            authHandlers={authHandlers}
           />
         ) : (
           <OverviewPanel
             sections={sections}
             onSelect={setSelectedName}
             onAddProvider={onAddProvider}
+            onAddCustomProvider={onAddCustomProvider}
             onEditConfig={onEditConfig}
             attentionItems={attentionItems}
             usageTotals={usageTotals}
