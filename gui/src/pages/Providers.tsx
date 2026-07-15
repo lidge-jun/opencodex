@@ -53,7 +53,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
   /** When true, AddProviderModal opens directly on the custom form. */
-  const [addCustom, setAddCustom] = useState(false);
   const aliveRef = useRef(true);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
@@ -451,8 +450,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             providers={config.providers}
             apiBase={apiBase}
             defaultProvider={config.defaultProvider}
-            onAddProvider={() => { setAddCustom(false); setAdding(true); }}
-            onAddCustomProvider={() => { setAddCustom(true); setAdding(true); }}
+            onAddProvider={() => setAdding(true)}
             onUseLegacyView={() => setLayout("classic")}
             onEditConfig={openJsonEditor}
             onSetDisabled={setProviderDisabled}
@@ -479,11 +477,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
-            initialCustom={addCustom}
-            onClose={() => { setAdding(false); setAddCustom(false); }}
+            onClose={() => setAdding(false)}
             onAdded={(name) => {
               setAdding(false);
-              setAddCustom(false);
               notify(t("prov.added", { name, cmd: "ocx sync" }), true);
               fetchConfig();
               fetchOauth();
