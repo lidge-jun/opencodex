@@ -748,12 +748,14 @@ select.input { appearance: none; }
   width: 100%;
   box-sizing: border-box;
 }
-/* Three equal columns — each tab is exactly 1/3 of the control (same as Free). */
+/* Three equal columns — Free / Paid / Accounts each get exactly 1/3. */
 .add-prov-segment--3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
 }
 .add-prov-segment-btn {
   appearance: none;
+  -webkit-appearance: none;
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -761,21 +763,25 @@ select.input { appearance: none; }
   font: inherit;
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
-  padding: 0 6px;
+  padding: 0;
+  margin: 0;
   height: 38px;
   min-height: 38px;
   max-height: 38px;
   width: 100%;
-  max-width: 100%;
+  min-width: 0;
+  max-width: none;
   box-sizing: border-box;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Kill global button width:auto / flex quirks that make Accounts look shorter */
+  flex: unset;
+  align-self: stretch;
 }
 .add-prov-segment-btn--active {
   background: color-mix(in oklab, var(--accent) 18%, var(--surface));

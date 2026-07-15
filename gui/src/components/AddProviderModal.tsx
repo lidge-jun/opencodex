@@ -469,11 +469,6 @@ export default function AddProviderModal({
                     <span className="add-prov-browse-card-title">
                       {tier === "free" ? t("modal.browseFree") : t("modal.browsePaid")}
                     </span>
-                    {hasOverflow && (
-                      <span className="add-prov-browse-card-sub muted">
-                        {t("modal.browseMore", { count: tierList.length - HOME_SLOT_COUNT })}
-                      </span>
-                    )}
                   </span>
                   <IconChevron width={16} height={16} aria-hidden="true" />
                 </button>
