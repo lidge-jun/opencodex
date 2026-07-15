@@ -34,7 +34,6 @@ import {
   IconServer,
   IconBoxes,
   IconRefresh,
-  IconKey,
   IconInfo,
   IconChevron,
   IconExternal,
@@ -316,40 +315,6 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
 }
 
 // ---------------------------------------------------------------------------
-// Quick actions (selected provider overview)
-// ---------------------------------------------------------------------------
-
-function QuickActionsCard({ onSelectTab }: { onSelectTab: (tab: Tab) => void }) {
-  const t = useT();
-  return (
-    <div className="providers-workspace-section">
-      <div className="providers-workspace-section-head">
-        <span className="providers-workspace-section-title">{t("pws.quickActions")}</span>
-      </div>
-      <div className="providers-workspace-section-body">
-        <div className="pwi-qa-grid pwi-qa-grid--2">
-          <a className="pwi-qa-tile" href="#models" onClick={() => onSelectTab("models")} aria-label={t("pws.qa.manageModels")}>
-            <IconServer style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-qa-label">{t("pws.qa.manageModels")}</span>
-            <span className="pwi-qa-desc">{t("pws.qa.manageModelsDesc")}</span>
-          </a>
-          <a className="pwi-qa-tile" href="#usage" onClick={() => onSelectTab("usage")} aria-label={t("pws.qa.viewUsage")}>
-            <IconActivity style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-qa-label">{t("pws.qa.viewUsage")}</span>
-            <span className="pwi-qa-desc">{t("pws.qa.viewUsageDesc")}</span>
-          </a>
-          <button type="button" className="pwi-qa-tile" onClick={() => onSelectTab("settings")} aria-label={t("pws.qa.apiSettings")}>
-            <IconKey style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-qa-label">{t("pws.qa.apiSettings")}</span>
-            <span className="pwi-qa-desc">{t("pws.qa.apiSettingsDesc")}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Stats sidebar
 // ---------------------------------------------------------------------------
 
@@ -439,7 +404,6 @@ function TabOverview({
             loginHint={loginHint}
             authHandlers={authHandlers}
           />
-          <QuickActionsCard onSelectTab={onSelectTab} />
         </div>
         <StatsSidebar item={item} usageTotals={usageTotals} quotaReport={quotaReport} onViewUsage={() => onSelectTab("usage")} />
       </div>
