@@ -1835,55 +1835,49 @@
 .pwi-summary-setup .providers-workspace-summary-value { color: var(--amber); }
 .pwi-summary-disabled .providers-workspace-summary-value { color: var(--muted); }
 
-/* ---- Overview: Edit JSON + Recently used (equal-width section cards) ---- */
+/* ---- Overview: Edit JSON card + Recently used (equal height, simple) ---- */
 .pwi-overview-edit-recent {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
   width: 100%;
 }
-.pwi-overview-edit-recent > .pwi-overview-section {
+.pwi-overview-edit-recent > .pwi-overview-section,
+.pwi-overview-edit-recent > .pwi-edit-json-card {
   min-width: 0;
-  min-height: 148px;
+  min-height: 160px;
   height: 100%;
-  display: flex;
-  flex-direction: column;
 }
-.pwi-edit-json-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
+.pwi-edit-json-card {
+  appearance: none;
   margin: 0;
-  padding: 14px;
-  border: 0;
-  border-bottom: none;
-  background: transparent;
-  color: var(--text);
+  width: 100%;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  flex: 1;
-  transition: background 0.12s;
+  justify-content: center;
+  gap: 8px;
 }
-.pwi-edit-json-row:hover {
+.pwi-edit-json-card:hover {
+  border-color: var(--faint);
   background: var(--hover);
 }
-.pwi-edit-json-copy {
+.pwi-edit-json-card-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.pwi-overview-recent {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 0;
+}
+.pwi-overview-recent-body {
   flex: 1;
-}
-.pwi-edit-json-title {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.pwi-edit-json-desc {
-  font-size: 12px;
-  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .pwi-coding-stats-row .providers-workspace-summary-value {
   font-size: 24px;

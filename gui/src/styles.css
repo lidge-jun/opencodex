@@ -758,10 +758,15 @@ select.input { appearance: none; }
   font: inherit;
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
-  padding: 9px 8px;
+  padding: 0 8px;
+  height: 38px;
+  min-height: 38px;
   cursor: pointer;
   flex: 1 1 0;
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -772,15 +777,22 @@ select.input { appearance: none; }
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
 }
+/* Shared content shell so Free / Paid / Accounts keep the same vertical length */
+.add-prov-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 420px;
+}
 .add-prov-browse-card {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--border));
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--accent) 12%, var(--surface));
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   cursor: pointer;
@@ -788,8 +800,8 @@ select.input { appearance: none; }
   transition: background var(--motion-fast), border-color var(--motion-fast);
 }
 .add-prov-browse-card:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--accent) 18%, var(--surface));
-  border-color: var(--accent-ring);
+  background: var(--hover);
+  border-color: var(--faint);
 }
 .add-prov-browse-card:disabled {
   opacity: 0.45;
@@ -802,8 +814,9 @@ select.input { appearance: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in oklab, var(--accent) 20%, var(--raised));
-  color: var(--accent-hover);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--muted);
   flex-shrink: 0;
 }
 .add-prov-browse-card-copy {
@@ -816,7 +829,7 @@ select.input { appearance: none; }
 .add-prov-browse-card-title {
   font-size: var(--text-body);
   font-weight: var(--weight-semibold);
-  color: var(--accent-hover);
+  color: var(--text);
 }
 .add-prov-browse-card-sub {
   font-size: var(--text-label);
@@ -873,9 +886,11 @@ select.input { appearance: none; }
   border-radius: var(--radius-md);
   background: var(--surface);
   overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .add-prov-list--browse {
-  max-height: min(42vh, 360px);
+  max-height: none;
   overflow-y: auto;
 }
 .add-prov-row {

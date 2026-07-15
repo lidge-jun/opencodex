@@ -362,6 +362,7 @@ export default function AddProviderModal({
               </button>
             </div>
 
+            <div className="add-prov-body">
             {tier === "accounts" ? (
               <div className="add-prov-list add-prov-list--browse">
                 {accountRows.length === 0 && (
@@ -515,6 +516,7 @@ export default function AddProviderModal({
                 </div>
               </>
             )}
+            </div>
 
             {tier !== "accounts" && (
               <div className="add-prov-footer">

@@ -1300,39 +1300,35 @@ function OverviewPanel({
         </div>
       </div>
 
-      {/* Equal-width panels: Edit JSON | Recently used */}
+      {/* Equal panels: compact Edit JSON card | Recently used */}
       <div className="pwi-overview-edit-recent">
-        <div className="pwi-overview-section pwi-overview-edit-panel">
-          <div className="pwi-overview-section-head">{t("prov.editJson")}</div>
-          <button
-            type="button"
-            className="pwi-edit-json-row"
-            onClick={onEditConfig}
-            aria-label={t("prov.editJson")}
-          >
-            <span className="pwi-edit-json-copy">
-              <span className="pwi-edit-json-title">{t("prov.editJson")}</span>
-              <span className="muted pwi-edit-json-desc">{t("pws.editJsonDesc")}</span>
-            </span>
-            <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0 }} aria-hidden="true" />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="providers-workspace-summary-card pwi-edit-json-card"
+          onClick={onEditConfig}
+          aria-label={t("prov.editJson")}
+        >
+          <span className="pwi-edit-json-card-title">{t("prov.editJson")}</span>
+          <span className="providers-workspace-summary-label">{t("pws.editJsonDesc")}</span>
+        </button>
         <div className="pwi-overview-section pwi-overview-recent">
           <div className="pwi-overview-section-head">{t("pws.recentlyUsed")}</div>
-          {mostUsed.length === 0 ? (
-            <div className="pwi-recent-empty muted">{t("pws.noUsageRecorded")}</div>
-          ) : mostUsed.map(entry => {
-            const item = providersByName.get(entry.name)!;
-            return (
-            <button key={entry.name} type="button" className="pwi-recent-row"
-              onClick={() => onSelect(entry.name)} aria-label={t("pws.openProvider", { name: entry.name })}>
-              <ProviderIcon name={entry.name} adapter={item.adapter} baseUrl={item.baseUrl}
-                cls="providers-workspace-rail-icon" />
-              <span className="pwi-recent-name">{entry.name}</span>
-              <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
-              <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
-            </button>
-          );})}
+          <div className="pwi-overview-recent-body">
+            {mostUsed.length === 0 ? (
+              <div className="pwi-recent-empty muted">{t("pws.noUsageRecorded")}</div>
+            ) : mostUsed.map(entry => {
+              const item = providersByName.get(entry.name)!;
+              return (
+              <button key={entry.name} type="button" className="pwi-recent-row"
+                onClick={() => onSelect(entry.name)} aria-label={t("pws.openProvider", { name: entry.name })}>
+                <ProviderIcon name={entry.name} adapter={item.adapter} baseUrl={item.baseUrl}
+                  cls="providers-workspace-rail-icon" />
+                <span className="pwi-recent-name">{entry.name}</span>
+                <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
+                <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+              </button>
+            );})}
+          </div>
         </div>
       </div>
 
