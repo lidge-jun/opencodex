@@ -70,6 +70,8 @@ export type LoginHint = {
 
 export interface ProviderAuthHandlers {
   onLogin: (provider: string, addAccount?: boolean) => void;
+  /** Stop an in-progress OAuth browser wait. */
+  onCancelLogin?: (provider: string) => void;
   onLogout: (provider: string) => void;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void;
   onRemoveAccount: (provider: string, account: OAuthAccountRow) => void;
@@ -513,30 +515,35 @@ function AuthAccountsCard({
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onLogout(item.name)}>
                     {t("prov.logout")}
                   </button>
+                ) : busy ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => authHandlers.onCancelLogin?.(item.name)}
+                  >
+                    {t("common.cancel")}
+                  </button>
                 ) : (
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
                     onClick={() => authHandlers.onLogin(item.name, false)}
-                    disabled={busy}
                   >
-                    {busy
-                      ? <><span className="pwi-spin-inline" aria-hidden="true" /> {t("prov.waitingBrowser")}</>
-                      : <><IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}</>}
+                    <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}
                   </button>
                 )}
               </span>
             </div>
 
-            {busy && hintForThis && (hintForThis.url || hintForThis.instructions) && (
+            {busy && (
               <div className="pwi-auth-wait">
                 <span className="pwi-spin-inline pwi-spin-inline--lg" aria-hidden="true" />
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
-                  {hintForThis.instructions && (
+                  {hintForThis?.instructions && (
                     <p className="pwi-auth-wait-hint muted">{hintForThis.instructions}</p>
                   )}
-                  {hintForThis.url && (
+                  {hintForThis?.url && (
                     <a
                       href={hintForThis.url}
                       target="_blank"
@@ -546,6 +553,16 @@ function AuthAccountsCard({
                       <IconExternal style={{ width: 13, height: 13 }} aria-hidden="true" />
                       {t("prov.didntOpen")}
                     </a>
+                  )}
+                  {authHandlers.onCancelLogin && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginTop: 6, alignSelf: "flex-start" }}
+                      onClick={() => authHandlers.onCancelLogin?.(item.name)}
+                    >
+                      {t("common.cancel")}
+                    </button>
                   )}
                 </div>
               </div>
@@ -584,11 +601,12 @@ function AuthAccountsCard({
                 <button
                   type="button"
                   className="pwi-auth-add"
-                  onClick={() => authHandlers.onLogin(item.name, true)}
-                  disabled={busy}
+                  onClick={() => busy
+                    ? authHandlers.onCancelLogin?.(item.name)
+                    : authHandlers.onLogin(item.name, true)}
                 >
                   {busy
-                    ? <><span className="pwi-spin-inline" aria-hidden="true" /> {t("prov.waitingBrowser")}</>
+                    ? t("common.cancel")
                     : <><IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.accountAdd")}</>}
                 </button>
               </div>

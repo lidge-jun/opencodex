@@ -53,6 +53,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
   const aliveRef = useRef(true);
+  /** Bumped to invalidate an in-flight OAuth poll (Cancel / close modal). */
+  const loginEpochRef = useRef(0);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
 
@@ -281,7 +283,23 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return false;
   };
 
+  const cancelOAuthLogin = async (provider?: string | null) => {
+    const p = (provider ?? busy)?.trim();
+    loginEpochRef.current += 1;
+    setBusy(null);
+    setLoginInfo(null);
+    setManualCode("");
+    setManualCodeMsg("");
+    if (!p) return;
+    await fetch(`${apiBase}/api/oauth/login/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: p }),
+    }).catch(() => {});
+  };
+
   const loginOAuth = async (provider: string, addAccount = false) => {
+    const epoch = ++loginEpochRef.current;
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
@@ -294,14 +312,17 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         body: JSON.stringify(addAccount ? { provider, addAccount: true } : { provider }),
       });
       const data = await res.json();
+      if (loginEpochRef.current !== epoch) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
       // The server opens the browser itself (popup-safe). Show the URL + paste fallback.
       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       // Poll until the loopback callback (or device flow / manual paste) completes.
-      for (let i = 0; i < 150 && aliveRef.current; i++) {
+      for (let i = 0; i < 150 && aliveRef.current && loginEpochRef.current === epoch; i++) {
         await new Promise(r => setTimeout(r, 2000));
+        if (loginEpochRef.current !== epoch) return;
         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
+        if (loginEpochRef.current !== epoch) return;
         if (!s) continue;
         // For add-account flows the provider is already "logged in": wait for the account count to grow.
         // addAccount: wait for a new slot OR flow completion (same-account re-login won't grow count).
@@ -320,6 +341,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           break;
         }
         if (s.error) {
+          // Soft-cancel from cancelLoginFlow — no error toast.
+          if (s.error === "Login cancelled") break;
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
           setLoginInfo(null);
@@ -327,9 +350,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }
       }
     } catch {
-      notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+      if (loginEpochRef.current === epoch) {
+        notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+      }
     } finally {
-      if (aliveRef.current) setBusy(null);
+      if (aliveRef.current && loginEpochRef.current === epoch) {
+        setBusy(null);
+        setLoginInfo(null);
+      }
     }
   };
 
@@ -463,6 +491,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             loginHint={loginInfo}
             authHandlers={{
               onLogin: (provider, addAccount) => { void loginOAuth(provider, !!addAccount); },
+              onCancelLogin: (provider) => { void cancelOAuthLogin(provider); },
               onLogout: (provider) => { void logoutOAuth(provider); },
               onSwitchAccount: (provider, account) => { void switchAccount(provider, account); },
               onRemoveAccount: (provider, account) => { void removeAccount(provider, account); },
@@ -476,7 +505,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
-            onClose={() => setAdding(false)}
+            onClose={() => {
+              if (busy) void cancelOAuthLogin(busy);
+              setAdding(false);
+            }}
             onAdded={(name) => {
               setAdding(false);
               notify(t("prov.added", { name, cmd: "ocx sync" }), true);
@@ -503,6 +535,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             accountBusy={busy}
             accountLoginHint={loginInfo}
             onAccountLogin={(provider) => { void loginOAuth(provider); }}
+            onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
             onAccountLogout={(provider) => { void logoutOAuth(provider); }}
             accountManualCode={manualCode}
             onAccountManualCodeChange={setManualCode}
@@ -603,9 +636,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 <span className="oauth-actions">
                   {st.loggedIn ? (
                     <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
+                  ) : isBusy ? (
+                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelOAuthLogin(p); }}>
+                      {t("common.cancel")}
+                    </button>
                   ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(p)} disabled={isBusy}>
-                      {isBusy ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconLock />{t("prov.login")}</>}
+                    <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(p)}>
+                      <IconLock />{t("prov.login")}
                     </button>
                   )}
                 </span>
@@ -785,8 +822,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                           </button>
                         ))}
                         {accountSet ? (
-                          <button className="prov-account-row prov-account-add" onClick={() => loginOAuth(name, true)} disabled={busy === name}>
-                            {busy === name ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconPlus style={{ width: 13, height: 13 }} />{t("prov.accountAdd")}</>}
+                          <button
+                            className="prov-account-row prov-account-add"
+                            onClick={() => busy === name ? void cancelOAuthLogin(name) : void loginOAuth(name, true)}
+                          >
+                            {busy === name
+                              ? t("common.cancel")
+                              : <><IconPlus style={{ width: 13, height: 13 }} />{t("prov.accountAdd")}</>}
                           </button>
                         ) : addingKeyFor === name ? (
                           <div className="prov-account-row prov-account-keyform">

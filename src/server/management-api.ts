@@ -11,6 +11,7 @@ import {
   saveConfig,
 } from "../config";
 import {
+  cancelLoginFlow,
   clearLoginState,
   getLoginStatus,
   isOAuthProvider,
@@ -1163,6 +1164,15 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     } catch (err) {
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
     }
+  }
+
+  // Cancel an in-progress browser/device OAuth login (GUI "Cancel" / close modal).
+  if (url.pathname === "/api/oauth/login/cancel" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as { provider?: string };
+    const provider = (body.provider ?? "").trim().toLowerCase();
+    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const cancelled = cancelLoginFlow(provider);
+    return jsonResponse({ ok: true, cancelled });
   }
 
   // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)

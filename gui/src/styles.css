@@ -864,6 +864,20 @@ select.input { appearance: none; }
   min-width: 0;
   font-size: var(--text-label);
 }
+.add-prov-account-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.add-prov-account-busy-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
 .add-prov-account-status-ok {
   color: var(--green);
   overflow: hidden;

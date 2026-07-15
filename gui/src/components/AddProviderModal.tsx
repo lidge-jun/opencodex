@@ -50,6 +50,7 @@ export default function AddProviderModal({
   accountBusy = null,
   accountLoginHint = null,
   onAccountLogin,
+  onAccountCancelLogin,
   onAccountLogout,
   accountManualCode = "",
   onAccountManualCodeChange,
@@ -69,6 +70,8 @@ export default function AddProviderModal({
   accountBusy?: string | null;
   accountLoginHint?: { provider: string; url?: string; instructions?: string } | null;
   onAccountLogin?: (provider: string) => void;
+  /** Stop an in-progress OAuth browser wait for this account row. */
+  onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
   accountManualCode?: string;
   onAccountManualCodeChange?: (value: string) => void;
@@ -393,9 +396,18 @@ export default function AddProviderModal({
                         </span>
                         {row.kind === "oauth" ? (
                           isBusy ? (
-                            <button type="button" className="btn btn-ghost btn-sm" disabled>
-                              <span className="spin" /> {t("prov.waitingBrowser")}
-                            </button>
+                            <span className="add-prov-account-busy">
+                              <span className="add-prov-account-busy-label">
+                                <span className="spin" /> {t("prov.waitingBrowser")}
+                              </span>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => onAccountCancelLogin?.(row.id)}
+                              >
+                                {t("common.cancel")}
+                              </button>
+                            </span>
                           ) : st.loggedIn ? (
                             <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAccountLogout?.(row.id)}>
                               {t("prov.logout")}
