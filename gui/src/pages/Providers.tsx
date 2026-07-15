@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
+import ProviderWorkspace from "../components/ProviderWorkspace";
 import { Notice } from "../ui";
 import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron } from "../icons";
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "../components/QuotaBars";
 import { providerIconSrc } from "../provider-icons";
+import "../styles-provider-workspace.css";
 
 interface Config {
   port: number;
@@ -44,6 +46,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
+  const [layout, setLayout] = useState<"workspace" | "classic">("workspace");
   const aliveRef = useRef(true);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
@@ -317,6 +320,33 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   if (!config) return <div className="muted">{t("prov.loadingConfig")}</div>;
 
+  if (layout === "workspace") {
+    return (
+      <>
+        {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
+        <ProviderWorkspace
+          providers={config.providers}
+          apiBase={apiBase}
+          onAddProvider={() => setAdding(true)}
+          onUseLegacyView={() => setLayout("classic")}
+          onEditConfig={() => { setLayout("classic"); setEditing(true); }}
+          onSetDisabled={setProviderDisabled}
+          onRemoveProvider={removeProvider}
+          quotaReports={quotaReports}
+          oauthStatus={oauthStatus}
+        />
+        {adding && (
+          <AddProviderModal
+            apiBase={apiBase}
+            existingNames={Object.keys(config.providers)}
+            onClose={() => setAdding(false)}
+            onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+          />
+        )}
+      </>
+    );
+  }
+
   // API-key providers shown alongside OAuth logins in the account panel.
   const keyProviders = Object.entries(config.providers)
     .filter(([name, prov]) => prov.hasApiKey && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
@@ -334,6 +364,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             </>
           ) : (
             <>
+              <button type="button" className="btn btn-ghost" onClick={() => setLayout("workspace")}>Workspace</button>
               <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
               <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t("prov.editJson")}</button>
             </>

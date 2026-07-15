@@ -49,7 +49,8 @@ function providerIconAlias(provider: string): string | undefined {
   return PROVIDER_ICON_ALIASES[provider.toLowerCase()];
 }
 
-export function providerIconSrc(provider: string, hints?: ProviderIconHints): string | undefined {
+export function providerIconSrc(provider: string, _hints?: ProviderIconHints): string | undefined {
+  void _hints;
   const icon = providerIconAlias(provider);
   return icon ? `/provider-icons/${icon}` : undefined;
 }
