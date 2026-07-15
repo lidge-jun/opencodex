@@ -608,6 +608,8 @@ export const de = {
   "pws.stats.requestsDay": "Anfragen / Tag",
   "pws.stats.dailyUnavailable": "Tagesaufschlüsselung nicht verfügbar",
   "pws.stats.totalRequests": "Anfragen gesamt (30d)",
+  "pws.stats.tokens30d": "Tokens codiert (30d)",
+  "pws.stats.activeCoded": "Genutzte Anbieter (30d)",
   "pws.stats.quotaUpdated": "Quota aktualisiert",
   "pws.stats.source": "Quelle: {source}",
   "pws.stats.viewDetailed": "Detaillierte Nutzung anzeigen",

@@ -629,6 +629,8 @@ export const en = {
   "pws.stats.requestsDay": "Requests / day",
   "pws.stats.dailyUnavailable": "Daily breakdown unavailable",
   "pws.stats.totalRequests": "Total requests (30d)",
+  "pws.stats.tokens30d": "Tokens coded (30d)",
+  "pws.stats.activeCoded": "Providers used (30d)",
   "pws.stats.quotaUpdated": "Quota updated",
   "pws.stats.source": "Source: {source}",
   "pws.stats.viewDetailed": "View detailed usage",

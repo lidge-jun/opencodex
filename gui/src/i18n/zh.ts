@@ -628,6 +628,8 @@ export const zh: Record<TKey, string> = {
   "pws.stats.requestsDay": "请求 / 天",
   "pws.stats.dailyUnavailable": "无法提供按日明细",
   "pws.stats.totalRequests": "总请求（30 天）",
+  "pws.stats.tokens30d": "编码 Token（30 天）",
+  "pws.stats.activeCoded": "用过的提供方（30 天）",
   "pws.stats.quotaUpdated": "配额已更新",
   "pws.stats.source": "来源：{source}",
   "pws.stats.viewDetailed": "查看详细用量",

@@ -1835,70 +1835,58 @@
 .pwi-summary-setup .providers-workspace-summary-value { color: var(--amber); }
 .pwi-summary-disabled .providers-workspace-summary-value { color: var(--muted); }
 
-/* ---- Overview: Edit JSON + Recently used (matched section cards) ---- */
+/* ---- Overview: Edit JSON + Recently used (equal-width section cards) ---- */
 .pwi-overview-edit-recent {
   display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
   align-items: stretch;
   width: 100%;
 }
 .pwi-overview-edit-recent > .pwi-overview-section {
   min-width: 0;
+  min-height: 148px;
   height: 100%;
   display: flex;
   flex-direction: column;
 }
-.pwi-overview-edit-card {
-  appearance: none;
+.pwi-edit-json-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   width: 100%;
   margin: 0;
+  padding: 14px;
+  border: 0;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text);
   font: inherit;
-  color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  flex: 1;
+  transition: background 0.12s;
 }
-.pwi-overview-edit-card:hover {
-  border-color: var(--accent-ring);
+.pwi-edit-json-row:hover {
   background: var(--hover);
 }
-.pwi-overview-edit-card-body {
+.pwi-edit-json-copy {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px 14px;
+  gap: 4px;
+  min-width: 0;
   flex: 1;
 }
-.pwi-overview-edit-card-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--raised);
-  border: 1px solid var(--border-soft);
-  color: var(--muted);
-}
-.pwi-overview-edit-card:hover .pwi-overview-edit-card-icon {
-  color: var(--accent-hover);
-  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
-}
-.pwi-oa-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-.pwi-oa-label {
+.pwi-edit-json-title {
   font-size: 13.5px;
   font-weight: 600;
 }
-.pwi-oa-desc {
+.pwi-edit-json-desc {
   font-size: 12px;
-  color: var(--muted);
   line-height: 1.4;
+}
+.pwi-coding-stats-row .providers-workspace-summary-value {
+  font-size: 24px;
 }
 
 /* ---- Overview two-column (attention + recently used) ---- */
@@ -2100,6 +2088,9 @@
   }
   .pwi-overview-edit-recent {
     grid-template-columns: 1fr;
+  }
+  .pwi-overview-edit-recent > .pwi-overview-section {
+    min-height: 0;
   }
   .providers-workspace-empty-root {
     min-height: auto;

@@ -628,6 +628,8 @@ export const ko: Record<TKey, string> = {
   "pws.stats.requestsDay": "요청 / 일",
   "pws.stats.dailyUnavailable": "일별 분석 불가",
   "pws.stats.totalRequests": "총 요청 (30일)",
+  "pws.stats.tokens30d": "코딩 토큰 (30일)",
+  "pws.stats.activeCoded": "사용 프로바이더 (30일)",
   "pws.stats.quotaUpdated": "할당량 업데이트됨",
   "pws.stats.source": "출처: {source}",
   "pws.stats.viewDetailed": "상세 사용량 보기",

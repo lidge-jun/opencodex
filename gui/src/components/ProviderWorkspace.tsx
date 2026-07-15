@@ -36,7 +36,6 @@ import {
   IconRefresh,
   IconKey,
   IconInfo,
-  IconBraces,
   IconChevron,
   IconExternal,
   IconActivity,
@@ -1228,14 +1227,36 @@ function OverviewPanel({
   attentionItems: AttentionItem[];
   usageTotals: Record<string, ProviderUsageTotals>;
 }) {
-  const providersByName = new Map(
-    [...sections.ready, ...sections.needsSetup, ...sections.disabled].map(item => [item.name, item]),
-  );
   const t = useT();
-  const mostUsed = buildMostUsedProviders(usageTotals)
-    .filter(entry => providersByName.has(entry.name))
-    .slice(0, 3);
-  // Create actions live in the left rail only — middle is selection/overview content.
+  const providersByName = useMemo(
+    () => new Map(
+      [...sections.ready, ...sections.needsSetup, ...sections.disabled].map(item => [item.name, item]),
+    ),
+    [sections],
+  );
+  const mostUsed = useMemo(
+    () => buildMostUsedProviders(usageTotals)
+      .filter(entry => providersByName.has(entry.name))
+      .slice(0, 4),
+    [usageTotals, providersByName],
+  );
+  const codingStats = useMemo(() => {
+    let requests = 0;
+    let tokens = 0;
+    let activeProviders = 0;
+    for (const [name, row] of Object.entries(usageTotals)) {
+      if (!providersByName.has(name)) continue;
+      if (typeof row.requests === "number" && row.requests > 0) {
+        requests += row.requests;
+        activeProviders += 1;
+      }
+      if (typeof row.totalTokens === "number" && row.totalTokens > 0) {
+        tokens += row.totalTokens;
+      }
+    }
+    return { requests, tokens, activeProviders };
+  }, [usageTotals, providersByName]);
+
   return (
     <div className="providers-workspace-overview">
       <div className="providers-workspace-overview-head">
@@ -1256,22 +1277,46 @@ function OverviewPanel({
           <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
         </div>
       </div>
-      {/* Matching section cards: Edit JSON + Recently used. */}
+
+      {/* Coding volume last 30 days */}
+      <div className="providers-workspace-summary-row pwi-coding-stats-row">
+        <div className="providers-workspace-summary-card">
+          <span className="providers-workspace-summary-value">
+            {codingStats.requests > 0 ? formatRequestCount(codingStats.requests) : "\u2014"}
+          </span>
+          <span className="providers-workspace-summary-label">{t("pws.stats.totalRequests")}</span>
+        </div>
+        <div className="providers-workspace-summary-card">
+          <span className="providers-workspace-summary-value">
+            {codingStats.tokens > 0 ? formatTokenCount(codingStats.tokens) : "\u2014"}
+          </span>
+          <span className="providers-workspace-summary-label">{t("pws.stats.tokens30d")}</span>
+        </div>
+        <div className="providers-workspace-summary-card">
+          <span className="providers-workspace-summary-value">
+            {codingStats.activeProviders > 0 ? codingStats.activeProviders : "\u2014"}
+          </span>
+          <span className="providers-workspace-summary-label">{t("pws.stats.activeCoded")}</span>
+        </div>
+      </div>
+
+      {/* Equal-width panels: Edit JSON | Recently used */}
       <div className="pwi-overview-edit-recent">
-        <button
-          type="button"
-          className="pwi-overview-section pwi-overview-edit-card"
-          onClick={onEditConfig}
-          aria-label={t("prov.editJson")}
-        >
+        <div className="pwi-overview-section pwi-overview-edit-panel">
           <div className="pwi-overview-section-head">{t("prov.editJson")}</div>
-          <div className="pwi-overview-edit-card-body">
-            <span className="pwi-overview-edit-card-icon" aria-hidden="true">
-              <IconBraces width={18} height={18} />
+          <button
+            type="button"
+            className="pwi-edit-json-row"
+            onClick={onEditConfig}
+            aria-label={t("prov.editJson")}
+          >
+            <span className="pwi-edit-json-copy">
+              <span className="pwi-edit-json-title">{t("prov.editJson")}</span>
+              <span className="muted pwi-edit-json-desc">{t("pws.editJsonDesc")}</span>
             </span>
-            <span className="pwi-oa-desc">{t("pws.editJsonDesc")}</span>
-          </div>
-        </button>
+            <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0 }} aria-hidden="true" />
+          </button>
+        </div>
         <div className="pwi-overview-section pwi-overview-recent">
           <div className="pwi-overview-section-head">{t("pws.recentlyUsed")}</div>
           {mostUsed.length === 0 ? (
@@ -1290,6 +1335,7 @@ function OverviewPanel({
           );})}
         </div>
       </div>
+
       {attentionItems.length > 0 && (
         <div className="pwi-overview-section pwi-overview-attention">
           <div className="pwi-overview-section-head">{t("pws.attentionRequired")}</div>

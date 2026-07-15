@@ -738,16 +738,16 @@ select.input { appearance: none; }
   min-height: 0;
 }
 .add-prov-segment {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 0;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--raised);
+  width: 100%;
 }
 .add-prov-segment--3 {
-  grid-template-columns: 1fr 1fr 1fr;
+  display: flex;
 }
 .add-prov-segment-btn {
   appearance: none;
@@ -758,8 +758,14 @@ select.input { appearance: none; }
   font: inherit;
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
-  padding: 9px 10px;
+  padding: 9px 8px;
   cursor: pointer;
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .add-prov-segment-btn--active {
   background: color-mix(in oklab, var(--accent) 18%, var(--surface));
