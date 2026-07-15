@@ -359,7 +359,6 @@ export const ko: Record<TKey, string> = {
   "modal.tab.accounts": "계정",
   "modal.browseFree": "무료 프로바이더 더 보기",
   "modal.browsePaid": "유료 프로바이더 더 보기",
-  "modal.browseMore": "전체 목록에 +{count}개 더",
   "modal.browseBack": "인기 목록으로",
   "modal.connect": "연결",
   "modal.notListedTitle": "목록에 없나요?",

@@ -342,7 +342,6 @@ export const de = {
   "modal.tab.accounts": "Konten",
   "modal.browseFree": "Kostenlose Anbieter durchsuchen",
   "modal.browsePaid": "Bezahlte Anbieter durchsuchen",
-  "modal.browseMore": "+{count} weitere in der Liste",
   "modal.browseBack": "Zurück zu Top-Anbietern",
   "modal.connect": "Verbinden",
   "modal.notListedTitle": "Anbieter nicht gelistet?",

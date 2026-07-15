@@ -359,7 +359,6 @@ export const zh: Record<TKey, string> = {
   "modal.tab.accounts": "账户",
   "modal.browseFree": "浏览免费提供方",
   "modal.browsePaid": "浏览付费提供方",
-  "modal.browseMore": "完整列表还有 +{count} 个",
   "modal.browseBack": "返回热门",
   "modal.connect": "连接",
   "modal.notListedTitle": "列表里没有？",

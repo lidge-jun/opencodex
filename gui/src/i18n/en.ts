@@ -370,7 +370,6 @@ export const en = {
   "modal.tab.accounts": "Accounts",
   "modal.browseFree": "Browse free providers",
   "modal.browsePaid": "Browse paid providers",
-  "modal.browseMore": "+{count} more in full list",
   "modal.browseBack": "Back to top picks",
   "modal.connect": "Connect",
   "modal.notListedTitle": "Provider not listed?",

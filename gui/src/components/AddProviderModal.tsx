@@ -163,7 +163,6 @@ export default function AddProviderModal({
     () => tierList.slice(0, HOME_SLOT_COUNT),
     [tierList],
   );
-  const hasOverflow = tierList.length > HOME_SLOT_COUNT;
 
   const browseList = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -513,20 +512,19 @@ export default function AddProviderModal({
             )}
             </div>
 
-            {tier !== "accounts" && (
-              <div className="add-prov-footer">
-                <div className="add-prov-footer-copy">
-                  <IconInfo width={15} height={15} aria-hidden="true" />
-                  <div>
-                    <div className="add-prov-footer-title">{t("modal.notListedTitle")}</div>
-                    <div className="add-prov-footer-sub muted">{t("modal.notListedSub")}</div>
-                  </div>
+            {/* Always show footer so Free / Paid / Accounts keep the same total height. */}
+            <div className="add-prov-footer">
+              <div className="add-prov-footer-copy">
+                <IconInfo width={15} height={15} aria-hidden="true" />
+                <div>
+                  <div className="add-prov-footer-title">{t("modal.notListedTitle")}</div>
+                  <div className="add-prov-footer-sub muted">{t("modal.notListedSub")}</div>
                 </div>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={openCustom}>
-                  {t("modal.connectApiKey")}
-                </button>
               </div>
-            )}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={openCustom}>
+                {t("modal.connectApiKey")}
+              </button>
+            </div>
           </div>
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
