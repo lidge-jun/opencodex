@@ -1836,6 +1836,22 @@
 .pwi-summary-disabled .providers-workspace-summary-value { color: var(--muted); }
 
 /* ---- Overview quick actions ---- */
+.pwi-overview-edit-recent {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  width: 100%;
+}
+.pwi-overview-edit-recent > .pwi-overview-section {
+  min-width: 0;
+  height: 100%;
+}
+.pwi-overview-edit-recent .pwi-overview-quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .pwi-oa-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1843,7 +1859,7 @@
 }
 .pwi-oa-grid--single {
   grid-template-columns: minmax(0, 1fr);
-  max-width: 320px;
+  max-width: none;
 }
 .pwi-oa-tile {
   display: flex;
@@ -1859,6 +1875,12 @@
   transition: background 0.12s, border-color 0.12s;
   align-items: flex-start;
   color: var(--text);
+  width: 100%;
+}
+.pwi-oa-tile--compact {
+  flex: 1;
+  min-height: 0;
+  justify-content: center;
 }
 .pwi-oa-tile:hover { background: var(--hover); border-color: var(--accent-ring); }
 .pwi-oa-tile > svg {
@@ -2089,6 +2111,9 @@
     position: static;
   }
   .pwi-overview-two-col {
+    grid-template-columns: 1fr;
+  }
+  .pwi-overview-edit-recent {
     grid-template-columns: 1fr;
   }
   .providers-workspace-empty-root {

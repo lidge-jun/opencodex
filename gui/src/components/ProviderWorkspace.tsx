@@ -1256,32 +1256,16 @@ function OverviewPanel({
           <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
         </div>
       </div>
-      <div className="pwi-overview-section pwi-overview-quick-actions">
-        <div className="pwi-overview-section-head">{t("pws.quickActions")}</div>
-        <div className="pwi-oa-grid pwi-oa-grid--single">
-          <button type="button" className="pwi-oa-tile" onClick={onEditConfig} aria-label={t("prov.editJson")}>
+      {/* Edit JSON (compact) + Recently used fill to the right edge under the summary cards. */}
+      <div className="pwi-overview-edit-recent">
+        <div className="pwi-overview-section pwi-overview-quick-actions">
+          <div className="pwi-overview-section-head">{t("pws.quickActions")}</div>
+          <button type="button" className="pwi-oa-tile pwi-oa-tile--compact" onClick={onEditConfig} aria-label={t("prov.editJson")}>
             <IconList style={{ width: 18, height: 18 }} aria-hidden="true" />
             <span className="pwi-oa-label">{t("prov.editJson")}</span>
             <span className="pwi-oa-desc">{t("pws.editJsonDesc")}</span>
           </button>
         </div>
-      </div>
-      <div className="pwi-overview-two-col">
-        {attentionItems.length > 0 && (
-          <div className="pwi-overview-section pwi-overview-attention">
-            <div className="pwi-overview-section-head">{t("pws.attentionRequired")}</div>
-            {attentionItems.map(ai => (
-              <button key={ai.name} type="button" className="pwi-attention-row"
-                onClick={() => onSelect(ai.name)}
-                aria-label={t("pws.attentionAria", { name: ai.name, reason: ai.reason })}>
-                <span className="pwi-dot pwi-dot--warning" aria-hidden="true" />
-                <span className="pwi-attention-name">{ai.name}</span>
-                <span className="pwi-attention-reason muted">{ai.reason}</span>
-                <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
-              </button>
-            ))}
-          </div>
-        )}
         <div className="pwi-overview-section pwi-overview-recent">
           <div className="pwi-overview-section-head">{t("pws.recentlyUsed")}</div>
           {mostUsed.length === 0 ? (
@@ -1300,6 +1284,21 @@ function OverviewPanel({
           );})}
         </div>
       </div>
+      {attentionItems.length > 0 && (
+        <div className="pwi-overview-section pwi-overview-attention">
+          <div className="pwi-overview-section-head">{t("pws.attentionRequired")}</div>
+          {attentionItems.map(ai => (
+            <button key={ai.name} type="button" className="pwi-attention-row"
+              onClick={() => onSelect(ai.name)}
+              aria-label={t("pws.attentionAria", { name: ai.name, reason: ai.reason })}>
+              <span className="pwi-dot pwi-dot--warning" aria-hidden="true" />
+              <span className="pwi-attention-name">{ai.name}</span>
+              <span className="pwi-attention-reason muted">{ai.reason}</span>
+              <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
