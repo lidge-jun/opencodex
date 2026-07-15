@@ -36,7 +36,6 @@ import {
   IconRefresh,
   IconKey,
   IconInfo,
-  IconList,
   IconBraces,
   IconChevron,
   IconExternal,
