@@ -1,6 +1,7 @@
 import type { Rule } from "eslint";
 import type { JSXAttribute, JSXElement, JSXText, Node, Property, TemplateElement } from "estree";
-import { isBrandOrModelLiteral } from "./i18n-allowlist.ts";
+import { isBrandOrModelLiteral, isTechnicalLiteral } from "./i18n-allowlist.ts";
+import { formatHardcodedSnippet, i18nLocaleFileHint } from "./i18n-locales.ts";
 
 const LITERAL_PATTERN =
   /[A-Za-zÀ-ÖØ-öø-ÿ\u0100-\u024F\u1E00-\u1EFF\u0400-\u04FF\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/u;
@@ -33,6 +34,7 @@ function isAllowedLiteral(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return true;
   if (!LITERAL_PATTERN.test(trimmed)) return true;
+  if (isTechnicalLiteral(trimmed)) return true;
   if (isBrandOrModelLiteral(trimmed)) return true;
   return false;
 }
@@ -44,7 +46,14 @@ function reportLiteral(
   messageId: "uiString" | "dataCopy",
 ) {
   if (isAllowedLiteral(value)) return;
-  context.report({ node, messageId });
+  context.report({
+    node,
+    messageId,
+    data: {
+      snippet: formatHardcodedSnippet(value),
+      locales: i18nLocaleFileHint(),
+    },
+  });
 }
 
 function isInsideTrans(node: Node): boolean {
@@ -95,7 +104,7 @@ const noHardcodedUiStrings: Rule.RuleModule = {
     schema: [],
     messages: {
       uiString:
-        "Hardcoded UI text is not allowed. Add a key to src/i18n/en.ts (+ de/ko/zh) and render with t() or <Trans />. Company names and model ids are the only allowed literals.",
+        'Hardcoded UI text: "{{snippet}}". Add a key to {{locales}} and render with t() or <Trans />. Company names and model ids are the only allowed literals.',
     },
   },
   create(context) {
@@ -155,7 +164,7 @@ const noHardcodedDataCopy: Rule.RuleModule = {
     schema: [],
     messages: {
       dataCopy:
-        "Hardcoded user-facing copy in data objects is not allowed. Use i18n keys (e.g. labelKey) and resolve with t() at render time.",
+        'Hardcoded user-facing copy: "{{snippet}}". Use i18n keys (e.g. labelKey) in {{locales}} and resolve with t() at render time.',
     },
   },
   create(context) {

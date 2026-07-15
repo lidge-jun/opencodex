@@ -29,6 +29,20 @@ const BRAND_LITERALS = new Set([
   "API",
 ]);
 
+const BRAND_LITERALS_LOWER = new Set(
+  [...BRAND_LITERALS].map((name) => name.toLowerCase()),
+);
+
+/** Non-UI technical strings (API paths, CSS fragments, dotted key fragments). */
+export function isTechnicalLiteral(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith("/") && /^\/[\w./?=&%-]+$/.test(trimmed)) return true;
+  if (/^(var\(--|calc\(|repeat\(|hsl\(|url\(|linear-gradient\()/i.test(trimmed)) return true;
+  if (/^[\w-]+(\.[\w-]+)+$/i.test(trimmed)) return true;
+  return false;
+}
+
 /** Model/catalog ids: gpt-4o, claude-3-5-sonnet, deepseek-v4-flash-free, provider/model */
 export function isModelIdentifier(value: string): boolean {
   const trimmed = value.trim();
@@ -41,8 +55,7 @@ export function isBrandOrModelLiteral(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!trimmed) return false;
-  if (BRAND_LITERALS.has(trimmed)) return true;
+  if (BRAND_LITERALS.has(trimmed) || BRAND_LITERALS_LOWER.has(trimmed.toLowerCase())) return true;
   if (isModelIdentifier(trimmed)) return true;
   return false;
 }
-
