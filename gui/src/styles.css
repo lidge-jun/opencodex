@@ -738,16 +738,19 @@ select.input { appearance: none; }
   min-height: 0;
 }
 .add-prov-segment {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--raised);
   width: 100%;
+  box-sizing: border-box;
 }
+/* Three equal columns — each tab is exactly 1/3 of the control (same as Free). */
 .add-prov-segment--3 {
-  display: flex;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .add-prov-segment-btn {
   appearance: none;
@@ -758,13 +761,15 @@ select.input { appearance: none; }
   font: inherit;
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
-  padding: 0 8px;
+  padding: 0 6px;
   height: 38px;
   min-height: 38px;
+  max-height: 38px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   cursor: pointer;
-  flex: 1 1 0;
-  min-width: 0;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
@@ -777,12 +782,16 @@ select.input { appearance: none; }
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
 }
-/* Shared content shell so Free / Paid / Accounts keep the same vertical length */
+/* Fixed shell so Free / Paid / Accounts content is the same vertical length. */
 .add-prov-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  height: 420px;
   min-height: 420px;
+  max-height: 420px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 .add-prov-browse-card {
   display: flex;
@@ -888,10 +897,16 @@ select.input { appearance: none; }
   overflow: hidden;
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
 }
 .add-prov-list--browse {
   max-height: none;
   overflow-y: auto;
+}
+/* Home list (top picks) fills remaining body so Free/Paid match Accounts height */
+.add-prov-body > .add-prov-list,
+.add-prov-body > .add-prov-list--browse {
+  flex: 1 1 auto;
 }
 .add-prov-row {
   display: grid;
