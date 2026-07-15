@@ -64,6 +64,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   // pickers. "" = 350k default; a saved off-ladder value is surfaced as its own option.
   const autoCompactOptions = useMemo(() => {
     const ladder = [100_000, 200_000, 250_000, 300_000, 350_000, 400_000, 500_000, 600_000, 750_000, 900_000, 1_000_000];
+    // Compact SI-style units (1M / 350k) — technical number format, not prose.
     const fmt = (v: number) => (v >= 1_000_000 ? "1M" : `${Math.round(v / 1_000)}k`);
     const current = state?.autoCompactWindow ?? null;
     const values = current !== null && !ladder.includes(current) ? [...ladder, current].sort((a, b) => a - b) : ladder;
@@ -121,6 +122,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   // Auto-context export (audit 021 #4): the manual path must carry the compact
   // window, or picker [1m] variants would account 1M with no safety net.
   const autoCompactActive = state.autoContext && state.maxContextTokens === null;
+  // Shell snippet for advanced users — keep export lines + comments literal.
   const manualEnv = [
     `export ANTHROPIC_BASE_URL=${baseUrl}`,
     ...(state.authMode === "proxy"
@@ -136,7 +138,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <div className="page-head"><h2>{t("nav.claude")} Code</h2></div>
+      <div className="page-head"><h2>{t("claude.pageTitle")}</h2></div>
       <p className="page-sub">{t("claude.subtitle")}</p>
 
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}

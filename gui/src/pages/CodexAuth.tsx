@@ -166,7 +166,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
           <span className="dot dot-green" />
           <strong>{t("codexAuth.mainAccount")}</strong>
           <span className="card-badges">
-            {main && <TicketBadge account={{ ...main, id: "__main__" } as AccountEntry} onClick={() => openResetPopup({ ...main, id: "__main__" } as AccountEntry)} />}
+            {main && <TicketBadge t={t} account={{ ...main, id: "__main__" } as AccountEntry} onClick={() => openResetPopup({ ...main, id: "__main__" } as AccountEntry)} />}
             <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
               {isMainActive ? t("codexAuth.nextSession") : t("codexAuth.current")}
             </span>
@@ -195,7 +195,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
             <strong>{a.email}</strong>
             <span className="card-badges">
               {a.plan && <span className="badge badge-green">{a.plan}</span>}
-              <TicketBadge account={a} onClick={() => openResetPopup(a)} />
+              <TicketBadge t={t} account={a} onClick={() => openResetPopup(a)} />
               {a.needsReauth && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
               {isNext(a.id) && !a.needsReauth && <span className="badge badge-primary">{t("codexAuth.nextSession")}</span>}
             </span>
@@ -259,7 +259,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
                   {(resetPopup.quota?.resetCredits ?? 0) > 0 ? (
                     <>
                       <p style={{ marginBottom: 12 }}>{t("codexAuth.resetCreditsAvailable", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
-                      {creditDetailsLoading && <p className="faint text-label">Loading...</p>}
+                      {creditDetailsLoading && <p className="faint text-label">{t("common.loading")}</p>}
                       {creditDetails && creditDetails.length > 0 && (
                         <div className="credit-list">
                           {creditDetails.map((c, i) => (
@@ -348,7 +348,7 @@ function CreditItem({ index, grantedAt, expiresAt, isNext, t }: {
   );
 }
 
-function TicketBadge({ account, onClick }: { account: AccountEntry; onClick: () => void }) {
+function TicketBadge({ account, onClick, t }: { account: AccountEntry; onClick: () => void; t: TFn }) {
   const credits = account.quota?.resetCredits;
   if (credits === undefined) return null;
   const hasCredits = typeof credits === "number" && credits > 0;
@@ -356,7 +356,7 @@ function TicketBadge({ account, onClick }: { account: AccountEntry; onClick: () 
     <button type="button"
       className={`badge ${hasCredits ? "badge-amber" : "badge-muted"} badge-clickable`}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      aria-label={`${credits} reset credit(s)`}
+      aria-label={t("codexAuth.resetCreditsAria", { count: String(credits) })}
     >
       <IconTicket width={12} />
       {credits}

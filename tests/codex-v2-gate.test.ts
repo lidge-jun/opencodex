@@ -436,7 +436,9 @@ describe("cli surface", () => {
     const logs: string[] = [];
     const deps = {
       execFile: (_file: string, args: string[]) => {
-        const enabled = args[1] === "enable";
+        // POSIX: ["features", "enable|disable", ...]; win32 .cmd: ["/d","/s","/c","...enable..."]
+        const joined = args.join(" ");
+        const enabled = args[1] === "enable" || /\benable\b/.test(joined);
         const content = readFileSync(path, "utf8");
         writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
       },

@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local i18n lint dumps
+lint-i18n-*.txt
+

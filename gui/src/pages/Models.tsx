@@ -38,6 +38,7 @@ const CUSTOM_OPTION = "custom";
 const THREAD_OPTIONS = [4, 8, 16, 32, 64, 128, 256, 500, 1000];
 const PAGE = 60; // rows rendered per provider before a "show more" (keeps 1000s-of-models providers usable)
 
+/** Compact token display (350k) — unit is technical, not prose. */
 function fmtK(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return String(n);
   return n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString();
@@ -46,8 +47,8 @@ function fmtK(n: number): string {
 export default function Models({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [models, setModels] = useState<ModelRow[]>([]);
- const [disabled, setDisabled] = useState<Set<string>>(new Set());
- const [search, setSearch] = useState<Record<string, string>>({});
+  const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>({});
   const [contextCapValue, setContextCapValue] = useState(350_000);
@@ -581,7 +582,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
               <h3>{t("models.v2Label")}</h3>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setV2HelpOpen(false)} aria-label="Close">&times;</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setV2HelpOpen(false)} aria-label={t("common.close")}>&times;</button>
             </div>
             <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
               {t("models.v2Help")}
@@ -592,7 +593,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
               </a>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setV2HelpOpen(false)}>OK</button>
+              <button type="button" className="btn btn-primary" onClick={() => setV2HelpOpen(false)}>{t("common.ok")}</button>
             </div>
           </div>
         </div>

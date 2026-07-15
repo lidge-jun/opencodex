@@ -679,7 +679,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
                         {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
-                        {prov.keyOptional && <span className="badge badge-green">Free</span>}
+                        {prov.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
                       </div>
                       <div className="muted prov-meta text-control">
                         <code className="chip">{prov.adapter}</code>

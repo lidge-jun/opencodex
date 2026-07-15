@@ -7,10 +7,18 @@
   - `src/i18n/en.ts` — source of truth / `TKey`
   - plus every other `src/i18n/{locale}.ts` module (discovered automatically by `bun run lint:i18n`; when adding a language, add `{locale}.ts` and wire it in `src/i18n/shared.ts`)
 - Render copy with `useT()` / `t("key")` or `<Trans k="key" cmd="..." />` for `{cmd}` chips.
-- **Allowed literals without i18n keys:**
-  - **Company / product names** (e.g. OpenAI, Anthropic, GitHub, Codex) — prefer identical entries in locale files when the string is shown as UI copy.
-  - **Model identifiers** from APIs/catalogs (e.g. `gpt-4o`, `deepseek-v4-flash-free`) when displaying provider data, not when writing labels like "Default model".
-- Run `bun run lint:i18n` after UI copy changes; fix violations before committing. Each error includes a **snippet** of the hardcoded text.
+- **Allowed literals without i18n keys** (see `.eslint/i18n-allowlist.ts`):
+  - **Company / product names** (e.g. OpenAI, Anthropic, GitHub, Codex).
+  - **Model identifiers** from APIs/catalogs (e.g. `gpt-4o`, `deepseek-v4-flash-free`) when displaying provider data, not labels like "Default model".
+  - **Technical / machine text** — do **not** put these in locale files:
+    - CLI/shell samples (`curl …`, `export VAR=…`, `ocx claude`)
+    - Content inside `<pre>` / `<code>`
+    - HTTP headers, env var names, protocol field dumps (`model=…`, `thinking`)
+    - Units/abbreviations next to numbers (`ms`, `k`, `1M`, cache `c`/`w`)
+    - URLs / localhost endpoints, adapter ids (`oauth`, `passthrough`, npm channels)
+  - Keep **code comments** (including shell `# …` comments in samples). Never strip them to “satisfy” i18n.
+- Run `bun run lint:i18n` after UI copy changes; fix real violations before committing. If a hit is technical, extend the allowlist or put the string in `<pre>`/`<code>` — do not invent nonsense translation keys.
+
 
 ## Failure mode
 

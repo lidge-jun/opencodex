@@ -174,7 +174,7 @@ export default function App() {
 
   const brand = (
     <div className="brand">
-      <span className="brand-logo" role="img" aria-label="opencodex logo" />
+      <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
       <span className="name">opencodex</span>
       <span className="ver">v{displayedVersion}</span>
     </div>
@@ -218,7 +218,7 @@ export default function App() {
             <button type="button" className="theme-toggle" onClick={toggleClaude}
               aria-pressed={claudeEnabled} aria-label={t("claude.toggleAria")} title={t("claude.toggleAria")}
               style={claudeEnabled ? { color: "var(--accent)" } : undefined}>
-              <IconSparkle /> <span className="mode">{claudeEnabled ? "Claude ON" : "Claude OFF"}</span>
+              <IconSparkle /> <span className="mode">{claudeEnabled ? t("app.claudeOn") : t("app.claudeOff")}</span>
             </button>
           )}
           <div className="lang-toggle">

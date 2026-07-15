@@ -90,7 +90,7 @@ export default function AddCodexAccountModal({
             <label className="field-label">{t("codexAuth.addIdLabel")}</label>
             <input
               className="input"
-              placeholder="codex-work, codex-alt, team..."
+              placeholder={t("codexAuth.addIdPlaceholder")}
               value={id}
               onChange={e => setId(e.target.value)}
               style={{ marginBottom: 12 }}

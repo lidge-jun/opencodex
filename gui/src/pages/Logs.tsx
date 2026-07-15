@@ -129,6 +129,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     || (surfaceFilter === "claude" ? log.surface === "claude" : log.surface !== "claude")
   ));
 
+  // TanStack Virtual returns unstable function identities; React Compiler skips this call.
+  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const rowVirtualizer = useVirtualizer({
     count: filteredLogs.length,
     getScrollElement: () => scrollContainerRef.current,

@@ -56,6 +56,8 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   const afterRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // TanStack Virtual returns unstable function identities; React Compiler skips this call.
+  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const lineVirtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollContainerRef.current,
@@ -284,6 +286,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
                     <th>{t("debug.claudeInbound.time")}</th>
                     <th>{t("debug.claudeInbound.endpoint")}</th>
                     <th>{t("debug.claudeInbound.model")}</th>
+                    {/* Protocol field names from Claude inbound capture — not prose. */}
                     <th>thinking</th>
                     <th>effort</th>
                     <th>beta</th>

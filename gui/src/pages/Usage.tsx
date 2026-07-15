@@ -346,7 +346,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
               </div>
               <div className="heatmap-body">
                 <div className="heatmap-days">
-                  <span /><span>Mon</span><span /><span>Wed</span><span /><span>Fri</span><span />
+                  <span /><span>{t("usage.dayMon")}</span><span /><span>{t("usage.dayWed")}</span><span /><span>{t("usage.dayFri")}</span><span />
                 </div>
                 <div className="heatmap-grid" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}>
                   {heatmap.weeks.map((week, wi) => (
@@ -371,8 +371,8 @@ export default function Usage({ apiBase }: { apiBase: string }) {
                 return (
                   <div className="heatmap-tip" style={{ left: hoverCell.x, top: hoverCell.y }}>
                     <div className="heatmap-tip-date">{cell.date}</div>
-                    <div className="heatmap-tip-val">{formatTokens(cell.totalTokens, locale)} tokens</div>
-                    <div className="heatmap-tip-req muted">{cell.requests} requests</div>
+                    <div className="heatmap-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(cell.totalTokens, locale) })}</div>
+                    <div className="heatmap-tip-req muted">{t("usage.heatmap.tooltipRequests", { requests: cell.requests })}</div>
                   </div>
                 );
               })()}

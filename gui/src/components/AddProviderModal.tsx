@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconX, IconLock, IconKey, IconExternal } from "../icons";
-import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
 import { useT } from "../i18n";
+import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -22,10 +22,6 @@ interface Preset {
   keyOptional?: boolean;
 }
 
-const FALLBACK_PRESETS: Preset[] = [
-  { id: "custom", label: "Custom provider", adapter: "openai-chat", baseUrl: "", auth: "key" },
-];
-
 interface FormState {
   name: string;
   adapter: string;
@@ -45,8 +41,12 @@ export default function AddProviderModal({
   /** Skip catalog picker and open the custom-provider form immediately. */
   initialCustom?: boolean;
 }) {
+  const t = useT();
+  const fallbackPresets = useMemo<Preset[]>(() => [
+    { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
+  ], [t]);
   const [query, setQuery] = useState("");
-  const [preset, setPreset] = useState<Preset | null>(initialCustom ? FALLBACK_PRESETS[0]! : null);
+  const [preset, setPreset] = useState<Preset | null>(initialCustom ? fallbackPresets[0]! : null);
   const [form, setForm] = useState<FormState | null>(
     initialCustom
       ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "" }
@@ -55,16 +55,17 @@ export default function AddProviderModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [oauthSupported, setOauthSupported] = useState<string[]>([]);
-  const t = useT();
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthMsg, setOauthMsg] = useState("");
+  const [oauthMsgTone, setOauthMsgTone] = useState<"ok" | "warn">("ok");
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
-  const [presets, setPresets] = useState<Preset[]>(FALLBACK_PRESETS);
+  const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
   const searchRef = useRef<HTMLInputElement>(null);
   const aliveRef = useRef(true);
+  const loadedPresetsRef = useRef(false);
 
   useEffect(() => { if (!initialCustom) searchRef.current?.focus(); }, [initialCustom]);
   useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
@@ -78,9 +79,16 @@ export default function AddProviderModal({
   }, [apiBase]);
   useEffect(() => {
     fetch(`${apiBase}/api/provider-presets`).then(r => r.json()).then((d: { providers?: Preset[] }) => {
-      if (Array.isArray(d.providers) && d.providers.length > 0) setPresets(d.providers);
+      if (Array.isArray(d.providers) && d.providers.length > 0) {
+        loadedPresetsRef.current = true;
+        setPresets(d.providers);
+      }
     }).catch(() => {});
   }, [apiBase]);
+  // Keep the custom fallback label in sync when language changes and API presets never loaded.
+  useEffect(() => {
+    if (!loadedPresetsRef.current) setPresets(fallbackPresets);
+  }, [fallbackPresets]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -99,16 +107,30 @@ export default function AddProviderModal({
       apiKey: "",
       defaultModel: p.defaultModel ?? "",
     });
-    setError(""); setOauthMsg("");
+    setError("");
+    setOauthMsg("");
+    setOauthMsgTone("ok");
+    setManualCode("");
+    setManualCodeMsg("");
+    setManualCodeOk(true);
   };
 
-  const back = () => { setPreset(null); setForm(null); setError(""); setOauthMsg(""); };
+  const back = () => {
+    setPreset(null);
+    setForm(null);
+    setError("");
+    setOauthMsg("");
+    setOauthMsgTone("ok");
+    setManualCode("");
+    setManualCodeMsg("");
+    setManualCodeOk(true);
+  };
 
   const submit = async () => {
     if (!form) return;
     const name = form.name.trim();
-    if (!name) { setError("Provider name is required"); return; }
-    if (!form.baseUrl.trim()) { setError("Base URL is required"); return; }
+    if (!name) { setError(t("modal.nameRequired")); return; }
+    if (!form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
     const provider = buildProviderPayload(form);
 
     setSaving(true);
@@ -121,12 +143,12 @@ export default function AddProviderModal({
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error || `Failed (${res.status})`);
+        setError(d.error || t("modal.failedStatus", { status: res.status }));
         return;
       }
       onAdded(name);
     } catch {
-      setError("Network error — is the proxy running?");
+      setError(t("modal.networkError"));
     } finally {
       setSaving(false);
     }
@@ -136,8 +158,10 @@ export default function AddProviderModal({
   const loginOAuth = async (providerId: string) => {
     setOauthBusy(true);
     setOauthMsg("");
+    setOauthMsgTone("ok");
     setManualCode("");
     setManualCodeMsg("");
+    setManualCodeOk(true);
     try {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
@@ -147,27 +171,36 @@ export default function AddProviderModal({
       const data = await res.json();
       if (!aliveRef.current) return;
       if (!res.ok) {
+        setOauthMsgTone("warn");
         setOauthMsg(data.error === "unknown oauth provider"
-          ? "OAuth login for this provider arrives in the next update — use an API key for now."
-          : (data.error || "Login failed to start"));
+          ? t("modal.oauthComingSoonShort")
+          : (data.error || t("modal.loginFailStart")));
         return;
       }
       // A non-empty url = browser/device flow (the server also opens it). An EMPTY url with a 200 =
       // a local-token import (e.g. Anthropic's Claude Code keychain, Grok CLI) that needs no browser
       // — just poll status until the credential lands. Don't treat empty url as a failure.
-      if (data.url) { window.open(data.url, "_blank"); setOauthMsg("Waiting for browser login…"); }
-      else { setOauthMsg(data.instructions || "Logging in…"); }
+      if (data.url) { window.open(data.url, "_blank"); setOauthMsg(t("modal.waitingLogin")); }
+      else { setOauthMsg(data.instructions || t("modal.loggingIn")); }
       for (let i = 0; i < 100; i++) {
         await new Promise(r => setTimeout(r, 2000));
         if (!aliveRef.current) return; // modal closed → stop polling, don't fire onAdded
         const s = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).then(r => r.json()).catch(() => null);
         if (!aliveRef.current) return;
         if (s?.loggedIn) { onAdded(providerId); return; }
-        if (s?.error) { setOauthMsg(`Login error: ${s.error}`); return; }
+        if (s?.error) {
+          setOauthMsgTone("warn");
+          setOauthMsg(t("modal.loginError", { error: s.error }));
+          return;
+        }
       }
-      setOauthMsg("Login timed out — try again.");
+      setOauthMsgTone("warn");
+      setOauthMsg(t("modal.loginTimeout"));
     } catch {
-      if (aliveRef.current) setOauthMsg("Network error — is the proxy running?");
+      if (aliveRef.current) {
+        setOauthMsgTone("warn");
+        setOauthMsg(t("modal.networkError"));
+      }
     } finally {
       if (aliveRef.current) setOauthBusy(false);
     }
@@ -197,7 +230,7 @@ export default function AddProviderModal({
     } catch {
       if (aliveRef.current) {
         setManualCodeOk(false);
-        setManualCodeMsg(t("prov.pasteFail", { error: "network error" }));
+        setManualCodeMsg(t("modal.networkError"));
       }
     } finally {
       if (aliveRef.current) setManualCodeBusy(false);
@@ -209,11 +242,11 @@ export default function AddProviderModal({
   const isLocal = form?.authMode === "local";
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Add provider" className="modal-overlay" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>{preset ? `Add: ${preset.label}` : "Add provider"}</h3>
-          <button className="btn btn-ghost btn-icon" aria-label="Close" onClick={onClose}><IconX /></button>
+          <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
+          <button className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
         </div>
 
         {!preset ? (
@@ -223,7 +256,7 @@ export default function AddProviderModal({
               className="input"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search providers…"
+              placeholder={t("modal.search")}
             />
             <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
               {filtered.map(p => (
@@ -233,38 +266,42 @@ export default function AddProviderModal({
                     <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
                   </div>
                   <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                    {p.keyOptional && <span className="badge badge-green">Free</span>}
+                    {p.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
                     {p.auth === "oauth"
-                      ? <span className="badge badge-accent">OAuth</span>
+                      ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
                       : p.auth === "forward"
-                        ? <span className="badge badge-green">Codex login</span>
+                        ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
                         : p.auth === "local"
-                          ? <span className="badge badge-amber">Local</span>
+                          ? <span className="badge badge-amber">{t("modal.badge.local")}</span>
                           : !p.keyOptional
-                            ? <span className="badge badge-muted">API key</span>
+                            ? <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>
                             : null}
                   </div>
                 </button>
               ))}
-              {filtered.length === 0 && <div className="muted text-control" style={{ padding: 8 }}>No match.</div>}
+              {filtered.length === 0 && <div className="muted text-control" style={{ padding: 8 }}>{t("modal.noMatch")}</div>}
             </div>
           </>
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div className="muted text-control">{preset.note ?? "Log in with your account — no API key needed."}</div>
+              <div className="muted text-control">{preset.note ?? t("modal.oauthDefaultNote")}</div>
               {oauthSupported.includes(preset.oauthProvider ?? "") ? (
                 <button className="btn btn-primary" onClick={() => loginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
                   style={{ width: "100%", padding: "12px 16px" }}>
-                  <IconLock />{oauthBusy ? "Waiting for browser…" : `Log in with ${preset.label}`}
+                  <IconLock />{oauthBusy ? t("modal.waitingBrowser") : t("modal.logInWith", { label: preset.label })}
                 </button>
               ) : (
                 <div className="text-control" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
-                  OAuth login for {preset.label} arrives in the next update. Use an API key for now.
+                  {t("modal.oauthComingSoon", { label: preset.label })}
                 </div>
               )}
-              {oauthMsg && <div className="text-label" style={{ color: /error|update|timed/.test(oauthMsg) ? "var(--amber)" : "var(--accent-hover)" }}>{oauthMsg}</div>}
+              {oauthMsg && (
+                <div className="text-label" style={{ color: oauthMsgTone === "warn" ? "var(--amber)" : "var(--accent-hover)" }}>
+                  {oauthMsg}
+                </div>
+              )}
               {oauthBusy && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <div className="muted text-label">
@@ -306,9 +343,20 @@ export default function AddProviderModal({
                 </div>
               )}
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
-                <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "key" }); setOauthMsg(""); setManualCode(""); setManualCodeMsg(""); }}>Use an API key instead</button>
+                <button
+                  className="link-btn"
+                  onClick={() => {
+                    setForm({ ...form, authMode: "key" });
+                    setOauthMsg("");
+                    setOauthMsgTone("ok");
+                    setManualCode("");
+                    setManualCodeMsg("");
+                  }}
+                >
+                  {t("modal.useApiKeyInstead")}
+                </button>
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-ghost" onClick={back}>Back</button>
+                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
               </div>
             </div>
           ) : (
@@ -316,60 +364,68 @@ export default function AddProviderModal({
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {!isCustom && !isLocal && !preset.keyOptional && preset.note && (
                 <details className="setup-guide">
-                  <summary>Setup guide</summary>
+                  <summary>{t("modal.setupGuide")}</summary>
                   <ol className="text-label leading-relaxed" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--muted)" }}>
-                    <li>Go to <a href={preset.dashboardUrl} target="_blank" rel="noreferrer">{preset.label} dashboard</a> and copy your API key</li>
-                    <li>Paste it in the API key field below</li>
-                    <li>Click Add provider — models are auto-discovered</li>
+                    <li>
+                      {t("modal.setupStep1Prefix")}{" "}
+                      <a href={preset.dashboardUrl} target="_blank" rel="noreferrer">
+                        {t("modal.setupDashboardLink", { label: preset.label })}
+                      </a>{" "}
+                      {t("modal.setupStep1Suffix")}
+                    </li>
+                    <li>{t("modal.setupStep2")}</li>
+                    <li>{t("modal.setupStep3")}</li>
                   </ol>
                   {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
                 </details>
               )}
-              <Field label="Provider name">
-                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. openrouter" />
+              <Field label={t("modal.providerName")}>
+                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
               </Field>
-              {dup && <div className="text-label" style={{ color: "var(--amber)" }}>Provider "{form.name.trim()}" exists and will be overwritten.</div>}
-              <Field label="Adapter">
+              {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
+              <Field label={t("modal.adapter")}>
                 <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
                   {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
               </Field>
-              <Field label="Base URL">
-                <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder="https://..." />
+              <Field label={t("modal.baseUrl")}>
+                <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
               </Field>
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
-                  No key needed — the proxy forwards your <code className="chip">codex login</code> credentials to this provider.
+                  {t("modal.forwardHintPrefix")}{" "}
+                  <code className="chip">{t("modal.forwardCredentials")}</code>{" "}
+                  {t("modal.forwardHintSuffix")}
                 </div>
               ) : form.authMode === "local" ? (
                 <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
-                  No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                  {t("modal.localHint")}
                 </div>
               ) : preset.keyOptional ? (
                 <div className="text-label leading-relaxed" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
-                  <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
+                  <strong>{t("modal.freeTierTitle")}</strong> — {preset.note ?? t("modal.freeTierDefault")}
                 </div>
               ) : (
                 <>
                   {preset.dashboardUrl && (
                     <a className="text-label" href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <IconKey style={{ width: 14, height: 14 }} />Get your {preset.label} API key<IconExternal style={{ width: 13, height: 13 }} />
+                      <IconKey style={{ width: 14, height: 14 }} />{t("modal.getApiKey", { label: preset.label })}<IconExternal style={{ width: 13, height: 13 }} />
                     </a>
                   )}
-                  <Field label="API key">
-                    <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-… (or $ENV_VAR)" />
+                  <Field label={t("modal.apiKey")}>
+                    <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder={t("modal.apiKeyPlaceholder")} />
                   </Field>
                 </>
               )}
-              <Field label="Default model (optional)">
-                <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder="e.g. gpt-5.5" />
+              <Field label={t("modal.defaultModel")}>
+                <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
               </Field>
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
-                <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? "Adding…" : "Add provider"}</button>
-                {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>← Use OAuth login</button>}
+                <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>
+                {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>{t("modal.useOauthLogin")}</button>}
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-ghost" onClick={back}>Back</button>
+                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
               </div>
             </div>
           )
