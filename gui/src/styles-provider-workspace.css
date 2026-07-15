@@ -1879,10 +1879,6 @@
   flex-direction: column;
   min-height: 0;
 }
-.pwi-coding-stats-row .providers-workspace-summary-value {
-  font-size: 24px;
-}
-
 /* ---- Overview two-column (attention + recently used) ---- */
 .pwi-overview-two-col {
   display: grid;

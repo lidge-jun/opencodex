@@ -1240,22 +1240,6 @@ function OverviewPanel({
       .slice(0, 4),
     [usageTotals, providersByName],
   );
-  const codingStats = useMemo(() => {
-    let requests = 0;
-    let tokens = 0;
-    let activeProviders = 0;
-    for (const [name, row] of Object.entries(usageTotals)) {
-      if (!providersByName.has(name)) continue;
-      if (typeof row.requests === "number" && row.requests > 0) {
-        requests += row.requests;
-        activeProviders += 1;
-      }
-      if (typeof row.totalTokens === "number" && row.totalTokens > 0) {
-        tokens += row.totalTokens;
-      }
-    }
-    return { requests, tokens, activeProviders };
-  }, [usageTotals, providersByName]);
 
   return (
     <div className="providers-workspace-overview">
@@ -1275,28 +1259,6 @@ function OverviewPanel({
         <div className="providers-workspace-summary-card pwi-summary-disabled">
           <span className="providers-workspace-summary-value">{sections.disabled.length}</span>
           <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
-        </div>
-      </div>
-
-      {/* Coding volume last 30 days */}
-      <div className="providers-workspace-summary-row pwi-coding-stats-row">
-        <div className="providers-workspace-summary-card">
-          <span className="providers-workspace-summary-value">
-            {codingStats.requests > 0 ? formatRequestCount(codingStats.requests) : "\u2014"}
-          </span>
-          <span className="providers-workspace-summary-label">{t("pws.stats.totalRequests")}</span>
-        </div>
-        <div className="providers-workspace-summary-card">
-          <span className="providers-workspace-summary-value">
-            {codingStats.tokens > 0 ? formatTokenCount(codingStats.tokens) : "\u2014"}
-          </span>
-          <span className="providers-workspace-summary-label">{t("pws.stats.tokens30d")}</span>
-        </div>
-        <div className="providers-workspace-summary-card">
-          <span className="providers-workspace-summary-value">
-            {codingStats.activeProviders > 0 ? codingStats.activeProviders : "\u2014"}
-          </span>
-          <span className="providers-workspace-summary-label">{t("pws.stats.activeCoded")}</span>
         </div>
       </div>
 
