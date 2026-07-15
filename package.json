@@ -1,7 +1,7 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.7.18",
-  "description": "Universal provider proxy for OpenAI Codex — use any LLM with Codex CLI/App/SDK",
+  "version": "2.7.20",
+  "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
   "exports": {
@@ -45,7 +45,9 @@
     "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
-    "release:watch": "bun scripts/release.ts watch"
+    "release:watch": "bun scripts/release.ts watch",
+    "prepush": "bun run typecheck && bun run test && bun run privacy:scan",
+    "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.12.0",
@@ -64,7 +66,17 @@
     "llm",
     "ollama",
     "anthropic",
-    "responses-api"
+    "responses-api",
+    "claude-code",
+    "claude",
+    "codex-cli",
+    "gemini",
+    "grok",
+    "deepseek",
+    "chatgpt",
+    "llm-proxy",
+    "ai-gateway",
+    "openrouter"
   ],
   "repository": {
     "type": "git",

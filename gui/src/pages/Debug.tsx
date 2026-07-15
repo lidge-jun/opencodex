@@ -202,7 +202,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
           >
             <IconRefresh /> {t("debug.refresh")}
           </button>
-          <label className="muted" style={{ fontSize: 13, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />
             {t("debug.follow")}
           </label>
@@ -226,7 +226,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
                       label={t(`debug.${flag}`)}
                       onClick={() => void setDebugFlag(flag, !checked)}
                     />
-                    <span style={{ fontSize: 13 }}>{t(`debug.${flag}`)}</span>
+                    <span className="text-control">{t(`debug.${flag}`)}</span>
                   </div>
                 );
               })}
@@ -272,13 +272,13 @@ export default function Debug({ apiBase }: { apiBase: string }) {
 
       {debug?.claude && (
         <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("debug.claudeInbound.title")}</div>
-          <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>{t("debug.claudeInbound.sub")}</div>
+          <div className="font-semibold" style={{ marginBottom: 4 }}>{t("debug.claudeInbound.title")}</div>
+          <div className="muted text-control" style={{ marginBottom: 10 }}>{t("debug.claudeInbound.sub")}</div>
           {claudeEntries.length === 0 ? (
-            <div className="muted" style={{ fontSize: 13 }}>{t("debug.claudeInbound.empty")}</div>
+            <div className="muted text-control">{t("debug.claudeInbound.empty")}</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table className="table" style={{ fontSize: 12 }}>
+              <table className="table text-label">
                 <thead>
                   <tr>
                     <th>{t("debug.claudeInbound.time")}</th>
@@ -323,13 +323,13 @@ export default function Debug({ apiBase }: { apiBase: string }) {
 
       {debug && !streamEnabled ? (
         <div className="empty">
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
-          <div className="muted" style={{ fontSize: 13, maxWidth: 560, marginInline: "auto" }}>{t("debug.empty")}</div>
+          <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
+          <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t("debug.empty")}</div>
         </div>
       ) : debug && streamEnabled && entries.length === 0 ? (
         <div className="empty">
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
-          <div className="muted" style={{ fontSize: 13, maxWidth: 560, marginInline: "auto" }}>{t(`debug.noLines.${stream}`)}</div>
+          <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
+          <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t(`debug.noLines.${stream}`)}</div>
         </div>
       ) : debug && streamEnabled ? (
         <div

@@ -81,7 +81,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
 
       <div className="h-section">{t("sub.featured")} <span className="count">{chosen.length}/5</span></div>
-      <div className="row muted" style={{ alignItems: "flex-start", gap: 8, margin: "-2px 0 10px", maxWidth: "80ch", fontSize: 12.5, lineHeight: 1.5 }}>
+      <div className="row muted text-label leading-body" style={{ alignItems: "flex-start", gap: 8, margin: "-2px 0 10px", maxWidth: "80ch" }}>
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
         <span><Trans k="sub.orderHint" cmd="spawn_agent" /></span>
       </div>
@@ -91,7 +91,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         <div className="stack" style={{ gap: 8 }}>
           {chosen.map((m, i) => (
             <div key={m} className="card panel-accent row" style={{ padding: "8px 12px", gap: 10 }}>
-              <span className="mono" style={{ width: 18, color: "var(--accent)", fontWeight: 700 }}>{i + 1}</span>
+              <span className="mono font-bold" style={{ width: 18, color: "var(--accent)" }}>{i + 1}</span>
               <code className="mono" style={{ flex: 1, color: "var(--text)" }}>{modelLabel(m)}</code>
               <button className="btn btn-ghost btn-icon btn-sm" onClick={() => move(i, -1)} disabled={i === 0} aria-label={t("sub.moveUp", { m })}>
                 <IconArrowUp />

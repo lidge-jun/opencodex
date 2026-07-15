@@ -310,8 +310,9 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
 
   // Live-capture carrier (2.1.207): the bundle rides a sibling TEXT block whose first
   // line is "Base directory for this skill: <dir>/<name>" — not the tool_result.
-  function requestWithSkillTextBlock(skillDirName: string, textLen: number, cc?: { blockedSkills?: string[] }) {
-    const bundle = `Base directory for this skill: /private/tmp/claude-501/bundled-skills/2.1.207/abc/${skillDirName}\n\n` + "DOCS ".repeat(Math.ceil(textLen / 5));
+  function requestWithSkillTextBlock(skillDirName: string, textLen: number, cc?: { blockedSkills?: string[] }, baseDir?: string) {
+    const dir = baseDir ?? `/private/tmp/claude-501/bundled-skills/2.1.207/abc/${skillDirName}`;
+    const bundle = `Base directory for this skill: ${dir}\n\n` + "DOCS ".repeat(Math.ceil(textLen / 5));
     return anthropicToResponsesTranslation({
       model: "gemini/gemini-3-pro",
       max_tokens: 100,
@@ -343,6 +344,27 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
     expect(small.some(t => t.startsWith("Base directory"))).toBe(true);
     const off = userTexts(requestWithSkillTextBlock("claude-api", 500_000, { blockedSkills: [] }));
     expect(off.some(t => t.length > 400_000)).toBe(true);
+  });
+
+  test("text-block carrier: Windows backslash base dir is elided (live incident 2026-07-15)", () => {
+    const texts = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined,
+      "C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\bundled-skills\\claude-api"));
+    expect(texts.some(t => t.includes("elided") && t.includes("claude-api"))).toBe(true);
+    expect(texts.every(t => t.length < 10_000)).toBe(true);
+  });
+
+  test("text-block carrier: mixed separators and UNC paths are elided", () => {
+    const mixed = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined,
+      "C:\\Users\\u\\skills/2.1.207\\claude-api"));
+    expect(mixed.some(t => t.includes("elided"))).toBe(true);
+    const unc = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined,
+      "\\\\server\\share\\skills\\claude-api"));
+    expect(unc.some(t => t.includes("elided"))).toBe(true);
+  });
+
+  test("text-block carrier: drive-relative dir (no separator) stays pass-through", () => {
+    const texts = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined, "C:claude-api"));
+    expect(texts.some(t => t.length > 400_000)).toBe(true);
   });
 });
 

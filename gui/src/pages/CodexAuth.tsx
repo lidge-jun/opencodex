@@ -259,7 +259,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
                   {(resetPopup.quota?.resetCredits ?? 0) > 0 ? (
                     <>
                       <p style={{ marginBottom: 12 }}>{t("codexAuth.resetCreditsAvailable", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
-                      {creditDetailsLoading && <p className="faint" style={{ fontSize: 12 }}>Loading...</p>}
+                      {creditDetailsLoading && <p className="faint text-label">Loading...</p>}
                       {creditDetails && creditDetails.length > 0 && (
                         <div className="credit-list">
                           {creditDetails.map((c, i) => (
@@ -271,7 +271,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
                         onClick={() => setResetConfirm(true)} disabled={redeeming}>
                         {t("codexAuth.useOneCredit")}
                       </button>
-                      <p className="card-sub" style={{ fontSize: 11, marginTop: 8, textAlign: "center" }}>{t("codexAuth.fifoNote")}</p>
+                      <p className="card-sub text-caption" style={{ marginTop: 8, textAlign: "center" }}>{t("codexAuth.fifoNote")}</p>
                     </>
                   ) : (
                     <>
@@ -288,11 +288,11 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
                   <h3>{t("codexAuth.confirmResetTitle")}</h3>
                   <p className="modal-desc">{t("codexAuth.confirmResetDesc", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
                   {creditDetails && creditDetails[0] && (
-                    <p className="faint" style={{ fontSize: 12 }}>
+                    <p className="faint text-label">
                       {t("codexAuth.confirmWhichCredit", { date: formatCreditDate(creditDetails[0].granted_at) })}
                     </p>
                   )}
-                  <p className="faint" style={{ fontSize: 12 }}>{t("codexAuth.irreversible")}</p>
+                  <p className="faint text-label">{t("codexAuth.irreversible")}</p>
                 </div>
                 <div className="modal-actions">
                   <button className="btn btn-ghost" onClick={() => setResetConfirm(false)}>{t("codexAuth.cancel")}</button>
@@ -338,7 +338,7 @@ function CreditItem({ index, grantedAt, expiresAt, isNext, t }: {
         <span className="credit-item-label">
           {isNext ? t("codexAuth.creditNext") : t("codexAuth.creditLabel", { n: String(index + 1) })}
         </span>
-        {isNext && <span className="badge badge-amber" style={{ fontSize: 10, padding: "1px 6px" }}>{t("codexAuth.creditNextBadge")}</span>}
+        {isNext && <span className="badge badge-amber text-micro" style={{ padding: "1px 6px" }}>{t("codexAuth.creditNextBadge")}</span>}
       </div>
       <div className="credit-item-dates">
         <span>{t("codexAuth.creditGranted", { date: formatCreditDate(grantedAt) })}</span>

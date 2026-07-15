@@ -27,7 +27,6 @@ import {
   IconSearch,
   IconFilter,
   IconPlus,
-  IconX,
   IconPower,
   IconTrash,
   IconCheck,
@@ -139,13 +138,6 @@ const SORT_OPTIONS: { id: ProviderSortMode; label: string }[] = [
   { id: "free-paid", label: "Free → Paid" },
   { id: "paid-free", label: "Paid → Free" },
 ];
-
-function statusDotCls(p: WorkspaceProvider): string {
-  const s = binProviderStatus(p);
-  if (s === "disabled") return "pwi-dot pwi-dot--inactive";
-  if (s === "ready")    return "pwi-dot pwi-dot--active";
-  return "pwi-dot pwi-dot--warning";
-}
 
 function statusLabel(p: WorkspaceProvider): string {
   const s = binProviderStatus(p);

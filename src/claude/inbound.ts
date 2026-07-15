@@ -180,7 +180,9 @@ function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
   const firstLineEnd = text.indexOf("\n");
   const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
-  const base = dir.split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  // Windows clients send `C:\Users\...\claude-api`; normalize separators before
+  // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
+  const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
   if (!names.includes(base)) return text;
   return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";

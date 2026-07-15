@@ -13,22 +13,38 @@
 import { execFileSync } from "node:child_process";
 import { getLogicalMaxThreads, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
 
+import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
 
 export interface V2CliDeps {
-  execFile?: (file: string, args: string[]) => void;
+  execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
   log?: Pick<Console, "log" | "error">;
 }
 
+/**
+ * Shared invocation for `codex features enable|disable multi_agent_v2` — the single
+ * source of truth for the CLI and the management API fallback. Windows npm installs
+ * expose `codex` as a `.cmd` shim, which needs the win-exec launcher
+ * (devlog 260715_cross_platform_audit/020).
+ */
+export function codexFeaturesInvocation(
+  action: "enable" | "disable",
+  platform: NodeJS.Platform = process.platform,
+  deps: Parameters<typeof commandInvocation>[3] = {},
+): SpawnInvocation {
+  const command = (deps.env ?? process.env).CODEX_CLI_PATH?.trim() || "codex";
+  return commandInvocation(command, ["features", action, "multi_agent_v2"], platform, deps);
+}
+
 function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
-  const exec = deps.execFile ?? ((file: string, args: string[]) => {
-    execFileSync(file, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true });
+  const exec = deps.execFile ?? ((file: string, args: string[], options?: SpawnInvocation["options"]) => {
+    execFileSync(file, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, ...options });
   });
-  const command = process.env.CODEX_CLI_PATH?.trim() || "codex";
-  exec(command, ["features", action, "multi_agent_v2"]);
+  const inv = codexFeaturesInvocation(action);
+  exec(inv.file, inv.args, inv.options);
 }
 
 export function v2StatusLine(enabled: boolean): string {

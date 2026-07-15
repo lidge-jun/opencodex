@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import {
   analyzeProjectCodexConfig,
   collectProjectCodexConfigWarnings,
@@ -9,8 +9,60 @@ import {
   isGlobalOpencodexRoutingActive,
   invalidateProjectConfigDiagnosticsCache,
   parseTrustedProjectPathsFromCodexConfig,
+  relPath,
   resolveEffectiveProjectModelProvider,
 } from "../src/codex/project-config-warnings";
+
+describe("relPath home containment (devlog 260715_cross_platform_audit/030)", () => {
+  let savedUserProfile: string | undefined;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedUserProfile = process.env.USERPROFILE;
+    savedHome = process.env.HOME;
+  });
+
+  afterEach(() => {
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedUserProfile;
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+  });
+
+  function setHome(value: string) {
+    process.env.USERPROFILE = value;
+    delete process.env.HOME;
+  }
+
+  test("win32: contained descendants render as ~/, exact home as ~", () => {
+    setHome("C:\\Users\\bob");
+    expect(relPath("C:\\Users\\bob\\proj\\.codex\\config.toml", win32)).toBe("~/proj/.codex/config.toml");
+    expect(relPath("C:\\Users\\bob", win32)).toBe("~");
+    // relative() case-folds on win32 (drive letters and components).
+    expect(relPath("c:\\users\\bob\\x", win32)).toBe("~/x");
+  });
+
+  test("win32: sibling prefix (bob vs bob2) is NOT rendered as home", () => {
+    setHome("C:\\Users\\bob");
+    expect(relPath("C:\\Users\\bob2\\proj\\config.toml", win32)).toBe("C:\\Users\\bob2\\proj\\config.toml");
+  });
+
+  test("win32: parent and cross-drive paths stay absolute", () => {
+    setHome("C:\\Users\\bob");
+    expect(relPath("C:\\Users", win32)).toBe("C:\\Users");
+    expect(relPath("D:\\work\\config.toml", win32)).toBe("D:\\work\\config.toml");
+  });
+
+  test("posix: comparison is case-sensitive (no false ~ for different-case home)", () => {
+    setHome("/home/Bob");
+    expect(relPath("/home/bob/x", posix)).toBe("/home/bob/x");
+    expect(relPath("/home/Bob/x", posix)).toBe("~/x");
+  });
+
+  test("no home env leaves paths untouched", () => {
+    delete process.env.USERPROFILE;
+    delete process.env.HOME;
+    expect(relPath("/anywhere/x", posix)).toBe("/anywhere/x");
+  });
+});
 
 let testDir = "";
 let previousHome: string | undefined;

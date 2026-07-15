@@ -3,6 +3,7 @@ import { createAzureAdapter } from "../adapters/azure";
 import { createCursorAdapter } from "../adapters/cursor";
 import { createGoogleAdapter } from "../adapters/google";
 import { createKiroAdapter } from "../adapters/kiro";
+import { createMimoFreeAdapter } from "../adapters/mimo-free";
 import { createOpenAIChatAdapter } from "../adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
 import type { OcxProviderConfig } from "../types";
@@ -40,6 +41,8 @@ export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention
       return createAzureAdapter(providerConfig);
     case "cursor":
       return createCursorAdapter(providerConfig);
+    case "mimo-free":
+      return createMimoFreeAdapter(providerConfig);
     default:
       throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
   }

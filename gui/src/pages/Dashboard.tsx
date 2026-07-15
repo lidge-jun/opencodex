@@ -489,7 +489,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: 999, color: "var(--muted)" }}
+              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
               onClick={() => setMaHelpOpen(true)}
               aria-label={t("dash.multiAgent")}
               aria-haspopup="dialog"
@@ -498,15 +498,15 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             </button>
           </div>
           <div className="value" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: 999, background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+            <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
               {(["v1", "default", "v2"] as const).map(mode => (
                 <button
                   key={mode}
                   type="button"
                   role="radio"
                   aria-checked={maMode === mode}
-                  className={`btn btn-sm${maMode === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ borderRadius: 999, minWidth: 36, fontSize: 11, padding: "5px 10px", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
+                  className={`btn btn-sm text-caption${maMode === mode ? " btn-primary" : " btn-ghost"}`}
+                  style={{ borderRadius: "var(--radius-pill)", minWidth: 36, padding: "5px 10px", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
                   disabled={maBusy}
                   onClick={() => void switchMaMode(mode)}
                 >{mode === "default" ? "base" : mode}</button>
@@ -527,7 +527,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="label">{t("dash.tokens30d")}</div>
           <div className="value mono">{usage30d && usage30d.summary.requests > 0 ? formatTokens(usage30d.summary.totalTokens, locale) : "—"}</div>
           {usage30d && usage30d.summary.requests > 0 && (
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+            <div className="muted text-label" style={{ marginTop: 2 }}>
               {t("dash.coverage").replace("{pct}", `${Math.round(usage30d.summary.coverageRatio * 100)}%`)}
             </div>
           )}
@@ -538,9 +538,9 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         <div className="notice notice-err maintenance-notice" style={{ marginBottom: 24 }} role="alert">
           <IconAlert />
           <div>
-            <div style={{ fontWeight: 650 }}>{t("dash.projectConfigTitle")}</div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{t("dash.projectConfigHint")}</div>
-            <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13 }}>
+            <div className="font-semibold">{t("dash.projectConfigTitle")}</div>
+            <div className="muted text-control" style={{ marginTop: 4 }}>{t("dash.projectConfigHint")}</div>
+            <ul className="text-control" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
               {projectConfigWarnings.map(g => (
                 <li key={g.path} style={{ marginBottom: 8 }}>
                   <code>{g.path}</code> — {g.issues.join(", ")}
@@ -561,7 +561,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: 999, color: "var(--muted)" }}
+                  style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
                   onClick={() => setEffortCapHelpOpen(open => !open)}
                   aria-label={t("dash.effortCapLabel")}
                   aria-expanded={effortCapHelpOpen}
@@ -572,8 +572,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                 {effortCapHelpOpen && (
                   <div
                     role="dialog"
-                    className="help-popup"
-                    style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, width: "min(360px, calc(100vw - 48px))", padding: "12px 16px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)", boxShadow: "0 8px 24px rgba(0, 0, 0, 0.14)", color: "var(--text)", fontSize: 13, fontWeight: 400, lineHeight: 1.5, zIndex: 10 }}
+                    className="help-popup text-control font-regular leading-body"
+                    style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, width: "min(360px, calc(100vw - 48px))", padding: "12px 16px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)", boxShadow: "0 8px 24px rgba(0, 0, 0, 0.14)", color: "var(--text)", zIndex: 10 }}
                   >
                     <button
                       type="button"
@@ -702,16 +702,16 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               label={t("dash.injectionEffortLabel")}
             />
           )}
-          {injectionModel && <span className="badge badge-green" style={{ fontSize: 10 }}>{t("dash.injectionActive")}</span>}
+          {injectionModel && <span className="badge badge-green text-micro">{t("dash.injectionActive")}</span>}
         </div>
-        <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>{t("dash.injectionHint")}</div>
+        <div className="muted text-control" style={{ marginTop: 6 }}>{t("dash.injectionHint")}</div>
       </div>
 
       <div className="panel maintenance-panel" style={{ marginBottom: 24 }}>
         <div className="spread maintenance-head">
           <div>
-            <div style={{ fontWeight: 650 }}>{t("dash.maintenance")}</div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{t("dash.maintenanceHint")}</div>
+            <div className="font-semibold">{t("dash.maintenance")}</div>
+            <div className="muted text-control" style={{ marginTop: 3 }}>{t("dash.maintenanceHint")}</div>
           </div>
           <div className="maintenance-actions">
             <button type="button" className="btn btn-ghost" onClick={runSync} disabled={syncing}>
@@ -753,7 +753,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       <div className="panel" style={{ marginBottom: 24 }}>
         <div className="spread">
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 650 }}>{t("dash.codexAutoStart")}</div>
+            <div className="font-semibold">{t("dash.codexAutoStart")}</div>
             <div className="muted setting-hint">{t("dash.codexAutoStartHint")}</div>
           </div>
           <button
@@ -771,7 +771,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       <div className="panel" style={{ marginBottom: 12 }}>
         <div className="spread setting-row" style={{ alignItems: "flex-start" }}>
           <div className="setting-copy" style={{ flex: 1 }}>
-            <div style={{ fontWeight: 650 }}>{t("dash.webSearchSidecar")}</div>
+            <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
             <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
           </div>
           <div className="setting-controls">
@@ -789,7 +789,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       <div className="panel" style={{ marginBottom: 24 }}>
         <div className="spread setting-row">
           <div className="setting-copy" style={{ flex: 1 }}>
-            <div style={{ fontWeight: 650 }}>{t("dash.visionSidecar")}</div>
+            <div className="font-semibold">{t("dash.visionSidecar")}</div>
             <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
           </div>
           <div className="setting-controls">
@@ -807,9 +807,9 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       <div className="panel" style={{ marginBottom: 12 }}>
         <div className="spread setting-row" style={{ alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontWeight: 650 }}>{t("dash.shadowCallIntercept")}</span>
+            <span className="font-semibold">{t("dash.shadowCallIntercept")}</span>
             <span title={t("dash.shadowCallTooltip")} style={{ cursor: "help", opacity: 0.5 }}>ⓘ</span>
-            <code className="muted" style={{ fontSize: 11 }}>⚠ 5.4-mini</code>
+            <code className="muted text-caption">⚠ 5.4-mini</code>
           </div>
           <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
@@ -842,9 +842,9 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <tbody>
               {providers.map(p => (
                 <tr key={p.name}>
-                  <td style={{ fontWeight: 600 }}>{p.name}</td>
+                  <td className="font-semibold">{p.name}</td>
                   <td><span className="chip">{p.adapter}</span></td>
-                  <td className="muted mono" style={{ fontSize: 12 }}>{p.baseUrl}</td>
+                  <td className="muted mono text-label">{p.baseUrl}</td>
                   <td className="muted">{p.defaultModel ?? "—"}</td>
                 </tr>
               ))}
@@ -904,11 +904,11 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               <div className="update-box">
                 <div className="spread">
                   <div>
-                    <div className="muted" style={{ fontSize: 12 }}>{t("dash.updateInstalled")}</div>
+                    <div className="muted text-label">{t("dash.updateInstalled")}</div>
                     <div className="mono">{updateCheck.currentVersion}</div>
                   </div>
                   <div>
-                    <div className="muted" style={{ fontSize: 12 }}>{t("dash.updateLatest")}</div>
+                    <div className="muted text-label">{t("dash.updateLatest")}</div>
                     <div className="mono">{updateCheck.latestVersion ?? "—"}</div>
                   </div>
                   <span className={`badge ${updateCheck.updateAvailable ? "badge-green" : "badge-muted"}`}>
@@ -951,8 +951,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                 {updateCheck.canUpdate && (
                   <div className="spread update-restart">
                     <div>
-                      <div style={{ fontWeight: 600 }}>{t("dash.updateRestart")}</div>
-                      <div className="muted" style={{ fontSize: 12 }}>{t("dash.updateRestartHint")}</div>
+                      <div className="font-semibold">{t("dash.updateRestart")}</div>
+                      <div className="muted text-label">{t("dash.updateRestartHint")}</div>
                     </div>
                     <button
                       type="button"
@@ -989,11 +989,11 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               <h3>{t("dash.multiAgent")}</h3>
               <button type="button" className="btn btn-ghost btn-icon" onClick={() => setMaHelpOpen(false)} aria-label="Close"><IconX /></button>
             </div>
-            <div className="modal-desc" style={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+            <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
               {t("models.v2Help")}
             </div>
             <div style={{ marginTop: 12 }}>
-              <a href="https://lidge-jun.github.io/opencodex/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "var(--accent)" }}>
+              <a className="text-control" href="https://lidge-jun.github.io/opencodex/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
                 {t("models.v2DocsLink")}
               </a>
             </div>

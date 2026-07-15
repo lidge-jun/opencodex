@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import path, { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
 import { readRootTomlString } from "./paths";
@@ -223,12 +223,24 @@ export function dedupeRelatedProjectCodexWarnings(
   });
 }
 
-function relPath(abs: string): string {
+/**
+ * Render a path under the user's home as `~/...` for warning display.
+ * Platform-correct containment (devlog 260715_cross_platform_audit/030): the old
+ * lowercase prefix match had no component boundary (`C:\Users\bob2` rendered as
+ * inside `~` for home `C:\Users\bob`) and case-folded on case-sensitive POSIX
+ * filesystems. `relative()` carries the right case semantics per platform; reject
+ * parent (`..`, `..\x`) and cross-drive (absolute) results.
+ */
+export function relPath(
+  abs: string,
+  pathApi: Pick<typeof path, "relative" | "sep" | "isAbsolute"> = path,
+): string {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
-  if (home && abs.toLowerCase().startsWith(home.toLowerCase())) {
-    return `~${abs.slice(home.length).replace(/\\/g, "/")}`;
-  }
-  return abs;
+  if (!home) return abs;
+  const rel = pathApi.relative(home, abs);
+  if (rel === "") return "~";
+  if (rel === ".." || rel.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(rel)) return abs;
+  return `~/${rel.replace(/\\/g, "/")}`;
 }
 
 export function discoverProjectCodexConfigPaths(options: {

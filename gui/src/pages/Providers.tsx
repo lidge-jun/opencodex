@@ -41,6 +41,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string } | null>(null);
+  const [manualCode, setManualCode] = useState("");
+  const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
@@ -284,6 +287,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
+    setManualCode("");
+    setManualCodeMsg("");
     try {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
@@ -292,10 +297,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       });
       const data = await res.json();
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
-      // The server opens the browser itself (popup-safe). Show the URL/device code as a fallback.
+      // The server opens the browser itself (popup-safe). Show the URL + paste fallback.
       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
-      // Poll until the loopback callback (or device flow) completes.
+      // Poll until the loopback callback (or device flow / manual paste) completes.
       for (let i = 0; i < 150 && aliveRef.current; i++) {
         await new Promise(r => setTimeout(r, 2000));
         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
@@ -309,17 +314,50 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
           setLoginInfo(null);
+          setManualCode("");
+          setManualCodeMsg("");
           fetchConfig();
           fetchAccountSets(Object.keys(accountSets).includes(provider) ? Object.keys(accountSets) : [...Object.keys(accountSets), provider]);
           fetchProviderQuotas(true);
           break;
         }
-        if (s.error) { setOauthStatus(prev => ({ ...prev, [provider]: s })); notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false); break; }
+        if (s.error) {
+          setOauthStatus(prev => ({ ...prev, [provider]: s }));
+          notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
+          setLoginInfo(null);
+          break;
+        }
       }
     } catch {
       notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
     } finally {
       if (aliveRef.current) setBusy(null);
+    }
+  };
+
+  /** Paste redirect URL / auth code when the browser cannot hit the loopback callback. */
+  const submitManualCode = async (provider: string) => {
+    const input = manualCode.trim();
+    if (!input || manualCodeBusy) return;
+    setManualCodeBusy(true);
+    setManualCodeMsg("");
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, input }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setManualCodeMsg(t("prov.pasteFail", { error: data.error || res.statusText }));
+        return;
+      }
+      setManualCode("");
+      setManualCodeMsg(t("prov.pasteOk"));
+    } catch {
+      setManualCodeMsg(t("prov.pasteFail", { error: "network error" }));
+    } finally {
+      if (aliveRef.current) setManualCodeBusy(false);
     }
   };
 
@@ -518,11 +556,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       <div className="panel panel-accent" style={{ marginBottom: 18 }}>
         <div className="row" style={{ marginBottom: 14 }}>
           <IconLock style={{ width: 16, height: 16, color: "var(--accent)" }} />
-          <span style={{ fontWeight: 600 }}>{t("prov.accountLogin")}</span>
+          <span className="font-semibold">{t("prov.accountLogin")}</span>
         </div>
         <div className="oauth-grid">
           {oauthProviders.length === 0 && keyProviders.length === 0 && (
-            <span className="muted" style={{ fontSize: 13, gridColumn: "1 / -1" }}>{t("prov.noOauth")}</span>
+            <span className="muted text-control" style={{ gridColumn: "1 / -1" }}>{t("prov.noOauth")}</span>
           )}
           {oauthProviders.map(p => {
             const st = oauthStatus[p] ?? { loggedIn: false };
@@ -551,10 +589,35 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </button>
                   )}
                 </span>
-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions) && (
+                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
                   <span className="oauth-login-hint muted">
-                    {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal />{t("prov.didntOpen")}</a>}
-                    {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                    <span className="oauth-login-hint-links">
+                      {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal />{t("prov.didntOpen")}</a>}
+                      {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                    </span>
+                    <span className="oauth-login-paste">
+                      <input
+                        className="input"
+                        type="text"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={manualCode}
+                        onChange={e => setManualCode(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void submitManualCode(p); } }}
+                        placeholder={t("prov.pasteRedirect")}
+                        aria-label={t("prov.pasteRedirect")}
+                        disabled={manualCodeBusy}
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        type="button"
+                        disabled={manualCodeBusy || !manualCode.trim()}
+                        onClick={() => void submitManualCode(p)}
+                      >
+                        {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                      </button>
+                    </span>
+                    <span className="text-caption">{manualCodeMsg || t("prov.pasteRedirectHint")}</span>
                   </span>
                 )}
               </div>
@@ -562,7 +625,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           })}
           {keyProviders.map(name => {
             const provider = config?.providers[name];
-            const icon = providerIconSrc(name, provider);
+            const icon = providerIconSrc(name);
             const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
             return (
               <div key={name} className="oauth-row">
@@ -590,14 +653,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         />
       ) : (
         <div className="stack" style={{ gap: 8 }}>
-          <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+          <div className="muted text-control" style={{ marginBottom: 4 }}>
             {t("prov.port")}: <code className="chip">{config.port}</code> · {t("prov.default")}: <code className="chip">{config.defaultProvider}</code>
           </div>
           {Object.entries(config.providers).map(([name, prov]) => {
             const isDefault = name === config.defaultProvider;
             const isDisabled = prov.disabled === true;
             const quota = quotaReports[name]?.quota ?? null;
-            const icon = providerIconSrc(name, prov);
+            const icon = providerIconSrc(name);
             const accountSet = prov.authMode === "oauth" ? accountSets[name] : undefined;
             const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward";
             const keyPool = isKeyAuth && prov.hasApiKey ? (keyPools[name] ?? []) : [];
@@ -611,14 +674,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     {icon && <span className="provider-icon"><img src={icon} alt="" aria-hidden="true" /></span>}
                     <div className="prov-card-copy">
                       <div className="prov-title">
-                        <span style={{ fontWeight: 600 }}>{name}</span>
+                        <span className="font-semibold">{name}</span>
                         {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
                         {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
                         {prov.keyOptional && <span className="badge badge-green">Free</span>}
                       </div>
-                      <div className="muted prov-meta" style={{ fontSize: 13 }}>
+                      <div className="muted prov-meta text-control">
                         <code className="chip">{prov.adapter}</code>
                         <span>{prov.baseUrl}</span>
                         {prov.defaultModel && <span>{prov.defaultModel}</span>}
@@ -626,7 +689,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {prov.hasHeaders && <span>{t("prov.hasHeaders")}</span>}
                       </div>
                       {prov.note && (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                        <div className="muted text-label leading-body" style={{ marginTop: 4 }}>
                           {prov.note}
                         </div>
                       )}

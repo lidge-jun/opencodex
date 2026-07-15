@@ -1,4 +1,5 @@
 <h3 align="center">make codex open!</h3>
+<p align="center"><b>OpenAI Codex &amp; Claude Code를 위한 범용 프로바이더 프록시</b> — Codex CLI·App·SDK와 Claude Code에서 어떤 LLM이든 사용하세요.</p>
 <p align="center"><code>npm install -g @bitkyc08/opencodex</code> · <code>ocx start</code> · <b>localhost:10100</b></p>
 
 <p align="center">
@@ -19,7 +20,7 @@
   <img src="assets/architecture.png" alt="opencodex 아키텍처 — Codex CLI가 opencodex 프록시를 통해 모든 LLM 프로바이더로 라우팅" width="820">
 </p>
 
-Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등 어떤 LLM이든 Codex에서 사용하세요 — OpenAI가 지원을 추가하기를 기다릴 필요 없이.
+Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등 어떤 LLM이든 Codex에서 — 그리고 **Claude Code**에서도 — 사용하세요. 누군가 지원을 추가해 주길 기다릴 필요 없이.
 
 opencodex는 Codex의 Responses API를 프로바이더가 쓰는 프로토콜로 변환해 주는 가벼운 로컬 프록시입니다. streaming, tool 호출, reasoning 토큰, 이미지까지 양방향으로 모두 동작합니다.
 

@@ -18,7 +18,7 @@ import {
   setMaxConcurrentThreads,
   transitionMultiAgentV2,
 } from "../src/codex/features";
-import { cmdV2, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
+import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
 
 function template(): Record<string, unknown> {
@@ -406,6 +406,25 @@ describe("cli surface", () => {
   test("status lines describe the multi-agent surface", () => {
     expect(v2StatusLine(true)).toContain("ON");
     expect(v2StatusLine(false)).toContain("OFF");
+  });
+
+  test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (devlog 260715 020)", () => {
+    expect(codexFeaturesInvocation("enable", "darwin", { env: {} }))
+      .toEqual({ file: "codex", args: ["features", "enable", "multi_agent_v2"], options: {} });
+    // Explicit CODEX_CLI_PATH pointing at a .cmd (npm-only Windows Codex install).
+    const inv = codexFeaturesInvocation("disable", "win32", {
+      env: { CODEX_CLI_PATH: "C:\\npm\\codex.cmd", ComSpec: "C:\\WINDOWS\\system32\\cmd.exe" },
+      exists: () => { throw new Error("explicit path must not probe PATH"); },
+    });
+    expect(inv.file).toBe("C:\\WINDOWS\\system32\\cmd.exe");
+    expect(inv.args).toEqual(["/d", "/s", "/c", '"C:\\npm\\codex.cmd ^"features^" ^"disable^" ^"multi_agent_v2^""']);
+    expect(inv.options).toEqual({ windowsVerbatimArguments: true });
+    // Bare `codex` resolving to codex.exe stays a direct spawn.
+    const exe = codexFeaturesInvocation("enable", "win32", {
+      env: { PATH: "C:\\bin" },
+      exists: (p: string) => p === "C:\\bin\\codex.exe",
+    });
+    expect(exe).toEqual({ file: "C:\\bin\\codex.exe", args: ["features", "enable", "multi_agent_v2"], options: {} });
   });
 
   test("mode v2/v1 preserves the same logical limit", async () => {

@@ -9,3 +9,18 @@ Thanks for helping with opencodex.
 
 For local development commands, architecture notes, and release workflow details, use the hosted
 contributing guide above instead of duplicating instructions here.
+
+## Pre-push hook
+
+After cloning, run once to install a local pre-push hook that runs the typecheck,
+unit-test, and privacy-scan portions of the CI gate:
+
+```sh
+bun run setup:hooks
+```
+
+This installs a `pre-push` hook (into the hooks dir git reports, so worktrees and
+`core.hooksPath` work) that runs `bun run prepush` — `typecheck`, `test`, and
+`privacy:scan` — before every `git push`. The same checks run on ubuntu-latest,
+macos-latest, and windows-latest in CI (CI additionally builds the GUI, lints, and
+smoke-tests the CLI). Skip in an emergency with `git push --no-verify`.

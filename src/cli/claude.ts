@@ -11,6 +11,7 @@ import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
+import { commandInvocation } from "../lib/win-exec";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -141,6 +142,21 @@ async function ensureProxyForClaude(): Promise<number | null> {
   return null;
 }
 
+const CLAUDE_INSTALL_HINT = "❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code";
+
+/**
+ * cmd.exe reports command-not-found as exit 9009 (the win32 launcher routes `.cmd`
+ * shims through cmd.exe, so ENOENT never fires there). Signal exits are not hints.
+ * Devlog 260715_cross_platform_audit/020.
+ */
+export function claudeNotFoundHint(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  return platform === "win32" && code === 9009 && !signal ? CLAUDE_INSTALL_HINT : null;
+}
+
 export async function cmdClaude(args: string[]): Promise<number> {
   const config = loadConfig();
   if (config.claudeCode?.enabled === false) {
@@ -176,16 +192,19 @@ export async function cmdClaude(args: string[]): Promise<number> {
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
   }
   return await new Promise<number>(resolve => {
-    const child = spawn("claude", args, { stdio: "inherit", env: env as NodeJS.ProcessEnv });
+    const inv = commandInvocation("claude", args);
+    const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
-        console.error("❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code");
+        console.error(CLAUDE_INSTALL_HINT);
       } else {
         console.error(`❌ Failed to launch claude: ${err.message}`);
       }
       resolve(1);
     });
     child.on("exit", (code, signal) => {
+      const hint = claudeNotFoundHint(code, signal);
+      if (hint) console.error(hint);
       resolve(signal ? 1 : code ?? 0);
     });
   });

@@ -283,7 +283,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
               <div className="muted">{t("usage.card.cachedTokens")}</div>
               <div className="stat-value">{formatTokens(data.summary.cacheReadInputTokens ?? data.summary.cachedInputTokens, locale)}</div>
               {(data.summary.cacheCreationInputTokens ?? 0) > 0 && (
-                <div className="muted" style={{ fontSize: 11 }}>
+                <div className="muted text-caption">
                   {t("usage.card.cacheWriteTokens")}: {formatTokens(data.summary.cacheCreationInputTokens ?? 0, locale)}
                 </div>
               )}
@@ -456,7 +456,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
               <div className="stat"><div className="muted">{t("logs.tokens.unreported")}</div><div className="stat-value">{data.summary.unreportedRequests}</div></div>
               <div className="stat"><div className="muted">{t("logs.tokens.unsupported")}</div><div className="stat-value">{data.summary.unsupportedRequests}</div></div>
             </div>
-            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>{t("usage.coverage.note")}</p>
+            <p className="muted text-control" style={{ marginTop: 12 }}>{t("usage.coverage.note")}</p>
           </section>
         </>
       )}

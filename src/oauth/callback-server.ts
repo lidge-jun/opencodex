@@ -235,12 +235,16 @@ export abstract class OAuthCallbackFlow {
         while (true) {
           const result = await Promise.race([
             callbackPromise,
-            requestManualInput()
+            requestManualInput(expectedState)
               .then((input): CallbackResult | null => {
                 const parsed = parseCallbackInput(input);
                 if (!parsed.code) return null;
-                if (expectedState && parsed.state !== expectedState) return null;
-                return { code: parsed.code, state: parsed.state ?? "" };
+                // Kind-aware state enforcement: url/query-shaped input is an authorization
+                // RESPONSE and must carry a matching state — missing state is rejected, not
+                // downgraded to raw. Only a syntactically raw code (same PKCE session) is
+                // exempt, so the CLI/GUI paste fallback still works.
+                if (parsed.kind !== "raw" && expectedState && parsed.state !== expectedState) return null;
+                return { code: parsed.code, state: parsed.state ?? expectedState };
               })
               .catch((): CallbackResult | null => null),
           ]);
@@ -255,14 +259,19 @@ export abstract class OAuthCallbackFlow {
   }
 }
 
-/** Parse a redirect URL or code string to extract code and state. */
-export function parseCallbackInput(input: string): { code?: string; state?: string } {
+/**
+ * Parse a redirect URL or code string to extract code and state.
+ * `kind` records the syntactic shape so callers can enforce state on authorization
+ * responses (url/query) while exempting raw in-session codes.
+ */
+export function parseCallbackInput(input: string): { kind: "url" | "query" | "raw"; code?: string; state?: string } {
   const value = input.trim();
-  if (!value) return {};
+  if (!value) return { kind: "raw" };
 
   try {
     const url = new URL(value);
     return {
+      kind: "url",
       code: url.searchParams.get("code") ?? undefined,
       state: url.searchParams.get("state") ?? undefined,
     };
@@ -273,6 +282,7 @@ export function parseCallbackInput(input: string): { code?: string; state?: stri
   if (value.includes("code=")) {
     const params = new URLSearchParams(value.replace(/^[?#]/, ""));
     return {
+      kind: "query",
       code: params.get("code") ?? undefined,
       state: params.get("state") ?? undefined,
     };
@@ -280,5 +290,5 @@ export function parseCallbackInput(input: string): { code?: string; state?: stri
 
   // Assume raw code, possibly with state after #
   const [code, state] = value.split("#", 2);
-  return { code, state };
+  return { kind: "raw", code, state };
 }

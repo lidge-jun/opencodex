@@ -84,7 +84,7 @@ export function EmptyState({ icon, title, children, className, style }: { icon?:
     <div className={className ? `empty ${className}` : "empty"} style={style}>
       {icon}
       <div className="title">{title}</div>
-      {children && <div style={{ fontSize: 13 }}>{children}</div>}
+      {children && <div className="text-control">{children}</div>}
     </div>
   );
 }

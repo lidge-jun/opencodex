@@ -215,7 +215,11 @@ export function responseWithDeferredRequestLog(
     if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
       const finalizeJsonLog = async () => {
         const text = await response.text();
-        inspectResponseLogJson(logCtx, text);
+        // Non-JSON error bodies: inspect/log only a bounded prefix (the stored
+        // upstreamError is 500 chars anyway); the FULL text is still forwarded to the
+        // client below, unchanged. JSON bodies keep full inspection (usage parsing).
+        const isJson = contentType.includes("application/json");
+        inspectResponseLogJson(logCtx, isJson ? text : text.slice(0, 8192));
         addFinalRequestLog(requestId, start, logCtx, response.status, { closeReason: "non_stream" }, addLog);
         return text;
       };

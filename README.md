@@ -1,4 +1,5 @@
 <h3 align="center">make codex open!</h3>
+<p align="center"><b>Universal provider proxy for OpenAI Codex &amp; Claude Code</b> — use any LLM with Codex CLI, App, SDK, and Claude Code.</p>
 <p align="center"><code>npm install -g @bitkyc08/opencodex</code> · <code>ocx start</code> · <b>localhost:10100</b></p>
 
 <p align="center">
@@ -19,7 +20,7 @@
   <img src="assets/architecture.png" alt="opencodex architecture — Codex CLI routes through opencodex proxy to any LLM provider" width="820">
 </p>
 
-Use Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex — without waiting for OpenAI to add support.
+Use Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex — and with **Claude Code** — without waiting for anyone to add support.
 
 opencodex is a lightweight local proxy that translates Codex's Responses API into whatever your provider speaks. Streaming, tool calls, reasoning tokens, images — everything works, in both directions.
 

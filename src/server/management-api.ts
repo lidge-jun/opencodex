@@ -16,6 +16,7 @@ import {
   isOAuthProvider,
   listOAuthProviders,
   startLoginFlow,
+  submitManualLoginCode,
   upsertOAuthProvider,
 } from "../oauth";
 import { removeCredential } from "../oauth/store";
@@ -729,10 +730,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       let toggle = deps.toggleCodexMultiAgentV2;
       if (!toggle) {
         const { execFileSync } = await import("node:child_process");
+        const { codexFeaturesInvocation } = await import("../cli/v2");
         toggle = (enabled: boolean) => {
-          const command = process.env.CODEX_CLI_PATH?.trim() || "codex";
-          execFileSync(command, ["features", enabled ? "enable" : "disable", "multi_agent_v2"],
-            { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true });
+          const inv = codexFeaturesInvocation(enabled ? "enable" : "disable");
+          execFileSync(inv.file, inv.args,
+            { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, ...inv.options });
         };
       }
       const result = transitionMultiAgentV2(targetFlag, toggle, {
@@ -1161,6 +1163,21 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     } catch (err) {
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
     }
+  }
+
+  // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
+  // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
+  if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as { provider?: string; input?: string; code?: string };
+    const provider = (body.provider ?? "").trim().toLowerCase();
+    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
+    // Authorization responses are measured in hundreds of bytes; never accept the
+    // generic management-body allowance here.
+    if (input.length > 4096) return jsonResponse({ error: "input too long" }, 400);
+    const result = submitManualLoginCode(provider, input);
+    if (!result.ok) return jsonResponse({ error: result.error }, 409);
+    return jsonResponse({ ok: true });
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {

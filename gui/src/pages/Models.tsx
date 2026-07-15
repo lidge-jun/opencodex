@@ -373,22 +373,22 @@ export default function Models({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head">
         <h2>{t("nav.models")}</h2>
-        <span className="muted mono" style={{ fontSize: 12 }}>{t("models.active", { active: models.length - disabled.size, total: models.length })}</span>
+        <span className="muted mono text-label">{t("models.active", { active: models.length - disabled.size, total: models.length })}</span>
       </div>
       <p className="page-sub">{t("models.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
 
-      <div className="row muted" style={{ gap: 6, marginBottom: 8, alignItems: "center", fontSize: 13 }}>
+      <div className="row muted text-control" style={{ gap: 6, marginBottom: 8, alignItems: "center" }}>
         <span title={t("models.shadowCallInterceptHint")} style={{ cursor: "help" }}>{t("models.shadowCallIntercept")} ⓘ</span>
-        <code style={{ fontSize: 11, opacity: 0.6 }}>⚠ 5.4-mini →</code>
+        <code className="text-caption" style={{ opacity: 0.6 }}>⚠ 5.4-mini →</code>
         <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
         <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...models.filter(m => !disabled.has(m.id) && !disabled.has(m.namespaced)).map(m => ({ value: m.namespaced, label: m.namespaced }))]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
       </div>
 
       {v2 && (
         <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="muted" style={{ fontSize: 13 }}>{t("models.v2Label")}</span>
-          <div className="segmented" role="radiogroup" aria-label={t("models.v2Label")} style={{ display: "inline-flex", borderRadius: 999, background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+          <span className="muted text-control">{t("models.v2Label")}</span>
+          <div className="segmented" role="radiogroup" aria-label={t("models.v2Label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
             {(["v1", "default", "v2"] as const).map(mode => (
               <button
                 key={mode}
@@ -396,7 +396,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 role="radio"
                 aria-checked={(v2.multiAgentMode ?? "default") === mode}
                 className={`btn btn-sm${(v2.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                style={{ borderRadius: 999, minWidth: 64, fontSize: 12, padding: "5px 12px", border: "none", background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
+                style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
                 disabled={v2Busy}
                 onClick={() => void setMultiAgentMode(mode)}
               >
@@ -407,7 +407,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: 999, color: "var(--muted)" }}
+            style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
             onClick={() => setV2HelpOpen(true)}
             aria-label={t("models.v2Label")}
             aria-haspopup="dialog"
@@ -416,7 +416,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           </button>
           {v2.enabled && (
             <>
-              <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>{t("models.v2ThreadsLabel")}</span>
+              <span className="muted text-control" style={{ marginLeft: 8 }}>{t("models.v2ThreadsLabel")}</span>
               <Select
                 value={showThreadsCustom
                   ? CUSTOM_OPTION
@@ -456,14 +456,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
             </>
           )}
           {v2.enabled && v2.agentsMaxThreadsConflict && (
-            <span className="mono" style={{ fontSize: 12, color: "var(--err, #e5484d)" }}>{t("models.v2Conflict")}</span>
+            <span className="mono text-label" style={{ color: "var(--err, #e5484d)" }}>{t("models.v2Conflict")}</span>
           )}
-          {v2Note && <span className="muted" style={{ fontSize: 12 }}>{v2Note}</span>}
+          {v2Note && <span className="muted text-label">{v2Note}</span>}
         </div>
       )}
 
       <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-        <span className="muted" style={{ fontSize: 13 }}>{t("models.contextCapLabel")}</span>
+        <span className="muted text-control">{t("models.contextCapLabel")}</span>
         <Select
           value={showCustom ? CUSTOM_OPTION : (CAP_OPTIONS.includes(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
           options={[
@@ -493,10 +493,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
         )}
         <div style={{ flex: 1 }} />
         <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
-        <span className="muted mono" style={{ fontSize: 12 }}>{t("models.setAll")}</span>
+        <span className="muted mono text-label">{t("models.setAll")}</span>
       </div>
 
-      <div className="row muted" style={{ alignItems: "flex-start", gap: 8, marginBottom: 12, maxWidth: "80ch", fontSize: 12.5, lineHeight: 1.5 }}>
+      <div className="row muted text-label leading-body" style={{ alignItems: "flex-start", gap: 8, marginBottom: 12, maxWidth: "80ch" }}>
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
         <span>{t("models.orderHint")}</span>
       </div>
@@ -523,22 +523,22 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <div onClick={() => toggleCollapse(provider)}
              className={`row group-head${isCollapsed ? "" : " open"}`}>
              <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
-             <span style={{ fontWeight: 600, fontSize: 14 }}>{provider}</span>
-             {isNative && <span className="muted mono" style={{ fontSize: 11, padding: "1px 6px", border: "1px solid var(--border)", borderRadius: 999 }}>{t("models.nativeGroupLabel")}</span>}
-             <span className="muted mono" style={{ fontSize: 12 }}>{t("models.active", { active: activeCount, total: rows.length })}</span>
+             <span className="text-body font-semibold">{provider}</span>
+             {isNative && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.nativeGroupLabel")}</span>}
+             <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
              <div style={{ flex: 1 }} />
               <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
-                <button className="btn btn-ghost btn-sm" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ fontSize: 11, padding: "2px 8px" }}>{t("models.allOn")}</button>
-                <button className="btn btn-ghost btn-sm" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ fontSize: 11, padding: "2px 8px" }}>{t("models.allOff")}</button>
+                <button className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
+                <button className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
                 {!isNative && <>
                   <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
-                  <span className="muted mono" style={{ fontSize: 12 }}>{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
+                  <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
                 </>}
               </div>
            </div>
            {!isCollapsed && (
              <div style={{ padding: "6px 12px" }}>
-               {isNative && <p className="muted" style={{ fontSize: 12, margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
+               {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
                {rows.length > PAGE / 2 && (
                  <input
                    className="input"
@@ -553,8 +553,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   return (
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
                       <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.id} />
-                      <code className="mono" style={{ fontSize: 13, color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{modelLabel(m.id)}</code>
-                      {m.contextCapped && <span className="muted mono" style={{ fontSize: 11, padding: "1px 6px", border: "1px solid var(--border)", borderRadius: 999 }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{modelLabel(m.id)}</code>
+                      {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </div>
                   );
                 })}
@@ -583,11 +583,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
               <h3>{t("models.v2Label")}</h3>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setV2HelpOpen(false)} aria-label="Close">&times;</button>
             </div>
-            <div className="modal-desc" style={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+            <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
               {t("models.v2Help")}
             </div>
             <div style={{ marginTop: 12 }}>
-              <a href="https://lidge-jun.github.io/opencodex/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "var(--accent)" }}>
+              <a className="text-control" href="https://lidge-jun.github.io/opencodex/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
                 {t("models.v2DocsLink")}
               </a>
             </div>

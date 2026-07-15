@@ -445,8 +445,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
       const url = `${provider.baseUrl}/chat/completions`;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (provider.headers) Object.assign(headers, provider.headers);
+      // Precedence preserved from pre-#128 behavior: apiKey Authorization first, then
+      // provider.headers may override (user/registry-configured headers win). Registry
+      // staticHeaders (e.g. opencode-free x-opencode-client) flow in via derive.ts and
+      // never carry Authorization, so keyless providers are unaffected.
       if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+      if (provider.headers) Object.assign(headers, provider.headers);
 
       return { url, method: "POST", headers, body: JSON.stringify(body) };
     },

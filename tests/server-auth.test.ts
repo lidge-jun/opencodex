@@ -159,6 +159,12 @@ describe("server local API auth", () => {
           authMode: "key",
           keyOptional: true,
         },
+        "mimo-free": {
+          adapter: "mimo-free",
+          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+          authMode: "key",
+          keyOptional: true,
+        },
       },
     } as OcxConfig) as {
       providers: Record<string, Record<string, unknown>>;
@@ -171,6 +177,12 @@ describe("server local API auth", () => {
       hasApiKey: false,
     });
     expect(dto.providers["opencode-free"].note).toBeTruthy();
+    expect(dto.providers["mimo-free"]).toMatchObject({
+      adapter: "mimo-free",
+      authMode: "key",
+      keyOptional: true,
+      hasApiKey: false,
+    });
   });
 
   test("safeConfigDTO strips URL-embedded provider secrets", () => {

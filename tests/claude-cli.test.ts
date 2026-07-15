@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { claudeNotFoundHint } from "../src/cli/claude";
+import { commandInvocation } from "../src/lib/win-exec";
 import { buildClaudeEnv } from "../src/cli/claude";
 import type { OcxConfig } from "../src/types";
 
@@ -174,4 +176,33 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
   });
 
+});
+
+describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", () => {
+  test("win32 .cmd shim launches through cmd.exe with preserved arg boundaries", () => {
+    const deps = {
+      env: { PATH: "C:\\Users\\u\\AppData\\Roaming\\npm", ComSpec: "C:\\WINDOWS\\system32\\cmd.exe" },
+      exists: (p: string) => p === "C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd",
+    };
+    const inv = commandInvocation("claude", ["chat", "hello world", 'say "hi"', "50%"], "win32", deps);
+    expect(inv.file).toBe("C:\\WINDOWS\\system32\\cmd.exe");
+    expect(inv.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(inv.args[3]).toBe(
+      '"C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd ^"chat^" ^"hello^ world^" ^"say^ \\^"hi\\^"^" ^"50^%^""',
+    );
+    expect(inv.options).toEqual({ windowsVerbatimArguments: true });
+  });
+
+  test("POSIX launch is byte-identical to the pre-launcher behavior", () => {
+    expect(commandInvocation("claude", ["chat"], "darwin"))
+      .toEqual({ file: "claude", args: ["chat"], options: {} });
+  });
+
+  test("exit-9009 hint fires only for win32 non-signal not-found exits", () => {
+    expect(claudeNotFoundHint(9009, null, "win32")).toContain("npm install -g @anthropic-ai/claude-code");
+    expect(claudeNotFoundHint(9009, "SIGTERM", "win32")).toBeNull();
+    expect(claudeNotFoundHint(9009, null, "darwin")).toBeNull();
+    expect(claudeNotFoundHint(1, null, "win32")).toBeNull();
+    expect(claudeNotFoundHint(0, null, "win32")).toBeNull();
+  });
 });

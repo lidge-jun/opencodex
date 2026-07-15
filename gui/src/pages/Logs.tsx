@@ -145,7 +145,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head">
         <h2>{t("logs.title")}</h2>
-        <label className="muted" style={{ fontSize: 13, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
           {t("logs.autoRefresh")}
         </label>
@@ -153,8 +153,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       <p className="page-sub">{t("logs.subtitle")}</p>
 
       <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center" }}>
-        <span className="muted" style={{ fontSize: 13 }}>{t("logs.filter.surface.label")}</span>
-        <div className="segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")} style={{ display: "inline-flex", borderRadius: 999, background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+        <span className="muted text-control">{t("logs.filter.surface.label")}</span>
+        <div className="segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
           {(["all", "claude", "codex"] as const).map(surface => (
             <button
               key={surface}
@@ -162,7 +162,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               role="radio"
               aria-checked={surfaceFilter === surface}
               className={`btn btn-sm${surfaceFilter === surface ? " btn-primary" : " btn-ghost"}`}
-              style={{ borderRadius: 999, minWidth: 64, fontSize: 12, padding: "5px 12px", border: "none", background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
+              style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
               onClick={() => setSurfaceFilter(surface)}
             >
               {t(`logs.filter.surface.${surface}`)}
@@ -212,17 +212,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                             <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                               <span>{log.usageStatus === "estimated" ? "~" : ""}{formatTokens(tokenTotal, locale)}</span>
                               {(read !== undefined && read > 0) && (
-                                <span className="muted" style={{ fontSize: 11, lineHeight: 1 }}>
+                                <span className="muted text-caption leading-tight">
                                   c {formatTokens(read, locale)}
                                 </span>
                               )}
                               {(write !== undefined && write > 0) && (
-                                <span className="muted" style={{ fontSize: 11, lineHeight: 1 }}>
+                                <span className="muted text-caption leading-tight">
                                   w {formatTokens(write, locale)}
                                 </span>
                               )}
                               {(log.usageStatus === "estimated" && read === undefined && write === undefined) && (
-                                <span className="muted" style={{ fontSize: 11, lineHeight: 1 }}>
+                                <span className="muted text-caption leading-tight">
                                   {t("logs.tokens.noCache")}
                                 </span>
                               )}
@@ -242,7 +242,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   <td className="muted">{log.provider}</td>
                   <td>
                     <span className="log-status-cell">
-                      <span className="mono" style={{ color: statusColor(log.status), fontWeight: 600 }}>{log.status}</span>
+                      <span className="mono font-semibold" style={{ color: statusColor(log.status) }}>{log.status}</span>
                       {log.status >= 400 && (
                         <button type="button" className="log-detail-btn" onClick={() => setDetail(log)}>
                           {t("logs.details")}
@@ -285,7 +285,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
               <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
             </div>
-            <div className="muted" style={{ fontSize: 12, margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>
+            <div className="muted text-label" style={{ margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>
             <pre className="log-detail-json">{JSON.stringify(detail, null, 2)}</pre>
           </div>
         </div>

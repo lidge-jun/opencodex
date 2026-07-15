@@ -49,6 +49,7 @@ function providerIconAlias(provider: string): string | undefined {
   return PROVIDER_ICON_ALIASES[provider.toLowerCase()];
 }
 
+/** Optional hints kept for call-site compatibility; resolution is name-based for now. */
 export function providerIconSrc(provider: string, _hints?: ProviderIconHints): string | undefined {
   void _hints;
   const icon = providerIconAlias(provider);

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { shellInvocation } from "../../lib/win-exec";
 import { create } from "@bufbuild/protobuf";
 import {
   ComputerUseErrorSchema,
@@ -25,7 +26,7 @@ const DEFAULT_DESKTOP_TIMEOUT_MS = 30_000;
  * command receives the request as JSON on stdin and must print a JSON result on stdout.
  */
 export interface DesktopExecutorConfig {
-  /** Command (run via `sh -c`) handling computer-use. Receives `{toolCallId, actions}` on stdin. */
+  /** Command (run via the platform shell) handling computer-use. Receives `{toolCallId, actions}` on stdin. */
   computerUseCommand?: string;
   /** Command handling record-screen. Receives `{mode, toolCallId, saveAsFilename?}` on stdin. */
   recordScreenCommand?: string;
@@ -121,14 +122,20 @@ function recordScreenFailure(error: string): RecordScreenResult {
   });
 }
 
-/** Spawn `command` via the shell, write `payload` as JSON to stdin, return parsed stdout JSON. */
+/**
+ * Spawn `command` via the platform shell (sh -c on POSIX, cmd.exe /d /s /c on win32 —
+ * the configured command is platform-native shell syntax; devlog
+ * 260715_cross_platform_audit/020), write `payload` as JSON to stdin, return parsed stdout JSON.
+ */
 function runExternalJson(command: string, payload: unknown, config: DesktopExecutorConfig): Promise<unknown> {
   const timeoutMs = config.timeoutMs ?? DEFAULT_DESKTOP_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const child = spawn("sh", ["-c", command], {
+    const inv = shellInvocation(command);
+    const child = spawn(inv.file, inv.args, {
       cwd: config.cwd,
       env: config.env ? { ...process.env, ...config.env } : process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      ...inv.options,
     });
     let stdout = "";
     let stderr = "";

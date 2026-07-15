@@ -1,4 +1,5 @@
 <h3 align="center">make codex open!</h3>
+<p align="center"><b>面向 OpenAI Codex 与 Claude Code 的通用 provider 代理</b> —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。</p>
 <p align="center"><code>npm install -g @bitkyc08/opencodex</code> · <code>ocx start</code> · <b>localhost:10100</b></p>
 
 <p align="center">
@@ -19,7 +20,7 @@
   <img src="assets/architecture.png" alt="opencodex 架构 — Codex CLI 通过 opencodex 代理路由到任意 LLM 提供商" width="820">
 </p>
 
-在 Codex 中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任意其他 LLM —— 无需等待 OpenAI 添加支持。
+在 Codex 中 —— 以及在 **Claude Code** 中 —— 使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任意其他 LLM，无需等待官方添加支持。
 
 opencodex 是一个轻量级本地代理，把 Codex 的 Responses API 翻译成你的 provider 所讲的协议。streaming、tool 调用、reasoning token、图片 —— 全部双向工作。
 
