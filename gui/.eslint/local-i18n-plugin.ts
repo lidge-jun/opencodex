@@ -89,6 +89,86 @@ function isInsideTCall(node: Node): boolean {
   return false;
 }
 
+/** JSX/style/url contexts where string literals are technical, not user-facing copy. */
+const NON_UI_JSX_ATTRS = new Set([
+  "className",
+  "class",
+  "style",
+  "id",
+  "key",
+  "htmlFor",
+  "for",
+  "type",
+  "name",
+  "href",
+  "src",
+  "srcSet",
+  "rel",
+  "target",
+  "method",
+  "tabIndex",
+  "role",
+  "width",
+  "height",
+  "viewBox",
+  "fill",
+  "stroke",
+  "d",
+  "path",
+  "xmlns",
+]);
+
+const NON_UI_OBJECT_KEYS = new Set([
+  "gridTemplateColumns",
+  "gridTemplateRows",
+  "gridColumn",
+  "gridRow",
+  "gridArea",
+  "background",
+  "backgroundImage",
+  "transform",
+  "transition",
+  "animation",
+]);
+
+const NON_UI_CALLEES = new Set([
+  "fetch",
+  "encodeURIComponent",
+  "decodeURIComponent",
+  "JSON.stringify",
+  "String",
+  "URL",
+]);
+
+function isInsideNonUiContext(node: Node): boolean {
+  if (isInsideTCall(node) || isInsideTrans(node)) return true;
+
+  let current: Node | undefined = node;
+  while (current) {
+    if (current.type === "JSXAttribute") {
+      const attr = current as JSXAttribute;
+      if (attr.name.type === "JSXIdentifier") {
+        const name = attr.name.name;
+        if (NON_UI_JSX_ATTRS.has(name)) return true;
+        if (name.startsWith("data-")) return true;
+        if (name.startsWith("aria-") && name !== "aria-label" && name !== "aria-description" && name !== "aria-roledescription") {
+          return true;
+        }
+      }
+    }
+    if (current.type === "Property") {
+      const key = propertyKeyName(current as Property);
+      if (key && NON_UI_OBJECT_KEYS.has(key)) return true;
+    }
+    if (current.type === "CallExpression") {
+      const callee = (current as { callee: Node }).callee;
+      if (callee.type === "Identifier" && NON_UI_CALLEES.has(callee.name)) return true;
+    }
+    current = (current as { parent?: Node }).parent;
+  }
+  return false;
+}
+
 function propertyKeyName(key: Property["key"]): string | null {
   if (key.type === "Identifier") return key.name;
   if (key.type === "Literal" && typeof key.value === "string") return key.value;
@@ -135,7 +215,7 @@ const noHardcodedUiStrings: Rule.RuleModule = {
         const parent = (node as { parent?: Node }).parent;
         if (!parent) return;
         if (parent.type === "ImportDeclaration") return;
-        if (isInsideTrans(node) || isTransProp(node) || isInsideTCall(node)) return;
+        if (isInsideTrans(node) || isTransProp(node) || isInsideNonUiContext(node)) return;
         if (parent.type === "JSXAttribute") return;
         if (parent.type === "JSXExpressionContainer") return;
         if (parent.type === "Property") {
@@ -146,7 +226,7 @@ const noHardcodedUiStrings: Rule.RuleModule = {
         }
       },
       TemplateElement(node: TemplateElement) {
-        if ((node.value.expressions?.length ?? 0) > 0) return;
+        if (isInsideNonUiContext(node)) return;
         const raw = node.value.raw.replace(/\s+/g, " ").trim();
         if (!raw) return;
         reportLiteral(context, node, raw, "uiString");

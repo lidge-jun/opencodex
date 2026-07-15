@@ -38,6 +38,7 @@ export function isTechnicalLiteral(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return true;
   if (trimmed.startsWith("/") && /^\/[\w./?=&%-]+$/.test(trimmed)) return true;
+  if (/^[?&][a-zA-Z_][\w-]*=$/.test(trimmed)) return true;
   if (/^(var\(--|calc\(|repeat\(|hsl\(|url\(|linear-gradient\()/i.test(trimmed)) return true;
   if (/^[\w-]+(\.[\w-]+)+$/i.test(trimmed)) return true;
   return false;
