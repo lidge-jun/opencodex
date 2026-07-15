@@ -12,6 +12,13 @@ export const IconServer = (p: P) => (<svg {...S(p)}><rect x="3" y="4" width="18"
 export const IconBoxes = (p: P) => (<svg {...S(p)}><path d="M12 2 4 6v6l8 4 8-4V6l-8-4Z"/><path d="m4 6 8 4 8-4M12 10v8"/></svg>);
 export const IconBot = (p: P) => (<svg {...S(p)}><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4M8 2h8"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/></svg>);
 export const IconList = (p: P) => (<svg {...S(p)}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>);
+/** Curly braces — raw config / JSON. */
+export const IconBraces = (p: P) => (
+  <svg {...S(p)}>
+    <path d="M8 3H7a2 2 0 0 0-2 2v3a2 2 0 0 1-2 2 2 2 0 0 1 2 2v3a2 2 0 0 0 2 2h1" />
+    <path d="M16 3h1a2 2 0 0 1 2 2v3a2 2 0 0 0 2 2 2 2 0 0 0-2 2v3a2 2 0 0 1-2 2h-1" />
+  </svg>
+);
 export const IconMenu = (p: P) => (<svg {...S(p)}><path d="M4 6h16M4 12h16M4 18h16"/></svg>);
 export const IconTerminal = (p: P) => (<svg {...S(p)}><path d="m4 17 6-5-6-5"/><path d="M12 19h8"/></svg>);
 export const IconActivity = (p: P) => (<svg {...S(p)}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>);

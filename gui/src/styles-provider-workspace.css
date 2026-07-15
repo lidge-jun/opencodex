@@ -1835,7 +1835,7 @@
 .pwi-summary-setup .providers-workspace-summary-value { color: var(--amber); }
 .pwi-summary-disabled .providers-workspace-summary-value { color: var(--muted); }
 
-/* ---- Overview quick actions ---- */
+/* ---- Overview: Edit JSON + Recently used (matched section cards) ---- */
 .pwi-overview-edit-recent {
   display: grid;
   grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
@@ -1846,65 +1846,50 @@
 .pwi-overview-edit-recent > .pwi-overview-section {
   min-width: 0;
   height: 100%;
-}
-.pwi-overview-edit-recent .pwi-overview-quick-actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+}
+.pwi-overview-edit-card {
+  appearance: none;
+  width: 100%;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.pwi-overview-edit-card:hover {
+  border-color: var(--accent-ring);
+  background: var(--hover);
+}
+.pwi-overview-edit-card-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  flex: 1;
+}
+.pwi-overview-edit-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+}
+.pwi-overview-edit-card:hover .pwi-overview-edit-card-icon {
+  color: var(--accent-hover);
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
 }
 .pwi-oa-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-}
-.pwi-oa-grid--single {
-  grid-template-columns: minmax(0, 1fr);
-  max-width: none;
-}
-.pwi-oa-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s, border-color 0.12s;
-  align-items: flex-start;
-  color: var(--text);
-  width: 100%;
-}
-.pwi-oa-tile--compact {
-  flex: 1;
-  min-height: 0;
-  justify-content: center;
-}
-.pwi-oa-tile:hover { background: var(--hover); border-color: var(--accent-ring); }
-.pwi-oa-tile > svg {
-  width: 20px;
-  height: 20px;
-  padding: 8px;
-  box-sizing: content-box;
-  border-radius: 10px;
-  background: var(--raised);
-  border: 1px solid var(--border-soft);
-  color: var(--text);
-  margin-bottom: 2px;
-}
-.pwi-overview-quick-actions {
-  border: none;
-  background: transparent;
-  overflow: visible;
-}
-.pwi-overview-quick-actions .pwi-overview-section-head {
-  padding: 0 0 10px;
-  border-bottom: none;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
 }
 .pwi-oa-label {
   font-size: 13.5px;

@@ -37,6 +37,7 @@ import {
   IconKey,
   IconInfo,
   IconList,
+  IconBraces,
   IconChevron,
   IconExternal,
   IconActivity,
@@ -1256,16 +1257,22 @@ function OverviewPanel({
           <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
         </div>
       </div>
-      {/* Edit JSON (compact) + Recently used fill to the right edge under the summary cards. */}
+      {/* Matching section cards: Edit JSON + Recently used. */}
       <div className="pwi-overview-edit-recent">
-        <div className="pwi-overview-section pwi-overview-quick-actions">
-          <div className="pwi-overview-section-head">{t("pws.quickActions")}</div>
-          <button type="button" className="pwi-oa-tile pwi-oa-tile--compact" onClick={onEditConfig} aria-label={t("prov.editJson")}>
-            <IconList style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-oa-label">{t("prov.editJson")}</span>
+        <button
+          type="button"
+          className="pwi-overview-section pwi-overview-edit-card"
+          onClick={onEditConfig}
+          aria-label={t("prov.editJson")}
+        >
+          <div className="pwi-overview-section-head">{t("prov.editJson")}</div>
+          <div className="pwi-overview-edit-card-body">
+            <span className="pwi-overview-edit-card-icon" aria-hidden="true">
+              <IconBraces width={18} height={18} />
+            </span>
             <span className="pwi-oa-desc">{t("pws.editJsonDesc")}</span>
-          </button>
-        </div>
+          </div>
+        </button>
         <div className="pwi-overview-section pwi-overview-recent">
           <div className="pwi-overview-section-head">{t("pws.recentlyUsed")}</div>
           {mostUsed.length === 0 ? (
