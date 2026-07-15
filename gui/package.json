@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "lint:i18n": "eslint src/pages src/components src/App.tsx src/ui.tsx src/provider-workspace-data.ts",
     "preview": "vite preview"
   },
   "dependencies": {
