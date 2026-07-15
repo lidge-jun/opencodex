@@ -412,13 +412,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     });
     const data = await res.json().catch(() => ({})) as { error?: string };
     if (res.ok) {
-      notify(`Saved ${name}`, true);
+      notify(t("pws.savedName", { name }), true);
       fetchConfig();
       fetchOauth();
       fetchProviderQuotas(true);
       return { ok: true };
     }
-    const err = data.error || `Failed to update ${name}`;
+    const err = data.error || t("pws.updateFailed", { name });
     notify(err, false);
     return { ok: false, error: err };
   };
@@ -504,7 +504,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 <h3 style={{ margin: 0, fontSize: 16 }}>{t("prov.editJson")}</h3>
               </div>
               <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
-                Edit the live proxy config as JSON. Secrets are masked in this view — prefer per-provider Settings or Add API key for credentials.
+                {t("pws.jsonEditorDesc")}
               </p>
               <textarea
                 className="input mono pwi-json-textarea"
@@ -541,7 +541,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             </>
           ) : (
             <>
-              <button type="button" className="btn btn-ghost" onClick={() => setLayout("workspace")}>Workspace</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setLayout("workspace")}>{t("pws.workspace")}</button>
               <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
               <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t("prov.editJson")}</button>
             </>
@@ -635,7 +635,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 </span>
                 <span className="oauth-status">
                   <span className="dot dot-green" />
-                  <span className="oauth-email muted">{keylessFree ? "free tier" : t("prov.hasApiKey")}</span>
+                  <span className="oauth-email muted">{keylessFree ? t("pws.freeTier") : t("prov.hasApiKey")}</span>
                 </span>
                 <span className="oauth-actions" aria-hidden="true" />
               </div>
