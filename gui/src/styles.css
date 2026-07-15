@@ -746,6 +746,9 @@ select.input { appearance: none; }
   border-radius: var(--radius-pill);
   background: var(--raised);
 }
+.add-prov-segment--3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
 .add-prov-segment-btn {
   appearance: none;
   border: 0;
@@ -755,7 +758,7 @@ select.input { appearance: none; }
   font: inherit;
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
-  padding: 9px 12px;
+  padding: 9px 10px;
   cursor: pointer;
 }
 .add-prov-segment-btn--active {
@@ -763,26 +766,99 @@ select.input { appearance: none; }
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
 }
-.add-prov-browse-link {
-  display: inline-flex;
+.add-prov-browse-card {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   width: 100%;
-  padding: 6px 2px;
-  border: 0;
-  background: transparent;
-  color: var(--accent-hover);
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface));
+  color: var(--text);
   font: inherit;
-  font-size: var(--text-control);
-  font-weight: var(--weight-semibold);
   cursor: pointer;
   text-align: left;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
 }
-.add-prov-browse-link:disabled {
+.add-prov-browse-card:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface));
+  border-color: var(--accent-ring);
+}
+.add-prov-browse-card:disabled {
   opacity: 0.45;
   cursor: default;
 }
-.add-prov-browse-link span { flex: 1; }
+.add-prov-browse-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--accent) 20%, var(--raised));
+  color: var(--accent-hover);
+  flex-shrink: 0;
+}
+.add-prov-browse-card-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.add-prov-browse-card-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--accent-hover);
+}
+.add-prov-browse-card-sub {
+  font-size: var(--text-label);
+}
+.add-prov-account-block {
+  border-bottom: 1px solid var(--border-soft);
+}
+.add-prov-account-block:last-child {
+  border-bottom: 0;
+}
+.add-prov-account-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-label);
+}
+.add-prov-account-status-ok {
+  color: var(--green);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14ch;
+}
+.add-prov-account-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px 50px;
+  font-size: var(--text-label);
+}
+.add-prov-account-hint-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.add-prov-account-paste {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.add-prov-account-paste .input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-label);
+  padding: 6px 10px;
+}
 .add-prov-list {
   display: flex;
   flex-direction: column;

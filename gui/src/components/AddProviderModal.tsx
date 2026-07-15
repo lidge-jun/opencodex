@@ -35,8 +35,27 @@ interface FormState {
   defaultModel: string;
 }
 
+export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string };
+export type AccountLoginRow = {
+  id: string;
+  label: string;
+  kind: "oauth" | "key";
+  statusLabel?: string;
+};
+
 export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded, initialCustom = false,
+  accountRows = [],
+  accountStatus = {},
+  accountBusy = null,
+  accountLoginHint = null,
+  onAccountLogin,
+  onAccountLogout,
+  accountManualCode = "",
+  onAccountManualCodeChange,
+  onAccountManualCodeSubmit,
+  accountManualCodeBusy = false,
+  accountManualCodeMsg = "",
 }: {
   apiBase: string;
   existingNames: string[];
@@ -44,13 +63,25 @@ export default function AddProviderModal({
   onAdded: (name: string) => void;
   /** Skip catalog picker and open the custom-provider form immediately. */
   initialCustom?: boolean;
+  /** Third-tab account login rows (oauth + key-configured), styled like the catalog. */
+  accountRows?: AccountLoginRow[];
+  accountStatus?: Record<string, AccountLoginStatus>;
+  accountBusy?: string | null;
+  accountLoginHint?: { provider: string; url?: string; instructions?: string } | null;
+  onAccountLogin?: (provider: string) => void;
+  onAccountLogout?: (provider: string) => void;
+  accountManualCode?: string;
+  onAccountManualCodeChange?: (value: string) => void;
+  onAccountManualCodeSubmit?: (provider: string) => void;
+  accountManualCodeBusy?: boolean;
+  accountManualCodeMsg?: string;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
     { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
   ], [t]);
   const [query, setQuery] = useState("");
-  const [tier, setTier] = useState<"free" | "paid">("free");
+  const [tier, setTier] = useState<"free" | "paid" | "accounts">("free");
   const [catalogView, setCatalogView] = useState<"home" | "browse">("home");
   const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const [preset, setPreset] = useState<Preset | null>(initialCustom ? fallbackPresets[0]! : null);
@@ -126,7 +157,7 @@ export default function AddProviderModal({
     [sortedByUsage],
   );
 
-  const tierList = tier === "free" ? freePresets : paidPresets;
+  const tierList = tier === "paid" ? paidPresets : freePresets;
 
   const homeList = useMemo(
     () => tierList.slice(0, HOME_SLOT_COUNT),
@@ -301,7 +332,7 @@ export default function AddProviderModal({
 
         {!preset ? (
           <div className="add-prov-catalog">
-            <div className="add-prov-segment" role="tablist" aria-label={t("modal.add")}>
+            <div className="add-prov-segment add-prov-segment--3" role="tablist" aria-label={t("modal.add")}>
               <button
                 type="button"
                 role="tab"
@@ -320,22 +351,131 @@ export default function AddProviderModal({
               >
                 {t("modal.tab.paid")}
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tier === "accounts"}
+                className={`add-prov-segment-btn${tier === "accounts" ? " add-prov-segment-btn--active" : ""}`}
+                onClick={() => { setTier("accounts"); setCatalogView("home"); setQuery(""); }}
+              >
+                {t("modal.tab.accounts")}
+              </button>
             </div>
 
-            {catalogView === "home" ? (
-              <>
-                {(hasOverflow || tierList.length > 0) && (
-                  <button
-                    type="button"
-                    className="add-prov-browse-link"
-                    onClick={() => setCatalogView("browse")}
-                    disabled={tierList.length === 0}
-                  >
-                    <IconGlobe width={14} height={14} aria-hidden="true" />
-                    <span>{tier === "free" ? t("modal.browseFree") : t("modal.browsePaid")}</span>
-                    <IconChevron width={14} height={14} aria-hidden="true" />
-                  </button>
+            {tier === "accounts" ? (
+              <div className="add-prov-list add-prov-list--browse">
+                {accountRows.length === 0 && (
+                  <div className="muted text-control" style={{ padding: "12px 4px" }}>{t("modal.accountsEmpty")}</div>
                 )}
+                {accountRows.map(row => {
+                  const st = accountStatus[row.id] ?? { loggedIn: false };
+                  const isBusy = accountBusy === row.id;
+                  const hint = accountLoginHint?.provider === row.id ? accountLoginHint : null;
+                  const icon = providerIconSrc(row.id);
+                  return (
+                    <div key={row.id} className="add-prov-account-block">
+                      <div className="add-prov-row">
+                        <span className="add-prov-row-icon" aria-hidden="true">
+                          {icon
+                            ? <img src={icon} alt="" />
+                            : <IconServer width={16} height={16} />}
+                        </span>
+                        <span className="add-prov-row-name">{row.label}</span>
+                        <span className="add-prov-account-status">
+                          <span className={`dot ${row.kind === "key" || st.loggedIn ? "dot-green" : "dot-muted"}`} />
+                          <span className={row.kind === "key" || st.loggedIn ? "add-prov-account-status-ok" : "muted"}>
+                            {row.kind === "key"
+                              ? (row.statusLabel ?? t("prov.hasApiKey"))
+                              : st.loggedIn
+                                ? (st.email ?? t("prov.loggedIn"))
+                                : t("prov.notLoggedIn")}
+                          </span>
+                        </span>
+                        {row.kind === "oauth" ? (
+                          isBusy ? (
+                            <button type="button" className="btn btn-ghost btn-sm" disabled>
+                              <span className="spin" /> {t("prov.waitingBrowser")}
+                            </button>
+                          ) : st.loggedIn ? (
+                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAccountLogout?.(row.id)}>
+                              {t("prov.logout")}
+                            </button>
+                          ) : (
+                            <button type="button" className="btn btn-primary btn-sm" onClick={() => onAccountLogin?.(row.id)}>
+                              <IconLock width={13} height={13} /> {t("prov.login")}
+                            </button>
+                          )
+                        ) : (
+                          <span className="add-prov-row-spacer" aria-hidden="true" />
+                        )}
+                      </div>
+                      {hint && (hint.url || hint.instructions || isBusy) && (
+                        <div className="add-prov-account-hint muted">
+                          <div className="add-prov-account-hint-links">
+                            {hint.url && (
+                              <a href={hint.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <IconExternal width={13} height={13} />{t("prov.didntOpen")}
+                              </a>
+                            )}
+                            {hint.instructions && <span>{hint.instructions}</span>}
+                          </div>
+                          <div className="add-prov-account-paste">
+                            <input
+                              className="input"
+                              type="text"
+                              autoComplete="off"
+                              spellCheck={false}
+                              value={accountManualCode}
+                              onChange={e => onAccountManualCodeChange?.(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  onAccountManualCodeSubmit?.(row.id);
+                                }
+                              }}
+                              placeholder={t("prov.pasteRedirect")}
+                              aria-label={t("prov.pasteRedirect")}
+                              disabled={accountManualCodeBusy}
+                            />
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              type="button"
+                              disabled={accountManualCodeBusy || !accountManualCode.trim()}
+                              onClick={() => onAccountManualCodeSubmit?.(row.id)}
+                            >
+                              {accountManualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                            </button>
+                          </div>
+                          <div className="text-caption">{accountManualCodeMsg || t("prov.pasteRedirectHint")}</div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : catalogView === "home" ? (
+              <>
+                <button
+                  type="button"
+                  className="add-prov-browse-card"
+                  onClick={() => setCatalogView("browse")}
+                  disabled={tierList.length === 0}
+                >
+                  <span className="add-prov-browse-card-icon" aria-hidden="true">
+                    <IconGlobe width={16} height={16} />
+                  </span>
+                  <span className="add-prov-browse-card-copy">
+                    <span className="add-prov-browse-card-title">
+                      {tier === "free" ? t("modal.browseFree") : t("modal.browsePaid")}
+                    </span>
+                    {hasOverflow && (
+                      <span className="add-prov-browse-card-sub muted">
+                        {t("modal.browseMore", { count: tierList.length - HOME_SLOT_COUNT })}
+                      </span>
+                    )}
+                  </span>
+                  <IconChevron width={16} height={16} aria-hidden="true" />
+                </button>
                 <div className="add-prov-list">
                   {homeList.map(p => (
                     <ProviderConnectRow key={p.id} preset={p} t={t} onConnect={() => choosePreset(p)} />
@@ -349,11 +489,13 @@ export default function AddProviderModal({
               <>
                 <button
                   type="button"
-                  className="add-prov-browse-link"
+                  className="add-prov-browse-card"
                   onClick={() => { setCatalogView("home"); setQuery(""); }}
                 >
-                  <IconChevron width={14} height={14} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
-                  <span>{t("modal.browseBack")}</span>
+                  <IconChevron width={16} height={16} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
+                  <span className="add-prov-browse-card-copy">
+                    <span className="add-prov-browse-card-title">{t("modal.browseBack")}</span>
+                  </span>
                 </button>
                 <input
                   ref={searchRef}
@@ -361,7 +503,7 @@ export default function AddProviderModal({
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   placeholder={t("modal.search")}
-                  style={{ marginBottom: 8 }}
+                  style={{ marginBottom: 4 }}
                 />
                 <div className="add-prov-list add-prov-list--browse">
                   {browseList.map(p => (
@@ -374,18 +516,20 @@ export default function AddProviderModal({
               </>
             )}
 
-            <div className="add-prov-footer">
-              <div className="add-prov-footer-copy">
-                <IconInfo width={15} height={15} aria-hidden="true" />
-                <div>
-                  <div className="add-prov-footer-title">{t("modal.notListedTitle")}</div>
-                  <div className="add-prov-footer-sub muted">{t("modal.notListedSub")}</div>
+            {tier !== "accounts" && (
+              <div className="add-prov-footer">
+                <div className="add-prov-footer-copy">
+                  <IconInfo width={15} height={15} aria-hidden="true" />
+                  <div>
+                    <div className="add-prov-footer-title">{t("modal.notListedTitle")}</div>
+                    <div className="add-prov-footer-sub muted">{t("modal.notListedSub")}</div>
+                  </div>
                 </div>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={openCustom}>
+                  {t("modal.connectApiKey")}
+                </button>
               </div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={openCustom}>
-                {t("modal.connectApiKey")}
-              </button>
-            </div>
+            )}
           </div>
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (

@@ -52,8 +52,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [layout, setLayout] = useState<"workspace" | "classic">("workspace");
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
-  /** When true, AddProviderModal opens directly on the custom form (rail Custom button). */
-  const [addCustom, setAddCustom] = useState(false);
   const aliveRef = useRef(true);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
@@ -451,8 +449,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             providers={config.providers}
             apiBase={apiBase}
             defaultProvider={config.defaultProvider}
-            onAddProvider={() => { setAddCustom(false); setAdding(true); }}
-            onAddCustomProvider={() => { setAddCustom(true); setAdding(true); }}
+            onAddProvider={() => setAdding(true)}
             onUseLegacyView={() => setLayout("classic")}
             onEditConfig={openJsonEditor}
             onSetDisabled={setProviderDisabled}
@@ -479,16 +476,39 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
-            initialCustom={addCustom}
-            onClose={() => { setAdding(false); setAddCustom(false); }}
+            onClose={() => setAdding(false)}
             onAdded={(name) => {
               setAdding(false);
-              setAddCustom(false);
               notify(t("prov.added", { name, cmd: "ocx sync" }), true);
               fetchConfig();
               fetchOauth();
               fetchProviderQuotas(true);
             }}
+            accountRows={[
+              ...oauthProviders.map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
+              ...Object.entries(config.providers)
+                .filter(([name, prov]) =>
+                  prov.hasApiKey
+                  && prov.authMode !== "oauth"
+                  && prov.authMode !== "forward"
+                  && !oauthProviders.includes(name))
+                .map(([name, prov]) => ({
+                  id: name,
+                  label: name,
+                  kind: "key" as const,
+                  statusLabel: prov.keyOptional && !prov.hasApiKey ? t("pws.freeTier") : t("prov.hasApiKey"),
+                })),
+            ]}
+            accountStatus={oauthStatus}
+            accountBusy={busy}
+            accountLoginHint={loginInfo}
+            onAccountLogin={(provider) => { void loginOAuth(provider); }}
+            onAccountLogout={(provider) => { void logoutOAuth(provider); }}
+            accountManualCode={manualCode}
+            onAccountManualCodeChange={setManualCode}
+            onAccountManualCodeSubmit={(provider) => { void submitManualCode(provider); }}
+            accountManualCodeBusy={manualCodeBusy}
+            accountManualCodeMsg={manualCodeMsg}
           />
         )}
         {jsonEditorOpen && (
