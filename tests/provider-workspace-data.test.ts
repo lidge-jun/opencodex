@@ -10,9 +10,12 @@ import {
   formatRequestCount,
   formatTokenCount,
   buildAttentionItems,
+  sortWorkspaceItems,
+  isFreeProvider,
   type ProviderModelCounts,
   type ProviderUsageTotals,
   type AttentionItem,
+  type WorkspaceItem,
 } from "../gui/src/provider-workspace-data";
 
 // ---------------------------------------------------------------------------
@@ -206,6 +209,35 @@ describe("buildProviderWorkspace", () => {
 // ---------------------------------------------------------------------------
 // binProviderStatus — pure status derivation (no network)
 // ---------------------------------------------------------------------------
+
+describe("sortWorkspaceItems + isFreeProvider", () => {
+  function item(name: string, overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
+    return { name, adapter: "openai-chat", baseUrl: "https://x", ...overrides };
+  }
+
+  test("A-Z / Z-A by name", () => {
+    const items = [item("zeta"), item("alpha"), item("mid")];
+    expect(sortWorkspaceItems(items, "az").map(i => i.name)).toEqual(["alpha", "mid", "zeta"]);
+    expect(sortWorkspaceItems(items, "za").map(i => i.name)).toEqual(["zeta", "mid", "alpha"]);
+  });
+
+  test("free-paid groups free first", () => {
+    const items = [
+      item("paid-a", { hasApiKey: true }),
+      item("free-b", { keyOptional: true }),
+      item("paid-c", { hasApiKey: true }),
+    ];
+    expect(sortWorkspaceItems(items, "free-paid").map(i => i.name)).toEqual(["free-b", "paid-a", "paid-c"]);
+    expect(sortWorkspaceItems(items, "paid-free").map(i => i.name)).toEqual(["paid-a", "paid-c", "free-b"]);
+  });
+
+  test("isFreeProvider detects local and keyOptional", () => {
+    expect(isFreeProvider(prov({ keyOptional: true }))).toBe(true);
+    expect(isFreeProvider(prov({ authMode: "local" }))).toBe(true);
+    expect(isFreeProvider(prov({ baseUrl: "http://127.0.0.1:11434/v1" }))).toBe(true);
+    expect(isFreeProvider(prov({ hasApiKey: true }))).toBe(false);
+  });
+});
 
 describe("binProviderStatus", () => {
   test("disabled provider returns 'disabled'", () => {

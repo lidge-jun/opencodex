@@ -447,17 +447,136 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/providers" && req.method === "PATCH") {
     const name = url.searchParams.get("name")?.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    let body: { disabled?: unknown };
+    let body: {
+      disabled?: unknown;
+      adapter?: unknown;
+      baseUrl?: unknown;
+      defaultModel?: unknown;
+      apiKey?: unknown;
+      authMode?: unknown;
+      note?: unknown;
+    };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (typeof body.disabled !== "boolean") return jsonResponse({ error: "disabled boolean is required" }, 400);
-    if (body.disabled && name === config.defaultProvider) {
-      return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
+
+    const next: OcxProviderConfig = { ...config.providers[name]! };
+    let touched = false;
+
+    if ("disabled" in body) {
+      if (typeof body.disabled !== "boolean") return jsonResponse({ error: "disabled must be a boolean" }, 400);
+      if (body.disabled && name === config.defaultProvider) {
+        return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
+      }
+      next.disabled = body.disabled;
+      touched = true;
     }
+    if (typeof body.adapter === "string" && body.adapter.trim()) {
+      next.adapter = body.adapter.trim();
+      touched = true;
+    }
+    if (typeof body.baseUrl === "string" && body.baseUrl.trim()) {
+      next.baseUrl = body.baseUrl.trim();
+      touched = true;
+    }
+    if (typeof body.defaultModel === "string") {
+      const dm = body.defaultModel.trim();
+      if (dm) next.defaultModel = dm;
+      else delete next.defaultModel;
+      touched = true;
+    }
+    if (typeof body.apiKey === "string") {
+      // Non-empty replaces the key; empty leaves existing key unchanged (never round-trip secrets).
+      if (body.apiKey.trim()) {
+        next.apiKey = body.apiKey.trim();
+        touched = true;
+      }
+    }
+    if (typeof body.authMode === "string") {
+      const mode = body.authMode.trim();
+      if (mode === "key" || mode === "forward" || mode === "oauth" || mode === "local") {
+        next.authMode = mode;
+        touched = true;
+      } else if (mode === "") {
+        delete next.authMode;
+        touched = true;
+      } else {
+        return jsonResponse({ error: "authMode must be key, forward, oauth, or local" }, 400);
+      }
+    }
+    if (typeof body.note === "string") {
+      const note = body.note.trim();
+      if (note) next.note = note;
+      else delete next.note;
+      touched = true;
+    }
+
+    if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
+
+    const providerError = providerManagementConfigError(name, next);
+    if (providerError) return jsonResponse({ error: providerError }, 400);
+    const resolvedError = await providerDestinationResolvedError(name, next);
+    if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
+
     const { saveConfig: save } = await import("../config");
-    config.providers[name] = { ...config.providers[name], disabled: body.disabled };
+    config.providers[name] = stripRegistryOnlyStaticHeaders(name, next);
     save(config);
+    const { clearModelCache } = await import("../codex/model-cache");
+    clearModelCache(name);
     await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, name, disabled: body.disabled });
+    return jsonResponse({
+      success: true,
+      name,
+      disabled: config.providers[name]!.disabled === true,
+      hasApiKey: !!config.providers[name]!.apiKey,
+    });
+  }
+
+  // Lightweight connectivity probe: clear the model cache for this provider and re-resolve
+  // models. Inspired by gateway "test connection" flows (probe, measure latency, report) —
+  // uses our existing catalog path rather than inventing a separate health wire format.
+  if (url.pathname === "/api/providers/test" && req.method === "POST") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    const prov = config.providers[name]!;
+    if (prov.disabled) {
+      return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 }, 200);
+    }
+    const { clearModelCache } = await import("../codex/model-cache");
+    clearModelCache(name);
+    const started = Date.now();
+    try {
+      const models = (await fetchAllModels(config)).filter(m => m.provider === name);
+      const latencyMs = Date.now() - started;
+      if (prov.authMode === "forward") {
+        return jsonResponse({
+          ok: true,
+          latencyMs,
+          models: models.length,
+          message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
+        });
+      }
+      if (models.length === 0) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          models: 0,
+          error: "No models returned. Check base URL, adapter, and credentials.",
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        latencyMs,
+        models: models.length,
+        message: `Connected — ${models.length} model${models.length === 1 ? "" : "s"} available.`,
+      });
+    } catch (err) {
+      return jsonResponse({
+        ok: false,
+        latencyMs: Date.now() - started,
+        error: err instanceof Error ? err.message : "Connection test failed",
+      });
+    }
   }
 
   if (url.pathname === "/api/providers" && req.method === "DELETE") {

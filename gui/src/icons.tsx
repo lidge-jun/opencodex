@@ -24,6 +24,24 @@ export const IconTrash = (p: P) => (<svg {...S(p)}><path d="M3 6h18M8 6V4h8v2M19
 export const IconAlert = (p: P) => (<svg {...S(p)}><path d="M10.3 3.7 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>);
 export const IconInfo = (p: P) => (<svg {...S(p)}><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>);
 export const IconSearch = (p: P) => (<svg {...S(p)}><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>);
+/**
+ * Funnel filter control — solid silhouette (wide top → stem).
+ * Stroke-only funnels read as inverted/ambiguous at 14–16px.
+ */
+export const IconFilter = (p: P) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="none"
+    aria-hidden={p["aria-hidden"]}
+    className={p.className}
+    width={p.width}
+    height={p.height}
+    style={p.style}
+  >
+    <path d="M3.5 4.25A1.25 1.25 0 0 1 4.75 3h14.5a1.25 1.25 0 0 1 .97 2.04L14 12.2V18.5a1.25 1.25 0 0 1-1.85 1.1l-2.5-1.35A1.25 1.25 0 0 1 9 17.15v-4.95L3.53 5.04A1.25 1.25 0 0 1 3.5 4.25Z" />
+  </svg>
+);
 export const IconArrowUp = (p: P) => (<svg {...S(p)}><path d="M12 19V5M5 12l7-7 7 7"/></svg>);
 export const IconArrowDown = (p: P) => (<svg {...S(p)}><path d="M12 5v14M19 12l-7 7-7-7"/></svg>);
 export const IconChevron = (p: P) => (<svg {...S(p)}><path d="m9 18 6-6-6-6"/></svg>);

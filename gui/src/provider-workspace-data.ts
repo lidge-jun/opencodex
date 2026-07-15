@@ -69,6 +69,49 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
 }
 
 /**
+ * Free-tier / no-paid-key providers: explicit free flag, local runtimes, or loopback.
+ * Everything else is treated as paid (API-key / cloud subscription providers).
+ */
+export function isFreeProvider(p: WorkspaceProvider): boolean {
+  return p.keyOptional === true
+    || p.authMode === "local"
+    || hasLoopbackBaseUrl(p.baseUrl);
+}
+
+export function isPaidProvider(p: WorkspaceProvider): boolean {
+  return !isFreeProvider(p);
+}
+
+/** Rail / list sort modes for the providers workspace. */
+export type ProviderSortMode = "az" | "za" | "free-paid" | "paid-free";
+
+export function sortWorkspaceItems(items: WorkspaceItem[], mode: ProviderSortMode): WorkspaceItem[] {
+  const copy = [...items];
+  const byName = (a: WorkspaceItem, b: WorkspaceItem) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  switch (mode) {
+    case "az":
+      return copy.sort(byName);
+    case "za":
+      return copy.sort((a, b) => byName(b, a));
+    case "free-paid":
+      return copy.sort((a, b) => {
+        const af = isFreeProvider(a) ? 0 : 1;
+        const bf = isFreeProvider(b) ? 0 : 1;
+        return af - bf || byName(a, b);
+      });
+    case "paid-free":
+      return copy.sort((a, b) => {
+        const af = isFreeProvider(a) ? 1 : 0;
+        const bf = isFreeProvider(b) ? 1 : 0;
+        return af - bf || byName(a, b);
+      });
+    default:
+      return copy;
+  }
+}
+
+/**
  * Transforms the proxy config `providers` map into the three workspace sections.
  * Iteration order follows `Object.entries` (insertion order).
  */

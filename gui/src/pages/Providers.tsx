@@ -318,6 +318,36 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     notify(data.error || (disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
   };
 
+  const updateProvider = async (
+    name: string,
+    patch: {
+      adapter?: string;
+      baseUrl?: string;
+      defaultModel?: string;
+      apiKey?: string;
+      authMode?: string;
+      note?: string;
+      disabled?: boolean;
+    },
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json().catch(() => ({})) as { error?: string };
+    if (res.ok) {
+      notify(`Saved ${name}`, true);
+      fetchConfig();
+      fetchOauth();
+      fetchProviderQuotas(true);
+      return { ok: true };
+    }
+    const err = data.error || `Failed to update ${name}`;
+    notify(err, false);
+    return { ok: false, error: err };
+  };
+
   if (!config) {
     return (
       <div className="providers-workspace-shell">
@@ -350,6 +380,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onEditConfig={() => { setLayout("classic"); setEditing(true); }}
             onSetDisabled={setProviderDisabled}
             onRemoveProvider={removeProvider}
+            onUpdateProvider={updateProvider}
             quotaReports={quotaReports}
             oauthStatus={oauthStatus}
           />
