@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { IconX, IconLock, IconKey, IconExternal } from "../icons";
-import { useT } from "../i18n";
+import { IconX, IconLock, IconKey, IconExternal, IconGlobe, IconChevron, IconInfo, IconServer } from "../icons";
+import { useT, type TFn } from "../i18n";
 import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
+import { providerIconSrc } from "../provider-icons";
+
+/** How many providers fit on the first sheet (room for Free/Paid tabs + footer). */
+const HOME_SLOT_COUNT = 8;
 
 export type ProviderConfig = ProviderPayload;
 
@@ -46,6 +50,9 @@ export default function AddProviderModal({
     { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
   ], [t]);
   const [query, setQuery] = useState("");
+  const [tier, setTier] = useState<"free" | "paid">("free");
+  const [catalogView, setCatalogView] = useState<"home" | "browse">("home");
+  const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const [preset, setPreset] = useState<Preset | null>(initialCustom ? fallbackPresets[0]! : null);
   const [form, setForm] = useState<FormState | null>(
     initialCustom
@@ -67,7 +74,7 @@ export default function AddProviderModal({
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
 
-  useEffect(() => { if (!initialCustom) searchRef.current?.focus(); }, [initialCustom]);
+  useEffect(() => { if (!initialCustom && catalogView === "browse") searchRef.current?.focus(); }, [initialCustom, catalogView]);
   useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -85,19 +92,53 @@ export default function AddProviderModal({
       }
     }).catch(() => {});
   }, [apiBase]);
+  useEffect(() => {
+    fetch(`${apiBase}/api/usage?range=30d`).then(r => r.json()).then((d: {
+      providers?: Array<{ provider: string; requests: number }>;
+    }) => {
+      const rank: Record<string, number> = {};
+      for (const row of d.providers ?? []) rank[row.provider] = row.requests;
+      setUsageRank(rank);
+    }).catch(() => {});
+  }, [apiBase]);
   // Keep the custom fallback label in sync when language changes and API presets never loaded.
   useEffect(() => {
     if (!loadedPresetsRef.current) setPresets(fallbackPresets);
   }, [fallbackPresets]);
 
-  const filtered = useMemo(() => {
-    // Custom is a dedicated rail action (initialCustom), not a catalog list row.
-    const catalog = presets.filter(p => p.id !== "custom");
+  const catalog = useMemo(() => presets.filter(p => p.id !== "custom"), [presets]);
+
+  const sortedByUsage = useMemo(() => {
+    return [...catalog].sort((a, b) => {
+      const ra = usageRank[a.id] ?? 0;
+      const rb = usageRank[b.id] ?? 0;
+      if (rb !== ra) return rb - ra;
+      return a.label.localeCompare(b.label);
+    });
+  }, [catalog, usageRank]);
+
+  const freePresets = useMemo(
+    () => sortedByUsage.filter(isFreePreset),
+    [sortedByUsage],
+  );
+  const paidPresets = useMemo(
+    () => sortedByUsage.filter(p => !isFreePreset(p)),
+    [sortedByUsage],
+  );
+
+  const tierList = tier === "free" ? freePresets : paidPresets;
+
+  const homeList = useMemo(
+    () => tierList.slice(0, HOME_SLOT_COUNT),
+    [tierList],
+  );
+  const hasOverflow = tierList.length > HOME_SLOT_COUNT;
+
+  const browseList = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return catalog;
-    // Match by provider name/id — not adapter, since most share "openai-chat" and would all match.
-    return catalog.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
-  }, [query, presets]);
+    if (!q) return tierList;
+    return tierList.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  }, [tierList, query]);
 
   const choosePreset = (p: Preset) => {
     setPreset(p);
@@ -126,6 +167,13 @@ export default function AddProviderModal({
     setManualCode("");
     setManualCodeMsg("");
     setManualCodeOk(true);
+    setCatalogView("home");
+    setQuery("");
+  };
+
+  const openCustom = () => {
+    const custom = fallbackPresets[0]!;
+    choosePreset(custom);
   };
 
   const submit = async () => {
@@ -252,38 +300,93 @@ export default function AddProviderModal({
         </div>
 
         {!preset ? (
-          <>
-            <input
-              ref={searchRef}
-              className="input"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder={t("modal.search")}
-            />
-            <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-              {filtered.map(p => (
-                <button key={p.id} className="list-row" onClick={() => choosePreset(p)}>
-                  <div>
-                    <div className="title">{p.label}</div>
-                    <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                    {p.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
-                    {p.auth === "oauth"
-                      ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
-                      : p.auth === "forward"
-                        ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
-                        : p.auth === "local"
-                          ? <span className="badge badge-amber">{t("modal.badge.local")}</span>
-                          : !p.keyOptional
-                            ? <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>
-                            : null}
-                  </div>
-                </button>
-              ))}
-              {filtered.length === 0 && <div className="muted text-control" style={{ padding: 8 }}>{t("modal.noMatch")}</div>}
+          <div className="add-prov-catalog">
+            <div className="add-prov-segment" role="tablist" aria-label={t("modal.add")}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tier === "free"}
+                className={`add-prov-segment-btn${tier === "free" ? " add-prov-segment-btn--active" : ""}`}
+                onClick={() => { setTier("free"); setCatalogView("home"); setQuery(""); }}
+              >
+                {t("modal.tab.free")}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tier === "paid"}
+                className={`add-prov-segment-btn${tier === "paid" ? " add-prov-segment-btn--active" : ""}`}
+                onClick={() => { setTier("paid"); setCatalogView("home"); setQuery(""); }}
+              >
+                {t("modal.tab.paid")}
+              </button>
             </div>
-          </>
+
+            {catalogView === "home" ? (
+              <>
+                {(hasOverflow || tierList.length > 0) && (
+                  <button
+                    type="button"
+                    className="add-prov-browse-link"
+                    onClick={() => setCatalogView("browse")}
+                    disabled={tierList.length === 0}
+                  >
+                    <IconGlobe width={14} height={14} aria-hidden="true" />
+                    <span>{tier === "free" ? t("modal.browseFree") : t("modal.browsePaid")}</span>
+                    <IconChevron width={14} height={14} aria-hidden="true" />
+                  </button>
+                )}
+                <div className="add-prov-list">
+                  {homeList.map(p => (
+                    <ProviderConnectRow key={p.id} preset={p} t={t} onConnect={() => choosePreset(p)} />
+                  ))}
+                  {homeList.length === 0 && (
+                    <div className="muted text-control" style={{ padding: "12px 4px" }}>{t("modal.noMatch")}</div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="add-prov-browse-link"
+                  onClick={() => { setCatalogView("home"); setQuery(""); }}
+                >
+                  <IconChevron width={14} height={14} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
+                  <span>{t("modal.browseBack")}</span>
+                </button>
+                <input
+                  ref={searchRef}
+                  className="input"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder={t("modal.search")}
+                  style={{ marginBottom: 8 }}
+                />
+                <div className="add-prov-list add-prov-list--browse">
+                  {browseList.map(p => (
+                    <ProviderConnectRow key={p.id} preset={p} t={t} onConnect={() => choosePreset(p)} />
+                  ))}
+                  {browseList.length === 0 && (
+                    <div className="muted text-control" style={{ padding: "12px 4px" }}>{t("modal.noMatch")}</div>
+                  )}
+                </div>
+              </>
+            )}
+
+            <div className="add-prov-footer">
+              <div className="add-prov-footer-copy">
+                <IconInfo width={15} height={15} aria-hidden="true" />
+                <div>
+                  <div className="add-prov-footer-title">{t("modal.notListedTitle")}</div>
+                  <div className="add-prov-footer-sub muted">{t("modal.notListedSub")}</div>
+                </div>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={openCustom}>
+                {t("modal.connectApiKey")}
+              </button>
+            </div>
+          </div>
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane
@@ -443,5 +546,47 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="field-label">{label}</span>
       {children}
     </label>
+  );
+}
+
+function isFreePreset(p: Preset): boolean {
+  if (p.keyOptional) return true;
+  if (p.auth === "local") return true;
+  try {
+    const host = new URL(p.baseUrl).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function authBadge(p: Preset, t: TFn): string {
+  if (p.auth === "local") return t("modal.badge.local");
+  if (p.auth === "oauth") return t("modal.badge.oauth");
+  if (p.auth === "forward") return t("modal.badge.codexLogin");
+  return t("modal.badge.api");
+}
+
+function ProviderConnectRow({
+  preset, t, onConnect,
+}: {
+  preset: Preset;
+  t: TFn;
+  onConnect: () => void;
+}) {
+  const icon = providerIconSrc(preset.id, { adapter: preset.adapter, baseUrl: preset.baseUrl });
+  return (
+    <div className="add-prov-row">
+      <span className="add-prov-row-icon" aria-hidden="true">
+        {icon
+          ? <img src={icon} alt="" />
+          : <IconServer width={16} height={16} />}
+      </span>
+      <span className="add-prov-row-name">{preset.label}</span>
+      <span className="add-prov-row-badge">{authBadge(preset, t)}</span>
+      <button type="button" className="btn btn-ghost btn-sm add-prov-row-connect" onClick={onConnect}>
+        {t("modal.connect")}
+      </button>
+    </div>
   );
 }
