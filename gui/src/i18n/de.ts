@@ -688,6 +688,7 @@ export const de = {
   "pws.providerList": "Anbieterliste",
   "pws.add": "Hinzufügen",
   "pws.addAria": "Anbieter hinzufügen",
+  "pws.fromCatalog": "Aus Katalog",
   "pws.addCustomAria": "Benutzerdefinierten Anbieter hinzufügen",
   "pws.custom": "Eigene",
   "pws.searchPlaceholder": "Anbieter suchen",

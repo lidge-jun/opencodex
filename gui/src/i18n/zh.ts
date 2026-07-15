@@ -708,6 +708,7 @@ export const zh: Record<TKey, string> = {
   "pws.providerList": "提供方列表",
   "pws.add": "添加",
   "pws.addAria": "添加提供方",
+  "pws.fromCatalog": "从目录添加",
   "pws.addCustomAria": "添加自定义提供方",
   "pws.custom": "自定义",
   "pws.searchPlaceholder": "搜索提供方",

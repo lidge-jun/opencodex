@@ -708,6 +708,7 @@ export const ko: Record<TKey, string> = {
   "pws.providerList": "프로바이더 목록",
   "pws.add": "추가",
   "pws.addAria": "프로바이더 추가",
+  "pws.fromCatalog": "카탈로그에서",
   "pws.addCustomAria": "커스텀 프로바이더 추가",
   "pws.custom": "커스텀",
   "pws.searchPlaceholder": "프로바이더 검색",

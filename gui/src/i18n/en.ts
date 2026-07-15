@@ -709,6 +709,7 @@ export const en = {
   "pws.providerList": "Provider list",
   "pws.add": "Add",
   "pws.addAria": "Add a provider",
+  "pws.fromCatalog": "From catalog",
   "pws.addCustomAria": "Add custom provider",
   "pws.custom": "Custom",
   "pws.searchPlaceholder": "Search providers",

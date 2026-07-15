@@ -1194,28 +1194,10 @@ function EmptyState({
   onAddCustomProvider?: () => void;
 }) {
   const t = useT();
+  // Hero only: catalog (primary) + custom (secondary). No second pair of CTAs.
   return (
     <div className="providers-workspace-empty-root">
-      <div className="pwi-empty-left">
-        <div className="pwi-empty-card">
-          <span className="pwi-empty-card-icon" aria-hidden="true">
-            <IconPlus style={{ width: 24, height: 24 }} />
-          </span>
-          <p className="pwi-empty-card-title">{t("pws.emptyTitle")}</p>
-          <p className="pwi-empty-card-sub">{t("pws.emptySub")}</p>
-          <div className="pwi-empty-card-actions">
-            <button type="button" className="btn btn-primary" onClick={onAddProvider} aria-label={t("pws.addAria")}>
-              {t("pws.addProvider")}
-            </button>
-            {onAddCustomProvider && (
-              <button type="button" className="btn btn-ghost" onClick={onAddCustomProvider} aria-label={t("pws.addCustomAria")}>
-                {t("modal.customProvider")}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="pwi-empty-right">
+      <div className="pwi-empty-hero">
         <div className="pwi-empty-right-icon" aria-hidden="true">
           <IconBoxes style={{ width: 64, height: 64 }} />
         </div>
@@ -1224,7 +1206,7 @@ function EmptyState({
           {t("pws.connectFirstSub")}
         </p>
         <div className="pwi-empty-tiles">
-          <button type="button" className="pwi-empty-tile" onClick={onAddProvider} aria-label={t("pws.browseProviders")}>
+          <button type="button" className="pwi-empty-tile pwi-empty-tile--primary" onClick={onAddProvider} aria-label={t("pws.browseProviders")}>
             <IconGlobe style={{ width: 20, height: 20 }} aria-hidden="true" />
             <span className="pwi-empty-tile-label">{t("pws.browseProviders")}</span>
             <span className="pwi-empty-tile-desc">{t("pws.browseProvidersDesc")}</span>
@@ -1256,12 +1238,10 @@ function EmptyState({
 // ---------------------------------------------------------------------------
 
 function OverviewPanel({
-  sections, onSelect, onAddProvider, onAddCustomProvider, onEditConfig, attentionItems, usageTotals
+  sections, onSelect, onEditConfig, attentionItems, usageTotals
 }: {
   sections: WorkspaceSections;
   onSelect: (name: string) => void;
-  onAddProvider: () => void;
-  onAddCustomProvider?: () => void;
   onEditConfig: () => void;
   attentionItems: AttentionItem[];
   usageTotals: Record<string, ProviderUsageTotals>;
@@ -1273,6 +1253,7 @@ function OverviewPanel({
   const mostUsed = buildMostUsedProviders(usageTotals)
     .filter(entry => providersByName.has(entry.name))
     .slice(0, 3);
+  // Create actions live in the left rail only — middle is selection/overview content.
   return (
     <div className="providers-workspace-overview">
       <div className="providers-workspace-overview-head">
@@ -1295,22 +1276,7 @@ function OverviewPanel({
       </div>
       <div className="pwi-overview-section pwi-overview-quick-actions">
         <div className="pwi-overview-section-head">{t("pws.quickActions")}</div>
-        <div className="pwi-oa-grid">
-          <button type="button" className="pwi-oa-tile" onClick={onAddProvider} aria-label={t("pws.addProvider")}>
-            <IconPlus style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-oa-label">{t("pws.addProvider")}</span>
-            <span className="pwi-oa-desc">{t("pws.addProviderDesc")}</span>
-          </button>
-          <button
-            type="button"
-            className="pwi-oa-tile"
-            onClick={onAddCustomProvider ?? onAddProvider}
-            aria-label={t("pws.addCustomAria")}
-          >
-            <IconExternal style={{ width: 18, height: 18 }} aria-hidden="true" />
-            <span className="pwi-oa-label">{t("modal.customProvider")}</span>
-            <span className="pwi-oa-desc">{t("pws.customEndpointDesc")}</span>
-          </button>
+        <div className="pwi-oa-grid pwi-oa-grid--single">
           <button type="button" className="pwi-oa-tile" onClick={onEditConfig} aria-label={t("prov.editJson")}>
             <IconList style={{ width: 18, height: 18 }} aria-hidden="true" />
             <span className="pwi-oa-label">{t("prov.editJson")}</span>
@@ -1379,7 +1345,9 @@ export default function ProviderWorkspace({
   const [pricingFilter, setPricingFilter] = useState({ free: true, paid: true });
   const [sortMode, setSortMode] = useState<ProviderSortMode>("az");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const filterWrapRef = useRef<HTMLDivElement>(null);
+  const addMenuWrapRef = useRef<HTMLDivElement>(null);
 
   const sections = useMemo(() => buildProviderWorkspace(providers), [providers]);
 
@@ -1421,14 +1389,21 @@ export default function ProviderWorkspace({
   };
 
   useEffect(() => {
-    if (!filterOpen) return;
+    if (!filterOpen && !addMenuOpen) return;
     const onDoc = (e: MouseEvent) => {
-      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (filterOpen && filterWrapRef.current && !filterWrapRef.current.contains(target)) {
         setFilterOpen(false);
+      }
+      if (addMenuOpen && addMenuWrapRef.current && !addMenuWrapRef.current.contains(target)) {
+        setAddMenuOpen(false);
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFilterOpen(false);
+      if (e.key === "Escape") {
+        setFilterOpen(false);
+        setAddMenuOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDoc);
     window.addEventListener("keydown", onKey);
@@ -1436,7 +1411,7 @@ export default function ProviderWorkspace({
       document.removeEventListener("mousedown", onDoc);
       window.removeEventListener("keydown", onKey);
     };
-  }, [filterOpen]);
+  }, [filterOpen, addMenuOpen]);
 
   const selectedItem = useMemo(
     () => selectedName
@@ -1508,17 +1483,49 @@ export default function ProviderWorkspace({
       <aside className="providers-workspace-rail" aria-label={t("pws.providerList")}>
         <div className="providers-workspace-rail-header">
           <span className="providers-workspace-rail-title">{t("nav.providers")}</span>
-          <div className="pwi-rail-header-actions">
-            <button type="button" className="btn btn-ghost btn-sm pwi-rail-add-btn"
-              onClick={onAddProvider} aria-label={t("pws.addAria")}>
+          <div className="pwi-rail-header-actions" ref={addMenuWrapRef}>
+            <button
+              type="button"
+              className={`btn btn-ghost btn-sm pwi-rail-add-btn${addMenuOpen ? " pwi-rail-add-btn--open" : ""}`}
+              onClick={() => setAddMenuOpen(o => !o)}
+              aria-label={t("pws.addAria")}
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+              title={t("pws.addAria")}
+            >
               <IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" />
               {t("pws.add")}
             </button>
-            {onAddCustomProvider && (
-              <button type="button" className="btn btn-ghost btn-sm pwi-rail-add-btn"
-                onClick={onAddCustomProvider} aria-label={t("pws.addCustomAria")} title={t("modal.customProvider")}>
-                {t("pws.custom")}
-              </button>
+            {addMenuOpen && (
+              <div className="pwi-rail-add-menu" role="menu" aria-label={t("pws.addAria")}>
+                <button
+                  type="button"
+                  className="pwi-rail-add-menu-item"
+                  role="menuitem"
+                  onClick={() => { setAddMenuOpen(false); onAddProvider(); }}
+                >
+                  <IconGlobe width={14} height={14} aria-hidden="true" />
+                  <span>
+                    <span className="pwi-rail-add-menu-label">{t("pws.fromCatalog")}</span>
+                    <span className="pwi-rail-add-menu-desc muted">{t("pws.addProviderDesc")}</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="pwi-rail-add-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    (onAddCustomProvider ?? onAddProvider)();
+                  }}
+                >
+                  <IconExternal width={14} height={14} aria-hidden="true" />
+                  <span>
+                    <span className="pwi-rail-add-menu-label">{t("modal.customProvider")}</span>
+                    <span className="pwi-rail-add-menu-desc muted">{t("pws.customEndpointDesc")}</span>
+                  </span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -1689,8 +1696,6 @@ export default function ProviderWorkspace({
           <OverviewPanel
             sections={sections}
             onSelect={setSelectedName}
-            onAddProvider={onAddProvider}
-            onAddCustomProvider={onAddCustomProvider}
             onEditConfig={onEditConfig}
             attentionItems={attentionItems}
             usageTotals={usageTotals}
