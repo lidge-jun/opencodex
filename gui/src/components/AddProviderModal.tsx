@@ -91,10 +91,12 @@ export default function AddProviderModal({
   }, [fallbackPresets]);
 
   const filtered = useMemo(() => {
+    // Custom is a dedicated rail action (initialCustom), not a catalog list row.
+    const catalog = presets.filter(p => p.id !== "custom");
     const q = query.trim().toLowerCase();
-    if (!q) return presets;
+    if (!q) return catalog;
     // Match by provider name/id — not adapter, since most share "openai-chat" and would all match.
-    return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+    return catalog.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
   }, [query, presets]);
 
   const choosePreset = (p: Preset) => {

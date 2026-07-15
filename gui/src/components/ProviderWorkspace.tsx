@@ -87,6 +87,8 @@ export interface ProviderWorkspaceProps {
   /** Name of the default routing provider (shows a Default label in the rail). */
   defaultProvider?: string;
   onAddProvider: () => void;
+  /** Open AddProviderModal straight on the custom form (not via catalog list). */
+  onAddCustomProvider?: () => void;
   onUseLegacyView: () => void;
   /** Open raw config JSON editor (workspace modal — do not leave workspace). */
   onEditConfig: () => void;
@@ -1309,7 +1311,7 @@ function OverviewPanel({
 // ---------------------------------------------------------------------------
 
 export default function ProviderWorkspace({
-  providers, apiBase, defaultProvider, onAddProvider,
+  providers, apiBase, defaultProvider, onAddProvider, onAddCustomProvider,
   onUseLegacyView: _onUseLegacyView, onEditConfig,
   onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports = {}, oauthStatus = {},
   accountSets = {}, keyPools = {}, busyProvider = null, loginHint = null, authHandlers,
@@ -1457,7 +1459,7 @@ export default function ProviderWorkspace({
         <div className="providers-workspace-rail-header">
           <span className="providers-workspace-rail-title">{t("nav.providers")}</span>
           <div className="pwi-rail-header-actions">
-            {/* Custom endpoint is already a catalog row inside AddProviderModal — one entry only. */}
+            {/* Two separate actions: Add = catalog only; Custom = dedicated form (not a catalog row). */}
             <button
               type="button"
               className="btn btn-ghost btn-sm pwi-rail-add-btn"
@@ -1468,6 +1470,17 @@ export default function ProviderWorkspace({
               <IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" />
               {t("pws.add")}
             </button>
+            {onAddCustomProvider && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm pwi-rail-add-btn"
+                onClick={onAddCustomProvider}
+                aria-label={t("pws.addCustomAria")}
+                title={t("modal.customProvider")}
+              >
+                {t("pws.custom")}
+              </button>
+            )}
           </div>
         </div>
         <div className="pwi-rail-search-row">
