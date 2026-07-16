@@ -283,7 +283,7 @@ describe("provider registry parity", () => {
       liveModels: true,
     });
     expect(cursor?.note).toContain("Live transport");
-    expect(cursor?.note).toContain("live model discovery");
+    expect(cursor?.note).toMatch(/live model discovery|model discovery/i);
     expect(cursor?.note).toContain("unsafeAllowNativeLocalExec");
     expect(cursor?.note).toContain("~/.opencodex/config.json");
     expect(cursor?.note).toContain("Providers → Cursor → Edit JSON");

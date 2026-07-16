@@ -528,7 +528,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "nvidia", label: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://build.nvidia.com",
     // Free pricing, but an API key is still required (free key from build.nvidia.com).
     freeTier: true,
-    featured: true,
     parallelToolCalls: false,
     noReasoningModels: NVIDIA_NIM_KIMI_MODELS,
     modelReasoningEfforts: Object.fromEntries(NVIDIA_NIM_KIMI_MODELS.map(id => [id, []])),
