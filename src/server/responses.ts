@@ -735,16 +735,10 @@ export async function handleResponses(
     const terminalRecorder = codexForwardTerminalOutcomeRecorder(config, authCtx, route.provider);
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
-   if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
-      // primary was the 5h window; it now carries weekly data for GPT plans.
-      // Prefer primary when present, fall back to secondary for compatibility.
-      const primaryRaw = upstreamResponse.headers.get("x-codex-primary-used-percent");
-      const secondaryRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
-      const weeklyRaw = primaryRaw ?? secondaryRaw;
+    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+      const weeklyRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
       const monthlyRaw = upstreamResponse.headers.get("x-codex-tertiary-used-percent");
-      const primaryResetRaw = upstreamResponse.headers.get("x-codex-primary-reset-at");
-      const secondaryResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
-      const weeklyResetRaw = primaryRaw ? primaryResetRaw : secondaryResetRaw;
+      const weeklyResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
       const monthlyResetRaw = upstreamResponse.headers.get("x-codex-tertiary-reset-at");
       const retryAfterRaw = upstreamResponse.headers.get("retry-after");
       if (weeklyRaw || monthlyRaw) {
@@ -764,8 +758,8 @@ export async function handleResponses(
         });
       } else {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
-        retryAfter: retryAfterRaw,
-         resetAt: [primaryResetRaw, secondaryResetRaw, monthlyResetRaw].filter(Boolean),
+         retryAfter: retryAfterRaw,
+          resetAt: [weeklyResetRaw, monthlyResetRaw],
         });
       }
     }

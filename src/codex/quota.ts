@@ -110,15 +110,9 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
 
   const quota: Omit<StoredAccountQuota, "updatedAt"> = {};
   const thirtyDayOnly = data.plan_type?.trim().toLowerCase() === "go" || data.plan_type?.trim().toLowerCase() === "free";
-  // primary_window was the 5h window; it now carries weekly data for GPT plans.
-  // secondary_window is the legacy weekly source; prefer primary when present.
-  const primaryPercent = normalizeUsagePercent(data.rate_limit.primary_window?.used_percent);
-  const secondaryPercent = normalizeUsagePercent(data.rate_limit.secondary_window?.used_percent);
-  const weeklyPercent = primaryPercent ?? secondaryPercent;
+  const weeklyPercent = normalizeUsagePercent(data.rate_limit.secondary_window?.used_percent);
   const monthlyPercent = normalizeUsagePercent(data.rate_limit.tertiary_window?.used_percent);
-  const primaryResetAt = normalizeResetAt(data.rate_limit.primary_window?.reset_at);
-  const secondaryResetAt = normalizeResetAt(data.rate_limit.secondary_window?.reset_at);
-  const weeklyResetAt = primaryPercent !== undefined ? primaryResetAt : secondaryResetAt;
+  const weeklyResetAt = normalizeResetAt(data.rate_limit.secondary_window?.reset_at);
   const monthlyResetAt = normalizeResetAt(data.rate_limit.tertiary_window?.reset_at);
   if (thirtyDayOnly) {
     if (monthlyPercent !== undefined) {
