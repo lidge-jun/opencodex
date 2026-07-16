@@ -292,14 +292,14 @@
   overflow: hidden;
 }
 
-/* ---- overview: no provider selected ---- */
+/* ---- overview: no provider selected — integrated (no card boxes) ---- */
 
 .providers-workspace-overview {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px 24px 32px;
-  max-width: 900px;
+  gap: 28px;
+  padding: 22px 28px 40px;
+  max-width: 920px;
 }
 
 .providers-workspace-overview-head {
@@ -313,6 +313,7 @@
   font-weight: 650;
   color: var(--text);
   letter-spacing: -0.015em;
+  margin: 0;
 }
 
 .providers-workspace-overview-sub {
@@ -322,26 +323,31 @@
   max-width: 60ch;
 }
 
-/* summary counter row — mock: big number on top, label under */
-.providers-workspace-summary-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+/* Status counts: one strip, vertical dividers — not three cards */
+.pwi-overview-counts {
+  padding: 0;
 }
-
-.providers-workspace-summary-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 18px 14px;
+.pwi-overview-count-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+.pwi-overview-count {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: border-color 0.12s;
+  padding: 14px 16px 14px 0;
+  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+  min-width: 0;
 }
-
-.providers-workspace-summary-card:hover {
-  border-color: var(--faint);
+.pwi-overview-count:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+.pwi-overview-count:first-child {
+  padding-left: 0;
 }
 
 .providers-workspace-summary-label {
@@ -366,6 +372,16 @@
   line-height: 1.05;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+}
+/* Keep class for any legacy call sites — no card chrome */
+.providers-workspace-summary-row {
+  display: contents;
+}
+.providers-workspace-summary-card {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 /* 3-column provider grid in overview */
@@ -885,11 +901,7 @@
 
   .providers-workspace-overview {
     padding: 20px 18px 48px;
-    gap: 20px;
-  }
-
-  .providers-workspace-summary-row {
-    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
   }
 
   .providers-workspace-grid {
@@ -1829,91 +1841,98 @@
   border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 
-/* ---- Overview panel ---- */
-.pwi-overview-section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.pwi-overview-section-head {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-soft);
-}
+/* ---- Overview counters (value colors) ---- */
+.pwi-summary-ready { color: var(--green); }
+.pwi-summary-setup { color: var(--amber); }
+.pwi-summary-disabled { color: var(--muted); }
 
-/* ---- Overview counter cards ---- */
-.pwi-summary-ready .providers-workspace-summary-value { color: var(--green); }
-.pwi-summary-setup .providers-workspace-summary-value { color: var(--amber); }
-.pwi-summary-disabled .providers-workspace-summary-value { color: var(--muted); }
-
-/* ---- Overview: Edit JSON card + Recently used (equal height, simple) ---- */
+/* ---- Overview: Edit JSON | Recently used (vertical divider, no cards) ---- */
 .pwi-overview-edit-recent {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 0 28px;
+  align-items: start;
   width: 100%;
 }
-.pwi-overview-edit-recent > .pwi-overview-section,
-.pwi-overview-edit-recent > .pwi-edit-json-card {
+.pwi-overview-config {
+  padding-right: 28px;
+  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   min-width: 0;
-  min-height: 160px;
-  height: 100%;
 }
-.pwi-edit-json-card {
-  appearance: none;
-  margin: 0;
+.pwi-edit-json-link {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 4px;
+  align-items: center;
   width: 100%;
+  margin: 0;
+  padding: 12px 0;
+  border: none;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  background: none;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  justify-content: center;
-  gap: 8px;
-}
-.pwi-edit-json-card:hover {
-  border-color: var(--faint);
-  background: var(--hover);
-}
-.pwi-edit-json-card-title {
-  font-size: 15px;
-  font-weight: 650;
   color: var(--text);
+}
+.pwi-edit-json-link:hover {
+  background: color-mix(in oklab, var(--hover) 55%, transparent);
+}
+.pwi-edit-json-link-title {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 14.5px;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
+.pwi-edit-json-link-desc {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.pwi-edit-json-link > svg {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
 .pwi-overview-recent {
-  display: flex;
-  flex-direction: column;
+  min-width: 0;
 }
 .pwi-overview-recent-body {
-  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
-/* ---- Overview two-column (attention + recently used) ---- */
+.pwi-recent-empty {
+  padding: 12px 0;
+  font-size: 13px;
+}
 .pwi-overview-two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 0 28px;
   align-items: start;
 }
-/* Single child (e.g. only Recently used) spans full width */
 .pwi-overview-two-col > :only-child {
   grid-column: 1 / -1;
 }
 
 /* ---- Attention required ---- */
+.pwi-overview-attention-body {
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
 .pwi-attention-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 11px 0;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border-soft);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
   font: inherit;
   font-size: 13px;
   color: var(--text);
@@ -1923,7 +1942,7 @@
   width: 100%;
 }
 .pwi-attention-row:last-child { border-bottom: none; }
-.pwi-attention-row:hover { background: var(--hover); }
+.pwi-attention-row:hover { background: color-mix(in oklab, var(--hover) 50%, transparent); }
 .pwi-attention-name {
   font-weight: 600;
   flex-shrink: 0;
@@ -1931,6 +1950,7 @@
 .pwi-attention-reason {
   flex: 1 1 auto;
   font-size: 12.5px;
+  min-width: 0;
 }
 
 /* ---- Recently used ---- */
@@ -1938,10 +1958,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 14px;
+  padding: 10px 0;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border-soft);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
   font: inherit;
   font-size: 13px;
   color: var(--text);
@@ -1950,7 +1970,8 @@
   width: 100%;
   text-align: left;
 }
-.pwi-recent-row:hover { background: var(--hover); }
+.pwi-recent-row:hover { background: color-mix(in oklab, var(--hover) 50%, transparent); }
+.pwi-recent-row:last-child { border-bottom: none; }
 .pwi-recent-name {
   flex: 1 1 auto;
   font-weight: 500;
@@ -1959,14 +1980,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pwi-recent-empty {
-  padding: 12px 14px;
-  font-size: 12.5px;
-}
 .pwi-recent-all {
   width: 100%;
   justify-content: space-between;
-  padding: 9px 14px;
+  padding: 9px 0;
   font-size: 12.5px;
   color: var(--muted);
 }
@@ -2111,9 +2128,13 @@
   }
   .pwi-overview-edit-recent {
     grid-template-columns: 1fr;
+    gap: 24px;
   }
-  .pwi-overview-edit-recent > .pwi-overview-section {
-    min-height: 0;
+  .pwi-overview-config {
+    padding-right: 0;
+    border-right: none;
+    padding-bottom: 4px;
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   }
   .providers-workspace-empty-root {
     min-height: auto;
@@ -2167,12 +2188,11 @@
   .pwi-oa-grid {
     grid-template-columns: 1fr;
   }
-  .providers-workspace-summary-row {
+  .pwi-overview-count-strip {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
   }
-  .providers-workspace-summary-card {
-    padding: 12px 10px;
+  .pwi-overview-count {
+    padding: 12px 10px 12px 0;
   }
   .providers-workspace-summary-value {
     font-size: 24px;

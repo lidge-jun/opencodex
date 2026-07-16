@@ -1283,71 +1283,96 @@ function OverviewPanel({
 
   return (
     <div className="providers-workspace-overview">
-      <div className="providers-workspace-overview-head">
+      <header className="providers-workspace-overview-head">
         <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>
         <p className="providers-workspace-overview-sub">{t("pws.overviewSub")}</p>
-      </div>
-      <div className="providers-workspace-summary-row">
-        <div className="providers-workspace-summary-card pwi-summary-ready">
-          <span className="providers-workspace-summary-value">{sections.ready.length}</span>
-          <span className="providers-workspace-summary-label">{t("pws.status.ready")}</span>
-        </div>
-        <div className="providers-workspace-summary-card pwi-summary-setup">
-          <span className="providers-workspace-summary-value">{sections.needsSetup.length}</span>
-          <span className="providers-workspace-summary-label">{t("pws.needSetup")}</span>
-        </div>
-        <div className="providers-workspace-summary-card pwi-summary-disabled">
-          <span className="providers-workspace-summary-value">{sections.disabled.length}</span>
-          <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
-        </div>
-      </div>
+      </header>
 
-      {/* Equal panels: compact Edit JSON card | Recently used */}
+      {/* Status counts — one strip, dividers between values (no cards) */}
+      <section className="pwi-section pwi-overview-counts" aria-label={t("pws.overviewTitle")}>
+        <div className="pwi-overview-count-strip" role="list">
+          <div className="pwi-overview-count" role="listitem">
+            <span className="providers-workspace-summary-value pwi-summary-ready">{sections.ready.length}</span>
+            <span className="providers-workspace-summary-label">{t("pws.status.ready")}</span>
+          </div>
+          <div className="pwi-overview-count" role="listitem">
+            <span className="providers-workspace-summary-value pwi-summary-setup">{sections.needsSetup.length}</span>
+            <span className="providers-workspace-summary-label">{t("pws.needSetup")}</span>
+          </div>
+          <div className="pwi-overview-count" role="listitem">
+            <span className="providers-workspace-summary-value pwi-summary-disabled">{sections.disabled.length}</span>
+            <span className="providers-workspace-summary-label">{t("prov.disabledBadge")}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Edit JSON | Recently used — sections with a vertical divider */}
       <div className="pwi-overview-edit-recent">
-        <button
-          type="button"
-          className="providers-workspace-summary-card pwi-edit-json-card"
-          onClick={onEditConfig}
-          aria-label={t("prov.editJson")}
-        >
-          <span className="pwi-edit-json-card-title">{t("prov.editJson")}</span>
-          <span className="providers-workspace-summary-label">{t("pws.editJsonDesc")}</span>
-        </button>
-        <div className="pwi-overview-section pwi-overview-recent">
-          <div className="pwi-overview-section-head">{t("pws.recentlyUsed")}</div>
+        <section className="pwi-section pwi-overview-config">
+          <h3 className="pwi-section-title">{t("prov.editJson")}</h3>
+          <button
+            type="button"
+            className="pwi-edit-json-link"
+            onClick={onEditConfig}
+            aria-label={t("prov.editJson")}
+          >
+            <span className="pwi-edit-json-link-title">{t("prov.editJson")}</span>
+            <span className="pwi-edit-json-link-desc muted">{t("pws.editJsonDesc")}</span>
+            <IconChevron style={{ width: 14, height: 14, color: "var(--muted)" }} aria-hidden="true" />
+          </button>
+        </section>
+        <section className="pwi-section pwi-overview-recent" aria-label={t("pws.recentlyUsed")}>
+          <h3 className="pwi-section-title">{t("pws.recentlyUsed")}</h3>
           <div className="pwi-overview-recent-body">
             {mostUsed.length === 0 ? (
               <div className="pwi-recent-empty muted">{t("pws.noUsageRecorded")}</div>
             ) : mostUsed.map(entry => {
               const item = providersByName.get(entry.name)!;
+              const label = formatProviderDisplayName(entry.name);
               return (
-              <button key={entry.name} type="button" className="pwi-recent-row"
-                onClick={() => onSelect(entry.name)} aria-label={t("pws.openProvider", { name: entry.name })}>
-                <ProviderIcon name={entry.name} adapter={item.adapter} baseUrl={item.baseUrl}
-                  cls="providers-workspace-rail-icon" />
-                <span className="pwi-recent-name">{entry.name}</span>
-                <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
-                <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
-              </button>
-            );})}
+                <button
+                  key={entry.name}
+                  type="button"
+                  className="pwi-recent-row"
+                  onClick={() => onSelect(entry.name)}
+                  aria-label={t("pws.openProvider", { name: label })}
+                >
+                  <ProviderIcon
+                    name={entry.name}
+                    adapter={item.adapter}
+                    baseUrl={item.baseUrl}
+                    cls="providers-workspace-rail-icon"
+                  />
+                  <span className="pwi-recent-name">{label}</span>
+                  <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
+                  <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </section>
       </div>
 
       {attentionItems.length > 0 && (
-        <div className="pwi-overview-section pwi-overview-attention">
-          <div className="pwi-overview-section-head">{t("pws.attentionRequired")}</div>
-          {attentionItems.map(ai => (
-            <button key={ai.name} type="button" className="pwi-attention-row"
-              onClick={() => onSelect(ai.name)}
-              aria-label={t("pws.attentionAria", { name: ai.name, reason: ai.reason })}>
-              <span className="pwi-dot pwi-dot--warning" aria-hidden="true" />
-              <span className="pwi-attention-name">{ai.name}</span>
-              <span className="pwi-attention-reason muted">{ai.reason}</span>
-              <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
-            </button>
-          ))}
-        </div>
+        <section className="pwi-section pwi-overview-attention" aria-label={t("pws.attentionRequired")}>
+          <h3 className="pwi-section-title">{t("pws.attentionRequired")}</h3>
+          <div className="pwi-overview-attention-body">
+            {attentionItems.map(ai => (
+              <button
+                key={ai.name}
+                type="button"
+                className="pwi-attention-row"
+                onClick={() => onSelect(ai.name)}
+                aria-label={t("pws.attentionAria", { name: ai.name, reason: ai.reason })}
+              >
+                <span className="pwi-dot pwi-dot--warning" aria-hidden="true" />
+                <span className="pwi-attention-name">{formatProviderDisplayName(ai.name)}</span>
+                <span className="pwi-attention-reason muted">{ai.reason}</span>
+                <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
