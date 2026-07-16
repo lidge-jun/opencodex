@@ -1649,42 +1649,27 @@
   letter-spacing: 0.04em;
 }
 
-/* ---- Connection: one section, value grid with soft dividers ---- */
+/* ---- Connection: one section, values with spacing only (no cell boxes) ---- */
 .pwi-connection {
   padding-bottom: 4px;
 }
 .pwi-connection-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  margin: 10px 16px 0;
-  padding: 0;
-  border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
+  column-gap: 20px;
+  row-gap: 16px;
+  margin: 12px 16px 4px;
+  padding: 14px 0 4px;
+  border: none;
+  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
 }
 .pwi-connection-cell {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 12px 12px 12px 0;
+  padding: 0;
   min-height: 0;
-  border: none;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
-  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
-}
-.pwi-connection-cell:nth-child(3n) {
-  border-right: none;
-  padding-right: 0;
-}
-.pwi-connection-cell:nth-child(3n + 1) {
-  padding-left: 0;
-}
-/* Second row: only two cells — drop bottom rule */
-.pwi-connection-cell:nth-child(4),
-.pwi-connection-cell:nth-child(5) {
-  border-bottom: none;
-}
-.pwi-connection-cell:nth-child(5) {
-  border-right: none;
+  border: none !important; /* never form a box grid */
 }
 .pwi-cell-label {
   font-size: 11px;
@@ -2186,19 +2171,6 @@
   .pwi-connection-grid {
     grid-template-columns: 1fr 1fr;
   }
-  .pwi-connection-cell:nth-child(3n) {
-    border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
-  }
-  .pwi-connection-cell:nth-child(2n) {
-    border-right: none;
-  }
-  .pwi-connection-cell:nth-child(4),
-  .pwi-connection-cell:nth-child(5) {
-    border-bottom: none;
-  }
-  .pwi-connection-cell:last-child {
-    border-bottom: none;
-  }
   .pwi-qa-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -2234,17 +2206,6 @@
   .pwi-qa-grid,
   .pwi-oa-grid {
     grid-template-columns: 1fr;
-  }
-  .pwi-connection-cell {
-    border-right: none !important;
-    padding-right: 0;
-  }
-  .pwi-connection-cell:nth-child(4),
-  .pwi-connection-cell:nth-child(5) {
-    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
-  }
-  .pwi-connection-cell:last-child {
-    border-bottom: none;
   }
   .providers-workspace-summary-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
