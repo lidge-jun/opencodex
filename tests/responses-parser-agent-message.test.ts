@@ -57,33 +57,23 @@ describe("Responses parser agent_message boundaries", () => {
 
     const messages = parsed.context.messages;
 
+    // Reasoning followed by an agent_message boundary is cleared, not emitted as a
+    // detached assistant turn (grok-build fold contract: reasoning belongs to the
+    // FOLLOWING assistant; a boundary with no following assistant drops it).
     expect(messages.map((message) => message.role)).toEqual([
-      "assistant",
       "user",
       "assistant",
       "toolResult",
     ]);
 
-    const firstAssistant = messages[0];
-    if (!firstAssistant || firstAssistant.role !== "assistant") {
-      throw new Error("expected the first parsed message to be assistant");
-    }
-
-    expect(firstAssistant.content).toHaveLength(1);
-    expect(firstAssistant.content[0]).toMatchObject({
-      type: "thinking",
-      thinking: "reasoning before the sub-agent response",
-      itemId: "rs_before_agent",
-    });
-
-    expect(messages[1]).toMatchObject({
+    expect(messages[0]).toMatchObject({
       role: "user",
       content: "sub-agent result",
     });
 
-    const secondAssistant = messages[2];
+    const secondAssistant = messages[1];
     if (!secondAssistant || secondAssistant.role !== "assistant") {
-      throw new Error("expected the third parsed message to be assistant");
+      throw new Error("expected the second parsed message to be assistant");
     }
 
     expect(secondAssistant.content).toHaveLength(2);
@@ -100,7 +90,7 @@ describe("Responses parser agent_message boundaries", () => {
       thoughtSignature: "fc_after_agent",
     });
 
-    expect(messages[3]).toMatchObject({
+    expect(messages[2]).toMatchObject({
       role: "toolResult",
       toolCallId: "call_after_agent",
       toolName: "shell_command",

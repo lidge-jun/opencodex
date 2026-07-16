@@ -3,7 +3,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { clearableDeadline } from "../src/lib/abort";
+import type { RequestLogContext } from "../src/server/request-log";
 import { startServer } from "../src/server";
+import {
+  fetchWithHeaderDeadline,
+  readBoundedPassthroughBody,
+  resolvePassthroughBodyGuard,
+  tapAnthropicSseForLog,
+} from "../src/server/claude-messages";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -107,6 +116,22 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     expect(row!.status).toBe(200);
     expect(row!.usage?.inputTokens).toBe(12);
     expect(row!.usage?.outputTokens).toBe(3);
+
+    const claudeUsage = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(res => res.json()) as {
+      surface: string;
+      summary: { requests: number; totalTokens: number };
+      models: Array<{ model: string }>;
+    };
+    expect(claudeUsage.surface).toBe("claude");
+    expect(claudeUsage.summary).toMatchObject({ requests: 1, totalTokens: 15 });
+    expect(claudeUsage.models).toEqual([expect.objectContaining({ model: "test-model" })]);
+
+    const codexUsage = await fetch(new URL("/api/usage?range=all&surface=codex", server.url)).then(res => res.json()) as {
+      surface: string;
+      summary: { requests: number };
+    };
+    expect(codexUsage.surface).toBe("codex");
+    expect(codexUsage.summary.requests).toBe(0);
   } finally {
     server.stop(true);
     upstream.stop(true);
@@ -136,6 +161,329 @@ test("non-streaming /v1/messages returns an Anthropic message JSON", async () =>
     expect(json.content[0].type).toBe("text");
     expect(json.content[0].text).toContain("Hello");
     expect(typeof json.usage.input_tokens).toBe("number");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("native Anthropic passthrough clears the header deadline before streaming the body", async () => {
+  const encoder = new TextEncoder();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: message_start\ndata: {"type":"message_start"}\n\n'));
+          setTimeout(() => {
+            controller.enqueue(encoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+            controller.close();
+          }, 600);
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const config = mockConfig("http://127.0.0.1:1/v1", {
+    anthropicBaseUrl: upstream.url.toString().replace(/\/$/, ""),
+  });
+  config.connectTimeoutMs = 200;
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+      body: JSON.stringify({
+        model: "claude-test",
+        max_tokens: 16,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("message_stop");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+// --- PR #136 follow-up hardening: deadline cleanup is guaranteed on EVERY fetch path ---
+
+function spyDeadlineFactory() {
+  const calls = { made: 0, clear: 0 };
+  const factory: typeof clearableDeadline = (timeoutMs, parent) => {
+    calls.made += 1;
+    const real = clearableDeadline(timeoutMs, parent);
+    return {
+      ...real,
+      clear: () => {
+        calls.clear += 1;
+        real.clear();
+      },
+    };
+  };
+  return { factory, calls };
+}
+
+test("fetchWithHeaderDeadline clears the deadline exactly once on the success path", async () => {
+  const { factory, calls } = spyDeadlineFactory();
+  const fetchImpl = (async () => new Response("ok")) as unknown as typeof fetch;
+  const result = await fetchWithHeaderDeadline("http://127.0.0.1:1/x", {}, 60_000, undefined, factory, fetchImpl);
+  expect(result.kind).toBe("response");
+  expect(calls.made).toBe(1);
+  expect(calls.clear).toBe(1);
+});
+
+test("fetchWithHeaderDeadline clears the deadline exactly once when fetch rejects (timer-leak regression)", async () => {
+  const { factory, calls } = spyDeadlineFactory();
+  const fetchImpl = (async () => {
+    throw new Error("connection refused");
+  }) as unknown as typeof fetch;
+  const result = await fetchWithHeaderDeadline("http://127.0.0.1:1/x", {}, 60_000, undefined, factory, fetchImpl);
+  expect(result.kind).toBe("error");
+  expect(calls.made).toBe(1);
+  expect(calls.clear).toBe(1);
+});
+
+test("fetchWithHeaderDeadline classifies expiry as timeout and still clears exactly once", async () => {
+  const { factory, calls } = spyDeadlineFactory();
+  const fetchImpl = ((_input: unknown, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    })) as unknown as typeof fetch;
+  const result = await fetchWithHeaderDeadline("http://127.0.0.1:1/x", {}, 10, undefined, factory, fetchImpl);
+  expect(result.kind).toBe("timeout");
+  expect(calls.made).toBe(1);
+  expect(calls.clear).toBe(1);
+});
+
+test("native Anthropic passthrough returns 502 when the upstream connection is refused (reject-path activation)", async () => {
+  const config = mockConfig("http://127.0.0.1:1/v1", {
+    anthropicBaseUrl: "http://127.0.0.1:9",
+  });
+  config.connectTimeoutMs = 60_000;
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+      body: JSON.stringify({
+        model: "claude-test",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as Record<string, any>;
+    expect(json.error?.type).toBe("api_error");
+    expect(String(json.error?.message)).toContain("anthropic passthrough failed");
+  } finally {
+    server.stop(true);
+  }
+});
+
+// --- Body-occupancy guard (devlog 260716_passthrough_followups/010): idle + size, never total-wall-clock ---
+
+const sseEncoder = new TextEncoder();
+
+function spyFinalize() {
+  const calls: Array<{ status: number; closeReason: string }> = [];
+  return {
+    calls,
+    finalize: (status: number, meta: { closeReason: string }) => calls.push({ status, closeReason: meta.closeReason }),
+  };
+}
+
+function freshLogCtx(): RequestLogContext {
+  return { model: "claude-test", provider: "anthropic-native" };
+}
+
+const MESSAGE_START_FRAME = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n';
+
+test("A1: stalled upstream body gets an Anthropic timeout_error tail and body_stall close reason", async () => {
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode(MESSAGE_START_FRAME));
+      // never closes, never enqueues again — a dead-but-open upstream
+    },
+  });
+  const { calls, finalize } = spyFinalize();
+  const tap = tapAnthropicSseForLog(upstream, freshLogCtx(), finalize, { stallMs: 30, maxBytes: 0 });
+  const text = await new Response(tap).text();
+  expect(text).toContain("message_start"); // prior bytes preserved
+  expect(text).toContain("\n\nevent: error\ndata: ");
+  expect(text).toContain('"type":"timeout_error"');
+  expect(calls).toEqual([{ status: 200, closeReason: "body_stall" }]);
+});
+
+test("A2: unbounded upstream body gets an api_error tail and body_overflow close reason", async () => {
+  const flood = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(sseEncoder.encode('data: {"type":"content_block_delta"}\n\n'));
+    },
+  });
+  const { calls, finalize } = spyFinalize();
+  const tap = tapAnthropicSseForLog(flood, freshLogCtx(), finalize, { stallMs: 0, maxBytes: 120 });
+  const text = await new Response(tap).text();
+  expect(text).toContain("\n\nevent: error\ndata: ");
+  expect(text).toContain('"type":"api_error"');
+  expect(text).toContain("exceeded 120 bytes");
+  expect(calls).toEqual([{ status: 200, closeReason: "body_overflow" }]);
+});
+
+test("A3: client abort mid-body finalizes 499 client_cancel, not 200 terminal (misclassification regression)", async () => {
+  let upstreamCancelled = false;
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode(MESSAGE_START_FRAME));
+    },
+    cancel() {
+      upstreamCancelled = true;
+    },
+  });
+  const ac = new AbortController();
+  const { calls, finalize } = spyFinalize();
+  const tap = tapAnthropicSseForLog(upstream, freshLogCtx(), finalize, { stallMs: 5_000, maxBytes: 0, reqSignal: ac.signal });
+  const reader = tap.getReader();
+  const first = await reader.read();
+  expect(first.done).toBe(false);
+  ac.abort(new DOMException("client went away", "AbortError"));
+  // drain to settlement: onClientAbort closes the tap
+  while (!(await reader.read()).done) { /* drain */ }
+  expect(calls).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  expect(upstreamCancelled).toBe(true);
+});
+
+test("A4: slow-but-alive stream outlives many idle windows (anti-total-wall-clock invariant)", async () => {
+  let sent = 0;
+  const upstream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (sent === 0) {
+        controller.enqueue(sseEncoder.encode(MESSAGE_START_FRAME));
+        sent += 1;
+        return;
+      }
+      if (sent < 7) {
+        await new Promise(resolve => setTimeout(resolve, 50)); // silence (50ms) << stallMs (200ms), total (300ms) >> stallMs
+        controller.enqueue(sseEncoder.encode('data: {"type":"content_block_delta"}\n\n'));
+        sent += 1;
+        return;
+      }
+      controller.enqueue(sseEncoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+      controller.close();
+    },
+  });
+  const { calls, finalize } = spyFinalize();
+  const tap = tapAnthropicSseForLog(upstream, freshLogCtx(), finalize, { stallMs: 200, maxBytes: 0 });
+  const text = await new Response(tap).text();
+  expect(text).toContain("message_stop");
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+});
+
+test("A5: non-stream bounded read classifies stall and overflow, passes clean bodies through", async () => {
+  const stalling = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode('{"partial":'));
+    },
+  }));
+  expect(await readBoundedPassthroughBody(stalling, { stallMs: 30, maxBytes: 0 })).toEqual({ kind: "stall" });
+
+  const flooding = new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(sseEncoder.encode("x".repeat(40)));
+    },
+  }));
+  expect(await readBoundedPassthroughBody(flooding, { stallMs: 0, maxBytes: 100 })).toEqual({ kind: "overflow" });
+
+  const clean = new Response('{"usage":{"input_tokens":1}}');
+  expect(await readBoundedPassthroughBody(clean, { stallMs: 1_000, maxBytes: 1_000 }))
+    .toEqual({ kind: "ok", text: '{"usage":{"input_tokens":1}}' });
+
+  // Client abort mid-read classifies deterministically (audit round 4 blocker) —
+  // including the pre-aborted-signal path.
+  const ac = new AbortController();
+  const hanging = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode('{"partial":'));
+    },
+  }));
+  const pending = readBoundedPassthroughBody(hanging, { stallMs: 5_000, maxBytes: 0, reqSignal: ac.signal });
+  setTimeout(() => ac.abort(new DOMException("client went away", "AbortError")), 20);
+  expect(await pending).toEqual({ kind: "client_cancel" });
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const neverRead = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode("x"));
+    },
+  }));
+  expect(await readBoundedPassthroughBody(neverRead, { stallMs: 5_000, maxBytes: 0, reqSignal: preAborted.signal }))
+    .toEqual({ kind: "client_cancel" });
+});
+
+test("A6: body-guard config normalization — 0 disables, negatives fall back, sub-second clamps to 1s", () => {
+  const guardFor = (claudeCode: OcxConfig["claudeCode"]) =>
+    resolvePassthroughBodyGuard(mockConfig("http://127.0.0.1:1/v1", claudeCode));
+  expect(guardFor({ bodyStallSec: 0, bodyMaxBytes: 0 })).toMatchObject({ stallMs: 0, maxBytes: 0 });
+  expect(guardFor({ bodyStallSec: -5, bodyMaxBytes: -1 })).toMatchObject({ stallMs: 90_000, maxBytes: 64 * 1024 * 1024 });
+  expect(guardFor({ bodyStallSec: 0.5, bodyMaxBytes: 1024.9 })).toMatchObject({ stallMs: 1_000, maxBytes: 1024 });
+  expect(guardFor(undefined)).toMatchObject({ stallMs: 90_000, maxBytes: 64 * 1024 * 1024 });
+  expect(guardFor({ bodyStallSec: Number.NaN, bodyMaxBytes: Number.POSITIVE_INFINITY }))
+    .toMatchObject({ stallMs: 90_000, maxBytes: 64 * 1024 * 1024 });
+});
+
+test("synthetic error tail parses as a terminal error in the Anthropic dialect (adapter fixture proof)", async () => {
+  const adapter = createAnthropicAdapter({ adapter: "anthropic", baseUrl: "https://example.test", apiKey: "key" });
+  const response = new Response([
+    MESSAGE_START_FRAME,
+    '\n\nevent: error\ndata: {"type":"error","error":{"type":"timeout_error","message":"anthropic passthrough body stalled: no upstream bytes for 90s"}}\n\n',
+  ].join(""));
+  const events: Array<{ type: string }> = [];
+  for await (const event of adapter.parseStream(response)) events.push(event);
+  const errorIndex = events.findIndex(e => e.type === "error");
+  expect(errorIndex).toBeGreaterThanOrEqual(0);
+  expect(events.slice(errorIndex + 1).filter(e => e.type === "done")).toHaveLength(0);
+});
+
+test("endpoint wiring: configured bodyStallSec bounds a stalled native passthrough stream", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(sseEncoder.encode(MESSAGE_START_FRAME));
+          // stalls forever
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const config = mockConfig("http://127.0.0.1:1/v1", {
+    anthropicBaseUrl: upstream.url.toString().replace(/\/$/, ""),
+    bodyStallSec: 1,
+  });
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+      body: JSON.stringify({
+        model: "claude-test",
+        max_tokens: 16,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("event: error");
+    expect(text).toContain("timeout_error");
   } finally {
     server.stop(true);
     upstream.stop(true);

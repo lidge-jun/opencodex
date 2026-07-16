@@ -37,6 +37,7 @@ describe("usage log", () => {
       timestamp: 1,
       provider: "openai",
       model: "gpt-5.5",
+      surface: "claude",
       resolvedModel: "gpt-5.5",
       status: 200,
       durationMs: 42,
@@ -55,6 +56,7 @@ describe("usage log", () => {
       timestamp: 1,
       provider: "openai",
       model: "gpt-5.5",
+      surface: "claude",
       resolvedModel: "gpt-5.5",
       status: 200,
       durationMs: 42,
@@ -89,6 +91,7 @@ describe("usage log", () => {
       accessToken: "access-secret",
       refreshToken: "refresh-secret",
       profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/demo",
+      surface: "codex",
     } as unknown as Parameters<typeof appendUsageEntry>[0]);
 
     const raw = readFileSync(usageLogPath(), "utf-8");
@@ -102,6 +105,7 @@ describe("usage log", () => {
       "headers",
       "messages",
       "profileArn",
+      "\"surface\"",
     ]) {
       expect(raw).not.toContain(leaked);
     }

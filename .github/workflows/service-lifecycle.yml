@@ -5,6 +5,10 @@ on:
     branches: [main, dev]
     paths:
       - "src/service.ts"
+      # Keep in sync with the release.yml service-gate regex (release.yml "Require
+      # successful Cross-platform CI" step). src/cli.ts is the pre-restructure compat
+      # stub that durable launchers still execute.
+      - "src/cli.ts"
       - "src/cli/index.ts"
       - "src/lib/bun-runtime.ts"
       - "package.json"
@@ -13,6 +17,8 @@ on:
   push:
     paths:
       - "src/service.ts"
+      # Keep in sync with the release.yml service-gate regex (see above).
+      - "src/cli.ts"
       - "src/cli/index.ts"
       - "src/lib/bun-runtime.ts"
       - "package.json"

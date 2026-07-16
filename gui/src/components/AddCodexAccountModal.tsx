@@ -14,7 +14,6 @@ export default function AddCodexAccountModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flowRef = useRef<string | null>(null);
-  const popupRef = useRef<Window | null>(null);
   useEffect(() => () => {
     aliveRef.current = false;
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -35,7 +34,6 @@ export default function AddCodexAccountModal({
   const cancelLogin = async () => {
     const flowId = flowRef.current;
     flowRef.current = null;
-    popupRef.current = null;
     setAuthUrl("");
     stopPolling();
     if (!flowId) return;
@@ -113,8 +111,6 @@ export default function AddCodexAccountModal({
                 if (data.url) {
                   flowRef.current = data.flowId ?? null;
                   setAuthUrl(data.url);
-                  popupRef.current = window.open(data.url, "_blank");
-                  if (popupRef.current) popupRef.current.opener = null;
                   setStep("oauth-waiting");
                   stopPolling();
                   const fid = data.flowId ?? "";
@@ -127,17 +123,12 @@ export default function AddCodexAccountModal({
                       if (st.status === "done") {
                         stopPolling();
                         flowRef.current = null;
-                        popupRef.current = null;
                         onAdded();
                         onClose();
                       } else if (st.status === "error" || st.status === "expired") {
                         stopPolling();
                         flowRef.current = null;
-                        popupRef.current = null;
                         if (aliveRef.current) { setStep("pick"); setError(st.error ?? "Login failed"); }
-                      } else if (popupRef.current?.closed) {
-                        await cancelLogin();
-                        if (aliveRef.current) { setStep("pick"); setError(t("codexAuth.oauthCancelled")); }
                       }
                     } catch { /* ignore network errors during polling */ }
                   }, 2000);

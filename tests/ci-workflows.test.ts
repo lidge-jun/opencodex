@@ -99,6 +99,21 @@ describe("GitHub Actions hardening", () => {
     expect(gate.test("src/cli/index.ts")).toBe(true);
     expect(gate.test("src/lib/bun-runtime.ts")).toBe(true);
     expect(gate.test("src/cli.ts")).toBe(true);
+
+    // PR and push triggers must stay path-set identical, and both must cover the
+    // pre-restructure compat stub src/cli.ts that the release gate regex checks
+    // (devlog 260716_passthrough_followups/020 — a release whose only service change
+    // is src/cli.ts must auto-trigger service-lifecycle instead of dead-ending the gate).
+    const prPaths = lifecycle
+      .split("pull_request:")[1]!
+      .split("push:")[0]!
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.startsWith('- "'))
+      .map(line => line.slice(3, -1));
+    expect([...prPaths].sort()).toEqual([...pushPaths].sort());
+    expect(prPaths).toContain("src/cli.ts");
+    expect(pushPaths).toContain("src/cli.ts");
     expect(gate.test("src/router.ts")).toBe(false);
     expect(gate.test("docs-site/src/pages/index.astro")).toBe(false);
 

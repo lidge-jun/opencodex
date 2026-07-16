@@ -60,3 +60,13 @@ wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhig
 Codex `spawn_agent` advertises only the highest-priority first five catalog models. `subagentModels`
 is capped at five ids and may contain routed `provider/model` slugs or native model slugs. Startup
 seeds native GPT defaults only when the field is unset; an explicit empty list persists.
+
+Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
+as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
+whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke
+those skills. Direct `provider/model` selectors are routed even when their inbound resolution is
+identity. The only unguarded `ocx-self` case is an identity-resolved `claude|anthropic` model while
+native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` restore the guard. The
+guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
+the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model
+behaviors.

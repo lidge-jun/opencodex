@@ -9,6 +9,7 @@
  *  - message_delta.usage is cumulative; message_start embeds a full message snapshot.
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
+import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 
 type Rec = Record<string, unknown>;
 
@@ -202,12 +203,19 @@ export function responsesSseToAnthropicSse(
         });
         emit("message_stop", { type: "message_stop" });
       };
-      const fail = (status: number, message: string) => {
+      // upstreamDerived: transient upstream statuses become overloaded_error so the
+      // Anthropic-SDK client retries with backoff; proxy-internal exceptions stay
+      // api_error — a deterministic ocx bug must not be masked as retryable
+      // (devlog/_plan/260716_claudecode_hardening/020). On win32 mid-stream socket
+      // resets reach the reader catch (no failed-tail relay) and stay api_error —
+      // same as today, deliberate residual.
+      const fail = (status: number, message: string, upstreamDerived = false) => {
         if (terminated) return;
         terminated = true;
         ensureStarted();
         closeOpenBlock();
-        emit("error", anthropicErrorBody(status, message));
+        const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
+        emit("error", anthropicErrorBody(status, message, type));
       };
 
       const handleFrame = (eventName: string, data: Rec) => {
@@ -323,7 +331,10 @@ export function responsesSseToAnthropicSse(
             const error = isRec(response.error) ? response.error : {};
             const message = typeof error.message === "string" ? error.message : "upstream request failed";
             const status = typeof error.status === "number" ? error.status : 500;
-            fail(status, message);
+            // status-absent response.failed (relaySseWithFailedTail synthetic tail) defaults
+            // to 500, which is in the transient set — the mid-stream reset shape maps to
+            // overloaded_error by design.
+            fail(status, message, true);
             break;
           }
           default:
@@ -360,7 +371,7 @@ export function responsesSseToAnthropicSse(
           // gateways that close such streams politely hand Claude Code an empty/partial
           // turn with no retryable error — CLIProxyAPI#2189 failure pattern). Fail closed
           // with a mid-stream Anthropic error event so the client can retry.
-          if (!cancelled) fail(502, "upstream stream ended before a terminal frame (truncated response)");
+          if (!cancelled) fail(502, "upstream stream ended before a terminal frame (truncated response)", true);
         } catch (err) {
           fail(500, err instanceof Error ? err.message : String(err));
         } finally {

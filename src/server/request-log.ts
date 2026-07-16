@@ -68,7 +68,7 @@ export interface RequestLogEntry {
   durationMs: number;
   errorCode?: string;
   terminalStatus?: ResponsesTerminalStatus;
-  closeReason?: "terminal" | "client_cancel" | "non_stream";
+  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
   upstreamError?: string;
   usageStatus: UsageStatus;
@@ -84,17 +84,30 @@ export function addRequestLog(entry: RequestLogEntry) {
   requestLog.push(entry);
   if (requestLog.length > MAX_LOG_SIZE) requestLog.shift();
   try {
+    // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
+    // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
+    // in their existing shape; the >=400 gate deliberately includes 499 client-cancels.
+    const failureDiagnostics = entry.status >= 400 || (entry.terminalStatus && entry.terminalStatus !== "completed")
+      ? {
+        ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+        ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
+        ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+        ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+      }
+      : {};
     appendUsageEntry({
       requestId: entry.requestId,
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
+      ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+      ...failureDiagnostics,
     });
   } catch {
     /* request logging must never fail a user request */

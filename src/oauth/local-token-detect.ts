@@ -13,7 +13,7 @@ const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 export function detectGrokCliToken(): OAuthCredentials | null {
-  const authPath = join(homedir(), ".grok", "auth.json");
+  const authPath = join(process.env.HOME ?? homedir(), ".grok", "auth.json");
   if (!existsSync(authPath)) return null;
 
   try {
@@ -37,6 +37,28 @@ export function detectGrokCliToken(): OAuthCredentials | null {
   } catch {
     return null;
   }
+}
+
+export function hasComparableGrokIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  return Boolean((stored.accountId && disk.accountId) || (stored.email && disk.email));
+}
+
+export function isSameGrokIdentity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  if (stored.accountId && disk.accountId) return stored.accountId === disk.accountId;
+  if (stored.email && disk.email) return stored.email.toLowerCase() === disk.email.toLowerCase();
+  return false;
+}
+
+export function shouldAdoptGrokGeneration(
+  stored: OAuthCredentials,
+  disk: OAuthCredentials,
+  now = Date.now(),
+  refreshSkewMs = 60_000,
+): boolean {
+  if (disk.expires <= now + refreshSkewMs) return false;
+  const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
+  if (bothExpiriesExist) return disk.expires >= stored.expires;
+  return true;
 }
 
 /** Claude Code config dir: `CLAUDE_CONFIG_DIR` override, else `~/.claude`. */

@@ -304,7 +304,7 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
   });
 
   test("custom blocklist matches case-insensitively inside the Skill input", () => {
-    const { body } = requestWithSkill("My-Custom-Skill", { blockedSkills: ["my-custom-skill"] });
+    const { body } = requestWithSkill("My-Custom-Skill", { blockedSkills: [" MY-CUSTOM-SKILL "] });
     expect(String(outputFor(body, "call_skill_1"))).toContain("elided");
   });
 

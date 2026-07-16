@@ -185,8 +185,7 @@ function accountQuotaFromReport(report?: ProviderQuotaReportView): AccountQuota 
   if (!report?.quota || typeof report.quota !== "object" || Array.isArray(report.quota)) return null;
   const q = report.quota as Partial<AccountQuota>;
   const hasWindow =
-    typeof q.fiveHourPercent === "number"
-    || typeof q.weeklyPercent === "number"
+    typeof q.weeklyPercent === "number"
     || typeof q.monthlyPercent === "number"
     || (Array.isArray(q.customWindows) && q.customWindows.length > 0);
   if (!hasWindow) return null;

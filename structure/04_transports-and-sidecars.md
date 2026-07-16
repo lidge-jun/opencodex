@@ -86,6 +86,35 @@ orphan `toolResult` messages by inserting a synthetic assistant `tool_call` befo
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+## xAI Grok hardening (official Grok Build contract parity)
+
+Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
+`devlog/_plan/260716_grok_build_hardening/`.
+
+- **Reasoning folding:** the Responses parser folds `reasoning` items into the FOLLOWING
+  assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
+  ONE assistant message with `reasoning_content` — exact-prefix cache stability. Unsigned
+  siblings newline-join; `ocxr1`-signed siblings stay separate parts (Anthropic replay keeps
+  each signature on its own text); boundaries (user/tool-result/agent) clear pending state;
+  call items fold pending reasoning into the same turn.
+- **Grok CLI credential ownership:** `source:"local-cli"` xAI credentials re-read
+  `~/.grok/auth.json` (read-only) before any refresh and adopt a newer usable generation with
+  zero IdP calls (`shouldAdoptGrokGeneration`, later-expiresAt authority); an IdP refresh
+  detaches the credential to `source:"oauth"`.
+- **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
+  exchange plus a short global store-write lock + async mutation funnel around every
+  `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
+  (`expectedGeneration` → superseded adoption), conditional `needsReauth`, bounded jittered
+  retry for transient token-endpoint failures.
+- **Reactive 401 replay:** the serving recovery loop force-refreshes once (singleflight,
+  generation-checked) and replays OAuth-backed xAI requests exactly once with a re-resolved
+  transport; API-key/BYOK paths excluded (`src/server/responses.ts`).
+- **Header parity:** per-attempt `x-grok-req-id` (fresh UUID inside the transport fetch
+  wrapper), stable session/conv affinity headers, always-set User-Agent, and a single
+  compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);
+  `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
+  timeout race.
+
 ## Parallel tool calls (default-on for chat providers)
 
 The openai-chat adapter buffers ALL streamed `tool_calls` deltas (keyed by `index`, falling back to

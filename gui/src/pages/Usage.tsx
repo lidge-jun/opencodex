@@ -5,6 +5,7 @@ import { EmptyState } from "../ui";
 import { modelLabel } from "../model-display";
 
 type Range = "all" | "30d" | "7d";
+type UsageSurface = "all" | "codex" | "claude";
 
 interface UsageSummaryTotals {
   requests: number;
@@ -65,6 +66,7 @@ interface UsageProvider {
 
 interface UsageResponse {
   range: Range;
+  surface: UsageSurface;
   since: number | null;
   generatedAt: number;
   summary: UsageSummaryTotals;
@@ -187,16 +189,17 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
+  const [surface, setSurface] = useState<UsageSurface>("all");
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [modelQuery, setModelQuery] = useState("");
   const [hoverDay, setHoverDay] = useState<number | null>(null);
   const [hoverCell, setHoverCell] = useState<{ wi: number; di: number; x: number; y: number } | null>(null);
 
-  const fetchUsage = useCallback(async (nextRange: Range, signal: AbortSignal) => {
+  const fetchUsage = useCallback(async (nextRange: Range, nextSurface: UsageSurface, signal: AbortSignal) => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiBase}/api/usage?range=${nextRange}`, { signal });
+      const res = await fetch(`${apiBase}/api/usage?range=${nextRange}&surface=${nextSurface}`, { signal });
       if (!res.ok) throw new Error("fetch failed");
       const json = await res.json() as UsageResponse;
       if (signal.aborted) return;
@@ -213,13 +216,13 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
-      void fetchUsage(range, controller.signal);
+      void fetchUsage(range, surface, controller.signal);
     }, 0);
     return () => {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [fetchUsage, range]);
+  }, [fetchUsage, range, surface]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   // Keep the heatmap scrolled to the right edge (most recent weeks): cells are fixed-size,
@@ -255,16 +258,51 @@ export default function Usage({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head usage-head">
         <h2>{t("usage.title")}</h2>
-        <div className="usage-range" role="group" aria-label={t("usage.title")}>
-          {(["all", "30d", "7d"] as Range[]).map(r => (
-            <button key={r} type="button"
-              className={`usage-range-btn${range === r ? " active" : ""}`}
-              onClick={() => setRange(r)}>
-              {t(`usage.range.${r}`)}
-            </button>
-          ))}
+        <div className="usage-filters">
+          <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+            {(["all", "codex", "claude"] as UsageSurface[]).map(choice => {
+              const label = t(`logs.filter.surface.${choice}`);
+              return (
+                <button
+                  key={choice}
+                  type="button"
+                  className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+                  aria-label={label}
+                  aria-pressed={surface === choice}
+                  onClick={() => setSurface(choice)}
+                >
+                  {choice === "codex" && (
+                    <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+                  )}
+                  {choice === "claude" && (
+                    <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
+                  )}
+                  <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+            {(["all", "30d", "7d"] as Range[]).map(r => {
+              const label = t(`usage.range.${r}`);
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  className={`usage-segmented-btn${range === r ? " active" : ""}`}
+                  aria-label={label}
+                  aria-pressed={range === r}
+                  onClick={() => setRange(r)}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>

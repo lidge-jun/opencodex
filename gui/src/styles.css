@@ -1162,6 +1162,7 @@ select.input { appearance: none; }
 .provider-icon-sm { width: 24px; height: 24px; border-radius: var(--radius-xs); }
 .provider-icon-sm img { width: 15px; height: 15px; }
 .link-btn { background: none; border: none; color: var(--accent-hover); font: inherit; font-size: var(--text-control); cursor: pointer; padding: 6px 2px; text-decoration: underline; }
+.link-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
 /* responsive: compact sticky top bar (menu + brand + stop) with the desktop sidebar
    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
@@ -1220,9 +1221,31 @@ select.input { appearance: none; }
 
 .usage-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
 .usage-cards .stat-value { font-size: var(--text-title); font-weight: var(--weight-semibold); margin-top: 4px; }
-.usage-range { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
-.usage-range-btn { border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; }
-.usage-range-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
+.usage-head { flex-wrap: wrap; }
+.usage-filters { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
+.usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
+.usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
+.usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
+:root[data-theme="dark"] .usage-source-mark { filter: invert(1); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }
+}
+
+@media (max-width: 760px) {
+  .usage-segmented-btn { min-height: var(--control-touch); }
+}
+
+@media (max-width: 640px) {
+  .usage-source-btn .usage-source-label-collapsible { display: none; }
+}
+
+@media (max-width: 360px) {
+  .usage-filters { width: 100%; flex-direction: column; align-items: stretch; }
+  .usage-segmented { width: 100%; }
+  .usage-segmented-btn { flex: 1 1 0; }
+}
 .panel-title { margin: 0 0 12px; font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .panel-head .panel-title { margin: 0; }

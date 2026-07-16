@@ -12,6 +12,7 @@ import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize"
 import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
@@ -19,6 +20,7 @@ import {
   responsesJsonToAnthropicMessage,
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
+import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import type { OcxConfig } from "../types";
@@ -116,13 +118,35 @@ function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; out
   };
 }
 
-/** Tap an Anthropic-vocabulary SSE stream for the request log (usage + terminal). */
-function tapAnthropicSseForLog(
+/** Body-occupancy guard for the native passthrough (devlog 260716_passthrough_followups/010). */
+export interface PassthroughBodyGuard {
+  /** Idle window in ms — raw upstream-byte inactivity while a read is pending. 0 disables. */
+  stallMs: number;
+  /** Cumulative body byte cap. 0 disables. */
+  maxBytes: number;
+  /** Client request signal for deterministic cancel classification. */
+  reqSignal?: AbortSignal;
+}
+
+type PassthroughCloseReason = "terminal" | "client_cancel" | "body_stall" | "body_overflow";
+
+/**
+ * Tap an Anthropic-vocabulary SSE stream for the request log (usage + terminal),
+ * bounding body occupancy: idle (silence-only, timed ONLY while a reader.read() is
+ * pending so downstream backpressure never counts as upstream inactivity) and a
+ * cumulative byte cap. On stall/overflow it appends a protocol-compatible Anthropic
+ * `event: error` terminal frame after a blank-line boundary, closes, and cancels the
+ * upstream reader — never a total-wall-clock bound (slow-but-alive streams live).
+ * Exported for deterministic unit tests.
+ */
+export function tapAnthropicSseForLog(
   upstream: ReadableStream<Uint8Array>,
   logCtx: RequestLogContext,
-  finalize: (status: number, meta: { closeReason: "terminal" | "client_cancel" }) => void,
+  finalize: (status: number, meta: { closeReason: PassthroughCloseReason }) => void,
+  guard?: PassthroughBodyGuard,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
   let buffer = "";
   let usageAcc: Rec = {};
   const inspect = (chunk: Uint8Array) => {
@@ -144,25 +168,110 @@ function tapAnthropicSseForLog(
     }
   };
   const reader = upstream.getReader();
+  let settled = false;
+  let bodyBytes = 0;
+  let tapController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+  const recordUsage = () => {
+    logCtx.usage = anthropicUsageToOcx(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
+  };
+  const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
+    if (settled) return;
+    settled = true;
+    idle.cancel();
+    detachAbort();
+    recordUsage();
+    finalize(200, { closeReason });
+    const payload = JSON.stringify({ type: "error", error: { type: errType, message } });
+    try {
+      // Leading blank line terminates any partial SSE block so the frame parses cleanly
+      // (relaySseWithFailedTail policy, Anthropic wire shape).
+      tapController?.enqueue(encoder.encode(`\n\nevent: error\ndata: ${payload}\n\n`));
+      tapController?.close();
+    } catch { /* client already torn down */ }
+    reader.cancel(new DOMException(message, closeReason === "body_stall" ? "TimeoutError" : "QuotaExceededError")).catch(() => {});
+  };
+  const idle = idleDeadline(guard?.stallMs ?? 0, () => {
+    failBody(
+      "body_stall",
+      "timeout_error",
+      `anthropic passthrough body stalled: no upstream bytes for ${Math.round((guard?.stallMs ?? 0) / 1000)}s`,
+    );
+  });
+  // Deterministic client-cancel classification: Bun may surface a client abort as a
+  // reader.read() rejection OR a resolved done (src/lib/abort.ts cancelBodyOnAbort
+  // rationale), so the listener performs first-wins settlement itself instead of
+  // relying on which shape the read takes.
+  const onClientAbort = () => {
+    if (settled) return;
+    settled = true;
+    idle.cancel();
+    detachAbort();
+    finalize(499, { closeReason: "client_cancel" });
+    try { tapController?.close(); } catch { /* downstream already torn down */ }
+    reader.cancel(guard?.reqSignal?.reason).catch(() => {});
+  };
+  const detachAbort = (() => {
+    const signal = guard?.reqSignal;
+    if (!signal) return () => {};
+    if (signal.aborted) {
+      queueMicrotask(onClientAbort);
+      return () => {};
+    }
+    signal.addEventListener("abort", onClientAbort, { once: true });
+    return () => signal.removeEventListener("abort", onClientAbort);
+  })();
+
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      tapController = controller;
+    },
     async pull(controller) {
+      if (settled) return;
       try {
+        idle.reset();
         const { done, value } = await reader.read();
+        idle.pause();
+        if (settled) return; // stall/overflow/abort won the race while we awaited
         if (done) {
-          logCtx.usage = anthropicUsageToOcx(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
+          settled = true;
+          idle.cancel();
+          detachAbort();
+          recordUsage();
           finalize(200, { closeReason: "terminal" });
           controller.close();
           return;
         }
+        if (value.byteLength > 0) {
+          bodyBytes += value.byteLength;
+          if (guard && guard.maxBytes > 0 && bodyBytes > guard.maxBytes) {
+            failBody(
+              "body_overflow",
+              "api_error",
+              `anthropic passthrough body exceeded ${guard.maxBytes} bytes`,
+            );
+            return;
+          }
+        }
         inspect(value);
         controller.enqueue(value);
       } catch (err) {
+        if (settled) return;
+        settled = true;
+        idle.cancel();
+        detachAbort();
+        recordUsage();
         finalize(200, { closeReason: "terminal" });
         try { controller.error(err); } catch { /* torn down */ }
       }
     },
     cancel(reason) {
-      finalize(499, { closeReason: "client_cancel" });
+      if (!settled) {
+        settled = true;
+        idle.cancel();
+        detachAbort();
+        finalize(499, { closeReason: "client_cancel" });
+      }
       reader.cancel(reason).catch(() => {});
     },
   });
@@ -181,7 +290,7 @@ async function anthropicNativePassthrough(
   logCtx.provider = "anthropic-native";
   logCtx.requestedModel = model;
   let logged = false;
-  const finalize = (status: number, meta: { closeReason: "terminal" | "client_cancel" | "non_stream" }) => {
+  const finalize = (status: number, meta: { closeReason: PassthroughCloseReason | "non_stream" }) => {
     if (!logIds || logged) return;
     logged = true;
     addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
@@ -204,28 +313,27 @@ async function anthropicNativePassthrough(
   });
   headers.set("content-type", "application/json");
 
-  const timeoutSignal = AbortSignal.timeout(config.connectTimeoutMs ?? 120_000);
-  const upstreamSignal = AbortSignal.any([req.signal, timeoutSignal]);
-  let upstream: Response;
-  try {
-    upstream = await fetch(`${base}${pathname}${search}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: upstreamSignal,
-    });
-  } catch (err) {
-    if (timeoutSignal.aborted && upstreamSignal.reason === timeoutSignal.reason) {
-      finalize(504, { closeReason: "non_stream" });
-      return anthropicErrorResponse(504, "anthropic passthrough timed out waiting for response headers", "timeout_error");
-    }
+  const result = await fetchWithHeaderDeadline(
+    `${base}${pathname}${search}`,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    config.connectTimeoutMs ?? 200_000,
+    req.signal,
+  );
+  if (result.kind === "timeout") {
+    finalize(504, { closeReason: "non_stream" });
+    return anthropicErrorResponse(504, "anthropic passthrough timed out waiting for response headers", "timeout_error");
+  }
+  if (result.kind === "error") {
+    const err = result.error;
     finalize(502, { closeReason: "non_stream" });
     return anthropicErrorResponse(502, `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error");
   }
+  const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
+  const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   if (upstream.ok && contentType.includes("text/event-stream") && upstream.body) {
-    return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize), {
+    return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard), {
       status: upstream.status,
       headers: {
         "Content-Type": contentType,
@@ -234,8 +342,22 @@ async function anthropicNativePassthrough(
       },
     });
   }
-  // Non-stream (count_tokens, errors, stream:false): relay verbatim, log on the spot.
-  const text = await upstream.text();
+  // Non-stream (count_tokens, errors, stream:false): relay verbatim under the same
+  // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
+  const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
+  if (bodyResult.kind === "client_cancel") {
+    finalize(499, { closeReason: "client_cancel" });
+    return anthropicErrorResponse(499, "client closed request during anthropic passthrough", "api_error");
+  }
+  if (bodyResult.kind === "stall") {
+    finalize(504, { closeReason: "body_stall" });
+    return anthropicErrorResponse(504, `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error");
+  }
+  if (bodyResult.kind === "overflow") {
+    finalize(502, { closeReason: "body_overflow" });
+    return anthropicErrorResponse(502, `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error");
+  }
+  const text = bodyResult.text;
   if (upstream.ok) {
     try {
       const parsed = JSON.parse(text) as { usage?: Rec };
@@ -248,6 +370,136 @@ async function anthropicNativePassthrough(
     status: upstream.status,
     headers: { "Content-Type": contentType, ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
   });
+}
+
+const DEFAULT_BODY_STALL_SEC = 90;
+const DEFAULT_BODY_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Normalize the claudeCode body-guard config (devlog 260716_passthrough_followups/010).
+ * Policy: exactly 0 disables; finite positive values are honored (stall clamped to
+ * min 1s); negative/non-finite/absent values fall back to the defaults.
+ */
+export function resolvePassthroughBodyGuard(config: OcxConfig, reqSignal?: AbortSignal): PassthroughBodyGuard {
+  const rawSec = config.claudeCode?.bodyStallSec;
+  const stallSec = rawSec === 0
+    ? 0
+    : typeof rawSec === "number" && Number.isFinite(rawSec) && rawSec > 0
+      ? Math.max(1, rawSec)
+      : DEFAULT_BODY_STALL_SEC;
+  const rawBytes = config.claudeCode?.bodyMaxBytes;
+  const maxBytes = rawBytes === 0
+    ? 0
+    : typeof rawBytes === "number" && Number.isFinite(rawBytes) && rawBytes > 0
+      ? Math.floor(rawBytes)
+      : DEFAULT_BODY_MAX_BYTES;
+  return { stallMs: stallSec * 1000, maxBytes, ...(reqSignal ? { reqSignal } : {}) };
+}
+
+type BoundedPassthroughBody =
+  | { kind: "ok"; text: string }
+  | { kind: "stall" }
+  | { kind: "overflow" }
+  | { kind: "client_cancel" };
+
+/**
+ * Bounded replacement for `await upstream.text()` on the non-stream passthrough
+ * branch: same idle-only + size-cap semantics as the SSE tap. NOTE: reader.cancel()
+ * resolves a pending read as done rather than rejecting, so the stalled flag is
+ * re-checked after every read settlement (audit round 3).
+ */
+export async function readBoundedPassthroughBody(
+  upstream: Response,
+  guard: PassthroughBodyGuard,
+): Promise<BoundedPassthroughBody> {
+  if (!upstream.body) return { kind: "ok", text: await upstream.text() };
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  let stalled = false;
+  let aborted = false;
+  const idle = idleDeadline(guard.stallMs, () => {
+    stalled = true;
+    reader.cancel(new DOMException("anthropic passthrough body stalled", "TimeoutError")).catch(() => {});
+  });
+  // Deterministic client-abort classification (audit round 4): Bun may surface the
+  // abort as a read rejection OR a resolved done, so we cancel the reader ourselves
+  // and classify via the flag rather than the read's settlement shape.
+  const signal = guard.reqSignal;
+  const onAbort = () => {
+    aborted = true;
+    reader.cancel(signal?.reason).catch(() => {});
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    while (true) {
+      idle.reset();
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await reader.read();
+      } catch (err) {
+        if (aborted) return { kind: "client_cancel" };
+        if (stalled) return { kind: "stall" };
+        throw err;
+      } finally {
+        idle.pause();
+      }
+      if (aborted) return { kind: "client_cancel" };
+      if (stalled) return { kind: "stall" };
+      if (result.done) break;
+      if (result.value.byteLength === 0) continue;
+      bytes += result.value.byteLength;
+      if (guard.maxBytes > 0 && bytes > guard.maxBytes) {
+        reader.cancel(new DOMException("anthropic passthrough body exceeded byte cap", "QuotaExceededError")).catch(() => {});
+        return { kind: "overflow" };
+      }
+      text += decoder.decode(result.value, { stream: true });
+    }
+    text += decoder.decode();
+    return { kind: "ok", text };
+  } finally {
+    idle.cancel();
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * Header-phase fetch guarded by a clearable deadline (PR #136 follow-up hardening).
+ *
+ * The deadline covers ONLY the wait for response headers; once `fetch` settles —
+ * fulfilled OR rejected — the timer must die. The `finally` block guarantees
+ * `clear()` on every path (success, upstream reject, deadline expiry), fixing the
+ * timer leak where a rejected fetch left the deadline running until expiry.
+ * `didExpire()` stays truthful after `clear()` (see src/lib/abort.ts), so timeout
+ * classification inside the catch is unaffected by the finally cleanup.
+ *
+ * `makeDeadline`/`fetchImpl` are injectable for deterministic unit tests.
+ */
+export type HeaderDeadlineFetchResult =
+  | { kind: "response"; upstream: Response }
+  | { kind: "timeout" }
+  | { kind: "error"; error: unknown };
+
+export async function fetchWithHeaderDeadline(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  parent?: AbortSignal,
+  makeDeadline: typeof clearableDeadline = clearableDeadline,
+  fetchImpl: typeof fetch = fetch,
+): Promise<HeaderDeadlineFetchResult> {
+  const deadline = makeDeadline(timeoutMs, parent);
+  try {
+    const upstream = await fetchImpl(input, { ...init, signal: deadline.signal });
+    return { kind: "response", upstream };
+  } catch (error) {
+    if (deadline.didExpire()) return { kind: "timeout" };
+    return { kind: "error", error };
+  } finally {
+    deadline.clear();
+  }
 }
 
 export async function handleClaudeMessages(
@@ -425,9 +677,19 @@ export async function handleClaudeMessages(
       }
     } catch { /* keep fallback message */ }
     const retryAfter = response.headers.get("retry-after");
-    const out = new Response(JSON.stringify(anthropicErrorBody(response.status, message)), {
-      status: response.status,
-      headers: { "Content-Type": "application/json", ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+    // Transient upstream 5xx (already retried pre-stream, 010): reclassify as Anthropic
+    // 529 overloaded_error so the Claude Code client applies its built-in backoff retry
+    // instead of dying on a fatal api_error (260716 sol-builder incident). The request
+    // log keeps the upstream status (captured in the deferred-log closure before this
+    // rewrite): log = upstream truth, client = retry signal.
+    const transient = isTransientUpstreamStatus(response.status);
+    const outStatus = transient ? 529 : response.status;
+    const out = new Response(JSON.stringify(anthropicErrorBody(outStatus, message)), {
+      status: outStatus,
+      headers: {
+        "Content-Type": "application/json",
+        ...(retryAfter ? { "Retry-After": retryAfter } : (transient ? { "Retry-After": "2" } : {})),
+      },
     });
     return out;
   }

@@ -295,7 +295,7 @@ export default function AddProviderModal({
       // A non-empty url = browser/device flow (the server also opens it). An EMPTY url with a 200 =
       // a local-token import (e.g. Anthropic's Claude Code keychain, Grok CLI) that needs no browser
       // — just poll status until the credential lands. Don't treat empty url as a failure.
-      if (data.url) { window.open(data.url, "_blank"); setOauthMsg(t("modal.waitingLogin")); }
+      if (data.url) { setOauthMsg(t("modal.waitingLogin")); }
       else { setOauthMsg(data.instructions || t("modal.loggingIn")); }
       for (let i = 0; i < 100; i++) {
         await new Promise(r => setTimeout(r, 2000));

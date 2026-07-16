@@ -127,7 +127,43 @@ describe("claude outbound SSE", () => {
     const eof = sse("response.created", { response: {} }) + sse("response.output_text.delta", { delta: "y" });
     const e2 = await collectEvents(responsesSseToAnthropicSse(streamFrom(eof), "m"));
     expect(e2.map(e => e.name)).toEqual(["message_start", "ping", "content_block_start", "content_block_delta", "content_block_stop", "error"]);
-    expect(e2.at(-1)!.data).toMatchObject({ type: "error", error: { type: "api_error" } });
+    // Truncation is upstream-derived transient (502) -> overloaded_error so Claude Code retries
+    // (devlog/_plan/260716_claudecode_hardening/020).
+    expect(e2.at(-1)!.data).toMatchObject({ type: "error", error: { type: "overloaded_error" } });
+  });
+
+  test("failed with transient upstream status 502 -> overloaded_error", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", { response: { status: "failed", error: { status: 502, message: "bad gateway" } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "bad gateway" } });
+  });
+
+  test("failed with NO status (relaySseWithFailedTail synthetic tail) -> default 500 -> overloaded_error", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", { response: { status: "failed", error: { type: "upstream_reset", code: "upstream_reset", message: "Upstream stream terminated unexpectedly" } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({
+      type: "error",
+      error: { type: "overloaded_error", message: "Upstream stream terminated unexpectedly" },
+    });
+  });
+
+  test("internal reader exception stays api_error (not promoted to overloaded)", async () => {
+    const boom = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sse("response.created", { response: {} })));
+      },
+      pull() {
+        throw new Error("proxy-internal read failure");
+      },
+    });
+    const events = await collectEvents(responsesSseToAnthropicSse(boom, "m"));
+    expect(events.at(-1)!.data).toMatchObject({ type: "error", error: { type: "api_error", message: "proxy-internal read failure" } });
   });
 
   test("incomplete(content_filter) -> refusal stop_reason", async () => {

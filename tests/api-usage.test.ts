@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -55,6 +55,7 @@ function writeFixture(now: number): void {
       timestamp: now - 1 * 86_400_000,
       provider: "anthropic",
       model: "claude-x",
+      surface: "claude",
       status: 200,
       durationMs: 11,
       usageStatus: "unreported",
@@ -88,6 +89,7 @@ describe("GET /api/usage", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty("range");
+      expect(body.surface).toBe("all");
       expect(body).toHaveProperty("summary");
       expect(body).toHaveProperty("days");
       expect(body).toHaveProperty("models");
@@ -138,6 +140,45 @@ describe("GET /api/usage", () => {
       const res = await fetch(new URL("/api/usage?range=quarter", server.url));
       const body = await res.json();
       expect(body.range).toBe("30d");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("filters by surface and normalizes unknown values to all", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const codex = await fetch(new URL("/api/usage?range=all&surface=codex", server.url)).then(res => res.json());
+      expect(codex.surface).toBe("codex");
+      expect(codex.summary).toMatchObject({ requests: 2, totalTokens: 165 });
+      expect(codex.models.map((model: { model: string }) => model.model)).toEqual(["gpt-5.5"]);
+      expect(codex.providers.map((provider: { provider: string }) => provider.provider)).toEqual(["openai"]);
+
+      const claude = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(res => res.json());
+      expect(claude.surface).toBe("claude");
+      expect(claude.summary).toMatchObject({ requests: 1, totalTokens: 0 });
+      expect(claude.models.map((model: { model: string }) => model.model)).toEqual(["claude-x"]);
+      expect(claude.providers.map((provider: { provider: string }) => provider.provider)).toEqual(["anthropic"]);
+
+      const fallback = await fetch(new URL("/api/usage?range=all&surface=unknown", server.url)).then(res => res.json());
+      expect(fallback.surface).toBe("all");
+      expect(fallback.summary).toMatchObject({ requests: 3, totalTokens: 165 });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("read failure keeps the normalized surface in the fallback response", async () => {
+    mkdirSync(join(testDir, "usage.jsonl"));
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?surface=claude", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.surface).toBe("claude");
+      expect(body.summary.requests).toBe(0);
+      expect(body.error).toBe("read_failed");
     } finally {
       await server.stop(true);
     }

@@ -1792,10 +1792,12 @@ describe("server local API auth", () => {
         },
       });
 
-      const usage = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json()) as {
+      const usage = await fetch(new URL("/api/usage?range=all&surface=codex", server.url)).then(r => r.json()) as {
+        surface: string;
         summary: { requests: number; reportedRequests: number; totalTokens: number };
         models: Array<{ provider: string; model: string; reportedRequests: number; totalTokens: number }>;
       };
+      expect(usage.surface).toBe("codex");
       expect(usage.summary).toMatchObject({ requests: 1, reportedRequests: 1, totalTokens: 18 });
       expect(usage.models.at(-1)).toMatchObject({
         provider: "test-openai",
@@ -1803,6 +1805,13 @@ describe("server local API auth", () => {
         reportedRequests: 1,
         totalTokens: 18,
       });
+
+      const claudeUsage = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(r => r.json()) as {
+        surface: string;
+        summary: { requests: number };
+      };
+      expect(claudeUsage.surface).toBe("claude");
+      expect(claudeUsage.summary.requests).toBe(0);
     } finally {
       await server.stop(true);
       await upstream.stop(true);

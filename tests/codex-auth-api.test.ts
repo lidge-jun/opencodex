@@ -156,7 +156,7 @@ describe("codex-auth API", () => {
       expiresAt: Date.now() + 5 * 60_000,
       chatgptAccountId: "acct-mask",
     });
-    updateAccountQuota("pool-mask", 10, 20);
+    updateAccountQuota("pool-mask", 10);
 
     const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
@@ -179,7 +179,7 @@ describe("codex-auth API", () => {
         expiresAt: Date.now() + 5 * 60_000,
         chatgptAccountId: `acct-${id}`,
       });
-      updateAccountQuota(id, 91, 92, 111, 222, 33, 333);
+      updateAccountQuota(id, 91, 111, 33, 333);
     }
 
     const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
@@ -190,13 +190,11 @@ describe("codex-auth API", () => {
       const quota = data.accounts.find(a => a.id === id)?.quota;
       expect(quota).toMatchObject({ monthlyPercent: 33, monthlyResetAt: 333 });
       expect(quota).not.toHaveProperty("weeklyPercent");
-      expect(quota).not.toHaveProperty("fiveHourPercent");
       expect(quota).not.toHaveProperty("weeklyResetAt");
-      expect(quota).not.toHaveProperty("fiveHourResetAt");
     }
   });
 
-  test("GET /api/codex-auth/accounts maps go primary quota response to 30d display quota", async () => {
+  test("GET /api/codex-auth/accounts maps go tertiary quota response to 30d display quota", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "pool-go-primary", email: "go-primary@example.test", plan: "go", isMain: false }],
     });
@@ -212,8 +210,8 @@ describe("codex-auth API", () => {
         if (String(input).includes("/backend-api/wham/usage")) {
           return new Response(JSON.stringify({
             rate_limit: {
-              primary_window: { used_percent: 42, reset_at: 1783000000 },
               secondary_window: { used_percent: 99, reset_at: 1782000000 },
+              tertiary_window: { used_percent: 42, reset_at: 1783000000 },
             },
             rate_limit_reset_credits: { available_count: 1 },
           }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -226,7 +224,6 @@ describe("codex-auth API", () => {
       const data = await resp!.json() as { accounts: Array<{ id: string; quota?: Record<string, unknown> }> };
       const quota = data.accounts.find(a => a.id === "pool-go-primary")?.quota;
       expect(quota).toMatchObject({ monthlyPercent: 42, monthlyResetAt: 1783000000, resetCredits: 1 });
-      expect(quota).not.toHaveProperty("fiveHourPercent");
       expect(quota).not.toHaveProperty("weeklyPercent");
     } finally {
       globalThis.fetch = originalFetch;
@@ -250,7 +247,7 @@ describe("codex-auth API", () => {
       expiresAt: Date.now() + 5 * 60_000,
       chatgptAccountId: "acct-credential-secret",
     });
-    updateAccountQuota("pool-safe", 10, 20);
+    updateAccountQuota("pool-safe", 10);
 
     const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
@@ -366,37 +363,35 @@ describe("codex-auth API", () => {
   });
 
   test("updateAccountQuota stores and retrieves quota", () => {
-    updateAccountQuota("test-acct", 45, 12);
+    updateAccountQuota("test-acct", 45);
     const q = getAccountQuota("test-acct");
     expect(q).not.toBeNull();
     expect(q!.weeklyPercent).toBe(45);
-    expect(q!.fiveHourPercent).toBe(12);
   });
 
   test("updateAccountQuota clamps finite out-of-range percentages", () => {
-    updateAccountQuota("clamp-acct", 120, -5, undefined, undefined, 40.4);
+    updateAccountQuota("clamp-acct", 120, undefined, 40.4);
     const q = getAccountQuota("clamp-acct");
     expect(q).toMatchObject({
       weeklyPercent: 100,
-      fiveHourPercent: 0,
       monthlyPercent: 40.4,
     });
   });
 
   test("updateAccountQuota ignores invalid-only updates", () => {
-    updateAccountQuota("invalid-only", Number.NaN, Number.POSITIVE_INFINITY, undefined, undefined, "not-a-number");
+    updateAccountQuota("invalid-only", Number.NaN, undefined, "not-a-number");
     expect(getAccountQuota("invalid-only")).toBeNull();
   });
 
   test("updateAccountQuota does not overwrite valid quota with invalid later values", () => {
-    updateAccountQuota("preserve-valid", 45, 12, 100, 200);
+    updateAccountQuota("preserve-valid", 45, 100);
     const before = getAccountQuota("preserve-valid");
-    updateAccountQuota("preserve-valid", Number.NaN, Number.POSITIVE_INFINITY, 300, 400);
+    updateAccountQuota("preserve-valid", Number.NaN, 300);
     expect(getAccountQuota("preserve-valid")).toEqual(before);
   });
 
   test("GET /api/codex-auth/quota returns stored quotas", async () => {
-    updateAccountQuota("q-test", 30, 5);
+    updateAccountQuota("q-test", 30);
     const req = new Request("http://localhost/api/codex-auth/quota", { method: "GET" });
     const url = new URL(req.url);
     const resp = await handleCodexAuthAPI(req, url, {} as any);
@@ -424,7 +419,6 @@ describe("codex-auth API", () => {
       return new Response(JSON.stringify({
         rate_limit: {
           secondary_window: { used_percent: 64, reset_at: 1782628379 },
-          primary_window: { used_percent: 11, reset_at: 1782291794 },
         },
       }), { status: 200 });
     }) as typeof fetch;
@@ -435,7 +429,7 @@ describe("codex-auth API", () => {
       expect(resp!.status).toBe(200);
       const data = await resp!.json() as { accounts: { id: string; quota: unknown; needsReauth?: boolean }[] };
       const pool = data.accounts.find(a => a.id === "pool-visible");
-      expect(pool?.quota).toMatchObject({ weeklyPercent: 64, fiveHourPercent: 11, weeklyResetAt: 1782628379, fiveHourResetAt: 1782291794 });
+      expect(pool?.quota).toMatchObject({ weeklyPercent: 64, weeklyResetAt: 1782628379 });
       expect(pool?.needsReauth).toBe(false);
       expect(calls).toBe(1);
     } finally {
@@ -452,7 +446,7 @@ describe("codex-auth API", () => {
       refreshToken: "ref",
       chatgptAccountId: "acc-pool-refresh",
     });
-    updateAccountQuota("pool-refresh", 72, 31);
+    updateAccountQuota("pool-refresh", 72);
 
     const originalFetch = globalThis.fetch;
     let calls = 0;
@@ -464,7 +458,6 @@ describe("codex-auth API", () => {
       return new Response(JSON.stringify({
         rate_limit: {
           secondary_window: { used_percent: 6, reset_at: 1782628379 },
-          primary_window: { used_percent: 2, reset_at: 1782291794 },
         },
       }), { status: 200 });
     }) as typeof fetch;
@@ -475,7 +468,7 @@ describe("codex-auth API", () => {
       expect(resp!.status).toBe(200);
       const data = await resp!.json() as { accounts: { id: string; quota: unknown }[] };
       const pool = data.accounts.find(a => a.id === "pool-refresh");
-      expect(pool?.quota).toMatchObject({ weeklyPercent: 6, fiveHourPercent: 2, weeklyResetAt: 1782628379, fiveHourResetAt: 1782291794 });
+      expect(pool?.quota).toMatchObject({ weeklyPercent: 6, weeklyResetAt: 1782628379 });
       expect(calls).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
@@ -739,7 +732,7 @@ describe("codex-auth API", () => {
       expiresAt: Date.now() + 5 * 60_000,
       chatgptAccountId: "acct-delete",
     });
-    updateAccountQuota("pool-delete", 70, 20);
+    updateAccountQuota("pool-delete", 70);
     expect(resolveCodexAccountForThread("delete-thread", config)).toBe("pool-delete");
     recordCodexUpstreamOutcome(config, "pool-delete", 500);
     expect(getCodexUpstreamHealth("pool-delete")).not.toBeNull();
@@ -899,7 +892,7 @@ describe("codex-auth API", () => {
       refreshToken: "ref",
       chatgptAccountId: "acc-cached-test",
     });
-    updateAccountQuota("cached-test", 25, 10);
+    updateAccountQuota("cached-test", 25);
 
     const originalFetch = globalThis.fetch;
     let called = false;
@@ -915,7 +908,7 @@ describe("codex-auth API", () => {
       expect(resp!.status).toBe(200);
       const data = await resp!.json() as { accounts: { id: string; quota: unknown }[] };
       const pool = data.accounts.find(a => a.id === "cached-test");
-      expect(pool?.quota).toMatchObject({ weeklyPercent: 25, fiveHourPercent: 10 });
+      expect(pool?.quota).toMatchObject({ weeklyPercent: 25 });
       expect(called).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;

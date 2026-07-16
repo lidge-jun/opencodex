@@ -14,8 +14,10 @@ import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import {
+  forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialProjectId,
-  getValidAccessToken,
+  getValidAccessTokenSnapshot,
+  type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../oauth";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch } from "../web-search";
@@ -36,7 +38,7 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../codex/routing";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { fetchWithResetRetry, fetchWithTransientRetry } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "./request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "./adapter-resolve";
@@ -611,9 +613,13 @@ export async function handleResponses(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
+  const isXaiOAuthRequest = route.providerName === "xai" && route.provider.authMode === "oauth";
+  let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   if (route.provider.authMode === "oauth") {
     try {
-      route.provider = { ...route.provider, apiKey: await getValidAccessToken(route.providerName) };
+      const resolved = await getValidAccessTokenSnapshot(route.providerName);
+      if (isXaiOAuthRequest) sentOAuthSnapshot = resolved;
+      route.provider = { ...route.provider, apiKey: resolved.accessToken };
       // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
       // CCA envelope; the server injects only the bare token, so pull project from the credential.
       if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
@@ -694,12 +700,15 @@ export async function handleResponses(
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     try {
-      upstreamResponse = await fetchWithResetRetry(
+      // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
+      // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
+      // Body is a replayable string; nothing has streamed to the client yet.
+      upstreamResponse = await fetchWithTransientRetry(
         () => fetchWithHeaderTimeout(request.url, {
           method: request.method,
           headers: request.headers,
           body: request.body,
-        }, upstream.signal, connectMs, parsed.stream),
+        }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
     } catch (err) {
@@ -726,22 +735,24 @@ export async function handleResponses(
     const terminalRecorder = codexForwardTerminalOutcomeRecorder(config, authCtx, route.provider);
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
-    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
-      const weeklyRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
-      const fiveHourRaw = upstreamResponse.headers.get("x-codex-primary-used-percent");
+   if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+      // primary was the 5h window; it now carries weekly data for GPT plans.
+      // Prefer primary when present, fall back to secondary for compatibility.
+      const primaryRaw = upstreamResponse.headers.get("x-codex-primary-used-percent");
+      const secondaryRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
+      const weeklyRaw = primaryRaw ?? secondaryRaw;
       const monthlyRaw = upstreamResponse.headers.get("x-codex-tertiary-used-percent");
-      const weeklyResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
-      const fiveHourResetRaw = upstreamResponse.headers.get("x-codex-primary-reset-at");
+      const primaryResetRaw = upstreamResponse.headers.get("x-codex-primary-reset-at");
+      const secondaryResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
+      const weeklyResetRaw = primaryRaw ? primaryResetRaw : secondaryResetRaw;
       const monthlyResetRaw = upstreamResponse.headers.get("x-codex-tertiary-reset-at");
       const retryAfterRaw = upstreamResponse.headers.get("retry-after");
-      if (weeklyRaw || fiveHourRaw || monthlyRaw) {
+      if (weeklyRaw || monthlyRaw) {
         const { updateAccountQuota } = await import("../codex/auth-api");
         updateAccountQuota(
           authCtx.accountId,
           weeklyRaw,
-          fiveHourRaw,
           weeklyResetRaw,
-          fiveHourResetRaw,
           monthlyRaw,
           monthlyResetRaw,
         );
@@ -753,8 +764,8 @@ export async function handleResponses(
         });
       } else {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
-          retryAfter: retryAfterRaw,
-          resetAt: [fiveHourResetRaw, weeklyResetRaw, monthlyResetRaw],
+        retryAfter: retryAfterRaw,
+         resetAt: [primaryResetRaw, secondaryResetRaw, monthlyResetRaw].filter(Boolean),
         });
       }
     }
@@ -945,7 +956,7 @@ export async function handleResponses(
       : await fetchWithResetRetry(
           () => fetchWithHeaderTimeout(request.url, {
             method: request.method, headers: request.headers, body: request.body,
-          }, upstream.signal, connectMs, parsed.stream),
+          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
           { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
         );
   } catch (err) {
@@ -966,6 +977,7 @@ export async function handleResponses(
     let activeAdapter = adapter;
     let imageTierBias = 0;
     let imageRetryAttempted = false;
+    let oauth401ReplayAttempted = false;
     const rebuildAndRefetch = async (): Promise<Response | { failed: Response }> => {
       const retryRequest = await activeAdapter.buildRequest(parsed, {
         headers: selectedForwardHeaders,
@@ -976,7 +988,7 @@ export async function handleResponses(
           ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
           : await fetchWithHeaderTimeout(retryRequest.url, {
               method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-            }, upstream.signal, connectMs, parsed.stream);
+            }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
       } catch (err) {
         cleanupUpstreamAbort();
         upstream.abort();
@@ -987,6 +999,38 @@ export async function handleResponses(
       }
     };
     recovery: for (;;) {
+      if (
+        upstreamResponse.status === 401
+        && isXaiOAuthRequest
+        && sentOAuthSnapshot
+        && !oauth401ReplayAttempted
+      ) {
+        oauth401ReplayAttempted = true;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        let refreshed: OAuthAccessSnapshot;
+        try {
+          refreshed = await forceRefreshOAuthAccessSnapshot(sentOAuthSnapshot);
+        } catch (err) {
+          cleanupUpstreamAbort();
+          return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
+        }
+        sentOAuthSnapshot = refreshed;
+        const refreshedProvider = resolveProviderTransport(
+          route.providerName,
+          { ...route.provider, apiKey: refreshed.accessToken },
+          parsed.options.promptCacheKey,
+        );
+        route.provider = refreshedProvider;
+        activeAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider),
+          config.cacheRetention,
+        );
+        const result = await rebuildAndRefetch();
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue recovery;
+      }
+
       // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
       // SAME request once per remaining key. OAuth/forward providers and single-key pools
       // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
@@ -1222,12 +1266,17 @@ export function safeHostLabel(url: string): string {
   }
 }
 
+function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
+  return (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+}
+
 export async function fetchWithHeaderTimeout(
   url: string,
   init: Omit<RequestInit, "signal">,
   abortSignal: AbortSignal,
   timeoutMs: number,
   preferIdentityEncoding = false,
+  executor: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response> {
   const timeout = new AbortController();
   const timer = setTimeout(() => {
@@ -1240,7 +1289,7 @@ export async function fetchWithHeaderTimeout(
     headers.set("accept-encoding", "identity");
   }
   try {
-    return await fetch(url, {
+    return await executor(url, {
       ...init,
       headers,
       signal: AbortSignal.any([abortSignal, timeout.signal]),

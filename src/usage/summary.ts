@@ -3,6 +3,7 @@ import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
 
 export type UsageRange = "7d" | "30d" | "all";
+export type UsageSurface = "all" | "codex" | "claude";
 
 export interface UsageSummaryTotals {
   requests: number;
@@ -63,6 +64,7 @@ export interface UsageProvider {
 
 export interface UsageSummary {
   range: UsageRange;
+  surface: UsageSurface;
   since: number | null;
   generatedAt: number;
   summary: UsageSummaryTotals;
@@ -76,6 +78,11 @@ const DAY_MS = 86_400_000;
 export function parseRange(input: string | null | undefined): UsageRange {
   if (input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
+}
+
+export function parseUsageSurface(input: string | null | undefined): UsageSurface {
+  if (input === "codex" || input === "claude") return input;
+  return "all";
 }
 
 function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
@@ -270,22 +277,33 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
   return providers.sort((a, b) => b.requests - a.requests);
 }
 
-export function summarizeUsage(entries: PersistedUsageEntry[], range: UsageRange, now: number): UsageSummary {
+export function summarizeUsage(
+  entries: PersistedUsageEntry[],
+  range: UsageRange,
+  now: number,
+  surface: UsageSurface = "all",
+): UsageSummary {
   const { since } = rangeWindow(range, now);
-  const inRange = since === null ? entries : entries.filter(e => e.timestamp >= since);
+  const filteredEntries = entries.filter(entry => {
+    if (since !== null && entry.timestamp < since) return false;
+    if (surface === "claude") return entry.surface === "claude";
+    if (surface === "codex") return entry.surface !== "claude";
+    return true;
+  });
   const totals = blankTotals();
-  for (const entry of inRange) {
+  for (const entry of filteredEntries) {
     bumpStatus(totals, entry.usageStatus);
     addTokens(totals, entry);
   }
   finalizeCoverage(totals);
   return {
     range,
+    surface,
     since,
     generatedAt: now,
     summary: totals,
-    days: buildDayGrid(range, since, now, inRange),
-    models: buildModels(inRange, totals.totalTokens),
-    providers: buildProviders(inRange, totals.totalTokens),
+    days: buildDayGrid(range, since, now, filteredEntries),
+    models: buildModels(filteredEntries, totals.totalTokens),
+    providers: buildProviders(filteredEntries, totals.totalTokens),
   };
 }

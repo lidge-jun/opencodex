@@ -1,48 +1,79 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 
-/**
- * xAI account OAuth and xAI API keys share a bearer shape but not a billing
- * transport. OAuth represents the Grok CLI subscription entitlement, while a
- * key represents the API team. Keep the saved provider preset compatible with
- * the dashboard's "Use an API key instead" switch and resolve the transport at
- * request time.
- */
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
-/** Minimum-compatible official Grok CLI wire version verified with the proxy. */
-export const XAI_GROK_CLIENT_VERSION = "0.2.93";
+export const XAI_GROK_COMPATIBILITY = {
+  version: "0.2.93",
+  userAgent: "opencodex-grok/0.2.93",
+  headers: {
+    clientIdentifier: "x-grok-client-identifier",
+    clientVersion: "x-grok-client-version",
+    tokenAuth: "x-xai-token-auth",
+    authenticateResponse: "x-authenticateresponse",
+    conversationId: "x-grok-conv-id",
+    requestId: "x-grok-req-id",
+    sessionId: "x-grok-session-id",
+    userAgent: "User-Agent",
+  },
+} as const;
 
-const XAI_GROK_CLI_HEADERS: Readonly<Record<string, string>> = {
-  "x-grok-client-identifier": "opencodex",
-  "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
-  "x-xai-token-auth": "xai-grok-cli",
+export const XAI_GROK_CLIENT_VERSION = XAI_GROK_COMPATIBILITY.version;
+export const XAI_CONV_ID_HEADER = XAI_GROK_COMPATIBILITY.headers.conversationId;
+
+export type OcxProviderTransport = OcxProviderConfig & {
+  /** Request executor used only at runtime; never persisted. */
+  fetch?: typeof globalThis.fetch;
 };
 
-/**
- * Sticky-routing hint for xAI's automatic prefix cache. xAI routes requests
- * carrying the same `x-grok-conv-id` to the same server, which is where the
- * prompt cache lives (docs.x.ai prompt-caching best-practices; verified
- * 2026-07-13, devlog/_plan/260713_grok_caching). Codex clients send a stable
- * per-conversation `prompt_cache_key`; hash it so the raw session id never
- * leaves the proxy.
- */
-export const XAI_CONV_ID_HEADER = "x-grok-conv-id";
+const XAI_GROK_CLI_HEADERS: Readonly<Record<string, string>> = {
+  [XAI_GROK_COMPATIBILITY.headers.clientIdentifier]: "opencodex",
+  [XAI_GROK_COMPATIBILITY.headers.clientVersion]: XAI_GROK_CLIENT_VERSION,
+  [XAI_GROK_COMPATIBILITY.headers.tokenAuth]: "xai-grok-cli",
+  [XAI_GROK_COMPATIBILITY.headers.authenticateResponse]: "authenticate-response",
+};
 
-function hasHeaderCaseInsensitive(headers: Record<string, string> | undefined, name: string): boolean {
-  if (!headers) return false;
+function hasHeaderCaseInsensitive(
+  headers: Record<string, string> | undefined,
+  name: string,
+): boolean {
   const target = name.toLowerCase();
-  return Object.keys(headers).some(key => key.toLowerCase() === target);
+  return Object.keys(headers ?? {}).some(key => key.toLowerCase() === target);
 }
 
-/** Drop default entries the user already overrides under any header-name casing. */
-function withoutUserOverridden(defaults: Readonly<Record<string, string>>, userHeaders: Record<string, string> | undefined): Record<string, string> {
-  if (!userHeaders) return { ...defaults };
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(defaults)) {
-    if (!hasHeaderCaseInsensitive(userHeaders, key)) out[key] = value;
+function withoutUserOverridden(
+  defaults: Readonly<Record<string, string>>,
+  userHeaders: Record<string, string> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(defaults).filter(([name]) => !hasHeaderCaseInsensitive(userHeaders, name)),
+  );
+}
+
+function withGeneratedRequestId(
+  init: RequestInit | undefined,
+  configuredRequestId: string | undefined,
+  stableHeaders: Readonly<Record<string, string>>,
+): RequestInit {
+  const headers = new Headers(init?.headers);
+  for (const [name, value] of Object.entries(stableHeaders)) {
+    if (!headers.has(name)) headers.set(name, value);
   }
-  return out;
+  if (!headers.has(XAI_GROK_COMPATIBILITY.headers.requestId)) {
+    headers.set(
+      XAI_GROK_COMPATIBILITY.headers.requestId,
+      configuredRequestId ?? randomUUID(),
+    );
+  }
+  return { ...init, headers };
+}
+
+function findHeaderCaseInsensitive(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
+  const target = name.toLowerCase();
+  return Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === target)?.[1];
 }
 
 export function deriveXaiConvId(promptCacheKey: string): string {
@@ -50,40 +81,56 @@ export function deriveXaiConvId(promptCacheKey: string): string {
 }
 
 /**
- * Resolve the effective xAI transport without mutating persisted config.
- * User-provided headers are preserved and may advance the compatibility
- * version without waiting for an opencodex release.
- *
- * `promptCacheKey` (the client's stable conversation key) additionally pins
- * cache-affinity routing via `x-grok-conv-id` in BOTH auth modes. Blank or
- * whitespace-only keys are ignored so unrelated requests can never collapse
- * onto one shared conv id, and any user-configured header (any case) wins.
+ * Resolve xAI's runtime transport without mutating persisted config. Conversation/session
+ * affinity is stable for this resolved transport; request identity is generated per fetch.
+ * Agent, deployment, model-override, turn, mode, and user identity headers are intentionally
+ * omitted because opencodex has no truthful values for the official fields.
  */
 export function resolveProviderTransport(
   providerName: string,
-  provider: OcxProviderConfig,
+  provider: OcxProviderTransport,
   promptCacheKey?: string,
-): OcxProviderConfig {
+): OcxProviderTransport {
   if (providerName !== "xai") return provider;
+
   const cacheKey = promptCacheKey?.trim();
-  const convIdHeaders: Record<string, string> =
-    cacheKey && !hasHeaderCaseInsensitive(provider.headers, XAI_CONV_ID_HEADER)
-      ? { [XAI_CONV_ID_HEADER]: deriveXaiConvId(cacheKey) }
-      : {};
-  if (provider.authMode !== "oauth") {
-    if (Object.keys(convIdHeaders).length === 0) return provider;
-    return {
-      ...provider,
-      headers: { ...convIdHeaders, ...(provider.headers ?? {}) },
-    };
-  }
+  const affinity = cacheKey ? deriveXaiConvId(cacheKey) : undefined;
+  const stableDefaults: Record<string, string> = {
+    [XAI_GROK_COMPATIBILITY.headers.userAgent]: XAI_GROK_COMPATIBILITY.userAgent,
+    ...(affinity
+      ? {
+          [XAI_GROK_COMPATIBILITY.headers.conversationId]: affinity,
+          [XAI_GROK_COMPATIBILITY.headers.sessionId]: affinity,
+        }
+      : {}),
+    ...(provider.authMode === "oauth" ? XAI_GROK_CLI_HEADERS : {}),
+  };
+  const stableHeaders = {
+    ...withoutUserOverridden(stableDefaults, provider.headers),
+    ...(provider.headers ?? {}),
+  };
+  // Keep API-key provider metadata compatible with key-pool rotation; session/UA defaults
+  // remain transport-scoped and are applied by the wrapper immediately below.
+  const headers = provider.authMode === "oauth"
+    ? stableHeaders
+    : {
+        ...(affinity && !hasHeaderCaseInsensitive(provider.headers, XAI_GROK_COMPATIBILITY.headers.conversationId)
+          ? { [XAI_GROK_COMPATIBILITY.headers.conversationId]: affinity }
+          : {}),
+        ...(provider.headers ?? {}),
+      };
+  const configuredRequestId = findHeaderCaseInsensitive(
+    provider.headers,
+    XAI_GROK_COMPATIBILITY.headers.requestId,
+  );
+  const baseFetch = provider.fetch ?? globalThis.fetch;
+  const attemptFetch = ((input, init) =>
+    baseFetch(input, withGeneratedRequestId(init, configuredRequestId, stableHeaders))) as typeof globalThis.fetch;
+
   return {
     ...provider,
-    baseUrl: XAI_GROK_CLI_BASE_URL,
-    headers: {
-      ...withoutUserOverridden(XAI_GROK_CLI_HEADERS, provider.headers),
-      ...convIdHeaders,
-      ...(provider.headers ?? {}),
-    },
+    ...(provider.authMode === "oauth" ? { baseUrl: XAI_GROK_CLI_BASE_URL } : {}),
+    headers,
+    fetch: attemptFetch,
   };
 }

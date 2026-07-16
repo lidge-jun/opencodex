@@ -228,6 +228,20 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   const now = Date.now();
   const messages: OcxMessage[] = [];
   const systemPrompt: string[] = [];
+  // Responses reasoning siblings belong to the following assistant, including across call items.
+  // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
+  const pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }> = [];
+  // Assistant placeholder that first folds any pending reasoning into the same turn (official
+  // grok-build preserves reasoning across call items; Anthropic replay requires thinking to
+  // precede tool_use inside one assistant message).
+  const assistantHolderWithReasoning = (): OcxAssistantMessage => {
+    const holder = ensureAssistantPlaceholder(messages, data.model, now);
+    if (pendingReasoning.length > 0) {
+      holder.content.push(...pendingReasoning.map(entry => entry.part));
+      pendingReasoning.length = 0;
+    }
+    return holder;
+  };
   // Tool specs surfaced by a prior tool_search (deferred tools, e.g. subagents). Codex does not
   // re-list these in `tools`, but chat models can only call listed tools — so we re-inject them.
   const loadedToolSpecs: unknown[] = [];
@@ -270,6 +284,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // is dropped silently. It must NOT flag _compactionRequest.
         const encrypted = (item as { encrypted_content?: unknown }).encrypted_content;
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
+        pendingReasoning.length = 0;
         messages.push({
           role: "user",
           content: compactionItemToText(typeof encrypted === "string" ? encrypted : undefined),
@@ -297,6 +312,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // An agent_message is external input delivered to the parent agent.
         // Preserve it as a user-role turn so signed Anthropic thinking blocks
         // on either side are never merged into one modified assistant response.
+        pendingReasoning.length = 0;
         messages.push({
           role: "user",
           content: hasContent ? content : "(sub-agent message received)",
@@ -310,6 +326,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         const msg = item as { role?: string; content?: unknown };
         switch (msg.role) {
           case "system": {
+            pendingReasoning.length = 0;
             const text = inputContentParts(msg.content as unknown[] | string | undefined);
             const flat = typeof text === "string" ? text : text.map(p => (p.type === "text" ? p.text : "")).join("");
             if (flat.length > 0) systemPrompt.push(flat);
@@ -317,13 +334,22 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           }
           case "user":
           case "developer": {
+            pendingReasoning.length = 0;
             const content = inputContentParts(msg.content as unknown[] | string | undefined);
             messages.push({ role: msg.role, content, timestamp: now });
             break;
           }
           case "assistant": {
             const parts = outputTextOf(msg.content as unknown[] | string | undefined);
-            messages.push({ role: "assistant", content: parts, model: data.model, timestamp: now });
+            messages.push({
+              role: "assistant",
+              content: pendingReasoning.length > 0
+                ? [...pendingReasoning.map(entry => entry.part), ...parts]
+                : parts,
+              model: data.model,
+              timestamp: now,
+            });
+            pendingReasoning.length = 0;
             break;
           }
         }
@@ -334,20 +360,33 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         const reasoning = item as { id?: string; summary?: { text: string }[]; content?: { text: string }[]; encrypted_content?: string };
         const fromSummary = (reasoning.summary ?? []).map(c => c.text).join("");
         const text = fromSummary || (reasoning.content ?? []).map(c => c.text).join("");
-        // ocxr1 envelope: the REAL Anthropic signature (+ redacted blocks, + hidden signed text)
-        // captured by the bridge. Native OpenAI-encrypted blobs decode to null and keep today's
-        // placeholder signature (which the anthropic adapter correctly rejects on replay).
         const envelope = typeof reasoning.encrypted_content === "string"
           ? decodeReasoningEnvelope(reasoning.encrypted_content)
           : null;
-        const thinking: OcxThinkingContent = {
-          type: "thinking",
-          thinking: envelope?.txt || text,
-          signature: envelope?.sig ?? JSON.stringify(reasoning),
-          ...(envelope?.red ? { redacted: envelope.red } : {}),
-          ...(reasoning.id ? { itemId: reasoning.id } : {}),
-        };
-        ensureAssistantPlaceholder(messages, data.model, now).content.push(thinking);
+        const thinkingText = envelope?.txt || text;
+
+        // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
+        // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
+        if (thinkingText.length > 0) {
+          const part: OcxThinkingContent = {
+            type: "thinking",
+            thinking: thinkingText,
+            signature: envelope?.sig ?? JSON.stringify(reasoning),
+            ...(envelope?.red ? { redacted: envelope.red } : {}),
+            ...(reasoning.id ? { itemId: reasoning.id } : {}),
+          };
+          const envelopeSigned = typeof envelope?.sig === "string";
+          const previous = pendingReasoning[pendingReasoning.length - 1];
+
+          if (!envelopeSigned && previous && !previous.envelopeSigned) {
+            previous.part = {
+              ...part,
+              thinking: `${previous.part.thinking}\n${part.thinking}`,
+            };
+          } else {
+            pendingReasoning.push({ part, envelopeSigned });
+          }
+        }
         continue;
       }
 
@@ -370,7 +409,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           ...(call.id ? { thoughtSignature: call.id } : {}),
           ...(call.namespace ? { namespace: call.namespace } : {}),
         };
-        ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+        assistantHolderWithReasoning().content.push(toolCall);
         continue;
       }
 
@@ -382,7 +421,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           customWireName: call.name,
           ...(call.id ? { thoughtSignature: call.id } : {}),
         };
-        ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+        assistantHolderWithReasoning().content.push(toolCall);
         continue;
       }
 
@@ -393,7 +432,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         const callId = call.call_id ?? call.id;
         if (callId) {
           const command = Array.isArray(call.action?.command) ? call.action.command : [];
-          ensureAssistantPlaceholder(messages, data.model, now).content.push({
+          assistantHolderWithReasoning().content.push({
             type: "toolCall", id: callId, name: "shell",
             arguments: command.length > 0 ? { command } : {},
           });
@@ -406,7 +445,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // knows the search already ran (prevents re-search loops); there is no output to pair.
         const call = item as { action?: { type?: string; query?: string } };
         const query = typeof call.action?.query === "string" ? call.action.query : "";
-        ensureAssistantPlaceholder(messages, data.model, now).content.push({
+        assistantHolderWithReasoning().content.push({
           type: "text", text: query ? `[web search performed: ${query}]` : "[web search performed]",
         });
         continue;
@@ -417,7 +456,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // history stays complete (otherwise the model re-issues tool_search forever).
         const call = item as { id?: string; call_id?: string; arguments?: unknown };
         const callId = call.call_id ?? call.id ?? "";
-        ensureAssistantPlaceholder(messages, data.model, now).content.push({
+        assistantHolderWithReasoning().content.push({
           type: "toolCall", id: callId, name: "tool_search",
           arguments: isObj(call.arguments) ? call.arguments : {},
         });
@@ -425,6 +464,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "tool_search_output") {
+        pendingReasoning.length = 0;
         // Pair the tool_search call with its result so the model sees what was loaded.
         const out = item as { call_id?: string; status?: string; tools?: unknown[] };
         const specs = Array.isArray(out.tools) ? (out.tools as Record<string, unknown>[]) : [];
@@ -455,6 +495,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "function_call_output") {
+        pendingReasoning.length = 0;
         const output = item as { call_id: string; output?: string | unknown[] };
         const toolInfo = findToolById(messages, output.call_id);
         messages.push({
@@ -466,6 +507,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "custom_tool_call_output") {
+        pendingReasoning.length = 0;
         const output = item as { call_id: string; output: string | unknown[] };
         const toolInfo = findToolById(messages, output.call_id);
         messages.push({

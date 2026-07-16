@@ -61,6 +61,17 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 on quota, cooldown, and health.
 :::
 
+### claudeCode (OcxClaudeCodeConfig)
+
+Claude Code inbound settings consumed by the `/v1/messages` surface, the `ocx claude`
+launcher, and the GUI Claude page. Native-passthrough body bounds (added with the
+body-occupancy guard):
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `claudeCode.bodyStallSec?` | `number` | `90` | Native passthrough body inactivity budget in seconds — raw upstream-byte silence while a read is pending, never total duration. Min 1. Exactly `0` disables. |
+| `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Native passthrough cumulative body byte cap (streamed SSE and buffered non-stream). Exactly `0` disables. |
+
 ### Managed record shapes
 
 `apiKeys[]` entries contain `id: string`, `name: string`, the generated `key: string`, and an ISO

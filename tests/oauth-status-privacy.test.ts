@@ -21,8 +21,8 @@ describe("OAuth status privacy", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test("getLoginStatus returns a masked provider email", () => {
-    saveCredential("xai", {
+  test("getLoginStatus returns a masked provider email", async () => {
+    await saveCredential("xai", {
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
@@ -41,7 +41,7 @@ describe("OAuth status privacy", () => {
     expect(JSON.stringify(status)).not.toContain("refresh-token");
   });
 
-  test("saveCredential persists only the credential allowlist", () => {
+  test("saveCredential persists only the credential allowlist", async () => {
     writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
       legacy: {
         access: "legacy-access",
@@ -53,7 +53,7 @@ describe("OAuth status privacy", () => {
       },
     }), "utf8");
 
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
@@ -79,7 +79,7 @@ describe("OAuth status privacy", () => {
     expect(stored).not.toContain("jwt-secret");
   });
 
-  test("getLoginStatus ignores invalid legacy source metadata", () => {
+  test("getLoginStatus ignores invalid legacy source metadata", async () => {
     writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
       xai: {
         access: "access-token",
@@ -97,7 +97,7 @@ describe("OAuth status privacy", () => {
   });
 
   test("stale credentials for removed OAuth providers fail as unsupported provider config", async () => {
-    saveCredential("removed-provider", {
+    await saveCredential("removed-provider", {
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
@@ -106,11 +106,11 @@ describe("OAuth status privacy", () => {
     await expect(getValidAccessToken("removed-provider")).rejects.toBeInstanceOf(UnsupportedOAuthProviderError);
   });
 
-  test("malformed oauth token store is backed up before a new credential save overwrites it", () => {
+  test("malformed oauth token store is backed up before a new credential save overwrites it", async () => {
     const authPath = join(TEST_DIR, "auth.json");
     writeFileSync(authPath, "{not valid json", "utf8");
 
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "new-access",
       refresh: "new-refresh",
       expires: Date.now() + 60_000,

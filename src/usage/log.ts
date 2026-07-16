@@ -11,12 +11,20 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
+  surface?: "claude";
   resolvedModel?: string;
   status: number;
   durationMs: number;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
+  // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
+  // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
+  errorCode?: string;
+  terminalStatus?: string;
+  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
+  upstreamError?: string;
 }
 
 export function usageLogPath(): string {
@@ -68,12 +76,17 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
+    ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
+    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
+    ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
   };
 }
 

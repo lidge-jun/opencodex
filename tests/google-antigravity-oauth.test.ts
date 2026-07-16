@@ -114,12 +114,12 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   });
 
-  test("saveCredential + getCredential round-trips projectId (regression: was stripped by normalizeCredential)", () => {
+  test("saveCredential + getCredential round-trips projectId (regression: was stripped by normalizeCredential)", async () => {
     tmp = join(tmpdir(), `ag-store-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(tmp, { recursive: true });
     process.env.HOME = tmp;
     process.env.OPENCODEX_HOME = join(tmp, "ocx");
-    saveCredential("google-antigravity", { access: "a", refresh: "r", expires: Date.now() + 3_600_000, projectId: "proj-persist" });
+    await saveCredential("google-antigravity", { access: "a", refresh: "r", expires: Date.now() + 3_600_000, projectId: "proj-persist" });
     expect(getCredential("google-antigravity")?.projectId).toBe("proj-persist");
   });
 });

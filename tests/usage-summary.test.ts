@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRange, summarizeUsage } from "../src/usage/summary";
+import { parseRange, parseUsageSurface, summarizeUsage } from "../src/usage/summary";
 import type { PersistedUsageEntry } from "../src/usage/log";
 
 const FIXED_NOW = Date.UTC(2026, 5, 28, 12, 0, 0);
@@ -14,6 +14,7 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
     status: rest.status ?? 200,
     durationMs: rest.durationMs ?? 10,
     usageStatus: rest.usageStatus ?? "unreported",
+    ...(rest.surface === "claude" ? { surface: rest.surface } : {}),
     ...(rest.resolvedModel !== undefined ? { resolvedModel: rest.resolvedModel } : {}),
     ...(rest.usage ? { usage: rest.usage } : {}),
     ...(rest.totalTokens !== undefined ? { totalTokens: rest.totalTokens } : {}),
@@ -35,7 +36,65 @@ describe("parseRange", () => {
   });
 });
 
+describe("parseUsageSurface", () => {
+  test("accepts all / codex / claude", () => {
+    expect(parseUsageSurface("all")).toBe("all");
+    expect(parseUsageSurface("codex")).toBe("codex");
+    expect(parseUsageSurface("claude")).toBe("claude");
+  });
+
+  test("defaults to all on null or unknown", () => {
+    expect(parseUsageSurface(null)).toBe("all");
+    expect(parseUsageSurface(undefined)).toBe("all");
+    expect(parseUsageSurface("openai")).toBe("all");
+    expect(parseUsageSurface("")).toBe("all");
+  });
+});
+
 describe("summarizeUsage", () => {
+  test("filters totals, days, models, and providers by persisted request surface", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({
+        ts: FIXED_NOW - 1000,
+        provider: "openai",
+        model: "gpt-5.5",
+        usageStatus: "reported",
+        usage: { inputTokens: 10, outputTokens: 2 },
+        totalTokens: 12,
+      }),
+      entry({
+        ts: FIXED_NOW - 2000,
+        provider: "anthropic",
+        model: "claude-fable-5",
+        surface: "claude",
+        usageStatus: "reported",
+        usage: { inputTokens: 20, outputTokens: 4 },
+        totalTokens: 24,
+      }),
+    ];
+
+    const all = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(all.surface).toBe("all");
+    expect(all.summary).toMatchObject({ requests: 2, totalTokens: 36 });
+    expect(all.days.reduce((requests, day) => requests + day.requests, 0)).toBe(2);
+    expect(all.models.map(model => model.model).sort()).toEqual(["claude-fable-5", "gpt-5.5"]);
+    expect(all.providers.map(provider => provider.provider).sort()).toEqual(["anthropic", "openai"]);
+
+    const codex = summarizeUsage(entries, "30d", FIXED_NOW, "codex");
+    expect(codex.surface).toBe("codex");
+    expect(codex.summary).toMatchObject({ requests: 1, totalTokens: 12 });
+    expect(codex.days.reduce((requests, day) => requests + day.requests, 0)).toBe(1);
+    expect(codex.models).toEqual([expect.objectContaining({ provider: "openai", model: "gpt-5.5", requests: 1 })]);
+    expect(codex.providers).toEqual([expect.objectContaining({ provider: "openai", requests: 1 })]);
+
+    const claude = summarizeUsage(entries, "30d", FIXED_NOW, "claude");
+    expect(claude.surface).toBe("claude");
+    expect(claude.summary).toMatchObject({ requests: 1, totalTokens: 24 });
+    expect(claude.days.reduce((requests, day) => requests + day.requests, 0)).toBe(1);
+    expect(claude.models).toEqual([expect.objectContaining({ provider: "anthropic", model: "claude-fable-5", requests: 1 })]);
+    expect(claude.providers).toEqual([expect.objectContaining({ provider: "anthropic", requests: 1 })]);
+  });
+
   test("missing usage does not inflate token totals", () => {
     const entries: PersistedUsageEntry[] = [
       entry({ ts: FIXED_NOW - 1000, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),

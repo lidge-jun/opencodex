@@ -12,6 +12,16 @@ import {
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { OcxAssistantMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const OMITTED = [
+  "x-grok-model-override",
+  "x-grok-agent-id",
+  "x-grok-turn-idx",
+  "x-grok-deployment-id",
+  "x-grok-user-id",
+  "x-grok-client-mode",
+] as const;
+
 function provider(authMode: "oauth" | "key"): OcxProviderConfig {
   return {
     adapter: "openai-chat",
@@ -64,10 +74,10 @@ describe("xAI auth-mode transport selection", () => {
     const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
     const modelsRequest = buildModelsRequest(configured, "xai-api-key", "xai");
 
-    expect(effective).toBe(configured);
+    expect(effective).not.toBe(configured);
     expect(request.url).toBe("https://api.x.ai/v1/chat/completions");
     expect(modelsRequest.url).toBe("https://api.x.ai/v1/models");
-    expect(request.headers).toEqual({
+    expect(request.headers).toMatchObject({
       "Content-Type": "application/json",
       Authorization: "Bearer xai-api-key",
     });
@@ -188,8 +198,8 @@ describe("xAI prompt-cache conv-id affinity", () => {
     expect(noKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
     expect(emptyKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
     expect(blankKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
-    // Key mode without a conv-id stays the exact configured object (no clone churn).
-    expect(emptyKeyApi).toBe(configuredKey);
+    expect(emptyKeyApi).not.toBe(configuredKey);
+    expect(emptyKeyApi.fetch).toBeFunction();
   });
 
   test("user-configured conv-id header wins in any casing (no duplicate header pair)", () => {
@@ -222,6 +232,123 @@ describe("xAI prompt-cache conv-id affinity", () => {
   });
 });
 
+function lower(headers: Headers): Record<string, string> {
+  return Object.fromEntries([...headers.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+async function capture(authMode: "oauth" | "key", calls = 1) {
+  const seen: Headers[] = [];
+  const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+  configured.fetch = async (_input, init) => {
+    seen.push(new Headers(init?.headers));
+    return new Response("{}", { status: 200 });
+  };
+  const effective = resolveProviderTransport("xai", configured, "codex-session-abc");
+  const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+  for (let index = 0; index < calls; index += 1) {
+    await effective.fetch!(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
+  }
+  return { effective, seen };
+}
+
+describe("xAI outbound compatibility headers", () => {
+  test("OAuth snapshot is exact", async () => {
+    const { effective, seen } = await capture("oauth");
+    expect(effective.baseUrl).toBe(XAI_GROK_CLI_BASE_URL);
+    expect(lower(seen[0])).toEqual({
+      authorization: "Bearer oauth-token",
+      "content-type": "application/json",
+      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "x-authenticateresponse": "authenticate-response",
+      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
+      "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
+      "x-grok-req-id": expect.stringMatching(UUID_V4),
+      "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
+      "x-xai-token-auth": "xai-grok-cli",
+    });
+    for (const name of OMITTED) expect(seen[0].has(name)).toBe(false);
+  });
+
+  test("API-key snapshot is exact and User-Agent is present", async () => {
+    const { effective, seen } = await capture("key");
+    expect(effective.baseUrl).toBe("https://api.x.ai/v1");
+    expect(lower(seen[0])).toEqual({
+      authorization: "Bearer xai-api-key",
+      "content-type": "application/json",
+      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
+      "x-grok-req-id": expect.stringMatching(UUID_V4),
+      "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
+    });
+    for (const name of [
+      "x-authenticateresponse",
+      "x-grok-client-identifier",
+      "x-grok-client-version",
+      "x-xai-token-auth",
+      ...OMITTED,
+    ]) expect(seen[0].has(name)).toBe(false);
+  });
+
+  test("same resolved transport refreshes req-id but keeps conv-id stable", async () => {
+    const { seen } = await capture("oauth", 2);
+    expect(seen).toHaveLength(2);
+    expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
+    expect(seen[1].get("x-grok-req-id")).toMatch(UUID_V4);
+    expect(seen[1].get("x-grok-req-id")).not.toBe(seen[0].get("x-grok-req-id"));
+    expect(seen[0].get("x-grok-conv-id")).toBe(deriveXaiConvId("codex-session-abc"));
+    expect(seen[1].get("x-grok-conv-id")).toBe(seen[0].get("x-grok-conv-id"));
+    expect(seen[1].get("x-grok-session-id")).toBe(seen[0].get("x-grok-session-id"));
+    for (const headers of seen) {
+      expect(headers.get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      for (const name of OMITTED) expect(headers.has(name)).toBe(false);
+    }
+  });
+
+  test("mixed-case caller overrides win without duplicates", async () => {
+    const seen: Headers[] = [];
+    const configured = provider("oauth") as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+    configured.headers = { "user-agent": "custom-agent", "X-Grok-Req-Id": "caller-id" };
+    configured.fetch = async (_input, init) => {
+      seen.push(new Headers(init?.headers));
+      return new Response("{}", { status: 200 });
+    };
+    const effective = resolveProviderTransport("xai", configured, "codex-session-abc");
+    const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+    await effective.fetch!(request.url, { headers: request.headers });
+    await effective.fetch!(request.url, { headers: request.headers });
+    for (const headers of seen) {
+      expect(headers.get("user-agent")).toBe("custom-agent");
+      expect(headers.get("x-grok-req-id")).toBe("caller-id");
+      expect([...headers.keys()].filter(name => name === "user-agent")).toHaveLength(1);
+      expect([...headers.keys()].filter(name => name === "x-grok-req-id")).toHaveLength(1);
+    }
+  });
+
+  test("blank cache keys omit affinity but retain UA and fresh req-id in both modes", async () => {
+    for (const authMode of ["oauth", "key"] as const) {
+      const seen: Headers[] = [];
+      const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+      configured.fetch = async (_input, init) => {
+        seen.push(new Headers(init?.headers));
+        return new Response("{}", { status: 200 });
+      };
+      const effective = resolveProviderTransport("xai", configured, "   ");
+      const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+      await effective.fetch!(request.url, { headers: request.headers });
+      expect(seen[0].has("x-grok-conv-id")).toBe(false);
+      expect(seen[0].has("x-grok-session-id")).toBe(false);
+      expect(seen[0].get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
+      for (const name of OMITTED) expect(seen[0].has(name)).toBe(false);
+    }
+  });
+});
+
 describe("xAI reasoning_content cache preservation", () => {
   test("registry preset replays reasoning_content for grok reasoning models only", () => {
     const entry = getProviderRegistryEntry("xai");
@@ -236,29 +363,130 @@ describe("xAI reasoning_content cache preservation", () => {
     }
   });
 
-  test("assistant thinking parts round-trip as reasoning_content on grok-4.5 history", () => {
-    // xAI docs: dropped reasoning_content is the top cause of multi-turn cache misses
-    // (docs.x.ai prompt-caching/multi-turn, 2026-07-13).
+  test("parseRequest folds summary reasoning into one Grok assistant wire message", () => {
     const prov: OcxProviderConfig = {
       ...provider("oauth"),
       preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
     };
-    const assistant: OcxAssistantMessage = {
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "cached chain" },
-        { type: "text", text: "answer" },
+    const req = parseRequest({
+      model: "grok-4.5",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q1" }] },
+        { type: "reasoning", id: "r1", summary: [{ type: "summary_text", text: "cached chain" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q2" }] },
       ],
-      timestamp: 0,
-    };
-    const req: OcxParsedRequest = {
-      modelId: "grok-4.5",
-      context: { messages: [{ role: "user", content: "q1", timestamp: 0 }, assistant, { role: "user", content: "q2", timestamp: 0 }] },
-      stream: false,
-      options: {},
-    };
+    });
     const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
-    const replayed = body.messages.find(m => m.role === "assistant");
-    expect(replayed?.reasoning_content).toBe("cached chain");
+    const assistants = body.messages.filter(message => message.role === "assistant");
+
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ content: "answer", reasoning_content: "cached chain" });
+  });
+
+  test("parseRequest drops opaque encrypted-only reasoning without detaching an assistant wire message", () => {
+    const prov: OcxProviderConfig = {
+      ...provider("oauth"),
+      preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
+    };
+    const req = parseRequest({
+      model: "grok-4.5",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q1" }] },
+        { type: "reasoning", id: "r-opaque", summary: [], encrypted_content: "opaque-native-blob" },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q2" }] },
+      ],
+    });
+    const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
+    const assistants = body.messages.filter(message => message.role === "assistant");
+
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toEqual({ role: "assistant", content: "answer" });
+    expect(assistants[0]).not.toHaveProperty("reasoning_content");
+  });
+
+  test("parseRequest clears pending reasoning at a user boundary", () => {
+    const prov: OcxProviderConfig = {
+      ...provider("oauth"),
+      preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
+    };
+    const req = parseRequest({
+      model: "grok-4.5",
+      input: [
+        { type: "reasoning", id: "r-orphan", summary: [{ type: "summary_text", text: "must drop" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "new turn" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
+    const assistants = body.messages.filter(message => message.role === "assistant");
+
+    expect(assistants).toEqual([{ role: "assistant", content: "answer" }]);
+    expect(assistants[0]).not.toHaveProperty("reasoning_content");
+  });
+
+  test("parseRequest folds pending reasoning into the assistant turn that carries the call", () => {
+    const prov: OcxProviderConfig = {
+      ...provider("oauth"),
+      preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
+    };
+    const req = parseRequest({
+      model: "grok-4.5",
+      input: [
+        { type: "reasoning", id: "r-call", summary: [{ type: "summary_text", text: "call chain" }] },
+        { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{\"q\":\"x\"}" },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
+    const assistants = body.messages.filter(message => message.role === "assistant");
+
+    expect(assistants).toHaveLength(2);
+    // Grok wire shape: a reasoning model emits reasoning_content and tool_calls on the SAME
+    // assistant message (and Anthropic replay requires thinking before tool_use in one turn).
+    expect(assistants[0]).toMatchObject({
+      reasoning_content: "call chain",
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{\"q\":\"x\"}" } }],
+    });
+    expect(assistants[1]).toMatchObject({ content: "answer" });
+    expect(assistants[1]).not.toHaveProperty("reasoning_content");
+  });
+
+  test("parseRequest newline-joins reasoning siblings before one assistant", () => {
+    const prov: OcxProviderConfig = {
+      ...provider("oauth"),
+      preserveReasoningContentModels: getProviderRegistryEntry("xai")?.preserveReasoningContentModels ?? [],
+    };
+    const req = parseRequest({
+      model: "grok-4.5",
+      input: [
+        { type: "reasoning", id: "r1", summary: [{ type: "summary_text", text: "first" }] },
+        { type: "reasoning", id: "r2", summary: [{ type: "summary_text", text: "second" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const body = JSON.parse(createOpenAIChatAdapter(prov).buildRequest(req).body as string) as { messages: Array<Record<string, unknown>> };
+    const assistants = body.messages.filter(message => message.role === "assistant");
+    const parsedAssistant = req.context.messages.find(message => message.role === "assistant") as OcxAssistantMessage;
+    const thinkingParts = parsedAssistant.content.filter(part => part.type === "thinking");
+
+    expect(thinkingParts).toHaveLength(1);
+    expect(thinkingParts[0]).toMatchObject({ thinking: "first\nsecond", itemId: "r2" });
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ content: "answer", reasoning_content: "first\nsecond" });
+  });
+
+  test("parseRequest drops trailing reasoning without creating an assistant", () => {
+    const req = parseRequest({
+      model: "xai/grok-4.5",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q1" }] },
+        { type: "reasoning", id: "r-trailing", summary: [{ type: "summary_text", text: "unfinished" }] },
+      ],
+    });
+
+    expect(req.context.messages.filter(message => message.role === "assistant")).toHaveLength(0);
+    expect(req.context.messages).toHaveLength(1);
   });
 });

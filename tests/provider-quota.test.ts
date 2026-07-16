@@ -73,9 +73,9 @@ afterEach(() => {
 
 describe("fetchProviderQuotaReports", () => {
   test("returns active provider quota rows without leaking credentials or raw upstream payloads", async () => {
-    saveCredential("xai", { access: "xai-access-secret", refresh: "xai-refresh-secret", expires: Date.now() + 3600_000 });
-    saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
-    saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
+    await saveCredential("xai", { access: "xai-access-secret", refresh: "xai-refresh-secret", expires: Date.now() + 3600_000 });
+    await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
+    await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
 
     const seen: { url: string; authorization?: string; body?: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -87,7 +87,6 @@ describe("fetchProviderQuotaReports", () => {
           email: "person@example.com",
           plan_type: "plus",
           rate_limit: {
-            primary_window: { used_percent: 12, reset_at: 1_788_000_000 },
             secondary_window: { used_percent: 34, reset_at: 1_789_000_000 },
             tertiary_window: { used_percent: 56, reset_at: 1_790_000_000 },
           },
@@ -141,12 +140,14 @@ describe("fetchProviderQuotaReports", () => {
     const byProvider = Object.fromEntries(result.reports.map(report => [report.provider, report]));
 
     expect(Object.keys(byProvider).sort()).toEqual(["anthropic", "google-antigravity", "openai", "xai"]);
-    expect(byProvider.openai?.quota.fiveHourPercent).toBe(12);
     expect(byProvider.openai?.quota.weeklyPercent).toBe(34);
     expect(byProvider.xai?.quota.monthlyPercent).toBe(25);
-    expect(byProvider.anthropic?.quota.fiveHourPercent).toBe(41.5);
     expect(byProvider.anthropic?.quota.weeklyPercent).toBe(72);
-    expect(byProvider.anthropic?.quota.customWindows?.map(window => window.label)).toEqual(["Opus", "Sonnet"]);
+    expect(byProvider.anthropic?.quota.customWindows).toEqual([
+      { label: "5h", percent: 41.5, resetAt: Date.parse("2026-07-05T12:00:00Z") },
+      { label: "Opus", percent: 88 },
+      { label: "Sonnet", percent: 19 },
+    ]);
     expect(byProvider["google-antigravity"]?.quota.customWindows).toEqual([
       { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },
@@ -164,7 +165,7 @@ describe("fetchProviderQuotaReports", () => {
   });
 
   test("skips Anthropic quota when the stored access token is expired", async () => {
-    saveCredential("anthropic", { access: "expired-claude-access", refresh: "expired-claude-refresh", expires: Date.now() - 1 });
+    await saveCredential("anthropic", { access: "expired-claude-access", refresh: "expired-claude-refresh", expires: Date.now() - 1 });
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       seen.push(String(input));

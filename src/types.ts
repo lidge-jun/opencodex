@@ -258,6 +258,19 @@ export interface OcxClaudeCodeConfig {
   nativePassthrough?: boolean;
   /** Upstream for the native passthrough (tests/enterprise gateways). Default: https://api.anthropic.com */
   anthropicBaseUrl?: string;
+  /**
+   * Native passthrough body inactivity budget in SECONDS — raw upstream-byte silence
+   * while a read is pending, NOT total duration (slow-but-alive streams never trip it;
+   * devlog 260716_passthrough_followups/010). Default 90. Min 1. Exactly 0 disables;
+   * negative/non-finite values fall back to the default.
+   */
+  bodyStallSec?: number;
+  /**
+   * Native passthrough cumulative body byte cap (streamed SSE and buffered non-stream
+   * alike) — an OOM/occupancy guard, not a correctness limit. Default 67108864 (64 MiB).
+   * Exactly 0 disables; negative/non-finite values fall back to the default.
+   */
+  bodyMaxBytes?: number;
   /** Default model slot injected as ANTHROPIC_MODEL by `ocx claude`. */
   model?: string;
   /** Haiku/small-fast slot injected as ANTHROPIC_DEFAULT_HAIKU_MODEL (+ legacy SMALL_FAST). */

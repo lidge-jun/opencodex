@@ -21,6 +21,25 @@ const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
+// Transient-5xx status retry layer (pre-stream only; devlog/_plan/260716_claudecode_hardening/010).
+const TRANSIENT_RETRY_MAX_ATTEMPTS = 3; // 1 initial + 2 retries
+const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
+// A failed attempt slower than this is the "slow 502" incident shape (191s observed on
+// 2026-07-15): retrying it only duplicates upstream load past client timeouts — return it.
+const TRANSIENT_RETRY_SLOW_ATTEMPT_MS = 15_000;
+
+/**
+ * Upstream statuses treated as transient: gateway errors and Cloudflare 52x.
+ * 500 is included per the OpenAI SDK default (auto-retries >=500; Tier-2 proven in
+ * devlog/260716_ocx_claude_sol_502_midstream/02). 507 was observed in the 48h ledger
+ * but is deliberately excluded (storage-class, not gateway-transient).
+ */
+export function isTransientUpstreamStatus(status: number): boolean {
+  return status === 500 || status === 502 || status === 503 || status === 504
+    || status === 520 || status === 521 || status === 522;
+}
+
 export interface RetryBackoffOptions {
   baseDelayMs: number;
   maxDelayMs: number;
@@ -121,6 +140,11 @@ export interface ResetRetryOptions {
   attempts?: number;
 }
 
+export interface TransientRetryOptions extends ResetRetryOptions {
+  /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
+  slowAttemptMs?: number;
+}
+
 /**
  * Run `doFetch`, retrying only connection-reset-shaped rejections (see
  * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
@@ -149,4 +173,42 @@ export async function fetchWithResetRetry(
     }
   }
   throw lastError ?? new Error("upstream fetch failed");
+}
+
+/**
+ * fetchWithResetRetry plus a transient-5xx status retry layer, PRE-STREAM only: a
+ * returned Response has by definition not been relayed to the client yet, so replaying
+ * the (string-body) request is safe. The failed attempt's body is cancelled before the
+ * retry; every returned response (ok, non-transient, aborted, slow, exhausted) keeps
+ * its body intact. Honors Retry-After via retryBackoffDelayMs.
+ *
+ * A failed attempt slower than the slow budget is returned as-is (slow-502 shape);
+ * note `opts.attempts` is shared with the inner reset layer (no caller passes it today).
+ */
+export async function fetchWithTransientRetry(
+  doFetch: () => Promise<Response>,
+  opts: TransientRetryOptions = {},
+): Promise<Response> {
+  const attempts = Math.max(1, opts.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS);
+  const slowAttemptMs = opts.slowAttemptMs ?? TRANSIENT_RETRY_SLOW_ATTEMPT_MS;
+  let attemptStart = Date.now();
+  let res = await fetchWithResetRetry(doFetch, opts);
+  for (let attempt = 0; attempt < attempts - 1; attempt++) {
+    if (res.ok || !isTransientUpstreamStatus(res.status)) return res;
+    if (opts.abortSignal?.aborted) return res;
+    if (Date.now() - attemptStart > slowAttemptMs) return res;
+    console.warn(
+      `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${attempt + 2}/${attempts})`,
+    );
+    const delay = retryBackoffDelayMs(attempt, {
+      baseDelayMs: TRANSIENT_RETRY_BASE_DELAY_MS,
+      maxDelayMs: TRANSIENT_RETRY_MAX_DELAY_MS,
+      headers: res.headers,
+    });
+    cancelResponseBodyBestEffort(res);
+    await sleepWithAbort(delay, opts.abortSignal);
+    attemptStart = Date.now();
+    res = await fetchWithResetRetry(doFetch, opts);
+  }
+  return res;
 }

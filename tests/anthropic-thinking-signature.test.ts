@@ -151,6 +151,7 @@ describe("parser ocxr1 decode + anthropic replay", () => {
       model: "anthropic/claude-x",
       input: [
         { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "chain" }], encrypted_content: encrypted },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
         { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
       ],
     });
@@ -167,6 +168,7 @@ describe("parser ocxr1 decode + anthropic replay", () => {
       model: "anthropic/claude-x",
       input: [
         { type: "reasoning", id: "rs_1", summary: [], encrypted_content: encrypted },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
         { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
       ],
     });
@@ -180,6 +182,7 @@ describe("parser ocxr1 decode + anthropic replay", () => {
       model: "anthropic/claude-x",
       input: [
         { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "chain" }], encrypted_content: "gAAAAABopaqueOpenAI" },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
         { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
       ],
     });
@@ -197,6 +200,7 @@ describe("parser ocxr1 decode + anthropic replay", () => {
       input: [
         { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "chain" }], encrypted_content: encrypted },
         { type: "function_call", call_id: "call_1", name: "shell", arguments: "{}" },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
         { type: "function_call_output", call_id: "call_1", output: "done" },
         { type: "message", role: "user", content: [{ type: "input_text", text: "next" }] },
       ],
@@ -214,6 +218,55 @@ describe("parser ocxr1 decode + anthropic replay", () => {
     expect(thinkIdx).toBeGreaterThan(redIdx);
     expect(content[thinkIdx].signature).toBe("RealSig1234567890==");
     expect(content[thinkIdx].thinking).toBe("chain");
+  });
+
+  test("two signed reasoning siblings replay with each signature attached to its own text", async () => {
+    const adapter = createAnthropicAdapter(provider);
+    const firstEnvelope = encodeReasoningEnvelope({
+      sig: "FirstRealSignature123456==",
+      txt: "first signed chain",
+    });
+    const secondEnvelope = encodeReasoningEnvelope({
+      sig: "SecondRealSignature123456==",
+      txt: "second signed chain",
+    });
+    const parsed = parseRequest({
+      model: "anthropic/claude-x",
+      input: [
+        { type: "reasoning", id: "rs_first", summary: [], encrypted_content: firstEnvelope },
+        { type: "reasoning", id: "rs_second", summary: [], encrypted_content: secondEnvelope },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "next" }] },
+      ],
+    });
+    const parsedAssistant = parsed.context.messages.find(message => message.role === "assistant") as {
+      content: OcxThinkingContent[];
+    };
+    const parsedThinking = parsedAssistant.content.filter(part => part.type === "thinking");
+
+    expect(parsedThinking).toHaveLength(2);
+    expect(parsedThinking.map(part => ({
+      thinking: part.thinking,
+      signature: part.signature,
+    }))).toEqual([
+      { thinking: "first signed chain", signature: "FirstRealSignature123456==" },
+      { thinking: "second signed chain", signature: "SecondRealSignature123456==" },
+    ]);
+
+    const request = await adapter.buildRequest(parsed) as { body: string };
+    const body = JSON.parse(request.body) as {
+      messages: Array<{
+        role: string;
+        content: Array<{ type: string; thinking?: string; signature?: string; text?: string }>;
+      }>;
+    };
+    const replayedAssistant = body.messages.find(message => message.role === "assistant");
+    const replayedThinking = replayedAssistant?.content.filter(block => block.type === "thinking");
+
+    expect(replayedThinking).toEqual([
+      { type: "thinking", thinking: "first signed chain", signature: "FirstRealSignature123456==" },
+      { type: "thinking", thinking: "second signed chain", signature: "SecondRealSignature123456==" },
+    ]);
   });
 });
 

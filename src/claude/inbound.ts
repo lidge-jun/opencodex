@@ -130,6 +130,15 @@ function pushUserMessage(input: Rec[], blocks: Rec[]): void {
  */
 export const DEFAULT_BLOCKED_SKILLS = ["claude-api"];
 
+/** Shared effective policy for proxy elision and generated routed-agent guards. */
+export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "blockedSkills">): string[] {
+  const names = cc?.blockedSkills ?? DEFAULT_BLOCKED_SKILLS;
+  return [...new Set(names
+    .filter((name): name is string => typeof name === "string")
+    .map(name => name.trim().toLowerCase())
+    .filter(name => name.length > 0))];
+}
+
 /**
  * ocx-route directive (devlog 072): injected agent-definition bodies carry
  * `<!-- ocx-route: <model> -->` because Claude Code 2.1.207 ignores custom
@@ -395,7 +404,7 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   const systemParts: string[] = [];
   const topLevelSystem = systemToInstructions(raw.system);
   if (topLevelSystem !== undefined) systemParts.push(topLevelSystem);
-  const blockedNames = (cc?.blockedSkills ?? DEFAULT_BLOCKED_SKILLS).map(n => n.toLowerCase()).filter(n => n.length > 0);
+  const blockedNames = effectiveBlockedSkillNames(cc);
   const elide: SkillElisionContext = {
     callIds: blockedSkillCallIds(raw.messages, blockedNames),
     names: blockedNames,

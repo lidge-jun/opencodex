@@ -28,7 +28,7 @@ import { fetchProviderQuotaReports } from "../providers/quota";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../providers/context-cap";
 import { readUsageEntries } from "../usage/log";
 import { getUsageDebugLogEntries } from "../usage/debug";
-import { parseRange, summarizeUsage } from "../usage/summary";
+import { parseRange, parseUsageSurface, summarizeUsage } from "../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../codex/auth-context";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { getDebugLogEntries } from "../lib/debug-log-buffer";
@@ -359,12 +359,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 
   if (url.pathname === "/api/usage" && req.method === "GET") {
     const range = parseRange(url.searchParams.get("range"));
+    const surface = parseUsageSurface(url.searchParams.get("surface"));
     const now = Date.now();
     try {
-      return jsonResponse(summarizeUsage(readUsageEntries(), range, now));
+      return jsonResponse(summarizeUsage(readUsageEntries(), range, now, surface));
     } catch {
       return jsonResponse({
         range,
+        surface,
         since: null,
         generatedAt: now,
         summary: {
@@ -1198,7 +1200,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    removeCredential(provider);
+    await removeCredential(provider);
     clearLoginState(provider);
     return jsonResponse({ success: true });
   }
@@ -1217,7 +1219,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../oauth/store");
-    if (!setActiveAccount(provider, body.accountId)) return jsonResponse({ error: "account not found" }, 404);
+    if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
     const { clearProviderQuotaCache } = await import("../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
@@ -1228,7 +1230,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeAccount, getAccountSet } = await import("../oauth/store");
-    if (!removeAccount(provider, id)) return jsonResponse({ error: "account not found" }, 404);
+    if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearProviderQuotaCache } = await import("../providers/quota");
     clearProviderQuotaCache();

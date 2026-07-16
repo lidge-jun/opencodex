@@ -14,6 +14,61 @@ export interface ClearableDeadline {
   clear: () => void;
 }
 
+export interface IdleDeadline {
+  /** (Re-)arm the timer for one idle window. Call when a wait for progress BEGINS. No-op after fire/cancel. */
+  reset: () => void;
+  /** Disarm the timer WITHOUT retiring the deadline (call when the awaited progress arrives). No-op after fire/cancel. */
+  pause: () => void;
+  /** Retire permanently (success/teardown paths). Idempotent. */
+  cancel: () => void;
+}
+
+/**
+ * Resettable inactivity deadline (devlog 260716_passthrough_followups/010).
+ *
+ * Fires `onIdle` at most ONCE after `idleMs` elapses with no `reset()`/`pause()`.
+ * Contract:
+ * - `idleMs <= 0` returns an inert no-op deadline — the 0-disable responsibility
+ *   lives here so callers cannot mis-handle it.
+ * - The timer starts DISARMED: callers arm it with `reset()` when a wait begins and
+ *   `pause()` it when the wait settles, so pull-based relays never count downstream
+ *   backpressure (no pending read) as upstream inactivity.
+ * - First terminal wins: after `onIdle` runs or `cancel()` is called, every method
+ *   is a no-op and `onIdle` never runs again.
+ * - Never linked to fetch signals — the consumer decides how to kill its stream
+ *   (e.g. reader.cancel), keeping body-lifetime semantics unchanged.
+ */
+export function idleDeadline(idleMs: number, onIdle: () => void): IdleDeadline {
+  if (idleMs <= 0) return { reset: () => {}, pause: () => {}, cancel: () => {} };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let done = false;
+  const disarm = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  return {
+    reset: () => {
+      if (done) return;
+      disarm();
+      timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        timer = undefined;
+        onIdle();
+      }, idleMs);
+    },
+    pause: () => {
+      if (done) return;
+      disarm();
+    },
+    cancel: () => {
+      if (done) return;
+      done = true;
+      disarm();
+    },
+  };
+}
+
 /**
  * Response-header deadline whose timer can be cleared without severing body-lifetime cancellation.
  *
