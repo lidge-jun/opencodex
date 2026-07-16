@@ -10,6 +10,14 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   const displayQuota = normalizeQuotaForPlan(quota, plan);
   if (!displayQuota) return [];
   const rows: (QuotaBarRow | null)[] = [
+    typeof displayQuota.fiveHourPercent === "number"
+      ? {
+          label: t("codexAuth.fiveHour"),
+          limitLabel: t("quota.fiveHourLimit"),
+          percent: displayQuota.fiveHourPercent,
+          resetAt: displayQuota.fiveHourResetAt,
+        }
+      : null,
     typeof displayQuota.weeklyPercent === "number"
       ? {
           label: t("codexAuth.weekly"),
@@ -39,7 +47,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
 /** Max utilisation across known windows (for sorting providers by urgency). */
 export function maxQuotaUtilisation(quota: AccountQuota | null): number {
   if (!quota) return -1;
-  const vals = [quota.weeklyPercent, quota.monthlyPercent]
+  const vals = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent]
     .filter((n): n is number => typeof n === "number");
   for (const w of quota.customWindows ?? []) {
     if (typeof w.percent === "number") vals.push(w.percent);

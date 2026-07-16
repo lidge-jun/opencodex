@@ -364,16 +364,21 @@
   font-size: 15px;
   font-weight: 600;
   line-height: 1.2;
-  padding: 8px 14px;
-  color: var(--text);
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--raised);
+  padding: 8px 4px;
+  color: var(--accent);
+  border: none !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
 }
 .pwi-edit-json-btn:hover {
-  color: var(--text);
-  border-color: var(--border);
-  background: var(--hover);
+  color: var(--accent-hover);
+  border-color: transparent;
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
 }
 .pwi-edit-json-btn svg {
   flex-shrink: 0;
@@ -1491,7 +1496,9 @@
   padding-top: 4px;
 }
 .pwi-settings-actions .pwi-save-btn.btn-primary,
-.pwi-settings-actions .pwi-save-btn {
+.pwi-settings-actions .pwi-save-btn,
+.pwi-json-panel-actions .pwi-save-btn,
+.pwi-json-unsaved-actions .pwi-save-btn {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -1503,13 +1510,29 @@
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
-.pwi-settings-actions .pwi-save-btn:hover:not(:disabled) {
+.pwi-settings-actions .pwi-save-btn:hover:not(:disabled),
+.pwi-json-panel-actions .pwi-save-btn:hover:not(:disabled),
+.pwi-json-unsaved-actions .pwi-save-btn:hover:not(:disabled) {
   color: var(--accent-hover) !important;
   background: transparent !important;
   text-decoration-color: var(--accent-hover);
 }
-.pwi-settings-actions .pwi-save-btn:disabled {
+.pwi-settings-actions .pwi-save-btn:disabled,
+.pwi-json-panel-actions .pwi-save-btn:disabled,
+.pwi-json-unsaved-actions .pwi-save-btn:disabled {
   opacity: 0.45;
+}
+.pwi-json-panel-actions .pwi-chrome-btn,
+.pwi-json-unsaved-actions .pwi-chrome-btn {
+  padding-inline: 6px !important;
+}
+.pwi-json-discard-btn {
+  color: var(--amber) !important;
+  text-decoration-color: color-mix(in oklab, var(--amber) 45%, transparent) !important;
+}
+.pwi-json-discard-btn:hover:not(:disabled) {
+  color: var(--amber) !important;
+  text-decoration-color: var(--amber) !important;
 }
 .providers-workspace-model-meta .badge,
 .pwi-kv .badge.badge-muted {
@@ -1862,9 +1885,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-.pwi-json-discard-btn {
-  color: var(--amber) !important;
 }
 .pwi-remove-confirm-card {
   max-width: 420px;

@@ -185,7 +185,8 @@ function accountQuotaFromReport(report?: ProviderQuotaReportView): AccountQuota 
   if (!report?.quota || typeof report.quota !== "object" || Array.isArray(report.quota)) return null;
   const q = report.quota as Partial<AccountQuota>;
   const hasWindow =
-    typeof q.weeklyPercent === "number"
+    typeof q.fiveHourPercent === "number"
+    || typeof q.weeklyPercent === "number"
     || typeof q.monthlyPercent === "number"
     || (Array.isArray(q.customWindows) && q.customWindows.length > 0);
   if (!hasWindow) return null;
@@ -1606,16 +1607,16 @@ function JsonEditorPanel({
               {t("pws.jsonUnsavedBadge")}
             </span>
           )}
-          <button type="button" className="btn btn-ghost" onClick={formatJson} disabled={saving}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={formatJson} disabled={saving}>
             {t("pws.jsonFormat")}
           </button>
-          <button type="button" className="btn btn-ghost" onClick={onRestore} disabled={saving || !isDirty}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onRestore} disabled={saving || !isDirty}>
             {t("pws.jsonRestore")}
           </button>
-          <button type="button" className="btn btn-ghost" onClick={onRequestClose} disabled={saving}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onRequestClose} disabled={saving}>
             {t("pws.jsonDiscard")}
           </button>
-          <button type="button" className="btn btn-primary" onClick={saveWithValidation} disabled={saving || !isDirty}>
+          <button type="button" className="btn btn-primary pwi-save-btn" onClick={saveWithValidation} disabled={saving || !isDirty}>
             {saving ? t("common.saving") : t("common.save")}
           </button>
         </div>
@@ -1666,13 +1667,13 @@ function JsonUnsavedDialog({
         <h3 id="pwi-json-unsaved-title" className="pwi-json-unsaved-title">{t("pws.jsonUnsavedTitle")}</h3>
         <p className="muted pwi-json-unsaved-desc">{t("pws.jsonUnsavedDesc")}</p>
         <div className="pwi-json-unsaved-actions">
-          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onCancel} disabled={busy}>
             {t("pws.jsonKeepEditing")}
           </button>
-          <button type="button" className="btn btn-ghost pwi-json-discard-btn" onClick={onDiscard} disabled={busy}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn pwi-json-discard-btn" onClick={onDiscard} disabled={busy}>
             {t("pws.jsonDiscard")}
           </button>
-          <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
+          <button type="button" className="btn btn-primary pwi-save-btn" onClick={onSave} disabled={busy}>
             {busy ? t("common.saving") : t("common.save")}
           </button>
         </div>
@@ -1705,7 +1706,7 @@ function RemoveProviderDialog({
         </h3>
         <p className="muted pwi-remove-confirm-desc">{t("pws.removeConfirmDesc")}</p>
         <div className="pwi-remove-confirm-actions">
-          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onCancel}>
             {t("common.cancel")}
           </button>
           <button type="button" className="btn pwi-remove-confirm-danger" onClick={onConfirm}>
@@ -1775,7 +1776,7 @@ function OverviewPanel({
           <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>
           <button
             type="button"
-            className="btn btn-ghost pwi-edit-json-btn"
+            className="btn btn-ghost pwi-edit-json-btn pwi-chrome-btn"
             onClick={onEditConfig}
             aria-label={t("prov.editJson")}
             title={t("pws.editJsonDesc")}
