@@ -587,9 +587,10 @@ export interface OcxProviderConfig {
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).
    * "oauth": resolve a stored OAuth access token (auto-refreshed) and use it as the Bearer key.
+   * "local": local runtime (Ollama etc.) — no remote key required.
    * Only the openai-responses adapter implements "forward"; openai-chat uses its own key/token.
    */
-  authMode?: "key" | "forward" | "oauth";
+  authMode?: "key" | "forward" | "oauth" | "local";
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
   /**
@@ -597,6 +598,8 @@ export interface OcxProviderConfig {
    * `keyOptional` — free tiers may still require an API key.
    */
   freeTier?: boolean;
+  /** Optional human note shown in the providers UI (not used for routing). */
+  note?: string;
   /** Strip one trailing bracketed suffix from model ids before sending them upstream. */
   modelSuffixBracketStrip?: boolean;
   /**
