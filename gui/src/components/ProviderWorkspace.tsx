@@ -300,37 +300,35 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
     ? "pwi-connection-status pwi-connection-status--ok"
     : "pwi-connection-status pwi-connection-status--warn";
   return (
-    <section className="pwi-panel pwi-connection" aria-label={t("pws.connection")}>
-      <header className="pwi-panel-head">
-        <h3 className="pwi-panel-title">{t("pws.connection")}</h3>
-      </header>
-      <div className="pwi-connection-grid" role="list">
-        <div className="pwi-connection-cell" role="listitem">
-          <span className="pwi-cell-label">{t("dash.status")}</span>
-          <span className={statusCls}>{statusText}</span>
+    <section className="pwi-section" aria-label={t("pws.connection")}>
+      <h3 className="pwi-section-title">{t("pws.connection")}</h3>
+      <dl className="pwi-kv">
+        <div className="pwi-kv-row">
+          <dt>{t("dash.status")}</dt>
+          <dd className={statusCls}>{statusText}</dd>
         </div>
-        <div className="pwi-connection-cell" role="listitem">
-          <span className="pwi-cell-label">{t("modal.baseUrl")}</span>
-          <code className="pwi-cell-value-mono">{baseUrl}</code>
+        <div className="pwi-kv-row">
+          <dt>{t("modal.baseUrl")}</dt>
+          <dd><code className="pwi-cell-value-mono">{baseUrl}</code></dd>
         </div>
-        <div className="pwi-connection-cell" role="listitem">
-          <span className="pwi-cell-label">{t("pws.cell.lastChecked")}</span>
-          <span className="pwi-cell-value">{formatRelativeTime(lastCheckedAt)}</span>
+        <div className="pwi-kv-row">
+          <dt>{t("pws.cell.lastChecked")}</dt>
+          <dd>{formatRelativeTime(lastCheckedAt)}</dd>
         </div>
-        <div className="pwi-connection-cell" role="listitem">
-          <span className="pwi-cell-label">{t("pws.cell.auth")}</span>
-          <span className="pwi-cell-value">{authModeLabel(item, t)}</span>
+        <div className="pwi-kv-row">
+          <dt>{t("pws.cell.auth")}</dt>
+          <dd>{authModeLabel(item, t)}</dd>
         </div>
-        <div className="pwi-connection-cell" role="listitem">
-          <span className="pwi-cell-label">{t("pws.cell.defaultModel")}</span>
-          <span className="pwi-cell-value">
+        <div className="pwi-kv-row">
+          <dt>{t("pws.cell.defaultModel")}</dt>
+          <dd>
             {item.defaultModel
               ? <>{item.defaultModel}{" "}<span className="badge badge-muted">{t("prov.defaultBadge")}</span></>
               : <span className="muted">&mdash;</span>}
-          </span>
+          </dd>
         </div>
-      </div>
-      <div className={`pwi-connection-footer${status === "ready" ? "" : " pwi-connection-footer--warn"}`}>
+      </dl>
+      <div className={`pwi-section-meta-row${status === "ready" ? "" : " pwi-section-meta-row--warn"}`}>
         <span className="pwi-connection-ops" role="status">
           {status === "ready"
             ? <IconCheck style={{ width: 13, height: 13 }} aria-hidden="true" />
@@ -360,42 +358,44 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   return (
-    <aside className="pwi-panel pwi-side-panel" aria-label={t("pws.statsAria")}>
-      <div className="pwi-side-block">
-        <header className="pwi-panel-head">
-          <h3 className="pwi-panel-title">{t("pws.statsTitle")}</h3>
-        </header>
-        <div className="pwi-stats-row-label">{t("pws.stats.requestsDay")}</div>
-        <div className="pwi-stats-value">&mdash;</div>
-        <div className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</div>
-        <div className="pwi-stats-line">
-          <span className="pwi-stats-line-label">{t("pws.stats.totalRequests")}</span>
-          <span className="pwi-stats-line-value">{formatRequestCount(requests)}</span>
+    <aside className="pwi-section pwi-section--side" aria-label={t("pws.statsAria")}>
+      <h3 className="pwi-section-title">{t("pws.statsTitle")}</h3>
+      <dl className="pwi-kv pwi-kv--stack">
+        <div className="pwi-kv-row">
+          <dt>{t("pws.stats.requestsDay")}</dt>
+          <dd>
+            <span className="pwi-stats-value">&mdash;</span>
+            <span className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</span>
+          </dd>
         </div>
-        <div className="pwi-stats-line">
-          <span className="pwi-stats-line-label">{t("dash.tokens30d")}</span>
-          <span className="pwi-stats-line-value">{formatTokenCount(tokens)}</span>
+        <div className="pwi-kv-row">
+          <dt>{t("pws.stats.totalRequests")}</dt>
+          <dd className="pwi-kv-mono">{formatRequestCount(requests)}</dd>
+        </div>
+        <div className="pwi-kv-row">
+          <dt>{t("dash.tokens30d")}</dt>
+          <dd className="pwi-kv-mono">{formatTokenCount(tokens)}</dd>
         </div>
         {quotaReport && (
-          <div className="pwi-stats-line">
-            <span className="pwi-stats-line-label">{t("pws.stats.quotaUpdated")}</span>
-            <span className="pwi-stats-line-value" title={quotaReport.source ? t("pws.stats.source", { source: quotaReport.source }) : undefined}>
+          <div className="pwi-kv-row">
+            <dt>{t("pws.stats.quotaUpdated")}</dt>
+            <dd className="pwi-kv-mono" title={quotaReport.source ? t("pws.stats.source", { source: quotaReport.source }) : undefined}>
               {formatRelativeTime(quotaReport.updatedAt)}
-            </span>
+            </dd>
           </div>
         )}
-        <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
-          <IconActivity style={{ width: 12, height: 12 }} aria-hidden="true" />
-          {t("pws.stats.viewDetailed")}
-          <IconChevron style={{ width: 11, height: 11 }} aria-hidden="true" />
-        </button>
-      </div>
-      <div className="pwi-side-block pwi-side-block--notes" aria-label={t("pws.notesAria")}>
-        <div className="pwi-stats-notes-head">{t("pws.notes")}</div>
+      </dl>
+      <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
+        <IconActivity style={{ width: 12, height: 12 }} aria-hidden="true" />
+        {t("pws.stats.viewDetailed")}
+        <IconChevron style={{ width: 11, height: 11 }} aria-hidden="true" />
+      </button>
+      <div className="pwi-notes-block" aria-label={t("pws.notesAria")}>
+        <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.notes")}</h4>
         {item.note ? (
-          <div className="pwi-stats-notes-body">{item.note}</div>
+          <p className="pwi-stats-notes-body">{item.note}</p>
         ) : (
-          <div className="pwi-stats-notes-placeholder muted">{t("pws.notesPlaceholder")}</div>
+          <p className="pwi-stats-notes-placeholder muted">{t("pws.notesPlaceholder")}</p>
         )}
       </div>
     </aside>
@@ -491,12 +491,10 @@ function AuthAccountsCard({
   };
 
   return (
-    <section className="pwi-panel pwi-auth-panel" aria-label={isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}>
-      <header className="pwi-panel-head">
-        <h3 className="pwi-panel-title">
-          {isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}
-        </h3>
-      </header>
+    <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}>
+      <h3 className="pwi-section-title">
+        {isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}
+      </h3>
       <div className="pwi-auth-body">
         {isOauth && (
           <>

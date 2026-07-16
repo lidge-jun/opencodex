@@ -682,13 +682,13 @@
 }
 
 /* ---- config section inside Models / Usage / Settings tabs ---- */
-/* Flat panels: background contrast, not stacked borders */
+/* Integrated into page: no card chrome, title + divider rows only */
 
 .providers-workspace-section {
-  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  background: none;
   border: none;
-  border-radius: 10px;
-  overflow: hidden;
+  border-radius: 0;
+  overflow: visible;
 }
 
 .providers-workspace-section-head {
@@ -696,8 +696,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px 8px;
-  border-bottom: none;
+  padding: 0 0 8px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 
 .providers-workspace-section-title {
@@ -715,17 +715,17 @@
 }
 
 .providers-workspace-section-body {
-  padding: 0 4px 8px;
+  padding: 0;
 }
 
-/* compact rows: divider only, no nested cell boxes */
+/* compact rows: divider only */
 .providers-workspace-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+  padding: 11px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
   min-width: 0;
 }
 
@@ -780,7 +780,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 10px 0;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
   transition: background 0.12s;
 }
@@ -1597,11 +1597,11 @@
   white-space: nowrap;
 }
 
-/* ---- Overview layout: two-column main + side (fewer nested boxes) ---- */
+/* ---- Overview: integrated into page (no card boxes) ---- */
 .pwi-overview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 240px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+  gap: 0 36px;
   padding: 0;
   min-height: 100%;
   align-items: start;
@@ -1609,13 +1609,15 @@
 .pwi-overview-main {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 28px;
   min-width: 0;
+  padding-right: 28px;
+  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
 }
 .pwi-overview-tab {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 .pwi-provider-summary {
   margin: 0;
@@ -1625,63 +1627,73 @@
   max-width: 76ch;
 }
 
-/* Shared flat panel: surface contrast, no hard card chrome */
-.pwi-panel {
-  background: color-mix(in oklab, var(--surface) 88%, transparent);
+/* Section: just a title + content on the page background */
+.pwi-section {
+  background: none;
   border: none;
-  border-radius: 10px;
+  border-radius: 0;
   min-width: 0;
-  overflow: hidden;
+  padding: 0;
 }
-.pwi-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 16px 0;
-}
-.pwi-panel-title {
-  margin: 0;
+.pwi-section-title {
+  margin: 0 0 4px;
   font-size: 12px;
   font-weight: 650;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-/* ---- Connection: one section, values with spacing only (no cell boxes) ---- */
-.pwi-connection {
-  padding-bottom: 4px;
-}
-.pwi-connection-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  column-gap: 20px;
-  row-gap: 16px;
-  margin: 12px 16px 4px;
-  padding: 14px 0 4px;
-  border: none;
-  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
-}
-.pwi-connection-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 0;
-  min-height: 0;
-  border: none !important; /* never form a box grid */
-}
-.pwi-cell-label {
-  font-size: 11px;
-  color: var(--faint);
-  font-weight: 550;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.pwi-cell-value {
-  font-size: 13.5px;
-  color: var(--text);
+.pwi-section-title--sub {
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+.pwi-section--side {
+  position: sticky;
+  top: 8px;
+  align-self: start;
+  padding-left: 0;
+}
+
+/* Key/value rows with horizontal dividers only */
+.pwi-kv {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+.pwi-kv-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 34%) minmax(0, 1fr);
+  gap: 12px 16px;
+  align-items: baseline;
+  margin: 0;
+  padding: 11px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+}
+.pwi-kv-row dt {
+  margin: 0;
+  font-size: 12px;
   font-weight: 500;
+  color: var(--muted);
+}
+.pwi-kv-row dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  min-width: 0;
+  word-break: break-word;
+}
+.pwi-kv--stack .pwi-kv-row {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.pwi-kv--stack .pwi-kv-row dt {
+  font-size: 11.5px;
+}
+.pwi-kv-mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
 }
 .pwi-cell-value-mono {
   font-size: 12.5px;
@@ -1699,21 +1711,19 @@
 .pwi-connection-status--warn {
   color: var(--amber);
 }
-/* Ops + action share one footer strip (not two stacked boxes) */
-.pwi-connection-footer {
+
+/* Ops line under connection — not a colored box */
+.pwi-section-meta-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  margin: 2px 12px 12px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--green) 9%, transparent);
+  margin-top: 2px;
+  padding-top: 12px;
   color: var(--green);
 }
-.pwi-connection-footer--warn {
-  background: color-mix(in oklab, var(--amber) 10%, transparent);
+.pwi-section-meta-row--warn {
   color: var(--amber);
 }
 .pwi-connection-ops {
@@ -1724,17 +1734,12 @@
   font-weight: 500;
   min-width: 0;
 }
-.pwi-connection-footer .btn {
+.pwi-section-meta-row .btn {
   color: inherit;
   flex-shrink: 0;
 }
-/* Legacy class hooks (if any remaining call sites) */
-.pwi-connection-operational,
-.pwi-connection-actions {
-  display: none;
-}
 
-/* ---- Quick actions (kept for other surfaces; lighter tiles) ---- */
+/* Quick actions if used elsewhere: text-like, no tiles */
 .pwi-qa-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1745,36 +1750,34 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 12px;
-  background: color-mix(in oklab, var(--raised) 70%, transparent);
+  padding: 10px 0;
+  background: none;
   border: none;
-  border-radius: 9px;
+  border-radius: 0;
   font: inherit;
   color: var(--text);
   text-decoration: none;
   cursor: pointer;
   text-align: left;
-  transition: background 0.12s;
   align-items: flex-start;
 }
 .pwi-qa-tile:hover {
-  background: var(--hover);
+  background: none;
+  color: var(--accent);
 }
 .pwi-qa-tile > svg {
-  width: 18px;
-  height: 18px;
-  padding: 6px;
-  box-sizing: content-box;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--surface) 80%, transparent);
+  width: 16px;
+  height: 16px;
+  padding: 0;
   border: none;
+  background: none;
   margin-bottom: 2px;
-  color: var(--text);
+  color: inherit;
 }
 .pwi-qa-label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text);
+  color: inherit;
 }
 .pwi-qa-desc {
   font-size: 11.5px;
@@ -1782,97 +1785,48 @@
   line-height: 1.4;
 }
 
-/* ---- Side panel: stats + notes in one surface ---- */
-.pwi-side-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  position: sticky;
-  top: 14px;
-  align-self: start;
-  padding-bottom: 12px;
-}
-.pwi-side-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 16px 12px;
-  font-size: 13px;
-}
-.pwi-side-block .pwi-panel-head {
-  padding: 12px 0 4px;
-}
-.pwi-side-block--notes {
-  margin: 0 12px;
-  padding: 12px 4px 0;
-  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
-  gap: 8px;
-}
-.pwi-stats-row-label {
-  font-size: 11.5px;
-  color: var(--muted);
-  font-weight: 500;
-}
 .pwi-stats-value {
-  font-size: 20px;
+  display: block;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text);
-  line-height: 1.1;
+  line-height: 1.15;
 }
 .pwi-stats-unavailable {
+  display: block;
   font-size: 12px;
-  margin-bottom: 4px;
-}
-.pwi-stats-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 0;
-  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
-}
-.pwi-stats-line:first-of-type {
-  border-top: none;
   margin-top: 2px;
-}
-.pwi-stats-line-label {
-  font-size: 12.5px;
-  color: var(--muted);
-}
-.pwi-stats-line-value {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  font-family: var(--mono);
 }
 .pwi-stats-usage-link {
   justify-content: space-between;
-  margin-top: 8px;
-  padding: 4px 0;
+  margin: 10px 0 0;
+  padding: 8px 0 0;
   width: 100%;
   font-size: 12.5px;
   color: var(--accent);
   gap: 6px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border-radius: 0;
 }
-.pwi-stats-notes-head {
-  font-size: 11px;
-  font-weight: 650;
-  color: var(--faint);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.pwi-notes-block {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 .pwi-stats-notes-body {
+  margin: 0;
   font-size: 12.5px;
   color: var(--text);
   line-height: 1.5;
 }
 .pwi-stats-notes-placeholder {
+  margin: 0;
   font-size: 12.5px;
   font-style: italic;
 }
-/* Auth on overview uses same flat panel */
-.pwi-auth-panel .pwi-auth-body {
-  padding: 8px 12px 12px;
+.pwi-auth-section .pwi-auth-body {
+  padding: 4px 0 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 
 /* ---- Overview panel ---- */
@@ -2143,8 +2097,14 @@
     grid-template-columns: 1fr;
     gap: 14px;
   }
-  .pwi-side-panel {
+  .pwi-section--side {
     position: static;
+  }
+  .pwi-overview-main {
+    padding-right: 0;
+    border-right: none;
+    padding-bottom: 20px;
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   }
   .pwi-overview-two-col {
     grid-template-columns: 1fr;
@@ -2167,9 +2127,6 @@
   }
   .pwi-oa-grid--single {
     max-width: none;
-  }
-  .pwi-connection-grid {
-    grid-template-columns: 1fr 1fr;
   }
   .pwi-qa-grid {
     grid-template-columns: 1fr 1fr;
@@ -2202,7 +2159,10 @@
 }
 
 @media (max-width: 760px) {
-  .pwi-connection-grid,
+  .pwi-kv-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
   .pwi-qa-grid,
   .pwi-oa-grid {
     grid-template-columns: 1fr;
