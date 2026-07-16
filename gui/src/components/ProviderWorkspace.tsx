@@ -265,10 +265,11 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
           <span className="pwi-rail-badge pwi-rail-badge--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
         ) : null}
       </span>
-      <span className={railStatusCls(item)} aria-hidden="true" title={status} />
+      {/* Model text left of status so an empty count doesn't leave the dot floating mid-row. */}
       <span className="providers-workspace-rail-model-count">
         {modelCount !== undefined && modelCount > 0 ? t("pws.modelCount", { count: modelCount }) : ""}
       </span>
+      <span className={railStatusCls(item)} aria-hidden="true" title={status} />
       <IconChevron className="providers-workspace-rail-chevron" aria-hidden="true" />
     </button>
   );

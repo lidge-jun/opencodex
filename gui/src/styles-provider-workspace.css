@@ -83,9 +83,9 @@
 
 /* compact provider row in the rail */
 .providers-workspace-rail-row {
-  /* Fixed columns so status dot + model count always land in the same place. */
+  /* icon | name | badges | model-count (right) | status-dot | chevron */
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto 7px 3.25rem 14px;
+  grid-template-columns: 26px minmax(0, 1fr) auto 3.25rem 7px 14px;
   align-items: center;
   column-gap: 8px;
   padding: 11px 14px 11px 16px;
@@ -236,6 +236,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  /* Dot sits just left of the chevron, always the same column. */
 }
 
 .providers-workspace-rail-status--active {
