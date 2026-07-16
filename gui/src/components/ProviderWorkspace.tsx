@@ -129,7 +129,6 @@ export interface ProviderWorkspaceProps {
   /** Name of the default routing provider (shows a Default label in the rail). */
   defaultProvider?: string;
   onAddProvider: (intent?: AddProviderIntent) => void;
-  onUseLegacyView: () => void;
   /** Open raw config JSON editor in the workspace main pane (not a modal). */
   onEditConfig: () => void;
   /** In-pane JSON editor state (fills the providers overview / main panel). */
@@ -288,6 +287,19 @@ function isLocalProvider(item: WorkspaceProvider): boolean {
   }
 }
 
+type ProviderKind = "cloud" | "local" | "selfHosted" | "account";
+
+const SELF_HOSTED_HINTS = ["ollama", "vllm", "lm-studio", "lmstudio", "litellm", "localai"];
+
+function providerKind(item: WorkspaceProvider & { name?: string }): ProviderKind {
+  const mode = (item.authMode ?? "").toLowerCase();
+  if (mode === "oauth" || mode === "forward") return "account";
+  if (isLocalProvider(item)) return "local";
+  const haystack = `${item.name ?? ""} ${item.adapter} ${item.baseUrl}`.toLowerCase();
+  if (SELF_HOSTED_HINTS.some(h => haystack.includes(h))) return "selfHosted";
+  return "cloud";
+}
+
 function RailRow({ item, selected, modelCount, isDefault, onClick }: {
   item: WorkspaceItem;
   selected: boolean;
@@ -397,7 +409,7 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
           <dt>{t("pws.cell.defaultModel")}</dt>
           <dd>
             {item.defaultModel
-              ? <>{item.defaultModel}{" "}<span className="badge badge-muted">{t("prov.defaultBadge")}</span></>
+              ? <>{item.defaultModel}{" "}<span className="pwi-model-flag">{t("prov.defaultBadge")}</span></>
               : <span className="muted">&mdash;</span>}
           </dd>
         </div>
@@ -409,7 +421,7 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
             : <IconAlert style={{ width: 13, height: 13 }} aria-hidden="true" />}
           {configurationText}
         </span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
+        <button type="button" className="btn btn-ghost btn-sm pwi-chrome-btn" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
           <IconInfo style={{ width: 13, height: 13 }} aria-hidden="true" />
           {t("pws.editSettings")}
         </button>
@@ -425,33 +437,33 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
 function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
-  quotaReport?: { updatedAt: number; source?: string };
+  quotaReport?: ProviderQuotaReportView;
   onViewUsage: () => void;
 }) {
   const t = useT();
   const timeLabels = useRelativeTimeLabels();
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
+  const hasRequests = typeof requests === "number";
+  const hasTokens = typeof tokens === "number";
+  const hasQuota = !!quotaReport;
   return (
     <aside className="pwi-section pwi-section--side" aria-label={t("pws.statsAria")}>
       <h3 className="pwi-section-title">{t("pws.statsTitle")}</h3>
       <dl className="pwi-kv pwi-kv--stack">
-        <div className="pwi-kv-row">
-          <dt>{t("pws.stats.requestsDay")}</dt>
-          <dd>
-            <span className="pwi-stats-value">&mdash;</span>
-            <span className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</span>
-          </dd>
-        </div>
-        <div className="pwi-kv-row">
-          <dt>{t("pws.stats.totalRequests")}</dt>
-          <dd className="pwi-kv-mono">{formatRequestCount(requests)}</dd>
-        </div>
-        <div className="pwi-kv-row">
-          <dt>{t("dash.tokens30d")}</dt>
-          <dd className="pwi-kv-mono">{formatTokenCount(tokens)}</dd>
-        </div>
-        {quotaReport && (
+        {hasRequests && (
+          <div className="pwi-kv-row">
+            <dt>{t("pws.stats.totalRequests")}</dt>
+            <dd className="pwi-kv-mono">{formatRequestCount(requests)}</dd>
+          </div>
+        )}
+        {hasTokens && (
+          <div className="pwi-kv-row">
+            <dt>{t("dash.tokens30d")}</dt>
+            <dd className="pwi-kv-mono">{formatTokenCount(tokens)}</dd>
+          </div>
+        )}
+        {hasQuota && (
           <div className="pwi-kv-row">
             <dt>{t("pws.stats.quotaUpdated")}</dt>
             <dd className="pwi-kv-mono" title={quotaReport.source ? t("pws.stats.source", { source: quotaReport.source }) : undefined}>
@@ -460,7 +472,10 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
           </div>
         )}
       </dl>
-      <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
+      {!hasRequests && !hasTokens && (
+        <p className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</p>
+      )}
+      <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm pwi-chrome-btn" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
         <IconActivity style={{ width: 12, height: 12 }} aria-hidden="true" />
         {t("pws.stats.viewDetailed")}
         <IconChevron style={{ width: 11, height: 11 }} aria-hidden="true" />
@@ -487,7 +502,7 @@ function TabOverview({
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
-  quotaReport?: { updatedAt: number; source?: string };
+  quotaReport?: ProviderQuotaReportView;
   onSelectTab: (tab: Tab) => void;
   lastCheckedAt?: number;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
@@ -574,7 +589,6 @@ function AuthAccountsCard({
         {isOauth && (
           <>
             <div className="pwi-auth-subsection">
-              <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.currentLogin")}</h4>
               <div className="pwi-auth-status-row">
                 <span className={`pwi-auth-dot ${oauth?.loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                 <span className="pwi-auth-status-text">
@@ -584,13 +598,13 @@ function AuthAccountsCard({
                 </span>
                 <span className="pwi-auth-actions">
                   {oauth?.loggedIn ? (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onLogout(item.name)}>
+                    <button type="button" className="btn btn-ghost btn-sm pwi-chrome-btn" onClick={() => authHandlers.onLogout(item.name)}>
                       {t("prov.logout")}
                     </button>
                   ) : busy ? (
                     <button
                       type="button"
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-sm pwi-chrome-btn"
                       onClick={() => authHandlers.onCancelLogin?.(item.name)}
                     >
                       {t("common.cancel")}
@@ -598,7 +612,7 @@ function AuthAccountsCard({
                   ) : (
                     <button
                       type="button"
-                      className="btn btn-primary btn-sm"
+                      className="btn btn-primary btn-sm pwi-chrome-btn"
                       onClick={() => authHandlers.onLogin(item.name, false)}
                     >
                       <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}
@@ -828,11 +842,11 @@ function TabModels({
       <div key={modelId} className="providers-workspace-model-row" style={style}>
         <span className="providers-workspace-model-id" title={modelId}>{modelId}</span>
         <span className="providers-workspace-model-meta">
-          {isDefault ? <span className="badge badge-muted">{t("prov.defaultBadge")}</span> : null}
-          {isSelected ? <span className="badge badge-green">{t("pws.selected")}</span> : null}
+          {isDefault ? <span className="pwi-model-flag">{t("prov.defaultBadge")}</span> : null}
+          {isSelected ? <span className="pwi-model-flag pwi-model-flag--selected">{t("pws.selected")}</span> : null}
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-sm pwi-chrome-btn"
             onClick={() => { void copyModelId(modelId); }}
             aria-label={t("pws.copyModelId")}
             title={t("pws.copyModelId")}
@@ -909,12 +923,14 @@ function TabModels({
 function TabUsage({ item, usageTotals, quotaReport }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
-  quotaReport?: { updatedAt: number; source?: string };
+  quotaReport?: ProviderQuotaReportView;
 }) {
   const t = useT();
   const timeLabels = useRelativeTimeLabels();
   const when = formatRelativeTime(quotaReport?.updatedAt, timeLabels);
   const hasUsage = usageTotals?.requests !== undefined;
+  const quota = accountQuotaFromReport(quotaReport);
+  const hasQuotaMeta = !!quotaReport;
   return (
     <div className="providers-workspace-section">
       <div className="providers-workspace-section-head">
@@ -939,22 +955,36 @@ function TabUsage({ item, usageTotals, quotaReport }: {
           )}
         </div>
         <div className="pwi-usage-block">
-          <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.quotaContext")}</h4>
-          <dl className="pwi-kv">
-            <div className="pwi-kv-row">
-              <dt>{t("pws.quotaSource")}</dt>
-              <dd>{quotaReport?.source?.trim() || t("pws.unavailable")}</dd>
-            </div>
-            <div className="pwi-kv-row">
-              <dt>{t("pws.lastUpdated")}</dt>
-              <dd>{quotaReport ? when : t("pws.unavailable")}</dd>
-            </div>
-            <div className="pwi-kv-row">
-              <dt>{t("pws.dailyLimit")}</dt>
-              <dd>{t("pws.unavailable")}</dd>
-            </div>
-          </dl>
-          {!hasUsage && !quotaReport && (
+          <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.rateLimits")}</h4>
+          {quota ? (
+            <>
+              <QuotaBars
+                quota={quota}
+                plan={null}
+                threshold={80}
+                t={t}
+                layout="stacked"
+                className="pwi-usage-quota-bars"
+              />
+              {hasQuotaMeta && (
+                <dl className="pwi-kv" style={{ marginTop: 12 }}>
+                  {quotaReport.source?.trim() ? (
+                    <div className="pwi-kv-row">
+                      <dt>{t("pws.quotaSource")}</dt>
+                      <dd className="pwi-kv-mono">{quotaReport.source.trim()}</dd>
+                    </div>
+                  ) : null}
+                  <div className="pwi-kv-row">
+                    <dt>{t("pws.lastUpdated")}</dt>
+                    <dd>{when}</dd>
+                  </div>
+                </dl>
+              )}
+            </>
+          ) : (
+            <p className="muted pwi-usage-empty">{t("pws.noRateLimits")}</p>
+          )}
+          {!hasUsage && !hasQuotaMeta && (
             <p className="muted" style={{ marginTop: 8 }}>{t("pws.noUsageFor", { name: formatProviderDisplayName(item.name) })}</p>
           )}
         </div>
@@ -1170,7 +1200,7 @@ function TabSettings({
             </div>
           )}
           <div className="pwi-settings-actions">
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving || !onUpdateProvider || !dirty}>
+            <button type="button" className="btn btn-primary btn-sm pwi-save-btn" onClick={() => void save()} disabled={saving || !onUpdateProvider || !dirty}>
               {saving ? t("pws.saving") : t("pws.saveSettings")}
             </button>
             {msg && <span className={msg.ok ? "pwi-settings-msg pwi-settings-msg--ok" : "pwi-settings-msg pwi-settings-msg--err"}>{msg.text}</span>}
@@ -1219,7 +1249,7 @@ function DetailPanel({
   onDeselect: () => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   usageTotals?: ProviderUsageTotals;
-  quotaReport?: { updatedAt: number; source?: string };
+  quotaReport?: ProviderQuotaReportView;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   modelCount: number;
   availableModels: string[];
@@ -1238,6 +1268,7 @@ function DetailPanel({
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [lastCheckedAt, setLastCheckedAt] = useState<number | undefined>(quotaReport?.updatedAt);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const isEnabled = !item.disabled;
 
   // Reset detail chrome when the selected provider changes.
@@ -1247,6 +1278,7 @@ function DetailPanel({
     setTestMsg(null);
     setLastCheckedAt(quotaReport?.updatedAt);
     setSettingsDirty(false);
+    setRemoveOpen(false);
   }, [item.name]); // eslint-disable-line react-hooks/exhaustive-deps -- reset UI when switching provider
 
   useEffect(() => {
@@ -1289,9 +1321,7 @@ function DetailPanel({
   };
 
   const confirmRemove = () => {
-    if (window.confirm(t("pws.removeConfirmUi", { name: item.name }))) {
-      onRemoveProvider(item.name);
-    }
+    setRemoveOpen(true);
   };
 
   const renderTabPanel = (): ReactNode => {
@@ -1339,7 +1369,7 @@ function DetailPanel({
       <div className="providers-workspace-detail-head">
         <button
           type="button"
-          className="btn btn-ghost btn-sm pwi-back-overview"
+          className="btn btn-ghost btn-sm pwi-back-overview pwi-chrome-btn"
           onClick={() => {
             if (tab === "settings" && settingsDirty && !window.confirm(t("pws.settingsUnsavedLeave"))) return;
             onDeselect();
@@ -1386,7 +1416,7 @@ function DetailPanel({
             </span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-sm pwi-chrome-btn"
               onClick={() => void testConnection()}
               disabled={testing || item.disabled}
               aria-label={t("pws.testConnection")}
@@ -1441,6 +1471,16 @@ function DetailPanel({
       >
         {renderTabPanel()}
       </div>
+      {removeOpen && (
+        <RemoveProviderDialog
+          name={item.name}
+          onCancel={() => setRemoveOpen(false)}
+          onConfirm={() => {
+            setRemoveOpen(false);
+            onRemoveProvider(item.name);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1551,7 +1591,7 @@ function JsonEditorPanel({
       <div className="pwi-json-panel-toolbar">
         <button
           type="button"
-          className="btn btn-ghost btn-sm pwi-back-overview"
+          className="btn btn-ghost btn-sm pwi-back-overview pwi-chrome-btn"
           onClick={onRequestClose}
           aria-label={t("pws.backToAll")}
           title={t("pws.backToAll")}
@@ -1635,6 +1675,42 @@ function JsonUnsavedDialog({
           </button>
           <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
             {busy ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** In-app remove confirmation (never use window.confirm for this). */
+function RemoveProviderDialog({
+  name, onCancel, onConfirm,
+}: {
+  name: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const t = useT();
+  const display = formatProviderDisplayName(name);
+  return (
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pwi-remove-confirm-title"
+      onClick={onCancel}
+    >
+      <div className="modal-card pwi-remove-confirm-card" onClick={e => e.stopPropagation()}>
+        <h3 id="pwi-remove-confirm-title" className="pwi-remove-confirm-title">
+          {t("pws.removeConfirmTitle", { name: display })}
+        </h3>
+        <p className="muted pwi-remove-confirm-desc">{t("pws.removeConfirmDesc")}</p>
+        <div className="pwi-remove-confirm-actions">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            {t("common.cancel")}
+          </button>
+          <button type="button" className="btn pwi-remove-confirm-danger" onClick={onConfirm}>
+            {t("common.remove")}
           </button>
         </div>
       </div>
@@ -1837,11 +1913,10 @@ function OverviewPanel({
 
 export default function ProviderWorkspace({
   providers, apiBase, defaultProvider, onAddProvider,
-  onUseLegacyView: _onUseLegacyView, onEditConfig, jsonEditor,
+  onEditConfig, jsonEditor,
   onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports: quotaReportsProp = {}, oauthStatus = {},
   accountSets = {}, keyPools = {}, busyProvider = null, loginHint = null, authHandlers,
 }: ProviderWorkspaceProps) {
-  void _onUseLegacyView;
   const t = useT();
   const [search, setSearch] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -1854,6 +1929,7 @@ export default function ProviderWorkspace({
   /** Status + pricing facets shown in the rail (all on by default). */
   const [statusFilter, setStatusFilter] = useState({ ready: true, needsSetup: true, disabled: true });
   const [pricingFilter, setPricingFilter] = useState({ free: true, paid: true });
+  const [typeFilter, setTypeFilter] = useState({ cloud: true, local: true, selfHosted: true, account: true });
   const [sortMode, setSortMode] = useState<ProviderSortMode>("az");
   const [filterOpen, setFilterOpen] = useState(false);
   const filterWrapRef = useRef<HTMLDivElement>(null);
@@ -1979,9 +2055,9 @@ export default function ProviderWorkspace({
         /* parent prop may still supply data */
       }
     };
-    void load(false);
-    // Soft refresh shortly after mount so WHAM/oauth windows populate if the first pass was cached empty.
-    const timer = window.setTimeout(() => { void load(true); }, 1200);
+    void load(true);
+    // Second pass after a beat in case the first oauth/WHAM probe was still warming up.
+    const timer = window.setTimeout(() => { void load(true); }, 1800);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -1994,34 +2070,43 @@ export default function ProviderWorkspace({
   );
   const freeCount = useMemo(() => allItems.filter(isFreeProvider).length, [allItems]);
   const paidCount = allItems.length - freeCount;
+  const typeCounts = useMemo(() => {
+    const counts = { cloud: 0, local: 0, selfHosted: 0, account: 0 };
+    for (const item of allItems) counts[providerKind(item)] += 1;
+    return counts;
+  }, [allItems]);
 
   const filteredSections = useMemo((): WorkspaceSections => {
     const q = search.trim().toLowerCase();
-    const byQueryAndPricing = (items: WorkspaceItem[]) => {
+    const byQueryAndFacets = (items: WorkspaceItem[]) => {
       const filtered = items.filter(p => {
         if (q && !p.name.toLowerCase().includes(q) && !p.adapter.toLowerCase().includes(q)) return false;
         const free = isFreeProvider(p);
         if (free && !pricingFilter.free) return false;
         if (!free && !pricingFilter.paid) return false;
+        const kind = providerKind(p);
+        if (!typeFilter[kind]) return false;
         return true;
       });
       return sortWorkspaceItems(filtered, sortMode);
     };
     return {
-      ready: statusFilter.ready ? byQueryAndPricing(sections.ready) : [],
-      needsSetup: statusFilter.needsSetup ? byQueryAndPricing(sections.needsSetup) : [],
-      disabled: statusFilter.disabled ? byQueryAndPricing(sections.disabled) : [],
+      ready: statusFilter.ready ? byQueryAndFacets(sections.ready) : [],
+      needsSetup: statusFilter.needsSetup ? byQueryAndFacets(sections.needsSetup) : [],
+      disabled: statusFilter.disabled ? byQueryAndFacets(sections.disabled) : [],
     };
-  }, [sections, search, statusFilter, pricingFilter, sortMode]);
+  }, [sections, search, statusFilter, pricingFilter, typeFilter, sortMode]);
 
   const filterActive =
     !statusFilter.ready || !statusFilter.needsSetup || !statusFilter.disabled
     || !pricingFilter.free || !pricingFilter.paid
+    || !typeFilter.cloud || !typeFilter.local || !typeFilter.selfHosted || !typeFilter.account
     || sortMode !== "az";
 
   const resetFilters = () => {
     setStatusFilter({ ready: true, needsSetup: true, disabled: true });
     setPricingFilter({ free: true, paid: true });
+    setTypeFilter({ cloud: true, local: true, selfHosted: true, account: true });
     setSortMode("az");
   };
 
@@ -2116,7 +2201,7 @@ export default function ProviderWorkspace({
           <div className="pwi-rail-header-actions">
             <button
               type="button"
-              className="btn btn-ghost btn-sm pwi-rail-add-btn"
+              className="btn btn-ghost btn-sm pwi-rail-add-btn pwi-chrome-btn"
               onClick={() => onAddProvider()}
               aria-label={t("modal.add")}
               title={t("modal.add")}
@@ -2141,14 +2226,14 @@ export default function ProviderWorkspace({
           <div className="pwi-rail-filter-wrap" ref={filterWrapRef}>
             <button
               type="button"
-              className={`btn btn-ghost btn-sm pwi-rail-filter-btn${filterActive || filterOpen ? " pwi-rail-filter-btn--active" : ""}`}
+              className={`pwi-rail-filter-btn${filterActive || filterOpen ? " pwi-rail-filter-btn--active" : ""}`}
               onClick={() => setFilterOpen(o => !o)}
               aria-label={t("pws.filterAria")}
               aria-haspopup="menu"
               aria-expanded={filterOpen}
               title={t("pws.filterAria")}
             >
-              <IconFilter width={29} height={29} aria-hidden="true" />
+              <IconFilter width={20} height={20} aria-hidden="true" />
               {filterActive && <span className="pwi-rail-filter-dot" aria-hidden="true" />}
             </button>
             {filterOpen && (
@@ -2203,6 +2288,30 @@ export default function ProviderWorkspace({
                   </div>
                 </div>
 
+                <div className="pwi-rail-filter-section">
+                  <div className="pwi-rail-filter-menu-head">{t("pws.filterType")}</div>
+                  <div className="pwi-rail-filter-list">
+                    {([
+                      { key: "cloud" as const, label: t("pws.type.cloud"), count: typeCounts.cloud },
+                      { key: "local" as const, label: t("pws.type.local"), count: typeCounts.local },
+                      { key: "selfHosted" as const, label: t("pws.type.selfHosted"), count: typeCounts.selfHosted },
+                      { key: "account" as const, label: t("pws.type.account"), count: typeCounts.account },
+                    ]).map(({ key, label, count }) => (
+                      <label key={key} className={`pwi-rail-filter-option${typeFilter[key] ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={typeFilter[key]}>
+                        <input
+                          type="checkbox"
+                          className="pwi-rail-filter-native"
+                          checked={typeFilter[key]}
+                          onChange={() => setTypeFilter(prev => ({ ...prev, [key]: !prev[key] }))}
+                        />
+                        <span className="pwi-rail-filter-toggle" aria-hidden="true" />
+                        <span className="pwi-rail-filter-option-label">{label}</span>
+                        <span className="pwi-rail-filter-option-count">{count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="pwi-rail-filter-section pwi-rail-filter-section--sort">
                   <div className="pwi-rail-filter-menu-head">{t("pws.sort")}</div>
                   <div className="pwi-rail-sort-grid" role="group" aria-label={t("pws.sortProvidersAria")}>
@@ -2223,7 +2332,7 @@ export default function ProviderWorkspace({
                 <div className="pwi-rail-filter-footer">
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm pwi-rail-filter-reset"
+                    className="pwi-rail-filter-reset"
                     onClick={resetFilters}
                     disabled={!filterActive}
                   >

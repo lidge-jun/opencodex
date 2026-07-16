@@ -110,15 +110,38 @@ export default function AddProviderModal({
   const [manualCodeOk, setManualCodeOk] = useState(true);
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
   const searchRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
 
   useEffect(() => { if (!initialCustom && catalogView === "browse") searchRef.current?.focus(); }, [initialCustom, catalogView]);
   useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter(el => !el.hasAttribute("disabled") && el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const initial = dialogRef.current?.querySelector<HTMLElement>("button, [href], input, select, textarea");
+    initial?.focus();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previouslyFocused?.focus?.();
+    };
   }, [onClose]);
   useEffect(() => {
     fetch(`${apiBase}/api/oauth/providers`).then(r => r.json()).then(d => setOauthSupported(d.providers ?? [])).catch(() => {});
@@ -335,7 +358,7 @@ export default function AddProviderModal({
 
   return (
     <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={e => e.stopPropagation()}>
+      <div className="modal-card" ref={dialogRef} onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
           <button className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
@@ -385,9 +408,15 @@ export default function AddProviderModal({
                   const hint = accountLoginHint?.provider === row.id ? accountLoginHint : null;
                   const icon = providerIconSrc(row.id);
                   const brand = providerBrandColor(row.id);
+                  const statusText = row.kind === "key"
+                    ? (row.statusLabel ?? t("prov.hasApiKey"))
+                    : st.loggedIn
+                      ? (st.email ?? t("prov.loggedIn"))
+                      : t("prov.notLoggedIn");
+                  const statusOk = row.kind === "key" || st.loggedIn;
                   return (
                     <div key={row.id} className="add-prov-account-block">
-                      <div className="add-prov-row">
+                      <div className="add-prov-account-row">
                         <span className="add-prov-row-icon" aria-hidden="true" style={brand ? { color: brand } : undefined}>
                           {icon && brand
                             ? <span className="provider-icon-mask" style={{ backgroundColor: brand, WebkitMaskImage: `url(${icon})`, maskImage: `url(${icon})` }} />
@@ -395,43 +424,52 @@ export default function AddProviderModal({
                               ? <img src={icon} alt="" />
                               : <IconServer width={16} height={16} />}
                         </span>
-                        <span className="add-prov-row-name">{formatProviderDisplayName(row.label || row.id)}</span>
-                        <span className="add-prov-account-status">
-                          <span className={`dot ${row.kind === "key" || st.loggedIn ? "dot-green" : "dot-muted"}`} />
-                          <span className={row.kind === "key" || st.loggedIn ? "add-prov-account-status-ok" : "muted"}>
-                            {row.kind === "key"
-                              ? (row.statusLabel ?? t("prov.hasApiKey"))
-                              : st.loggedIn
-                                ? (st.email ?? t("prov.loggedIn"))
-                                : t("prov.notLoggedIn")}
+                        <div className="add-prov-account-copy">
+                          <span className="add-prov-row-name">{formatProviderDisplayName(row.label || row.id)}</span>
+                          <span className={`add-prov-account-status${statusOk ? " add-prov-account-status--ok" : ""}`}>
+                            <span
+                              className={`dot ${statusOk ? "dot-green" : "dot-muted"}`}
+                              title={statusText}
+                              aria-hidden="true"
+                            />
+                            <span className="add-prov-account-status-text" title={statusText}>{statusText}</span>
                           </span>
-                        </span>
-                        {row.kind === "oauth" ? (
-                          isBusy ? (
-                            <span className="add-prov-account-busy">
-                              <span className="add-prov-account-busy-label">
-                                <span className="spin" /> {t("prov.waitingBrowser")}
+                        </div>
+                        <div className="add-prov-account-action">
+                          {row.kind === "oauth" ? (
+                            isBusy ? (
+                              <span className="add-prov-account-busy">
+                                <span className="add-prov-account-busy-label">
+                                  <span className="spin" /> {t("prov.waitingBrowser")}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => onAccountCancelLogin?.(row.id)}
+                                >
+                                  {t("common.cancel")}
+                                </button>
                               </span>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => onAccountCancelLogin?.(row.id)}
-                              >
-                                {t("common.cancel")}
+                            ) : st.loggedIn ? (
+                              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAccountLogout?.(row.id)}>
+                                {t("prov.logout")}
                               </button>
-                            </span>
-                          ) : st.loggedIn ? (
-                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAccountLogout?.(row.id)}>
-                              {t("prov.logout")}
-                            </button>
+                            ) : (
+                              <button type="button" className="btn btn-primary btn-sm" onClick={() => onAccountLogin?.(row.id)}>
+                                <IconLock width={13} height={13} /> {t("prov.login")}
+                              </button>
+                            )
                           ) : (
-                            <button type="button" className="btn btn-primary btn-sm" onClick={() => onAccountLogin?.(row.id)}>
-                              <IconLock width={13} height={13} /> {t("prov.login")}
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={onClose}
+                              title={t("modal.manage")}
+                            >
+                              {t("modal.manage")}
                             </button>
-                          )
-                        ) : (
-                          <span className="add-prov-row-spacer" aria-hidden="true" />
-                        )}
+                          )}
+                        </div>
                       </div>
                       {hint && (hint.url || hint.instructions || isBusy) && (
                         <div className="add-prov-account-hint muted">
@@ -610,7 +648,9 @@ export default function AddProviderModal({
                   )}
                 </div>
               )}
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+              <div className="add-prov-form-actions">
+                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
+                <div style={{ flex: 1 }} />
                 <button
                   className="link-btn"
                   onClick={() => {
@@ -623,8 +663,6 @@ export default function AddProviderModal({
                 >
                   {t("modal.useApiKeyInstead")}
                 </button>
-                <div style={{ flex: 1 }} />
-                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
               </div>
             </div>
           ) : (
@@ -704,7 +742,14 @@ export default function AddProviderModal({
                 <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
               </Field>
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
-              <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
+              <div className="add-prov-form-actions">
+                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
+                <div style={{ flex: 1 }} />
+                {preset.auth === "oauth" && (
+                  <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>
+                    {t("modal.useOauthLogin")}
+                  </button>
+                )}
                 <button
                   className={`btn ${dup ? "btn-amber" : "btn-primary"}`}
                   onClick={() => { void submit(); }}
@@ -713,9 +758,6 @@ export default function AddProviderModal({
                 >
                   {saving ? t("modal.adding") : (dup ? t("modal.overwriteProvider") : t("modal.add"))}
                 </button>
-                {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>{t("modal.useOauthLogin")}</button>}
-                <div style={{ flex: 1 }} />
-                <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
               </div>
             </div>
           )

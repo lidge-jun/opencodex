@@ -2,11 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import ProviderWorkspace from "../components/ProviderWorkspace";
 import { Notice } from "../ui";
-import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron } from "../icons";
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
-import QuotaBars from "../components/QuotaBars";
-import { providerIconSrc } from "../provider-icons";
 import "../styles-provider-workspace.css";
 
 interface Config {
@@ -31,7 +28,6 @@ const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [config, setConfig] = useState<Config | null>(null);
-  const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addIntent, setAddIntent] = useState<{ tier?: "free" | "paid" | "accounts"; custom?: boolean }>({});
   const [draft, setDraft] = useState("");
@@ -46,11 +42,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
-  const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
-  const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
-  const [newKeyValue, setNewKeyValue] = useState("");
-  const [layout, setLayout] = useState<"workspace" | "classic">("workspace");
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
   /** Snapshot of draft when the JSON editor opened — used for dirty detection. */
@@ -167,26 +159,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const addApiKey = async (provider: string) => {
-    const key = newKeyValue.trim();
-    if (!key) return;
-    const res = await fetch(`${apiBase}/api/providers/keys`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: provider, key }),
-    });
-    if (res.ok) {
-      notify(t("prov.keyAdded", { name: provider }), true);
-      setNewKeyValue("");
-      setAddingKeyFor(null);
-      fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]);
-      fetchConfig();
-      fetchProviderQuotas(true);
-    } else {
-      const data = await res.json().catch(() => ({}));
-      notify(data.error || t("prov.keyAddFail"), false);
-    }
-  };
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
     if (!window.confirm(t("prov.accountRemoveConfirm", { email: account.email ?? account.id }))) return;
@@ -248,7 +220,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       });
       if (res.ok) {
         notify(t("prov.saved"), true);
-        setEditing(false);
         setJsonEditorOpen(false);
         jsonBaselineRef.current = draft;
         fetchConfig();
@@ -271,13 +242,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     jsonBaselineRef.current = baseline;
     setDraft(baseline);
     setJsonEditorOpen(true);
-    setEditing(true);
   };
 
   /** Discard edits and leave the JSON pane. */
   const closeJsonEditor = () => {
     setJsonEditorOpen(false);
-    setEditing(false);
     const baseline = config ? JSON.stringify(config, null, 2) : jsonBaselineRef.current;
     jsonBaselineRef.current = baseline;
     setDraft(baseline);
@@ -490,398 +459,100 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     );
   }
 
-  if (layout === "workspace") {
-    return (
-      <div className="providers-workspace-shell">
-        {status && (
-          <div className="providers-workspace-shell-banner">
-            <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
-          </div>
-        )}
-        <div className="providers-workspace-shell-body">
-          <ProviderWorkspace
-            providers={config.providers}
-            apiBase={apiBase}
-            defaultProvider={config.defaultProvider}
-            onAddProvider={(intent) => {
-              setAddIntent(intent ?? {});
-              setAdding(true);
-            }}
-            onUseLegacyView={() => setLayout("classic")}
-            onEditConfig={openJsonEditor}
-            jsonEditor={{
-              open: jsonEditorOpen,
-              draft,
-              isDirty: jsonIsDirty,
-              onDraftChange: setDraft,
-              onSave: () => saveConfig(),
-              onClose: closeJsonEditor,
-              onRestore: restoreJsonEditor,
-            }}
-            onSetDisabled={setProviderDisabled}
-            onRemoveProvider={removeProvider}
-            onUpdateProvider={updateProvider}
-            quotaReports={quotaReports}
-            oauthStatus={oauthStatus}
-            accountSets={accountSets}
-            keyPools={keyPools}
-            busyProvider={busy}
-            loginHint={loginInfo}
-            authHandlers={{
-              onLogin: (provider, addAccount) => { void loginOAuth(provider, !!addAccount); },
-              onCancelLogin: (provider) => { void cancelOAuthLogin(provider); },
-              onLogout: (provider) => { void logoutOAuth(provider); },
-              onSwitchAccount: (provider, account) => { void switchAccount(provider, account); },
-              onRemoveAccount: (provider, account) => { void removeAccount(provider, account); },
-              onAddApiKey: handleAddApiKey,
-              onSwitchApiKey: (provider, entry) => { void switchApiKey(provider, entry); },
-              onRemoveApiKey: (provider, entry) => { void removeApiKey(provider, entry); },
-            }}
-          />
-        </div>
-        {adding && (
-          <AddProviderModal
-            apiBase={apiBase}
-            existingNames={Object.keys(config.providers)}
-            initialCustom={!!addIntent.custom}
-            initialTier={addIntent.tier ?? "free"}
-            onClose={() => {
-              if (busy) void cancelOAuthLogin(busy);
-              setAdding(false);
-              setAddIntent({});
-            }}
-            onAdded={(name) => {
-              setAdding(false);
-              setAddIntent({});
-              notify(t("prov.added", { name, cmd: "ocx sync" }), true);
-              fetchConfig();
-              fetchOauth();
-              fetchProviderQuotas(true);
-            }}
-            accountRows={[
-              ...oauthProviders.map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
-              ...Object.entries(config.providers)
-                .filter(([name, prov]) =>
-                  prov.hasApiKey
-                  && prov.authMode !== "oauth"
-                  && prov.authMode !== "forward"
-                  && !oauthProviders.includes(name))
-                .map(([name, prov]) => ({
-                  id: name,
-                  label: name,
-                  kind: "key" as const,
-                  statusLabel: prov.keyOptional && !prov.hasApiKey ? t("pws.freeTier") : t("prov.hasApiKey"),
-                })),
-            ]}
-            accountStatus={oauthStatus}
-            accountBusy={busy}
-            accountLoginHint={loginInfo}
-            onAccountLogin={(provider) => { void loginOAuth(provider); }}
-            onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
-            onAccountLogout={(provider) => { void logoutOAuth(provider); }}
-            accountManualCode={manualCode}
-            onAccountManualCodeChange={setManualCode}
-            onAccountManualCodeSubmit={(provider) => { void submitManualCode(provider); }}
-            accountManualCodeBusy={manualCodeBusy}
-            accountManualCodeMsg={manualCodeMsg}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // API-key providers shown alongside OAuth logins in the account panel.
-  const keyProviders = Object.entries(config.providers)
-    .filter(([name, prov]) => prov.hasApiKey && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
-    .map(([name]) => name);
-
   return (
-    <>
-      <div className="page-head">
-        <h2>{t("nav.providers")}</h2>
-        <div className="row">
-          {editing ? (
-            <>
-              <button className="btn btn-primary" onClick={saveConfig}>{t("common.save")}</button>
-              <button className="btn btn-ghost" onClick={() => { setEditing(false); setDraft(JSON.stringify(config, null, 2)); }}>{t("common.cancel")}</button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-ghost" onClick={() => setLayout("workspace")}>{t("pws.workspace")}</button>
-              <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
-              <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t("prov.editJson")}</button>
-            </>
-          )}
-        </div>
-      </div>
-      <p className="page-sub">{t("prov.subtitle")}</p>
-
-      {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
-
-      {/* OAuth Login — every OAuth-capable provider, with its live login status. */}
-      <div className="panel panel-accent" style={{ marginBottom: 18 }}>
-        <div className="row" style={{ marginBottom: 14 }}>
-          <IconLock style={{ width: 16, height: 16, color: "var(--accent)" }} />
-          <span className="font-semibold">{t("prov.accountLogin")}</span>
-        </div>
-        <div className="oauth-grid">
-          {oauthProviders.length === 0 && keyProviders.length === 0 && (
-            <span className="muted text-control" style={{ gridColumn: "1 / -1" }}>{t("prov.noOauth")}</span>
-          )}
-          {oauthProviders.map(p => {
-            const st = oauthStatus[p] ?? { loggedIn: false };
-            const isBusy = busy === p;
-            const icon = providerIconSrc(p);
-            return (
-              <div key={p} className="oauth-row">
-                <span className="oauth-name" title={oauthLabel(p)}>
-                  <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
-                  <span className="oauth-name-text">{p}</span>
-                </span>
-                <span className="oauth-status">
-                  <span className={`dot ${st.loggedIn ? "dot-green" : "dot-muted"}`} />
-                  {st.loggedIn ? (
-                    <span className="oauth-email" style={{ color: "var(--green)" }}>{st.email ?? t("prov.loggedIn")}</span>
-                  ) : (
-                    <span className="oauth-email muted">{t("prov.notLoggedIn")}</span>
-                  )}
-                </span>
-                <span className="oauth-actions">
-                  {st.loggedIn ? (
-                    <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
-                  ) : isBusy ? (
-                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelOAuthLogin(p); }}>
-                      {t("common.cancel")}
-                    </button>
-                  ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(p)}>
-                      <IconLock />{t("prov.login")}
-                    </button>
-                  )}
-                </span>
-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
-                  <span className="oauth-login-hint muted">
-                    <span className="oauth-login-hint-links">
-                      {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal />{t("prov.didntOpen")}</a>}
-                      {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
-                    </span>
-                    <span className="oauth-login-paste">
-                      <input
-                        className="input"
-                        type="text"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={manualCode}
-                        onChange={e => setManualCode(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void submitManualCode(p); } }}
-                        placeholder={t("prov.pasteRedirect")}
-                        aria-label={t("prov.pasteRedirect")}
-                        disabled={manualCodeBusy}
-                      />
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        type="button"
-                        disabled={manualCodeBusy || !manualCode.trim()}
-                        onClick={() => void submitManualCode(p)}
-                      >
-                        {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
-                      </button>
-                    </span>
-                    <span className="text-caption">{manualCodeMsg || t("prov.pasteRedirectHint")}</span>
-                  </span>
-                )}
-              </div>
-            );
-          })}
-          {keyProviders.map(name => {
-            const provider = config?.providers[name];
-            const icon = providerIconSrc(name);
-            const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
-            return (
-              <div key={name} className="oauth-row">
-                <span className="oauth-name" title={name}>
-                  <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
-                  <span className="oauth-name-text">{name}</span>
-                </span>
-                <span className="oauth-status">
-                  <span className="dot dot-green" />
-                  <span className="oauth-email muted">{keylessFree ? t("pws.freeTier") : t("prov.hasApiKey")}</span>
-                </span>
-                <span className="oauth-actions" aria-hidden="true" />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {editing ? (
-        <textarea
-          className="input"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          style={{ height: 400 }}
-        />
-      ) : (
-        <div className="stack" style={{ gap: 8 }}>
-          <div className="muted text-control" style={{ marginBottom: 4 }}>
-            {t("prov.port")}: <code className="chip">{config.port}</code> · {t("prov.default")}: <code className="chip">{config.defaultProvider}</code>
-          </div>
-          {Object.entries(config.providers).map(([name, prov]) => {
-            const isDefault = name === config.defaultProvider;
-            const isDisabled = prov.disabled === true;
-            const quota = quotaReports[name]?.quota ?? null;
-            const icon = providerIconSrc(name);
-            const accountSet = prov.authMode === "oauth" ? accountSets[name] : undefined;
-            const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward";
-            const keyPool = isKeyAuth && prov.hasApiKey ? (keyPools[name] ?? []) : [];
-            const showAccounts = (!!accountSet && accountSet.accounts.length > 0) || keyPool.length > 0;
-            const accountsOpen = openAccounts[name] === true;
-            const dropdownCount = accountSet?.accounts.length ?? keyPool.length;
-            return (
-              <div key={name} className={`card prov-card${isDisabled ? " prov-card-disabled" : ""}`}>
-                <div className="prov-card-main">
-                  <div className="prov-card-info">
-                    {icon && <span className="provider-icon"><img src={icon} alt="" aria-hidden="true" /></span>}
-                    <div className="prov-card-copy">
-                      <div className="prov-title">
-                        <span className="font-semibold">{name}</span>
-                        {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
-                        {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
-                        {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
-                        {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
-                        {(prov.freeTier || prov.keyOptional) && <span className="badge badge-green">{t("modal.badge.free")}</span>}
-                      </div>
-                      <div className="muted prov-meta text-control">
-                        <code className="chip">{prov.adapter}</code>
-                        <span>{prov.baseUrl}</span>
-                        {prov.defaultModel && <span>{prov.defaultModel}</span>}
-                        {prov.hasApiKey && <span>{t("prov.hasApiKey")}</span>}
-                        {prov.hasHeaders && <span>{t("prov.hasHeaders")}</span>}
-                      </div>
-                      {prov.note && (
-                        <div className="muted text-label leading-body" style={{ marginTop: 4 }}>
-                          {prov.note}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="provider-actions">
-                    <button
-                      className={`btn ${isDisabled ? "btn-primary" : "btn-ghost"} btn-sm`}
-                      onClick={() => setProviderDisabled(name, !isDisabled)}
-                      disabled={isDefault}
-                      title={isDefault ? t("prov.defaultCannotDisable") : undefined}
-                      aria-label={isDisabled ? t("prov.enableAria", { name }) : t("prov.disableAria", { name })}
-                    >
-                      {isDefault ? <IconLock /> : <IconPower />}
-                      {isDisabled ? t("prov.enable") : t("prov.disable")}
-                    </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => removeProvider(name)} aria-label={t("sub.removeAria", { m: name })}><IconTrash />{t("common.remove")}</button>
-                  </div>
-                </div>
-                {quota && <QuotaBars quota={quota} threshold={80} t={t} className="provider-quota" />}
-                {showAccounts && (
-                  <>
-                    <button
-                      className={`prov-accounts-toggle${accountsOpen ? " open" : ""}`}
-                      onClick={() => setOpenAccounts(prev => ({ ...prev, [name]: !accountsOpen }))}
-                      aria-expanded={accountsOpen}
-                      aria-label={t("prov.accountsAria", { name })}
-                    >
-                      {t("prov.accounts", { n: String(dropdownCount) })}
-                      <span className="chev"><IconChevron /></span>
-                    </button>
-                    {accountsOpen && (
-                      <div className="prov-accounts-list">
-                        {(accountSet?.accounts ?? []).map(account => (
-                          <button
-                            key={account.id}
-                            className={`prov-account-row${account.active ? " active" : ""}`}
-                            onClick={() => switchAccount(name, account)}
-                            title={account.active ? undefined : t("prov.accountSwitchTitle")}
-                          >
-                            <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
-                            <span className="prov-account-email">{account.email ?? t("prov.accountNoLabel", { id: account.id })}</span>
-                            {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
-                            {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                            <span
-                              className="prov-account-remove"
-                              role="button"
-                              aria-label={t("prov.accountRemoveAria", { email: account.email ?? account.id })}
-                              onClick={e => { e.stopPropagation(); removeAccount(name, account); }}
-                            >
-                              <IconTrash style={{ width: 13, height: 13 }} />
-                            </span>
-                          </button>
-                        ))}
-                        {keyPool.map(entry => (
-                          <button
-                            key={entry.id}
-                            className={`prov-account-row${entry.active ? " active" : ""}`}
-                            onClick={() => switchApiKey(name, entry)}
-                            title={entry.active ? undefined : t("prov.keySwitchTitle")}
-                          >
-                            <span className={`dot ${entry.active ? "dot-green" : "dot-muted"}`} />
-                            <span className="prov-account-email mono">{entry.label ? `${entry.label} · ${entry.masked}` : entry.masked}</span>
-                            {entry.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                            <span
-                              className="prov-account-remove"
-                              role="button"
-                              aria-label={t("prov.keyRemoveAria", { key: entry.label ?? entry.masked })}
-                              onClick={e => { e.stopPropagation(); removeApiKey(name, entry); }}
-                            >
-                              <IconTrash style={{ width: 13, height: 13 }} />
-                            </span>
-                          </button>
-                        ))}
-                        {accountSet ? (
-                          <button
-                            className="prov-account-row prov-account-add"
-                            onClick={() => busy === name ? void cancelOAuthLogin(name) : void loginOAuth(name, true)}
-                          >
-                            {busy === name
-                              ? t("common.cancel")
-                              : <><IconPlus style={{ width: 13, height: 13 }} />{t("prov.accountAdd")}</>}
-                          </button>
-                        ) : addingKeyFor === name ? (
-                          <div className="prov-account-row prov-account-keyform">
-                            <input
-                              className="input input-sm mono"
-                              type="password"
-                              autoFocus
-                              placeholder={t("prov.keyPlaceholder")}
-                              value={newKeyValue}
-                              onChange={e => setNewKeyValue(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === "Enter") addApiKey(name);
-                                if (e.key === "Escape") { setAddingKeyFor(null); setNewKeyValue(""); }
-                              }}
-                            />
-                            <button className="btn btn-primary btn-sm" onClick={() => addApiKey(name)} disabled={!newKeyValue.trim()}>{t("common.save")}</button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => { setAddingKeyFor(null); setNewKeyValue(""); }}>{t("common.cancel")}</button>
-                          </div>
-                        ) : (
-                          <button className="prov-account-row prov-account-add" onClick={() => { setAddingKeyFor(name); setNewKeyValue(""); }}>
-                            <IconPlus style={{ width: 13, height: 13 }} />{t("prov.keyAdd")}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
+    <div className="providers-workspace-shell">
+      {status && (
+        <div className="providers-workspace-shell-banner">
+          <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
         </div>
       )}
+      <div className="providers-workspace-shell-body">
+        <ProviderWorkspace
+          providers={config.providers}
+          apiBase={apiBase}
+          defaultProvider={config.defaultProvider}
+          onAddProvider={(intent) => {
+            setAddIntent(intent ?? {});
+            setAdding(true);
+          }}
+          onEditConfig={openJsonEditor}
+          jsonEditor={{
+            open: jsonEditorOpen,
+            draft,
+            isDirty: jsonIsDirty,
+            onDraftChange: setDraft,
+            onSave: () => saveConfig(),
+            onClose: closeJsonEditor,
+            onRestore: restoreJsonEditor,
+          }}
+          onSetDisabled={setProviderDisabled}
+          onRemoveProvider={removeProvider}
+          onUpdateProvider={updateProvider}
+          quotaReports={quotaReports}
+          oauthStatus={oauthStatus}
+          accountSets={accountSets}
+          keyPools={keyPools}
+          busyProvider={busy}
+          loginHint={loginInfo}
+          authHandlers={{
+            onLogin: (provider, addAccount) => { void loginOAuth(provider, !!addAccount); },
+            onCancelLogin: (provider) => { void cancelOAuthLogin(provider); },
+            onLogout: (provider) => { void logoutOAuth(provider); },
+            onSwitchAccount: (provider, account) => { void switchAccount(provider, account); },
+            onRemoveAccount: (provider, account) => { void removeAccount(provider, account); },
+            onAddApiKey: handleAddApiKey,
+            onSwitchApiKey: (provider, entry) => { void switchApiKey(provider, entry); },
+            onRemoveApiKey: (provider, entry) => { void removeApiKey(provider, entry); },
+          }}
+        />
+      </div>
       {adding && (
         <AddProviderModal
           apiBase={apiBase}
           existingNames={Object.keys(config.providers)}
-          onClose={() => setAdding(false)}
-          onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+          initialCustom={!!addIntent.custom}
+          initialTier={addIntent.tier ?? "free"}
+          onClose={() => {
+            if (busy) void cancelOAuthLogin(busy);
+            setAdding(false);
+            setAddIntent({});
+          }}
+          onAdded={(name) => {
+            setAdding(false);
+            setAddIntent({});
+            notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+            fetchConfig();
+            fetchOauth();
+            fetchProviderQuotas(true);
+          }}
+          accountRows={[
+            ...oauthProviders.map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
+            ...Object.entries(config.providers)
+              .filter(([name, prov]) =>
+                prov.hasApiKey
+                && prov.authMode !== "oauth"
+                && prov.authMode !== "forward"
+                && !oauthProviders.includes(name))
+              .map(([name, prov]) => ({
+                id: name,
+                label: name,
+                kind: "key" as const,
+                statusLabel: prov.keyOptional && !prov.hasApiKey ? t("pws.freeTier") : t("prov.hasApiKey"),
+              })),
+          ]}
+          accountStatus={oauthStatus}
+          accountBusy={busy}
+          accountLoginHint={loginInfo}
+          onAccountLogin={(provider) => { void loginOAuth(provider); }}
+          onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
+          onAccountLogout={(provider) => { void logoutOAuth(provider); }}
+          accountManualCode={manualCode}
+          onAccountManualCodeChange={setManualCode}
+          onAccountManualCodeSubmit={(provider) => { void submitManualCode(provider); }}
+          accountManualCodeBusy={manualCodeBusy}
+          accountManualCodeMsg={manualCodeMsg}
         />
       )}
-    </>
+    </div>
   );
 }

@@ -123,9 +123,9 @@
 .providers-workspace-rail-icon {
   width: 26px;
   height: 26px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border-soft);
-  background: var(--raised);
+  border-radius: 0;
+  border: none;
+  background: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -173,13 +173,15 @@
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 10.5px;
-  font-weight: 650;
-  line-height: 1;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
   white-space: nowrap;
-  border-radius: 999px;
-  padding: 2px 7px;
-  border: 1px solid transparent;
+  border-radius: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  letter-spacing: 0.01em;
 }
 /* Bare star — no circle/chip chrome; sits tight against the status dot in the rail trail. */
 .pwi-default-star {
@@ -199,13 +201,13 @@
 }
 .pwi-rail-badge--free {
   color: var(--green);
-  background: var(--green-soft);
-  border-color: color-mix(in oklab, var(--green) 35%, transparent);
+  background: none;
+  border: none;
 }
 .pwi-rail-badge--local {
   color: var(--muted);
-  background: var(--raised);
-  border-color: var(--border);
+  background: none;
+  border: none;
 }
 /* Legacy meta classes kept for any remaining call sites. */
 .pwi-rail-meta {
@@ -587,11 +589,11 @@
 }
 
 .providers-workspace-detail-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 12px;
-  border: 1px solid var(--border-soft);
-  background: var(--raised);
+  width: 40px;
+  height: 40px;
+  border-radius: 0;
+  border: none;
+  background: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -780,6 +782,10 @@
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+  background: transparent;
+  padding: 0;
+  border: none;
+  box-shadow: none;
 }
 
 .providers-workspace-section-body {
@@ -1111,35 +1117,45 @@
   flex-shrink: 0;
 }
 .pwi-rail-filter-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  font: inherit;
   position: relative;
   flex-shrink: 0;
-  width: 38px;
-  height: 38px;
-  min-width: 38px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--muted);
-  background: var(--surface);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+}
+.pwi-test-cluster .btn.pwi-chrome-btn,
+.pwi-test-cluster .pwi-chrome-btn {
+  color: var(--text);
 }
 .pwi-rail-filter-btn:hover {
-  color: var(--text);
+  color: var(--accent-hover);
   background: var(--hover);
-  border-color: var(--faint);
+  border-color: transparent;
 }
 .pwi-rail-filter-btn--active {
-  color: var(--text);
-  border-color: var(--accent-ring);
-  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+  background: transparent;
 }
 .pwi-rail-filter-btn svg {
   display: block;
-  width: 29px !important;
-  height: 29px !important;
+  width: 20px !important;
+  height: 20px !important;
+  stroke-width: 2.25;
 }
 .pwi-rail-filter-dot {
   position: absolute;
@@ -1307,17 +1323,6 @@
   /* Single separator above footer (sort/options do not also draw a bottom line) */
   border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
-.pwi-rail-filter-reset {
-  font-size: 12.5px;
-  color: var(--muted);
-}
-.pwi-rail-filter-reset:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.pwi-rail-filter-reset:not(:disabled):hover {
-  color: var(--text);
-}
 /* Sort: 2×2 grid (A–Z | Z–A / Free→Paid | Paid→Free) */
 .pwi-rail-filter-section--sort {
   margin-bottom: 12px;
@@ -1360,20 +1365,57 @@
   margin-right: 2px;
   white-space: nowrap;
 }
+/* Flat toolbar actions — link affordance without pill boxes */
+.pwi-chrome-btn.btn,
+.pwi-chrome-btn.btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.pwi-chrome-btn.btn:hover:not(:disabled),
+.pwi-chrome-btn.btn-ghost:hover:not(:disabled) {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-chrome-btn.btn:focus-visible,
+.pwi-chrome-btn.btn-ghost:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+.pwi-chrome-btn.btn-primary,
+.pwi-auth-actions .btn-primary.pwi-chrome-btn {
+  color: var(--accent) !important;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.pwi-chrome-btn.btn-primary:hover:not(:disabled),
+.pwi-auth-actions .btn-primary.pwi-chrome-btn:hover:not(:disabled) {
+  color: var(--accent-hover) !important;
+  text-decoration-color: var(--accent-hover);
+  background: transparent !important;
+}
 .pwi-remove-btn {
   color: var(--red, #c44) !important;
-  border: 1px solid color-mix(in srgb, var(--red, #c44) 45%, transparent) !important;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--red, #c44) 8%, transparent);
+  border: none !important;
+  border-radius: var(--radius-xs);
+  background: transparent !important;
+  padding: 6px;
+  min-width: 32px;
 }
 .pwi-remove-btn svg {
-  color: var(--red, #c44);
+  color: inherit;
   stroke: currentColor;
 }
 .pwi-remove-btn:hover {
   color: var(--red, #c44) !important;
-  background: var(--red-soft, color-mix(in srgb, var(--red, #c44) 16%, transparent));
-  border-color: var(--red, #c44) !important;
+  background: var(--red-soft, color-mix(in srgb, var(--red, #c44) 16%, transparent)) !important;
 }
 /* Status text LEFT of the button — full string, no ellipsis */
 .pwi-test-cluster {
@@ -1448,6 +1490,129 @@
   gap: 12px;
   padding-top: 4px;
 }
+.pwi-settings-actions .pwi-save-btn.btn-primary,
+.pwi-settings-actions .pwi-save-btn {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--accent) !important;
+  padding-inline: 0 !important;
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.pwi-settings-actions .pwi-save-btn:hover:not(:disabled) {
+  color: var(--accent-hover) !important;
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-settings-actions .pwi-save-btn:disabled {
+  opacity: 0.45;
+}
+.providers-workspace-model-meta .badge,
+.pwi-kv .badge.badge-muted {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11.5px;
+}
+.providers-workspace-model-meta .badge-green {
+  color: var(--green) !important;
+}
+.pwi-model-flag {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pwi-model-flag--selected {
+  color: var(--green);
+}
+.providers-workspace-model-meta .btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--text);
+  padding-inline: 6px !important;
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.providers-workspace-model-meta .btn-ghost:hover:not(:disabled) {
+  background: transparent !important;
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-section-meta-row .btn-ghost,
+.pwi-auth-actions .btn-ghost,
+.pwi-auth-actions .btn-primary,
+.pwi-auth-wait .btn-ghost,
+.pwi-auth-row-remove.btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  font-weight: 550;
+}
+.pwi-auth-actions .btn-primary {
+  color: var(--accent) !important;
+  padding-inline: 6px !important;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.pwi-auth-actions .btn-primary:hover:not(:disabled) {
+  color: var(--accent-hover) !important;
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-section-meta-row .btn-ghost,
+.pwi-auth-actions .btn-ghost,
+.pwi-auth-wait .btn-ghost {
+  color: var(--text);
+}
+.pwi-section-meta-row .btn-ghost:hover:not(:disabled),
+.pwi-auth-actions .btn-ghost:hover:not(:disabled),
+.pwi-auth-wait .btn-ghost:hover:not(:disabled) {
+  color: var(--accent-hover);
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-auth-add {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  width: auto;
+  padding: 6px 0;
+  margin-top: 4px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+  transition: color 0.12s, text-decoration-color 0.12s;
+}
+.pwi-auth-add:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: transparent;
+  background: none;
+  text-decoration-color: var(--accent-hover);
+}
 .pwi-settings-msg { font-size: 12.5px; font-weight: 500; }
 .pwi-settings-msg--ok { color: var(--green); }
 .pwi-settings-msg--err { color: var(--red, #c44); }
@@ -1456,8 +1621,29 @@
 .pwi-auth-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px 14px;
+  gap: 12px;
+  padding: 8px 0 0;
+  background: none;
+}
+.pwi-auth-section .pwi-auth-body {
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  background: none;
+}
+.pwi-auth-subsection {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.pwi-auth-subsection .pwi-section-title,
+.pwi-auth-subsection .pwi-section-title--sub,
+.pwi-auth-section > .pwi-section-title {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  display: block;
 }
 .pwi-auth-status-row {
   display: flex;
@@ -1561,34 +1747,17 @@
 .pwi-auth-row-remove {
   flex-shrink: 0;
   color: var(--muted);
-  opacity: 0.7;
+  opacity: 0.85;
+  min-width: 40px;
+  min-height: 40px;
 }
 .pwi-auth-row-remove:hover {
   color: var(--red, #c44);
   opacity: 1;
 }
-.pwi-auth-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  padding: 9px 12px;
-  margin-top: 2px;
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: none;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.pwi-auth-add:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--faint);
-  background: var(--hover);
+.pwi-auth-row-remove:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
 }
 .pwi-auth-add:disabled { opacity: 0.65; cursor: default; }
 .pwi-auth-keyform {
@@ -1697,13 +1866,75 @@
 .pwi-json-discard-btn {
   color: var(--amber) !important;
 }
+.pwi-remove-confirm-card {
+  max-width: 420px;
+  width: min(420px, 92vw);
+  padding: 20px 22px 16px;
+}
+.pwi-remove-confirm-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+.pwi-remove-confirm-desc {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.pwi-remove-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pwi-remove-confirm-danger {
+  background: var(--red) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+.pwi-remove-confirm-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 .pwi-rail-add-btn {
-  border: 1px solid var(--border);
-  border-radius: 999px;
   font-size: 12px;
-  font-weight: 550;
-  padding: 5px 10px;
+  font-weight: 600;
+  padding: 5px 8px;
   gap: 5px;
+}
+.pwi-rail-add-btn.pwi-chrome-btn {
+  color: var(--accent) !important;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.pwi-rail-add-btn.pwi-chrome-btn:hover:not(:disabled) {
+  color: var(--accent-hover) !important;
+  text-decoration-color: var(--accent-hover);
+}
+.pwi-rail-filter-reset {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 4px 0 !important;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
+  text-underline-offset: 3px;
+}
+.pwi-rail-filter-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+  text-decoration: none;
+}
+.pwi-rail-filter-reset:not(:disabled):hover {
+  color: var(--accent-hover);
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
 }
 
 /* Status badge: defined with detail-head (pill). Do not redeclare flat styles here. */
@@ -1982,8 +2213,20 @@
   font-size: 12.5px;
   color: var(--accent);
   gap: 6px;
-  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border: none !important;
+  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent) !important;
   border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.pwi-stats-usage-link:hover:not(:disabled) {
+  background: transparent !important;
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
 }
 .pwi-notes-block {
   margin-top: 18px;
@@ -2000,10 +2243,6 @@
   margin: 0;
   font-size: 12.5px;
   font-style: italic;
-}
-.pwi-auth-section .pwi-auth-body {
-  padding: 4px 0 0;
-  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 
 /* ---- Overview counters (value colors) ---- */
@@ -2132,7 +2371,10 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg, var(--panel));
+  /* Transparent so ambient green/teal glow isn't cut by an opaque strip */
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   padding-top: 2px;
   padding-bottom: 8px;
 }
@@ -2169,6 +2411,10 @@
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+}
+.providers-workspace-section-body > .pwi-usage-block:first-child {
+  margin-top: 12px;
+  padding-top: 4px;
 }
 .pwi-usage-metrics {
   display: grid;

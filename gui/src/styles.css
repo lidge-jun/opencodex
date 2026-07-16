@@ -374,8 +374,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   padding: 0;
   color: var(--muted);
   border-radius: var(--radius-sm);
@@ -384,7 +386,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .btn-icon:hover { background: var(--raised-hover); color: var(--text); }
 .btn-icon:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 .btn-icon svg { width: 16px; height: 16px; display: block; }
-.btn.btn-ghost.btn-icon { width: 28px; height: 28px; padding: 0; }
+.btn.btn-ghost.btn-icon { width: 40px; height: 40px; min-width: 40px; min-height: 40px; padding: 0; }
 
 /* ---- cards / panels ---- */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
@@ -741,10 +743,11 @@ select.input { appearance: none; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--raised);
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
   width: 100%;
   box-sizing: border-box;
 }
@@ -758,7 +761,8 @@ select.input { appearance: none; }
   appearance: none;
   -webkit-appearance: none;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -785,10 +789,14 @@ select.input { appearance: none; }
   flex: none;
   align-self: stretch;
 }
-.add-prov-segment-btn--active {
-  background: color-mix(in oklab, var(--accent) 18%, var(--surface));
+.add-prov-segment-btn:hover:not(:disabled) {
   color: var(--text);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.add-prov-segment-btn--active {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  border-bottom-color: var(--accent);
 }
 /* Fixed shell so Free / Paid / Accounts content is the same vertical length. */
 .add-prov-body {
@@ -806,33 +814,35 @@ select.input { appearance: none; }
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  padding: 10px 0;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   cursor: pointer;
   text-align: left;
-  transition: background var(--motion-fast), border-color var(--motion-fast);
+  transition: color var(--motion-fast);
 }
 .add-prov-browse-card:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: var(--faint);
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--text);
 }
 .add-prov-browse-card:disabled {
   opacity: 0.45;
   cursor: default;
 }
 .add-prov-browse-card-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--raised);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: none;
   color: var(--muted);
   flex-shrink: 0;
 }
@@ -847,6 +857,13 @@ select.input { appearance: none; }
   font-size: var(--text-body);
   font-weight: var(--weight-semibold);
   color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
+  text-underline-offset: 3px;
+}
+.add-prov-browse-card:hover:not(:disabled) .add-prov-browse-card-title {
+  text-decoration-color: var(--accent-hover);
+  color: var(--accent-hover);
 }
 .add-prov-browse-card-sub {
   font-size: var(--text-label);
@@ -857,12 +874,47 @@ select.input { appearance: none; }
 .add-prov-account-block:last-child {
   border-bottom: 0;
 }
+.add-prov-account-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+}
+.add-prov-account-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.add-prov-account-copy .add-prov-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .add-prov-account-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   font-size: var(--text-label);
+  color: var(--muted);
+}
+.add-prov-account-status--ok {
+  color: color-mix(in oklab, var(--green) 85%, var(--text));
+}
+.add-prov-account-status-text {
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  line-height: 1.35;
+}
+.add-prov-account-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 40px;
+  align-self: center;
 }
 .add-prov-account-busy {
   display: inline-flex;
@@ -878,12 +930,11 @@ select.input { appearance: none; }
   font-size: var(--text-label);
   white-space: nowrap;
 }
-.add-prov-account-status-ok {
-  color: var(--green);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 14ch;
+.add-prov-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  align-items: center;
 }
 .add-prov-account-hint {
   display: flex;
@@ -913,9 +964,10 @@ select.input { appearance: none; }
   display: flex;
   flex-direction: column;
   gap: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  /* Flat list inside modal body — avoid a bordered card nested in the modal shell */
+  border: none;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
   flex: 1 1 auto;
   min-height: 0;
@@ -942,9 +994,9 @@ select.input { appearance: none; }
 .add-prov-row-icon {
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--raised);
-  border: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  border: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -977,27 +1029,110 @@ select.input { appearance: none; }
 }
 .add-prov-row-badge {
   font-size: 11px;
-  font-weight: var(--weight-semibold);
-  color: var(--accent-hover);
-  background: color-mix(in oklab, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in oklab, var(--accent) 28%, transparent);
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   white-space: nowrap;
 }
 .add-prov-row-connect {
   min-width: 72px;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--accent) !important;
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.add-prov-row-connect:hover:not(:disabled) {
+  background: transparent !important;
+  color: var(--accent-hover) !important;
+  text-decoration-color: var(--accent-hover);
+}
+.add-prov-row:hover .add-prov-row-connect {
+  text-decoration-color: var(--accent-hover);
+}
+.add-prov-footer-action {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
+  text-underline-offset: 3px;
+}
+/* Flatten ghost/primary chrome inside the add-provider dialog — keep link affordance */
+.modal-card .add-prov-catalog .btn-ghost,
+.modal-card .add-prov-account-action .btn-ghost,
+.modal-card .add-prov-footer .btn-ghost,
+.modal-card .add-prov-account-busy .btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--text);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
+  text-underline-offset: 3px;
+}
+.modal-card .add-prov-catalog .btn-ghost:hover:not(:disabled),
+.modal-card .add-prov-account-action .btn-ghost:hover:not(:disabled),
+.modal-card .add-prov-footer .btn-ghost:hover:not(:disabled) {
+  background: transparent !important;
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
+}
+.modal-card .add-prov-account-action .btn-primary,
+.modal-card .add-prov-catalog .btn-primary,
+.modal-card .btn-primary {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--accent) !important;
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.modal-card .add-prov-account-action .btn-primary:hover:not(:disabled),
+.modal-card .add-prov-catalog .btn-primary:hover:not(:disabled),
+.modal-card .btn-primary:hover:not(:disabled) {
+  background: transparent !important;
+  color: var(--accent-hover) !important;
+  text-decoration-color: var(--accent-hover);
+}
+.modal-card .btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
+  text-underline-offset: 3px;
+}
+.modal-card .btn-ghost:hover:not(:disabled) {
+  background: transparent !important;
+  text-decoration-color: var(--accent-hover);
+  color: var(--accent-hover);
+}
+.modal-card .btn-icon {
+  text-decoration: none !important;
 }
 .add-prov-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 4px;
-  padding: 12px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--raised);
+  margin-top: auto;
+  padding: 12px 4px 0;
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
 }
 .add-prov-footer-copy {
   display: flex;
@@ -1017,13 +1152,6 @@ select.input { appearance: none; }
   margin-top: 2px;
 }
 
-/* provider config card (Providers page) */
-.prov-card { overflow: hidden; }
-.prov-card-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 15px 16px; flex-wrap: wrap; }
-.prov-card-disabled { opacity: 0.62; }
-.prov-card-info { display: flex; align-items: flex-start; gap: 11px; min-width: 0; flex: 1 1 360px; }
-.prov-card-copy { min-width: 0; flex: 1; }
-.prov-title { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; min-width: 0; }
 .provider-icon { width: 31px; height: 31px; border-radius: var(--radius-xs); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--raised); border: 1px solid var(--border-soft); color: var(--text); }
 .provider-icon img,
 .provider-icon .provider-icon-mask { width: 19px; height: 19px; object-fit: contain; display: block; }
@@ -1031,54 +1159,9 @@ select.input { appearance: none; }
   width: 32px;
   height: 32px;
 }
-.prov-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
-.prov-meta > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.provider-quota { padding-left: 58px; }
-.provider-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.link-btn { background: none; border: none; color: var(--accent-hover); font: inherit; font-size: var(--text-control); cursor: pointer; padding: 6px 2px; text-decoration: underline; }
-
-/* provider card accounts dropdown (multiauth) */
-.prov-accounts-toggle {
-  width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
-  background: none; border: none; border-top: 1px solid var(--border-soft);
-  color: var(--muted); font: inherit; font-size: var(--text-label); padding: 4px 0; cursor: pointer; min-height: 24px;
-}
-.prov-accounts-toggle:hover { color: var(--text); background: var(--raised); }
-.prov-accounts-toggle .chev { transition: transform var(--motion-normal) ease; display: inline-flex; }
-.prov-accounts-toggle .chev svg { width: 12px; height: 12px; transform: rotate(90deg); }
-.prov-accounts-toggle.open .chev svg { transform: rotate(-90deg); }
-.prov-accounts-list { border-top: 1px solid var(--border-soft); padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 2px; }
-.prov-account-row {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  background: none; border: none; border-radius: var(--radius-xs);
-  color: var(--text); font: inherit; font-size: var(--text-control); line-height: var(--leading-ui); padding: 6px 8px; cursor: pointer; min-height: 32px;
-}
-.prov-account-row:hover { background: var(--raised); }
-.prov-account-row.active { cursor: default; }
-.prov-account-row .prov-account-email { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prov-account-row .badge { flex: 0 0 auto; }
-.prov-account-remove { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: var(--radius-xs); }
-.prov-account-remove:hover { color: var(--red); background: var(--red-soft); }
-.prov-account-add { color: var(--muted); font-size: var(--text-label); }
-.prov-account-add:hover { color: var(--accent-hover); }
-.prov-account-keyform { cursor: default; gap: 6px; }
-.prov-account-keyform:hover { background: none; }
-.prov-account-keyform .input-sm { flex: 1 1 auto; min-width: 0; padding: 4px 8px; font-size: var(--text-label); height: var(--control-sm); }
-
-/* account login grid (Providers page): shared name | status | action columns across rows */
-.oauth-grid { display: grid; grid-template-columns: minmax(140px, max-content) minmax(0, 1fr) max-content; column-gap: 16px; row-gap: 10px; align-items: center; }
-.oauth-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 30px; }
-.oauth-name { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-control); font-weight: var(--weight-semibold); min-width: 0; }
-.oauth-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-icon-sm { width: 24px; height: 24px; border-radius: var(--radius-xs); }
 .provider-icon-sm img { width: 15px; height: 15px; }
-.oauth-status { display: inline-flex; align-items: center; gap: 7px; font-size: var(--text-control); min-width: 0; }
-.oauth-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.oauth-actions { display: inline-flex; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
-.oauth-login-hint { grid-column: 1 / -1; font-size: var(--text-label); line-height: var(--leading-body); display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-.oauth-login-hint-links { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.oauth-login-paste { display: flex; gap: 8px; align-items: center; width: 100%; }
-.oauth-login-paste .input { flex: 1; min-width: 0; font-size: var(--text-label); padding: 6px 10px; }
+.link-btn { background: none; border: none; color: var(--accent-hover); font: inherit; font-size: var(--text-control); cursor: pointer; padding: 6px 2px; text-decoration: underline; }
 
 /* responsive: compact sticky top bar (menu + brand + stop) with the desktop sidebar
    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
@@ -1130,11 +1213,6 @@ select.input { appearance: none; }
   .stat-row > .stat { min-width: 100px; }
   .tbl { min-width: 460px; }   /* keep columns readable; .tbl-wrap scrolls horizontally */
   .usage-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-  .provider-quota { padding-left: 16px; }
-  .prov-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); width: 100%; }
-  .prov-meta .chip ~ span:not(:last-child) { display: none; }
-  /* account login grid: let name/status truncate with ellipsis instead of wrapping */
-  .oauth-grid { grid-template-columns: minmax(0, auto) minmax(0, 1fr) max-content; column-gap: 8px; }
   /* language menu: the drawer scrolls (overflow-y) so the beside-placement would be
      clipped at the drawer edge — open upward from the foot row instead. */
   .sidebar .lang-toggle .select-dropdown-beside { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }

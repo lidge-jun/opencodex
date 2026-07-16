@@ -156,30 +156,27 @@ function formatResetAt(resetAt: number | undefined, t: TFn): { day: string; time
   return { day, time };
 }
 
-/** Future-facing reset copy: "Resets in 2 h" / "Resets 23.07., 18:08". */
+/** Future-facing reset copy: "Resets in 2 h" near-term; absolute "Resets 23.07., 18:08" beyond that. */
 export function formatResetFuture(resetAt: number | undefined, t: TFn, now = Date.now()): string {
   if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return "";
   const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
   const delta = ms - now;
-  if (delta <= 0) {
-    // Already due — still show absolute time
+  const absoluteWhen = () => {
     const date = new Date(ms);
-    const abs = new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(undefined, {
       day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
     }).format(date);
-    return t("quota.resetsAt", { when: abs });
+  };
+  if (delta <= 0) {
+    // Already due — still show absolute time
+    return t("quota.resetsAt", { when: absoluteWhen() });
   }
   const minutes = Math.round(delta / 60_000);
   if (minutes < 60) return t("quota.resetsRelativeMinutes", { n: Math.max(1, minutes) });
   const hours = Math.round(minutes / 60);
+  // Day-scale windows need a concrete date+time; "in 7 d" hides when the clock flips.
   if (hours < 36) return t("quota.resetsRelativeHours", { n: hours });
-  const days = Math.round(hours / 24);
-  if (days <= 7) return t("quota.resetsRelativeDays", { n: days });
-  const date = new Date(ms);
-  const abs = new Intl.DateTimeFormat(undefined, {
-    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(date);
-  return t("quota.resetsAt", { when: abs });
+  return t("quota.resetsAt", { when: absoluteWhen() });
 }
 
 void clampPercent;
