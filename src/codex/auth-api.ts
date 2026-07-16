@@ -237,9 +237,7 @@ async function fetchMainAccountInfo(forceRefresh = false): Promise<{ email: stri
       updateAccountQuota(
         MAIN_CODEX_ACCOUNT_ID,
         result.quota.weeklyPercent,
-        result.quota.fiveHourPercent,
         result.quota.weeklyResetAt,
-        result.quota.fiveHourResetAt,
         result.quota.monthlyPercent,
         result.quota.monthlyResetAt,
         result.quota.resetCredits,
@@ -285,9 +283,7 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
     updateAccountQuota(
       accountId,
       quota.weeklyPercent,
-      quota.fiveHourPercent,
       quota.weeklyResetAt,
-      quota.fiveHourResetAt,
       quota.monthlyPercent,
       quota.monthlyResetAt,
       quota.resetCredits,
@@ -644,9 +640,7 @@ export async function handleCodexAuthAPI(
                 updateAccountQuota(
                   accountId,
                   quota.weeklyPercent,
-                  quota.fiveHourPercent,
                   quota.weeklyResetAt,
-                  quota.fiveHourResetAt,
                   quota.monthlyPercent,
                   quota.monthlyResetAt,
                   quota.resetCredits,

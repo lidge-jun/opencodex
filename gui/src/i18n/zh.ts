@@ -382,7 +382,6 @@ export const zh: Record<TKey, string> = {
   "codexAuth.quotaRefreshFailed": "额度刷新失败",
   "codexAuth.noPool": "尚未添加池账号。",
   "codexAuth.weekly": "每周",
-  "codexAuth.fiveHour": "5h",
   "codexAuth.monthly": "30天",
   "codexAuth.resets": "重置",
   "codexAuth.today": "今天",

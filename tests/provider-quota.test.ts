@@ -87,7 +87,6 @@ describe("fetchProviderQuotaReports", () => {
           email: "person@example.com",
           plan_type: "plus",
           rate_limit: {
-            primary_window: { used_percent: 12, reset_at: 1_788_000_000 },
             secondary_window: { used_percent: 34, reset_at: 1_789_000_000 },
             tertiary_window: { used_percent: 56, reset_at: 1_790_000_000 },
           },
@@ -141,12 +140,14 @@ describe("fetchProviderQuotaReports", () => {
     const byProvider = Object.fromEntries(result.reports.map(report => [report.provider, report]));
 
     expect(Object.keys(byProvider).sort()).toEqual(["anthropic", "google-antigravity", "openai", "xai"]);
-    expect(byProvider.openai?.quota.fiveHourPercent).toBe(12);
     expect(byProvider.openai?.quota.weeklyPercent).toBe(34);
     expect(byProvider.xai?.quota.monthlyPercent).toBe(25);
-    expect(byProvider.anthropic?.quota.fiveHourPercent).toBe(41.5);
     expect(byProvider.anthropic?.quota.weeklyPercent).toBe(72);
-    expect(byProvider.anthropic?.quota.customWindows?.map(window => window.label)).toEqual(["Opus", "Sonnet"]);
+    expect(byProvider.anthropic?.quota.customWindows).toEqual([
+      { label: "5h", percent: 41.5, resetAt: Date.parse("2026-07-05T12:00:00Z") },
+      { label: "Opus", percent: 88 },
+      { label: "Sonnet", percent: 19 },
+    ]);
     expect(byProvider["google-antigravity"]?.quota.customWindows).toEqual([
       { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },

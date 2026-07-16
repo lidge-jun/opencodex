@@ -365,7 +365,6 @@ export const de = {
   "codexAuth.quotaRefreshFailed": "Kontingente konnten nicht aktualisiert werden",
   "codexAuth.noPool": "Noch keine Pool-Konten hinzugefügt.",
   "codexAuth.weekly": "Woche",
-  "codexAuth.fiveHour": "5h",
   "codexAuth.monthly": "30d",
   "codexAuth.resets": "zurücksetzen",
   "codexAuth.today": "Heute",

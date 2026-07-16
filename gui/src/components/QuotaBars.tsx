@@ -11,9 +11,6 @@ export default function QuotaBars({ quota, plan, threshold, t, className }: {
   const displayQuota = normalizeQuotaForPlan(quota, plan);
   if (!displayQuota) return null;
   const rows = [
-    typeof displayQuota.fiveHourPercent === "number"
-      ? { label: t("codexAuth.fiveHour"), percent: displayQuota.fiveHourPercent, resetAt: displayQuota.fiveHourResetAt }
-      : null,
     typeof displayQuota.weeklyPercent === "number"
       ? { label: t("codexAuth.weekly"), percent: displayQuota.weeklyPercent, resetAt: displayQuota.weeklyResetAt }
       : null,

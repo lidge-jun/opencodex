@@ -428,7 +428,6 @@ export const en = {
   "codexAuth.quotaRefreshFailed": "Failed to refresh quotas",
   "codexAuth.noPool": "No pool accounts added yet.",
   "codexAuth.weekly": "Week",
-  "codexAuth.fiveHour": "5h",
   "codexAuth.monthly": "30d",
   "codexAuth.resets": "resets",
   "codexAuth.today": "Today",

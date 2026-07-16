@@ -80,7 +80,6 @@ export function getCodexUpstreamHealth(
 
 export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
-  fiveHourPercent?: number;
   monthlyPercent?: number;
 } | null, plan?: string | null): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
@@ -90,7 +89,7 @@ export function computeCodexUsageScore(quota: {
       ? quota.monthlyPercent
       : CODEX_UNKNOWN_USAGE_SCORE;
   }
-  const values = [quota.weeklyPercent, quota.fiveHourPercent, quota.monthlyPercent]
+  const values = [quota.weeklyPercent, quota.monthlyPercent]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return values.length > 0 ? Math.max(...values) : CODEX_UNKNOWN_USAGE_SCORE;
 }

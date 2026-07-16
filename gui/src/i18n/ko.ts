@@ -382,7 +382,6 @@ export const ko: Record<TKey, string> = {
   "codexAuth.quotaRefreshFailed": "할당량 재조회에 실패했습니다",
   "codexAuth.noPool": "풀 계정이 아직 없습니다.",
   "codexAuth.weekly": "주간",
-  "codexAuth.fiveHour": "5h",
   "codexAuth.monthly": "30일",
   "codexAuth.resets": "리셋",
   "codexAuth.today": "오늘",

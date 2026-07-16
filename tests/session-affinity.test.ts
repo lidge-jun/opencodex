@@ -76,8 +76,8 @@ describe("resolveCodexAccountForThread", () => {
     const config = makeActivePoolConfig("work", ["work", "personal"]);
     // Known low quota keeps "work" the deterministic active (this case tests
     // thread affinity, not the all-unknown quota rotation added in Phase 10).
-    updateAccountQuota("work", 10, 5);
-    updateAccountQuota("personal", 10, 5);
+    updateAccountQuota("work", 10);
+    updateAccountQuota("personal", 10);
     resolveCodexAccountForThread("t1", config);
     config.activeCodexAccountId = "personal";
     expect(resolveCodexAccountForThread("t1", config)).toBe("work");
@@ -85,8 +85,8 @@ describe("resolveCodexAccountForThread", () => {
 
   test("different thread gets different account", () => {
     const config = makeActivePoolConfig("work", ["work", "personal"]);
-    updateAccountQuota("work", 10, 5);
-    updateAccountQuota("personal", 10, 5);
+    updateAccountQuota("work", 10);
+    updateAccountQuota("personal", 10);
     resolveCodexAccountForThread("t1", config);
     config.activeCodexAccountId = "personal";
     expect(resolveCodexAccountForThread("t2", config)).toBe("personal");
@@ -94,8 +94,8 @@ describe("resolveCodexAccountForThread", () => {
 
   test("null thread-id does not cache", () => {
     const config = makeActivePoolConfig("work", ["work", "personal"]);
-    updateAccountQuota("work", 10, 5);
-    updateAccountQuota("personal", 10, 5);
+    updateAccountQuota("work", 10);
+    updateAccountQuota("personal", 10);
     resolveCodexAccountForThread(null, config);
     config.activeCodexAccountId = "personal";
     expect(resolveCodexAccountForThread(null, config)).toBe("personal");
@@ -112,8 +112,8 @@ describe("resolveCodexAccountForThread", () => {
     });
     saveTestCredential("a");
     saveTestCredential("b");
-    updateAccountQuota("a", 85, 10);
-    updateAccountQuota("b", 20, 5);
+    updateAccountQuota("a", 85);
+    updateAccountQuota("b", 20);
     const result = resolveCodexAccountForThread("new-thread", config);
     expect(result).toBe("b");
   });
@@ -129,8 +129,8 @@ describe("resolveCodexAccountForThread", () => {
     });
     saveTestCredential("a");
     saveTestCredential("b");
-    updateAccountQuota("a", 90, 10);
-    updateAccountQuota("b", 95, 15);
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 95);
     const result = resolveCodexAccountForThread("new-thread", config);
     expect(result).toBe("a");
   });
@@ -146,8 +146,8 @@ describe("resolveCodexAccountForThread", () => {
     });
     saveTestCredential("a");
     saveTestCredential("b");
-    updateAccountQuota("a", 99, 50);
-    updateAccountQuota("b", 10, 5);
+    updateAccountQuota("a", 99);
+    updateAccountQuota("b", 10);
     const result = resolveCodexAccountForThread("t1", config);
     expect(result).toBe("a");
   });

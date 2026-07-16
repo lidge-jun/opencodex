@@ -737,20 +737,16 @@ export async function handleResponses(
     // Capture quota from upstream response for multi-account tracking
     if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
       const weeklyRaw = upstreamResponse.headers.get("x-codex-secondary-used-percent");
-      const fiveHourRaw = upstreamResponse.headers.get("x-codex-primary-used-percent");
       const monthlyRaw = upstreamResponse.headers.get("x-codex-tertiary-used-percent");
       const weeklyResetRaw = upstreamResponse.headers.get("x-codex-secondary-reset-at");
-      const fiveHourResetRaw = upstreamResponse.headers.get("x-codex-primary-reset-at");
       const monthlyResetRaw = upstreamResponse.headers.get("x-codex-tertiary-reset-at");
       const retryAfterRaw = upstreamResponse.headers.get("retry-after");
-      if (weeklyRaw || fiveHourRaw || monthlyRaw) {
+      if (weeklyRaw || monthlyRaw) {
         const { updateAccountQuota } = await import("../codex/auth-api");
         updateAccountQuota(
           authCtx.accountId,
           weeklyRaw,
-          fiveHourRaw,
           weeklyResetRaw,
-          fiveHourResetRaw,
           monthlyRaw,
           monthlyResetRaw,
         );
@@ -762,8 +758,8 @@ export async function handleResponses(
         });
       } else {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
-          retryAfter: retryAfterRaw,
-          resetAt: [fiveHourResetRaw, weeklyResetRaw, monthlyResetRaw],
+         retryAfter: retryAfterRaw,
+          resetAt: [weeklyResetRaw, monthlyResetRaw],
         });
       }
     }
