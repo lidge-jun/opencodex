@@ -65,3 +65,18 @@ export const IconMoon = (p: P) => (<svg {...S(p)}><path d="M21 12.8A9 9 0 1 1 11
 export const IconMonitor = (p: P) => (<svg {...S(p)}><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>);
 export const IconGlobe = (p: P) => (<svg {...S(p)}><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>);
 export const IconSparkle = (p: P) => (<svg {...S(p)}><path d="M12 3v18M5.6 5.6l12.8 12.8M3 12h18M5.6 18.4 18.4 5.6"/></svg>);
+/** Filled star — default-provider marker (reads at 12–14px). */
+export const IconStar = (p: P) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="none"
+    aria-hidden={p["aria-hidden"]}
+    className={p.className}
+    width={p.width}
+    height={p.height}
+    style={p.style}
+  >
+    <path d="M12 2.6 14.9 9l6.9.6-5.2 4.5 1.6 6.7L12 17.4 5.8 20.8l1.6-6.7L2.2 9.6 9.1 9 12 2.6Z" />
+  </svg>
+);

@@ -38,6 +38,61 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   xai: "grok-color.svg",
   "mimo-free": "xiaomi-color.svg",
   xiaomi: "xiaomi-color.svg",
+  momo: "xiaomi-color.svg",
+};
+
+/** Brand colors for monochrome Simple-Icons SVGs (fill is black by default). */
+const PROVIDER_BRAND_COLORS: Record<string, string> = {
+  nvidia: "#76B900",
+  "mimo-free": "#FF6900",
+  xiaomi: "#FF6900",
+  momo: "#FF6900",
+  anthropic: "#D97757",
+  "anthropic-apikey": "#D97757",
+  openai: "#10A37F",
+  "openai-apikey": "#10A37F",
+  chatgpt: "#10A37F",
+  "azure-openai": "#10A37F",
+  // xAI / Ollama monochrome marks stay as-authored (black/white per theme SVG).
+  deepseek: "#4D6BFE",
+  groq: "#F55036",
+  mistral: "#FF7000",
+  openrouter: "#6566F1",
+  google: "#8E75B2",
+  "google-vertex": "#8E75B2",
+  kimi: "#1A6CFF",
+  "kimi-code": "#1A6CFF",
+  moonshot: "#1A6CFF",
+};
+
+/** Canonical brand casing for known provider ids (config keys stay lowercase). */
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  anthropic: "Anthropic",
+  "anthropic-apikey": "Anthropic",
+  chatgpt: "ChatGPT",
+  openai: "OpenAI",
+  "openai-apikey": "OpenAI",
+  "azure-openai": "Azure OpenAI",
+  nvidia: "NVIDIA",
+  ollama: "Ollama",
+  "ollama-cloud": "Ollama",
+  xai: "xAI",
+  "mimo-free": "MiMo",
+  xiaomi: "Xiaomi",
+  momo: "MiMo",
+  cursor: "Cursor",
+  deepseek: "DeepSeek",
+  openrouter: "OpenRouter",
+  mistral: "Mistral",
+  groq: "Groq",
+  kimi: "Kimi",
+  "kimi-code": "Kimi",
+  moonshot: "Moonshot",
+  google: "Google",
+  "google-vertex": "Google Vertex",
+  "lm-studio": "LM Studio",
+  huggingface: "Hugging Face",
+  vllm: "vLLM",
 };
 
 type ProviderIconHints = {
@@ -54,4 +109,23 @@ export function providerIconSrc(provider: string, _hints?: ProviderIconHints): s
   void _hints;
   const icon = providerIconAlias(provider);
   return icon ? `/provider-icons/${icon}` : undefined;
+}
+
+/** Brand accent for monochrome icons; undefined = leave SVG as-authored. */
+export function providerBrandColor(provider: string): string | undefined {
+  return PROVIDER_BRAND_COLORS[provider.toLowerCase()];
+}
+
+/** Display label with proper brand casing when known; otherwise original name. */
+export function formatProviderDisplayName(provider: string): string {
+  const key = provider.toLowerCase();
+  if (PROVIDER_DISPLAY_NAMES[key]) return PROVIDER_DISPLAY_NAMES[key]!;
+  // Title-case simple ids like "my-provider" without mangling mixedCase custom names.
+  if (provider === key && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(provider)) {
+    return provider
+      .split("-")
+      .map(part => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+      .join(" ");
+  }
+  return provider;
 }

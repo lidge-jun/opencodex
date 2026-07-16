@@ -951,10 +951,20 @@ select.input { appearance: none; }
   color: var(--muted);
   overflow: hidden;
 }
-.add-prov-row-icon img {
+.add-prov-row-icon img,
+.add-prov-row-icon .provider-icon-mask {
   width: 16px;
   height: 16px;
   object-fit: contain;
+  display: block;
+}
+.add-prov-row-icon .provider-icon-mask {
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 .add-prov-row-name {
   font-size: var(--text-body);
@@ -1015,7 +1025,12 @@ select.input { appearance: none; }
 .prov-card-copy { min-width: 0; flex: 1; }
 .prov-title { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; min-width: 0; }
 .provider-icon { width: 31px; height: 31px; border-radius: var(--radius-xs); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--raised); border: 1px solid var(--border-soft); color: var(--text); }
-.provider-icon img { width: 19px; height: 19px; object-fit: contain; display: block; }
+.provider-icon img,
+.provider-icon .provider-icon-mask { width: 19px; height: 19px; object-fit: contain; display: block; }
+.providers-workspace-detail-icon .provider-icon-mask {
+  width: 32px;
+  height: 32px;
+}
 .prov-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
 .prov-meta > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-quota { padding-left: 58px; }

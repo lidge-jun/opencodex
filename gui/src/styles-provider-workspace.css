@@ -83,10 +83,12 @@
 
 /* compact provider row in the rail */
 .providers-workspace-rail-row {
-  display: flex;
+  /* Fixed columns so status dot + model count always land in the same place. */
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto 7px 3.25rem 14px;
   align-items: center;
-  gap: 9px;
-  padding: 11px 16px;
+  column-gap: 8px;
+  padding: 11px 14px 11px 16px;
   min-height: 34px;
   border-radius: 0;
   border: none;
@@ -130,15 +132,24 @@
   color: var(--text);
 }
 
-.providers-workspace-rail-icon img {
+.providers-workspace-rail-icon img,
+.providers-workspace-rail-icon .provider-icon-mask {
   width: 16px;
   height: 16px;
   object-fit: contain;
   display: block;
 }
+.provider-icon-mask {
+  flex-shrink: 0;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
 
 .providers-workspace-rail-name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -147,7 +158,47 @@
   font-size: 13px;
 }
 
-/* Exception labels only (Local / Free) — quiet type, no pill chrome. Paid = unmarked default. */
+.providers-workspace-rail-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+/* Distinct badge types: Default (icon), Free (green), Local (muted/slate). */
+.pwi-rail-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+}
+.pwi-rail-badge--default {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--accent-hover);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 32%, transparent);
+}
+.pwi-rail-badge--free {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: color-mix(in oklab, var(--green) 35%, transparent);
+}
+.pwi-rail-badge--local {
+  color: var(--muted);
+  background: var(--raised);
+  border-color: var(--border);
+}
+/* Legacy meta classes kept for any remaining call sites. */
 .pwi-rail-meta {
   flex: 0 0 auto;
   font-size: 11.5px;
@@ -180,6 +231,7 @@
 }
 
 .providers-workspace-rail-status {
+  justify-self: center;
   flex-shrink: 0;
   width: 7px;
   height: 7px;
@@ -201,12 +253,14 @@
 }
 
 .providers-workspace-rail-model-count {
-  flex: 0 0 auto;
+  justify-self: stretch;
+  text-align: right;
   white-space: nowrap;
   font-size: 11.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
+  min-height: 1em;
 }
 
 .providers-workspace-rail-chevron {
@@ -217,10 +271,7 @@
   transform: rotate(0deg);
 }
 
-/* Keep row pieces on one line — no letter stacking / vertical glyphs */
-.providers-workspace-rail-row > * {
-  min-width: 0;
-}
+/* Keep fixed columns stable (icon / status / count / chevron). */
 .providers-workspace-rail-row .providers-workspace-rail-icon,
 .providers-workspace-rail-row .providers-workspace-rail-status,
 .providers-workspace-rail-row .providers-workspace-rail-model-count,
@@ -1957,7 +2008,7 @@
   color: var(--muted);
 }
 
-/* ---- Empty state (no providers) — single hero, no duplicate CTAs ---- */
+/* ---- Empty state (no providers) — three equal CTAs ---- */
 .providers-workspace-empty-root {
   display: flex;
   min-height: 100%;
@@ -1968,12 +2019,12 @@
 .pwi-empty-hero {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 22px;
   padding: 48px 24px;
   align-items: center;
   justify-content: center;
   text-align: center;
-  max-width: 560px;
+  max-width: 720px;
   width: 100%;
 }
 .pwi-empty-right {
@@ -2005,38 +2056,54 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  width: 100%;
-  max-width: 420px;
   width: min(100%, 620px);
+}
+.pwi-empty-tiles--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100%, 680px);
 }
 .pwi-empty-tile {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 16px 14px;
+  gap: 6px;
+  padding: 18px 14px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
   font: inherit;
   cursor: pointer;
-  text-align: left;
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
   align-items: center;
   text-align: center;
   color: var(--text);
+  min-height: 132px;
 }
 .pwi-empty-tile:hover {
   border-color: var(--accent-ring);
   background: var(--hover);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 20%, transparent);
+}
+.pwi-empty-tile-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 .pwi-empty-tile-label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 650;
 }
 .pwi-empty-tile-desc {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
+  max-width: 22ch;
 }
 .pwi-empty-doc-link {
   font-size: 12.5px;
@@ -2088,7 +2155,8 @@
   .pwi-empty-hero {
     padding: 32px 24px;
   }
-  .pwi-empty-tiles {
+  .pwi-empty-tiles,
+  .pwi-empty-tiles--3 {
     grid-template-columns: 1fr;
   }
   .pwi-oa-grid--single {

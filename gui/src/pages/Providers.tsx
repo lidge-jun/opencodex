@@ -33,6 +33,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [addIntent, setAddIntent] = useState<{ tier?: "free" | "paid" | "accounts"; custom?: boolean }>({});
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
@@ -477,7 +478,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             providers={config.providers}
             apiBase={apiBase}
             defaultProvider={config.defaultProvider}
-            onAddProvider={() => setAdding(true)}
+            onAddProvider={(intent) => {
+              setAddIntent(intent ?? {});
+              setAdding(true);
+            }}
             onUseLegacyView={() => setLayout("classic")}
             onEditConfig={openJsonEditor}
             onSetDisabled={setProviderDisabled}
@@ -505,12 +509,16 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <AddProviderModal
             apiBase={apiBase}
             existingNames={Object.keys(config.providers)}
+            initialCustom={!!addIntent.custom}
+            initialTier={addIntent.tier ?? "free"}
             onClose={() => {
               if (busy) void cancelOAuthLogin(busy);
               setAdding(false);
+              setAddIntent({});
             }}
             onAdded={(name) => {
               setAdding(false);
+              setAddIntent({});
               notify(t("prov.added", { name, cmd: "ocx sync" }), true);
               fetchConfig();
               fetchOauth();

@@ -22,7 +22,7 @@ import {
   parseAvailableModels,
   parseSelectedModels,
 } from "../provider-workspace-data";
-import { providerIconSrc } from "../provider-icons";
+import { formatProviderDisplayName, providerBrandColor, providerIconSrc } from "../provider-icons";
 import {
   IconSearch,
   IconFilter,
@@ -39,6 +39,9 @@ import {
   IconExternal,
   IconActivity,
   IconLock,
+  IconGlobe,
+  IconKey,
+  IconStar,
 } from "../icons";
 import { Switch } from "../ui";
 import { useT, type TFn, type TKey } from "../i18n";
@@ -79,6 +82,14 @@ export interface ProviderAuthHandlers {
   onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void;
 }
 
+/** How the empty-state / rail “Add” entry should open the add-provider flow. */
+export type AddProviderIntent = {
+  /** Catalog tab: free, paid, or logins. */
+  tier?: "free" | "paid" | "accounts";
+  /** Jump straight to custom API-endpoint form. */
+  custom?: boolean;
+};
+
 export interface ProviderWorkspaceProps {
   /** Provider map as returned from the proxy config API. */
   providers: Record<string, WorkspaceProvider>;
@@ -86,7 +97,7 @@ export interface ProviderWorkspaceProps {
   apiBase: string;
   /** Name of the default routing provider (shows a Default label in the rail). */
   defaultProvider?: string;
-  onAddProvider: () => void;
+  onAddProvider: (intent?: AddProviderIntent) => void;
   onUseLegacyView: () => void;
   /** Open raw config JSON editor (workspace modal — do not leave workspace). */
   onEditConfig: () => void;
@@ -165,11 +176,24 @@ function ProviderIcon({ name, adapter, baseUrl, cls }: {
   cls: string;
 }) {
   const src = providerIconSrc(name, { adapter, baseUrl });
+  const brand = providerBrandColor(name);
   return (
-    <span className={cls}>
-      {src
-        ? <img src={src} alt="" aria-hidden="true" />
-        : <IconServer aria-hidden="true" />}
+    <span className={cls} style={brand ? { color: brand } : undefined}>
+      {src && brand ? (
+        <span
+          className="provider-icon-mask"
+          style={{
+            backgroundColor: brand,
+            WebkitMaskImage: `url(${src})`,
+            maskImage: `url(${src})`,
+          }}
+          aria-hidden="true"
+        />
+      ) : src ? (
+        <img src={src} alt="" aria-hidden="true" />
+      ) : (
+        <IconServer aria-hidden="true" />
+      )}
     </span>
   );
 }
@@ -206,6 +230,7 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
   const free = isFreeProvider(item);
   const local = isLocalProvider(item);
   const status = statusLabel(item, t);
+  const displayName = formatProviderDisplayName(item.name);
   const suffix = `${isDefault ? t("pws.rail.suffixDefault") : ""}${local ? t("pws.rail.suffixLocal") : free ? t("pws.rail.suffixFree") : ""}`;
   return (
     <button
@@ -214,7 +239,7 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
       onClick={onClick}
       role="option"
       aria-selected={selected}
-      aria-label={t("pws.rail.selectAria", { name: item.name, status, suffix })}
+      aria-label={t("pws.rail.selectAria", { name: displayName, status, suffix })}
     >
       <ProviderIcon
         name={item.name}
@@ -222,20 +247,28 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
         baseUrl={item.baseUrl}
         cls="providers-workspace-rail-icon"
       />
-      <span className="providers-workspace-rail-name">{item.name}</span>
-      {isDefault && (
-        <span className="pwi-rail-meta pwi-rail-meta--default" title={t("pws.defaultTitle")}>{t("prov.defaultBadge")}</span>
-      )}
-      {/* Only label exceptions (Local / Free). Paid is the unmarked default. */}
-      {local ? (
-        <span className="pwi-rail-meta" title={t("pws.localTitle")}>{t("modal.badge.local")}</span>
-      ) : free ? (
-        <span className="pwi-rail-meta pwi-rail-meta--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
-      ) : null}
+      <span className="providers-workspace-rail-name">{displayName}</span>
+      <span className="providers-workspace-rail-badges">
+        {isDefault && (
+          <span
+            className="pwi-rail-badge pwi-rail-badge--default"
+            title={t("pws.defaultTitle")}
+            aria-label={t("prov.defaultBadge")}
+          >
+            <IconStar width={11} height={11} aria-hidden="true" />
+          </span>
+        )}
+        {/* Only label exceptions (Local / Free). Paid is the unmarked default. */}
+        {local ? (
+          <span className="pwi-rail-badge pwi-rail-badge--local" title={t("pws.localTitle")}>{t("modal.badge.local")}</span>
+        ) : free ? (
+          <span className="pwi-rail-badge pwi-rail-badge--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
+        ) : null}
+      </span>
       <span className={railStatusCls(item)} aria-hidden="true" title={status} />
-      {modelCount !== undefined && modelCount > 0 && (
-        <span className="providers-workspace-rail-model-count">{t("pws.modelCount", { count: modelCount })}</span>
-      )}
+      <span className="providers-workspace-rail-model-count">
+        {modelCount !== undefined && modelCount > 0 ? t("pws.modelCount", { count: modelCount }) : ""}
+      </span>
       <IconChevron className="providers-workspace-rail-chevron" aria-hidden="true" />
     </button>
   );
@@ -1079,14 +1112,20 @@ function DetailPanel({
         />
         <div className="providers-workspace-detail-title-group">
           <div className="providers-workspace-detail-title-row">
-            <div className="providers-workspace-detail-title">{item.name}</div>
+            <div className="providers-workspace-detail-title">{formatProviderDisplayName(item.name)}</div>
             {defaultProvider === item.name && (
-              <span className="pwi-rail-meta pwi-rail-meta--default" title={t("pws.defaultTitle")}>{t("prov.defaultBadge")}</span>
+              <span
+                className="pwi-rail-badge pwi-rail-badge--default"
+                title={t("pws.defaultTitle")}
+                aria-label={t("prov.defaultBadge")}
+              >
+                <IconStar width={12} height={12} aria-hidden="true" />
+              </span>
             )}
             {isLocalProvider(item) ? (
-              <span className="pwi-rail-meta" title={t("pws.localTitle")}>{t("modal.badge.local")}</span>
+              <span className="pwi-rail-badge pwi-rail-badge--local" title={t("pws.localTitle")}>{t("modal.badge.local")}</span>
             ) : isFreeProvider(item) ? (
-              <span className="pwi-rail-meta pwi-rail-meta--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
+              <span className="pwi-rail-badge pwi-rail-badge--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
             ) : null}
           </div>
         </div>
@@ -1167,10 +1206,9 @@ function DetailPanel({
 function EmptyState({
   onAddProvider,
 }: {
-  onAddProvider: () => void;
+  onAddProvider: (intent?: AddProviderIntent) => void;
 }) {
   const t = useT();
-  // One CTA: opens the add-provider catalog (Custom is a row inside that modal).
   return (
     <div className="providers-workspace-empty-root">
       <div className="pwi-empty-hero">
@@ -1178,13 +1216,35 @@ function EmptyState({
           <IconBoxes style={{ width: 64, height: 64 }} />
         </div>
         <h2 className="pwi-empty-right-title">{t("pws.connectFirst")}</h2>
-        <p className="pwi-empty-right-sub">
-          {t("pws.connectFirstSub")}
-        </p>
-        <button type="button" className="btn btn-primary" onClick={onAddProvider} aria-label={t("pws.addAria")}>
-          <IconPlus style={{ width: 14, height: 14 }} aria-hidden="true" />
-          {t("pws.addProvider")}
-        </button>
+        <div className="pwi-empty-tiles pwi-empty-tiles--3">
+          <button
+            type="button"
+            className="pwi-empty-tile"
+            onClick={() => onAddProvider({ tier: "free" })}
+          >
+            <span className="pwi-empty-tile-icon" aria-hidden="true"><IconGlobe width={18} height={18} /></span>
+            <span className="pwi-empty-tile-label">{t("pws.empty.browseFree")}</span>
+            <span className="pwi-empty-tile-desc">{t("pws.empty.browseFreeDesc")}</span>
+          </button>
+          <button
+            type="button"
+            className="pwi-empty-tile"
+            onClick={() => onAddProvider({ tier: "accounts" })}
+          >
+            <span className="pwi-empty-tile-icon" aria-hidden="true"><IconLock width={18} height={18} /></span>
+            <span className="pwi-empty-tile-label">{t("pws.empty.connectAccount")}</span>
+            <span className="pwi-empty-tile-desc">{t("pws.empty.connectAccountDesc")}</span>
+          </button>
+          <button
+            type="button"
+            className="pwi-empty-tile"
+            onClick={() => onAddProvider({ custom: true })}
+          >
+            <span className="pwi-empty-tile-icon" aria-hidden="true"><IconKey width={18} height={18} /></span>
+            <span className="pwi-empty-tile-label">{t("pws.empty.addEndpoint")}</span>
+            <span className="pwi-empty-tile-desc">{t("pws.empty.addEndpointDesc")}</span>
+          </button>
+        </div>
         <p className="pwi-empty-doc-link muted">
           {t("pws.notSure")}{" "}
           <a href="https://opencodex.dev/docs" target="_blank" rel="noreferrer" className="link-btn">
@@ -1451,7 +1511,7 @@ export default function ProviderWorkspace({
             <button
               type="button"
               className="btn btn-ghost btn-sm pwi-rail-add-btn"
-              onClick={onAddProvider}
+              onClick={() => onAddProvider()}
               aria-label={t("modal.add")}
               title={t("modal.add")}
             >

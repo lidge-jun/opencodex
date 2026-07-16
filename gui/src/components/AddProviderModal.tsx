@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { IconX, IconLock, IconKey, IconExternal, IconGlobe, IconChevron, IconInfo, IconServer } from "../icons";
 import { useT, type TFn } from "../i18n";
 import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
-import { providerIconSrc } from "../provider-icons";
+import { formatProviderDisplayName, providerBrandColor, providerIconSrc } from "../provider-icons";
 
 /** How many providers fit on the first sheet (room for Free/Paid tabs + footer). */
 const HOME_SLOT_COUNT = 8;
@@ -45,6 +45,7 @@ export type AccountLoginRow = {
 
 export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded, initialCustom = false,
+  initialTier = "free",
   accountRows = [],
   accountStatus = {},
   accountBusy = null,
@@ -64,6 +65,8 @@ export default function AddProviderModal({
   onAdded: (name: string) => void;
   /** Skip catalog picker and open the custom-provider form immediately. */
   initialCustom?: boolean;
+  /** Opening catalog tab (Free / Paid / Logins). */
+  initialTier?: "free" | "paid" | "accounts";
   /** Third-tab account login rows (oauth + key-configured), styled like the catalog. */
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
@@ -84,7 +87,7 @@ export default function AddProviderModal({
     { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
   ], [t]);
   const [query, setQuery] = useState("");
-  const [tier, setTier] = useState<"free" | "paid" | "accounts">("free");
+  const [tier, setTier] = useState<"free" | "paid" | "accounts">(initialTier);
   const [catalogView, setCatalogView] = useState<"home" | "browse">("home");
   const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const [preset, setPreset] = useState<Preset | null>(initialCustom ? fallbackPresets[0]! : null);
@@ -375,15 +378,18 @@ export default function AddProviderModal({
                   const isBusy = accountBusy === row.id;
                   const hint = accountLoginHint?.provider === row.id ? accountLoginHint : null;
                   const icon = providerIconSrc(row.id);
+                  const brand = providerBrandColor(row.id);
                   return (
                     <div key={row.id} className="add-prov-account-block">
                       <div className="add-prov-row">
-                        <span className="add-prov-row-icon" aria-hidden="true">
-                          {icon
-                            ? <img src={icon} alt="" />
-                            : <IconServer width={16} height={16} />}
+                        <span className="add-prov-row-icon" aria-hidden="true" style={brand ? { color: brand } : undefined}>
+                          {icon && brand
+                            ? <span className="provider-icon-mask" style={{ backgroundColor: brand, WebkitMaskImage: `url(${icon})`, maskImage: `url(${icon})` }} />
+                            : icon
+                              ? <img src={icon} alt="" />
+                              : <IconServer width={16} height={16} />}
                         </span>
-                        <span className="add-prov-row-name">{row.label}</span>
+                        <span className="add-prov-row-name">{formatProviderDisplayName(row.label || row.id)}</span>
                         <span className="add-prov-account-status">
                           <span className={`dot ${row.kind === "key" || st.loggedIn ? "dot-green" : "dot-muted"}`} />
                           <span className={row.kind === "key" || st.loggedIn ? "add-prov-account-status-ok" : "muted"}>
@@ -726,14 +732,17 @@ function ProviderConnectRow({
   onConnect: () => void;
 }) {
   const icon = providerIconSrc(preset.id, { adapter: preset.adapter, baseUrl: preset.baseUrl });
+  const brand = providerBrandColor(preset.id);
   return (
     <div className="add-prov-row">
-      <span className="add-prov-row-icon" aria-hidden="true">
-        {icon
-          ? <img src={icon} alt="" />
-          : <IconServer width={16} height={16} />}
+      <span className="add-prov-row-icon" aria-hidden="true" style={brand ? { color: brand } : undefined}>
+        {icon && brand
+          ? <span className="provider-icon-mask" style={{ backgroundColor: brand, WebkitMaskImage: `url(${icon})`, maskImage: `url(${icon})` }} />
+          : icon
+            ? <img src={icon} alt="" />
+            : <IconServer width={16} height={16} />}
       </span>
-      <span className="add-prov-row-name">{preset.label}</span>
+      <span className="add-prov-row-name">{formatProviderDisplayName(preset.label || preset.id)}</span>
       <span className="add-prov-row-badge">{authBadge(preset, t)}</span>
       <button type="button" className="btn btn-ghost btn-sm add-prov-row-connect" onClick={onConnect}>
         {t("modal.connect")}
