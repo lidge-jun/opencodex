@@ -283,6 +283,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setDraft(baseline);
   };
 
+  /** Reset draft to the open-time baseline without closing. */
+  const restoreJsonEditor = () => {
+    setDraft(jsonBaselineRef.current);
+  };
+
   // Compare against ref every render while open (ref is stable; draft state drives updates).
   const jsonIsDirty = jsonEditorOpen && draft !== jsonBaselineRef.current;
 
@@ -511,6 +516,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onDraftChange: setDraft,
               onSave: () => saveConfig(),
               onClose: closeJsonEditor,
+              onRestore: restoreJsonEditor,
             }}
             onSetDisabled={setProviderDisabled}
             onRemoveProvider={removeProvider}

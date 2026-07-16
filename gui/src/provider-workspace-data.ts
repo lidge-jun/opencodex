@@ -257,15 +257,51 @@ export function buildMostUsedProviders(
     .sort((a, b) => b.requests - a.requests || a.name.localeCompare(b.name));
 }
 
-export function formatRelativeTime(updatedAt: number | undefined, now = Date.now()): string {
-  if (updatedAt === undefined || !Number.isFinite(updatedAt)) return "Not checked";
+/** Optional label resolver — pass `t` from i18n for localized relative times. */
+export type RelativeTimeLabels = {
+  justNow: string;
+  notChecked: string;
+  minutesAgo: (n: number) => string;
+  hoursAgo: (n: number) => string;
+  daysAgo: (n: number) => string;
+};
+
+const EN_RELATIVE: RelativeTimeLabels = {
+  justNow: "Just now",
+  notChecked: "Not checked",
+  minutesAgo: n => `${n}m ago`,
+  hoursAgo: n => `${n}h ago`,
+  daysAgo: n => `${n}d ago`,
+};
+
+export function formatRelativeTime(
+  updatedAt: number | undefined,
+  labelsOrNow?: RelativeTimeLabels | number,
+  nowArg?: number,
+): string {
+  const labels = typeof labelsOrNow === "object" && labelsOrNow !== null ? labelsOrNow : EN_RELATIVE;
+  const now = typeof labelsOrNow === "number" ? labelsOrNow : (nowArg ?? Date.now());
+  if (updatedAt === undefined || !Number.isFinite(updatedAt)) return labels.notChecked;
   const elapsedMs = Math.max(0, now - updatedAt);
   const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return labels.justNow;
+  if (minutes < 60) return labels.minutesAgo(minutes);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return labels.hoursAgo(hours);
+  return labels.daysAgo(Math.floor(hours / 24));
+}
+
+/** Build RelativeTimeLabels from the app translator. */
+export function relativeTimeLabelsFromT(
+  t: (key: "time.justNow" | "time.notChecked" | "time.minutesAgo" | "time.hoursAgo" | "time.daysAgo", vars?: Record<string, string | number>) => string,
+): RelativeTimeLabels {
+  return {
+    justNow: t("time.justNow"),
+    notChecked: t("time.notChecked"),
+    minutesAgo: n => t("time.minutesAgo", { n }),
+    hoursAgo: n => t("time.hoursAgo", { n }),
+    daysAgo: n => t("time.daysAgo", { n }),
+  };
 }
 
 /** An entry in the "Attention required" list shown in the overview panel. */

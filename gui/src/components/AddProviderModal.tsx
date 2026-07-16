@@ -219,6 +219,10 @@ export default function AddProviderModal({
     const name = form.name.trim();
     if (!name) { setError(t("modal.nameRequired")); return; }
     if (!form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
+    const willOverwrite = existingNames.includes(name);
+    if (willOverwrite && !window.confirm(t("modal.overwriteConfirm", { name }))) {
+      return;
+    }
     const provider = buildProviderPayload(form);
 
     setSaving(true);
@@ -646,7 +650,22 @@ export default function AddProviderModal({
               <Field label={t("modal.providerName")}>
                 <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
               </Field>
-              {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
+              {dup && (
+                <div
+                  className="text-label leading-relaxed"
+                  style={{
+                    color: "var(--amber)",
+                    background: "var(--amber-soft)",
+                    border: "1px solid var(--amber)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "10px 12px",
+                  }}
+                  role="alert"
+                >
+                  <strong>{t("modal.duplicateWarn", { name: form.name.trim() })}</strong>
+                  <div style={{ marginTop: 4 }}>{t("modal.overwriteWarnDetail")}</div>
+                </div>
+              )}
               <Field label={t("modal.adapter")}>
                 <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
                   {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
@@ -686,7 +705,14 @@ export default function AddProviderModal({
               </Field>
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
-                <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>
+                <button
+                  className={`btn ${dup ? "btn-amber" : "btn-primary"}`}
+                  onClick={() => { void submit(); }}
+                  disabled={saving}
+                  style={dup ? { background: "var(--amber)", borderColor: "var(--amber)", color: "#111" } : undefined}
+                >
+                  {saving ? t("modal.adding") : (dup ? t("modal.overwriteProvider") : t("modal.add"))}
+                </button>
                 {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>{t("modal.useOauthLogin")}</button>}
                 <div style={{ flex: 1 }} />
                 <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>

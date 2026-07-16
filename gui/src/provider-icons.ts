@@ -75,14 +75,16 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "azure-openai": "Azure OpenAI",
   nvidia: "NVIDIA",
   ollama: "Ollama",
-  "ollama-cloud": "Ollama",
+  "ollama-cloud": "Ollama Cloud",
   xai: "xAI",
-  "mimo-free": "MiMo",
+  "mimo-free": "MiMo Free",
   xiaomi: "Xiaomi",
   momo: "MiMo",
   cursor: "Cursor",
   deepseek: "DeepSeek",
   openrouter: "OpenRouter",
+  "opencode-go": "OpenCode Go",
+  "opencode-free": "OpenCode Free",
   mistral: "Mistral",
   groq: "Groq",
   kimi: "Kimi",
@@ -93,6 +95,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "lm-studio": "LM Studio",
   huggingface: "Hugging Face",
   vllm: "vLLM",
+  litellm: "LiteLLM",
 };
 
 type ProviderIconHints = {
