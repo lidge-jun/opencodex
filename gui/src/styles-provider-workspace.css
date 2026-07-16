@@ -681,12 +681,13 @@
   margin-top: 14px;
 }
 
-/* ---- config section card inside a tab ---- */
+/* ---- config section inside Models / Usage / Settings tabs ---- */
+/* Flat panels: background contrast, not stacked borders */
 
 .providers-workspace-section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  border: none;
+  border-radius: 10px;
   overflow: hidden;
 }
 
@@ -695,14 +696,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 12px 16px 8px;
+  border-bottom: none;
 }
 
 .providers-workspace-section-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .providers-workspace-section-meta {
@@ -712,17 +715,17 @@
 }
 
 .providers-workspace-section-body {
-  padding: 0;
+  padding: 0 4px 8px;
 }
 
-/* compact table rows inside a section */
+/* compact rows: divider only, no nested cell boxes */
 .providers-workspace-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   min-width: 0;
 }
 
@@ -777,8 +780,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
   transition: background 0.12s;
 }
 
@@ -1373,8 +1376,8 @@
   gap: 12px;
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--raised);
+  border: none;
+  background: color-mix(in oklab, var(--raised) 85%, transparent);
 }
 .pwi-auth-wait-copy { min-width: 0; flex: 1; }
 .pwi-auth-wait-title {
@@ -1594,42 +1597,25 @@
   white-space: nowrap;
 }
 
-/* ---- Overview layout: two-column main+sidebar ---- */
+/* ---- Overview layout: two-column main + side (fewer nested boxes) ---- */
 .pwi-overview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 224px);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 240px);
+  gap: 18px;
   padding: 0;
   min-height: 100%;
-  align-items: stretch;
+  align-items: start;
 }
-/* Keep connection + stats columns top-aligned and equal stretch */
 .pwi-overview-main {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
-  min-height: 0;
-}
-.pwi-overview-main > .providers-workspace-section:first-child {
-  /* Connection card: grow so it matches stats column height when short */
-  flex: 0 0 auto;
-}
-.pwi-stats-column {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  align-self: stretch;
-  height: 100%;
-}
-.pwi-stats-sidebar {
-  flex: 1 1 auto;
 }
 .pwi-overview-tab {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 .pwi-provider-summary {
   margin: 0;
@@ -1638,33 +1624,61 @@
   line-height: 1.5;
   max-width: 76ch;
 }
-.pwi-overview-main {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+
+/* Shared flat panel: surface contrast, no hard card chrome */
+.pwi-panel {
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  border: none;
+  border-radius: 10px;
   min-width: 0;
+  overflow: hidden;
+}
+.pwi-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px 0;
+}
+.pwi-panel-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-/* ---- Connection card ---- */
+/* ---- Connection: one section, value grid with soft dividers ---- */
+.pwi-connection {
+  padding-bottom: 4px;
+}
 .pwi-connection-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
+  margin: 10px 16px 0;
+  padding: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
 }
 .pwi-connection-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  min-height: 60px;
-  border-bottom: 1px solid var(--border-soft);
-  border-right: 1px solid var(--border-soft);
+  gap: 5px;
+  padding: 12px 12px 12px 0;
+  min-height: 0;
+  border: none;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
 }
-/* 3-col: right edge cells */
 .pwi-connection-cell:nth-child(3n) {
   border-right: none;
+  padding-right: 0;
 }
-/* 5 cells: row2 has Auth + Default model — clear bottom on both + no right on last of row */
+.pwi-connection-cell:nth-child(3n + 1) {
+  padding-left: 0;
+}
+/* Second row: only two cells — drop bottom rule */
 .pwi-connection-cell:nth-child(4),
 .pwi-connection-cell:nth-child(5) {
   border-bottom: none;
@@ -1673,11 +1687,11 @@
   border-right: none;
 }
 .pwi-cell-label {
-  font-size: 11.5px;
-  color: var(--muted);
-  font-weight: 500;
+  font-size: 11px;
+  color: var(--faint);
+  font-weight: 550;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 .pwi-cell-value {
   font-size: 13.5px;
@@ -1700,63 +1714,75 @@
 .pwi-connection-status--warn {
   color: var(--amber);
 }
-.pwi-connection-operational {
+/* Ops + action share one footer strip (not two stacked boxes) */
+.pwi-connection-footer {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 9px 14px;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 2px 12px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--green) 9%, transparent);
   color: var(--green);
-  font-size: 13px;
-  font-weight: 500;
-  border-top: 1px solid var(--border-soft);
 }
-.pwi-connection-operational--warn {
+.pwi-connection-footer--warn {
+  background: color-mix(in oklab, var(--amber) 10%, transparent);
   color: var(--amber);
 }
-.pwi-connection-actions {
-  display: flex;
+.pwi-connection-ops {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border-soft);
-  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 0;
+}
+.pwi-connection-footer .btn {
+  color: inherit;
+  flex-shrink: 0;
+}
+/* Legacy class hooks (if any remaining call sites) */
+.pwi-connection-operational,
+.pwi-connection-actions {
+  display: none;
 }
 
-/* ---- Quick actions (selected provider) ---- */
+/* ---- Quick actions (kept for other surfaces; lighter tiles) ---- */
 .pwi-qa-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 4px 0 0;
 }
 .pwi-qa-tile {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 14px 13px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding: 12px;
+  background: color-mix(in oklab, var(--raised) 70%, transparent);
+  border: none;
+  border-radius: 9px;
   font: inherit;
   color: var(--text);
   text-decoration: none;
   cursor: pointer;
   text-align: left;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s;
   align-items: flex-start;
 }
 .pwi-qa-tile:hover {
   background: var(--hover);
-  border-color: var(--accent-ring);
 }
 .pwi-qa-tile > svg {
   width: 18px;
   height: 18px;
-  padding: 7px;
+  padding: 6px;
   box-sizing: content-box;
-  border-radius: 9px;
-  background: var(--raised);
-  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 80%, transparent);
+  border: none;
   margin-bottom: 2px;
   color: var(--text);
 }
@@ -1771,40 +1797,31 @@
   line-height: 1.4;
 }
 
-/* ---- Stats sidebar ---- */
-.pwi-stats-column {
+/* ---- Side panel: stats + notes in one surface ---- */
+.pwi-side-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  align-self: start;
+  gap: 0;
   position: sticky;
   top: 14px;
+  align-self: start;
+  padding-bottom: 12px;
 }
-.pwi-stats-sidebar,
-.pwi-stats-notes {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 14px;
-  min-width: 0;
-}
-.pwi-stats-sidebar {
+.pwi-side-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 0 16px 12px;
   font-size: 13px;
 }
-.pwi-stats-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.pwi-side-block .pwi-panel-head {
+  padding: 12px 0 4px;
 }
-.pwi-stats-head {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
+.pwi-side-block--notes {
+  margin: 0 12px;
+  padding: 12px 4px 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  gap: 8px;
 }
 .pwi-stats-row-label {
   font-size: 11.5px;
@@ -1819,17 +1836,19 @@
 }
 .pwi-stats-unavailable {
   font-size: 12px;
-}
-.pwi-stats-divider {
-  height: 1px;
-  background: var(--border-soft);
-  margin: 2px 0;
+  margin-bottom: 4px;
 }
 .pwi-stats-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+}
+.pwi-stats-line:first-of-type {
+  border-top: none;
+  margin-top: 2px;
 }
 .pwi-stats-line-label {
   font-size: 12.5px;
@@ -1843,17 +1862,17 @@
 }
 .pwi-stats-usage-link {
   justify-content: space-between;
-  margin-top: 14px;
-  padding: 4px 2px;
+  margin-top: 8px;
+  padding: 4px 0;
   width: 100%;
   font-size: 12.5px;
   color: var(--accent);
   gap: 6px;
 }
 .pwi-stats-notes-head {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 650;
-  color: var(--muted);
+  color: var(--faint);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -1865,6 +1884,10 @@
 .pwi-stats-notes-placeholder {
   font-size: 12.5px;
   font-style: italic;
+}
+/* Auth on overview uses same flat panel */
+.pwi-auth-panel .pwi-auth-body {
+  padding: 8px 12px 12px;
 }
 
 /* ---- Overview panel ---- */
@@ -2135,10 +2158,7 @@
     grid-template-columns: 1fr;
     gap: 14px;
   }
-  .pwi-stats-sidebar {
-    position: static;
-  }
-  .pwi-stats-column {
+  .pwi-side-panel {
     position: static;
   }
   .pwi-overview-two-col {
@@ -2166,18 +2186,15 @@
   .pwi-connection-grid {
     grid-template-columns: 1fr 1fr;
   }
-  .pwi-connection-cell {
-    border-right: 1px solid var(--border-soft);
+  .pwi-connection-cell:nth-child(3n) {
+    border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   }
   .pwi-connection-cell:nth-child(2n) {
     border-right: none;
   }
-  .pwi-connection-cell:nth-child(3n) {
-    border-right: 1px solid var(--border-soft);
-  }
   .pwi-connection-cell:nth-child(4),
   .pwi-connection-cell:nth-child(5) {
-    border-bottom: 1px solid var(--border-soft);
+    border-bottom: none;
   }
   .pwi-connection-cell:last-child {
     border-bottom: none;
@@ -2220,10 +2237,11 @@
   }
   .pwi-connection-cell {
     border-right: none !important;
+    padding-right: 0;
   }
   .pwi-connection-cell:nth-child(4),
   .pwi-connection-cell:nth-child(5) {
-    border-bottom: 1px solid var(--border-soft);
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   }
   .pwi-connection-cell:last-child {
     border-bottom: none;

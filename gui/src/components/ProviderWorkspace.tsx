@@ -300,51 +300,49 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
     ? "pwi-connection-status pwi-connection-status--ok"
     : "pwi-connection-status pwi-connection-status--warn";
   return (
-    <div className="providers-workspace-section">
-      <div className="providers-workspace-section-head">
-        <span className="providers-workspace-section-title">{t("pws.connection")}</span>
-      </div>
-      <div className="providers-workspace-section-body">
-        <div className="pwi-connection-grid">
-          <div className="pwi-connection-cell">
-            <span className="pwi-cell-label">{t("dash.status")}</span>
-            <span className={statusCls}>{statusText}</span>
-          </div>
-          <div className="pwi-connection-cell">
-            <span className="pwi-cell-label">{t("modal.baseUrl")}</span>
-            <code className="pwi-cell-value-mono">{baseUrl}</code>
-          </div>
-          <div className="pwi-connection-cell">
-            <span className="pwi-cell-label">{t("pws.cell.lastChecked")}</span>
-            <span className="pwi-cell-value">{formatRelativeTime(lastCheckedAt)}</span>
-          </div>
-          <div className="pwi-connection-cell">
-            <span className="pwi-cell-label">{t("pws.cell.auth")}</span>
-            <span className="pwi-cell-value">{authModeLabel(item, t)}</span>
-          </div>
-          <div className="pwi-connection-cell">
-            <span className="pwi-cell-label">{t("pws.cell.defaultModel")}</span>
-            <span className="pwi-cell-value">
-              {item.defaultModel
-                ? <>{item.defaultModel}{" "}<span className="badge badge-muted">{t("prov.defaultBadge")}</span></>
-                : <span className="muted">&mdash;</span>}
-            </span>
-          </div>
+    <section className="pwi-panel pwi-connection" aria-label={t("pws.connection")}>
+      <header className="pwi-panel-head">
+        <h3 className="pwi-panel-title">{t("pws.connection")}</h3>
+      </header>
+      <div className="pwi-connection-grid" role="list">
+        <div className="pwi-connection-cell" role="listitem">
+          <span className="pwi-cell-label">{t("dash.status")}</span>
+          <span className={statusCls}>{statusText}</span>
         </div>
-        <div className={`pwi-connection-operational${status === "ready" ? "" : " pwi-connection-operational--warn"}`}>
+        <div className="pwi-connection-cell" role="listitem">
+          <span className="pwi-cell-label">{t("modal.baseUrl")}</span>
+          <code className="pwi-cell-value-mono">{baseUrl}</code>
+        </div>
+        <div className="pwi-connection-cell" role="listitem">
+          <span className="pwi-cell-label">{t("pws.cell.lastChecked")}</span>
+          <span className="pwi-cell-value">{formatRelativeTime(lastCheckedAt)}</span>
+        </div>
+        <div className="pwi-connection-cell" role="listitem">
+          <span className="pwi-cell-label">{t("pws.cell.auth")}</span>
+          <span className="pwi-cell-value">{authModeLabel(item, t)}</span>
+        </div>
+        <div className="pwi-connection-cell" role="listitem">
+          <span className="pwi-cell-label">{t("pws.cell.defaultModel")}</span>
+          <span className="pwi-cell-value">
+            {item.defaultModel
+              ? <>{item.defaultModel}{" "}<span className="badge badge-muted">{t("prov.defaultBadge")}</span></>
+              : <span className="muted">&mdash;</span>}
+          </span>
+        </div>
+      </div>
+      <div className={`pwi-connection-footer${status === "ready" ? "" : " pwi-connection-footer--warn"}`}>
+        <span className="pwi-connection-ops" role="status">
           {status === "ready"
             ? <IconCheck style={{ width: 13, height: 13 }} aria-hidden="true" />
             : <IconAlert style={{ width: 13, height: 13 }} aria-hidden="true" />}
           {configurationText}
-        </div>
-        <div className="pwi-connection-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
-            <IconInfo style={{ width: 13, height: 13 }} aria-hidden="true" />
-            {t("pws.editSettings")}
-          </button>
-        </div>
+        </span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
+          <IconInfo style={{ width: 13, height: 13 }} aria-hidden="true" />
+          {t("pws.editSettings")}
+        </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -362,13 +360,14 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   return (
-    <div className="pwi-stats-column">
-      <aside className="pwi-stats-sidebar" aria-label={t("pws.statsAria")}>
-        <div className="pwi-stats-head">{t("pws.statsTitle")}</div>
+    <aside className="pwi-panel pwi-side-panel" aria-label={t("pws.statsAria")}>
+      <div className="pwi-side-block">
+        <header className="pwi-panel-head">
+          <h3 className="pwi-panel-title">{t("pws.statsTitle")}</h3>
+        </header>
         <div className="pwi-stats-row-label">{t("pws.stats.requestsDay")}</div>
         <div className="pwi-stats-value">&mdash;</div>
         <div className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</div>
-        <div className="pwi-stats-divider" />
         <div className="pwi-stats-line">
           <span className="pwi-stats-line-label">{t("pws.stats.totalRequests")}</span>
           <span className="pwi-stats-line-value">{formatRequestCount(requests)}</span>
@@ -385,21 +384,21 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
             </span>
           </div>
         )}
-        <a href="#usage" className="pwi-stats-usage-link btn btn-ghost btn-sm" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
+        <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
           <IconActivity style={{ width: 12, height: 12 }} aria-hidden="true" />
           {t("pws.stats.viewDetailed")}
           <IconChevron style={{ width: 11, height: 11 }} aria-hidden="true" />
-        </a>
-      </aside>
-      <section className="pwi-stats-notes" aria-label={t("pws.notesAria")}>
+        </button>
+      </div>
+      <div className="pwi-side-block pwi-side-block--notes" aria-label={t("pws.notesAria")}>
         <div className="pwi-stats-notes-head">{t("pws.notes")}</div>
         {item.note ? (
           <div className="pwi-stats-notes-body">{item.note}</div>
         ) : (
           <div className="pwi-stats-notes-placeholder muted">{t("pws.notesPlaceholder")}</div>
         )}
-      </section>
-    </div>
+      </div>
+    </aside>
   );
 }
 
@@ -492,13 +491,13 @@ function AuthAccountsCard({
   };
 
   return (
-    <div className="providers-workspace-section">
-      <div className="providers-workspace-section-head">
-        <span className="providers-workspace-section-title">
+    <section className="pwi-panel pwi-auth-panel" aria-label={isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}>
+      <header className="pwi-panel-head">
+        <h3 className="pwi-panel-title">
           {isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}
-        </span>
-      </div>
-      <div className="providers-workspace-section-body pwi-auth-body">
+        </h3>
+      </header>
+      <div className="pwi-auth-body">
         {isOauth && (
           <>
             <div className="pwi-auth-status-row">
@@ -685,7 +684,7 @@ function AuthAccountsCard({
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
