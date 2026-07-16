@@ -49,6 +49,8 @@ export interface DerivedProviderPreset {
   dashboardUrl?: string;
   note?: string;
   keyOptional?: boolean;
+  /** Free pricing (may still require a key). */
+  freeTier?: boolean;
 }
 
 export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
@@ -69,6 +71,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     baseUrl: entry.baseUrl,
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
+    ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),
     ...(entry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: entry.modelSuffixBracketStrip } : {}),
     ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
@@ -194,6 +197,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.thinkingBudgetModels && seed.thinkingBudgetModels) prov.thinkingBudgetModels = [...seed.thinkingBudgetModels];
   if (prov.escapeBuiltinToolNames === undefined && seed.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = seed.escapeBuiltinToolNames;
   if (prov.keyOptional === undefined && seed.keyOptional !== undefined) prov.keyOptional = seed.keyOptional;
+  if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
 }
@@ -231,6 +235,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
+    ...(entry.freeTier ? { freeTier: true } : {}),
   };
 }
 

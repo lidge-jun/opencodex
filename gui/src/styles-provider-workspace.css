@@ -83,9 +83,9 @@
 
 /* compact provider row in the rail */
 .providers-workspace-rail-row {
-  /* icon | name | badges | model-count (right) | status-dot | chevron */
+  /* icon | name | badges | model-count | trail (star + status) | chevron */
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto 3.25rem 7px 14px;
+  grid-template-columns: 26px minmax(0, 1fr) auto 3.25rem auto 14px;
   align-items: center;
   column-gap: 8px;
   padding: 11px 14px 11px 16px;
@@ -166,7 +166,7 @@
   justify-content: flex-end;
 }
 
-/* Distinct badge types: Default (icon), Free (green), Local (muted/slate). */
+/* Distinct badge types: Free (green), Local (muted/slate). Default = bare star. */
 .pwi-rail-badge {
   display: inline-flex;
   align-items: center;
@@ -180,13 +180,21 @@
   padding: 2px 7px;
   border: 1px solid transparent;
 }
-.pwi-rail-badge--default {
-  width: 18px;
-  height: 18px;
-  padding: 0;
+/* Bare star — no circle/chip chrome; sits tight against the status dot in the rail trail. */
+.pwi-default-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
   color: var(--accent-hover);
-  background: color-mix(in oklab, var(--accent) 16%, transparent);
-  border-color: color-mix(in oklab, var(--accent) 32%, transparent);
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  cursor: help;
 }
 .pwi-rail-badge--free {
   color: var(--green);
@@ -230,13 +238,21 @@
   grid-template-columns: repeat(3, 1fr);
 }
 
+/* Star + status-dot cluster — keeps default marker adjacent to the green ready dot. */
+.providers-workspace-rail-trail {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 7px;
+}
 .providers-workspace-rail-status {
   justify-self: center;
   flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  /* Dot sits just left of the chevron, always the same column. */
 }
 
 .providers-workspace-rail-status--active {
@@ -272,8 +288,9 @@
   transform: rotate(0deg);
 }
 
-/* Keep fixed columns stable (icon / status / count / chevron). */
+/* Keep fixed columns stable (icon / trail / count / chevron). */
 .providers-workspace-rail-row .providers-workspace-rail-icon,
+.providers-workspace-rail-row .providers-workspace-rail-trail,
 .providers-workspace-rail-row .providers-workspace-rail-status,
 .providers-workspace-rail-row .providers-workspace-rail-model-count,
 .providers-workspace-rail-row .providers-workspace-rail-chevron {
@@ -298,7 +315,8 @@
   display: flex;
   flex-direction: column;
   gap: 28px;
-  padding: 22px 28px 40px;
+  /* Extra left inset so Ready / Need setup / Disabled aren't flush to the rail edge */
+  padding: 22px 28px 40px 40px;
   max-width: 920px;
 }
 
@@ -308,12 +326,22 @@
   gap: 4px;
 }
 
+/* Title + Edit JSON on one baseline (same height as "Providers Overview") */
+.providers-workspace-overview-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
 .providers-workspace-overview-title {
   font-size: 22px;
   font-weight: 650;
   color: var(--text);
   letter-spacing: -0.015em;
   margin: 0;
+  min-width: 0;
 }
 
 .providers-workspace-overview-sub {
@@ -323,9 +351,31 @@
   max-width: 60ch;
 }
 
-/* Status counts: one strip, vertical dividers — not three cards */
+/* Status counts: Ready | Need setup | Disabled strip */
 .pwi-overview-counts {
   padding: 0;
+}
+.pwi-edit-json-btn {
+  flex: 0 0 auto;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 8px 14px;
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--raised);
+}
+.pwi-edit-json-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--hover);
+}
+.pwi-edit-json-btn svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
 }
 .pwi-overview-count-strip {
   display: grid;
@@ -338,7 +388,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 14px 16px 14px 0;
+  padding: 14px 18px;
   border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
   min-width: 0;
 }
@@ -347,7 +397,8 @@
   padding-right: 0;
 }
 .pwi-overview-count:first-child {
-  padding-left: 0;
+  /* Breathing room before the Ready number/label */
+  padding-left: 4px;
 }
 
 .providers-workspace-summary-label {
@@ -1099,66 +1150,95 @@
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);
 }
+/* Filter popover — match provider detail: flat sections, divider rows, no chips/boxes */
 .pwi-rail-filter-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 40;
-  width: 248px;
-  padding: 10px;
+  width: 260px;
+  padding: 14px 16px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 6%, transparent),
     0 12px 32px color-mix(in srgb, var(--text) 12%, transparent);
 }
 .pwi-rail-filter-menu-title {
-  padding: 2px 6px 10px;
-  font-size: 13.5px;
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  font-size: 15px;
   font-weight: 650;
   color: var(--text);
   letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--border);
 }
+/* Flat section — same idea as .pwi-section (title + content, no card chrome) */
 .pwi-rail-filter-section {
-  background: var(--raised);
-  border: 1px solid var(--border-soft);
-  border-radius: 12px;
-  padding: 6px;
-  margin-bottom: 8px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  margin: 0 0 14px;
 }
 .pwi-rail-filter-section:last-of-type {
   margin-bottom: 0;
 }
 .pwi-rail-filter-menu-head {
-  padding: 4px 8px 6px;
-  font-size: 10.5px;
-  font-weight: 700;
+  margin: 0 0 2px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
+}
+.pwi-rail-filter-list {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 .pwi-rail-filter-option {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 8px 8px;
-  font-size: 13px;
-  color: var(--text);
+  gap: 10px;
+  margin: 0;
+  padding: 10px 0;
+  font-size: 13.5px;
+  color: var(--muted);
   cursor: pointer;
   user-select: none;
-  border-radius: 9px;
-  transition: background 0.12s;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  background: none;
+  transition: color 0.12s, opacity 0.12s;
+}
+.pwi-rail-filter-list .pwi-rail-filter-option:last-child {
+  border-bottom: none;
 }
 .pwi-rail-filter-option:hover {
-  background: color-mix(in srgb, var(--hover) 80%, transparent);
+  color: var(--text);
+  background: none;
 }
 .pwi-rail-filter-option--on {
-  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  color: var(--text);
+  background: none;
+}
+.pwi-rail-filter-option--on .pwi-rail-filter-option-label {
+  font-weight: 600;
 }
 .pwi-rail-filter-option--on:hover {
-  background: var(--accent-soft);
+  background: none;
+}
+/* Off = clearly unselected (dim + hollow toggle) */
+.pwi-rail-filter-option:not(.pwi-rail-filter-option--on) {
+  opacity: 0.55;
+}
+.pwi-rail-filter-option:not(.pwi-rail-filter-option--on):hover {
+  opacity: 0.85;
 }
 .pwi-rail-filter-native {
   position: absolute;
@@ -1169,53 +1249,65 @@
   margin: 0;
   cursor: pointer;
 }
-.pwi-rail-filter-check {
-  width: 18px;
-  height: 18px;
-  border-radius: 6px;
-  border: 1.5px solid var(--border);
-  background: var(--surface);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* Round on/off indicator — not a checkbox chip; hollow = off, filled = on */
+.pwi-rail-filter-toggle {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--border) 90%, var(--muted));
+  background: transparent;
   flex-shrink: 0;
-  color: var(--surface);
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  box-sizing: border-box;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
-.pwi-rail-filter-check--on {
-  background: var(--text);
-  border-color: var(--text);
-  color: var(--surface);
+.pwi-rail-filter-option--on .pwi-rail-filter-toggle {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2.5px var(--surface);
+}
+.pwi-rail-filter-option .pwi-dot {
+  align-self: center;
+  flex-shrink: 0;
 }
 .pwi-rail-filter-option-label {
   flex: 1 1 auto;
   min-width: 0;
-  font-weight: 550;
+  font-weight: 500;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   flex-wrap: wrap;
+  color: inherit;
 }
+/* Count as plain meta — not a pill/box (matches detail kv muted values) */
 .pwi-rail-filter-option-count {
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  min-width: 22px;
-  padding: 1px 7px;
-  text-align: center;
+  background: none;
+  border: none;
+  border-radius: 0;
+  min-width: 0;
+  padding: 0;
+  text-align: right;
+  flex-shrink: 0;
+}
+.pwi-rail-filter-option--on .pwi-rail-filter-option-count {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .pwi-rail-filter-footer {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 2px 2px;
+  margin-top: 0;
+  padding: 10px 0 0;
+  /* Single separator above footer (sort/options do not also draw a bottom line) */
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
 .pwi-rail-filter-reset {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 .pwi-rail-filter-reset:disabled {
@@ -1225,33 +1317,40 @@
 .pwi-rail-filter-reset:not(:disabled):hover {
   color: var(--text);
 }
+/* Sort: 2×2 grid (A–Z | Z–A / Free→Paid | Paid→Free) */
+.pwi-rail-filter-section--sort {
+  margin-bottom: 12px;
+}
 .pwi-rail-sort-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 2px 4px 6px;
+  gap: 2px 12px;
+  margin-top: 4px;
+  border: none;
 }
 .pwi-rail-sort-btn {
   font: inherit;
-  font-size: 12px;
-  font-weight: 550;
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border-soft);
-  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 8px 0 7px;
+  text-align: left;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
   color: var(--muted);
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: color 0.12s, border-color 0.12s;
 }
 .pwi-rail-sort-btn:hover {
   color: var(--text);
-  border-color: var(--border);
+  background: none;
 }
 .pwi-rail-sort-btn--active {
   color: var(--text);
-  background: var(--accent-soft);
-  border-color: var(--accent-ring);
-  font-weight: 650;
+  background: none;
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 
 .pwi-back-overview {
@@ -1518,19 +1617,81 @@
   margin-top: 2px;
 }
 
-/* Edit JSON modal (workspace overlay) */
-.pwi-json-modal {
-  max-width: 720px;
-  width: min(720px, 96vw);
+/* Edit JSON — full main/overview pane (not a modal) */
+.pwi-json-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  padding: 14px 22px 18px;
+  box-sizing: border-box;
+}
+.pwi-json-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+.pwi-json-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.pwi-json-panel-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  flex-shrink: 0;
+  max-width: 72ch;
 }
 .pwi-json-textarea {
   width: 100%;
-  min-height: 360px;
-  height: min(55vh, 480px);
+  flex: 1 1 auto;
+  min-height: 200px;
+  height: auto;
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.45;
-  resize: vertical;
+  resize: none;
+  box-sizing: border-box;
+}
+.pwi-json-dirty-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--amber);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.pwi-json-unsaved-card {
+  max-width: 420px;
+  width: min(420px, 92vw);
+  padding: 20px 22px 16px;
+}
+.pwi-json-unsaved-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+.pwi-json-unsaved-desc {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.pwi-json-unsaved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pwi-json-discard-btn {
+  color: var(--amber) !important;
 }
 .pwi-rail-add-btn {
   border: 1px solid var(--border);
@@ -1846,59 +2007,69 @@
 .pwi-summary-setup { color: var(--amber); }
 .pwi-summary-disabled { color: var(--muted); }
 
-/* ---- Overview: Edit JSON | Recently used (vertical divider, no cards) ---- */
-.pwi-overview-edit-recent {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 0 28px;
-  align-items: start;
-  width: 100%;
-}
-.pwi-overview-config {
-  padding-right: 28px;
-  border-right: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+/* ---- Overview: Rate limits (5h / week / reset times via QuotaBars) ---- */
+.pwi-overview-quotas {
   min-width: 0;
 }
-.pwi-edit-json-link {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
-  column-gap: 10px;
-  row-gap: 4px;
-  align-items: center;
-  width: 100%;
-  margin: 0;
+.pwi-overview-quota-empty {
   padding: 12px 0;
-  border: none;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 62ch;
+}
+.pwi-overview-quota-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+.pwi-overview-quota-card {
+  padding: 12px 0 10px;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  min-width: 0;
+}
+.pwi-overview-quota-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: none;
   background: none;
   font: inherit;
+  color: var(--text);
   text-align: left;
   cursor: pointer;
-  color: var(--text);
+  min-width: 0;
 }
-.pwi-edit-json-link:hover {
-  background: color-mix(in oklab, var(--hover) 55%, transparent);
+.pwi-overview-quota-head:hover .pwi-overview-quota-name {
+  color: var(--accent-hover, var(--accent));
 }
-.pwi-edit-json-link-title {
-  grid-column: 1;
-  grid-row: 1;
-  font-size: 14.5px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+.pwi-overview-quota-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.pwi-edit-json-link-desc {
-  grid-column: 1;
-  grid-row: 2;
-  font-size: 12.5px;
-  line-height: 1.4;
+.pwi-overview-quota-meta {
+  margin-left: auto;
+  font-size: 11.5px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.pwi-edit-json-link > svg {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
+.pwi-overview-quota-bars.quota-compact {
+  padding: 0 0 0 36px; /* align under name, past icon */
+  gap: 5px;
 }
+.pwi-overview-quota-bars .quota-row {
+  grid-template-columns: minmax(28px, max-content) 40px minmax(32px, 48px) minmax(40px, 46px) minmax(72px, 1fr) minmax(32px, max-content);
+  gap: 8px;
+}
+
+/* ---- Overview: Recently used (full width; Edit JSON lives above counts) ---- */
 .pwi-overview-recent {
   min-width: 0;
 }
@@ -2126,16 +2297,6 @@
   .pwi-overview-two-col {
     grid-template-columns: 1fr;
   }
-  .pwi-overview-edit-recent {
-    grid-template-columns: 1fr;
-    gap: 24px;
-  }
-  .pwi-overview-config {
-    padding-right: 0;
-    border-right: none;
-    padding-bottom: 4px;
-    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
-  }
   .providers-workspace-empty-root {
     min-height: auto;
   }
@@ -2192,7 +2353,10 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .pwi-overview-count {
-    padding: 12px 10px 12px 0;
+    padding: 12px 12px;
+  }
+  .providers-workspace-overview {
+    padding-left: 24px;
   }
   .providers-workspace-summary-value {
     font-size: 24px;

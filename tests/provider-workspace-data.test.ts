@@ -63,7 +63,7 @@ describe("buildProviderWorkspace", () => {
     expect(sections.needsSetup).toHaveLength(0);
   });
 
-  test("keyOptional provider without an API key is ready (free tier)", () => {
+  test("keyOptional provider without an API key is ready (keyless free)", () => {
     const sections = buildProviderWorkspace(single("opencode-go", { keyOptional: true, hasApiKey: false }));
     expect(sections.ready.map(p => p.name)).toContain("opencode-go");
     expect(sections.needsSetup).toHaveLength(0);
@@ -72,6 +72,21 @@ describe("buildProviderWorkspace", () => {
   test("keyOptional provider with an API key is also ready", () => {
     const sections = buildProviderWorkspace(single("opencode-pro", { keyOptional: true, hasApiKey: true }));
     expect(sections.ready.map(p => p.name)).toContain("opencode-pro");
+  });
+
+  test("freeTier without key is Free pricing but still needsSetup", () => {
+    const item = { freeTier: true, hasApiKey: false, adapter: "openai-chat", baseUrl: "https://example.test" };
+    expect(isFreeProvider({ ...item })).toBe(true);
+    const sections = buildProviderWorkspace(single("nvidia", item));
+    expect(sections.needsSetup.map(p => p.name)).toContain("nvidia");
+    expect(sections.ready).toHaveLength(0);
+  });
+
+  test("freeTier with key is Free and ready", () => {
+    const item = { freeTier: true, hasApiKey: true, adapter: "openai-chat", baseUrl: "https://example.test" };
+    expect(isFreeProvider({ ...item })).toBe(true);
+    const sections = buildProviderWorkspace(single("nvidia", item));
+    expect(sections.ready.map(p => p.name)).toContain("nvidia");
   });
 
   test("OAuth provider with no key required is ready", () => {

@@ -22,6 +22,11 @@ export interface ProviderRegistryEntry {
   allowKeyAuthOverride?: boolean;
   allowPrivateNetworkByDefault?: boolean;
   keyOptional?: boolean;
+  /**
+   * Free-tier pricing (no paid subscription required). Distinct from `keyOptional`:
+   * free tiers may still require an API key (e.g. NVIDIA NIM free credits).
+   */
+  freeTier?: boolean;
   allowBaseUrlOverride?: boolean;
   /** Static headers merged into every upstream request for this provider. */
   staticHeaders?: Record<string, string>;
@@ -521,10 +526,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   //   its working reasoning_effort. Future kimi ids must be appended individually.
   {
     id: "nvidia", label: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://build.nvidia.com",
+    // Free pricing, but an API key is still required (free key from build.nvidia.com).
+    freeTier: true,
+    featured: true,
     parallelToolCalls: false,
     noReasoningModels: NVIDIA_NIM_KIMI_MODELS,
     modelReasoningEfforts: Object.fromEntries(NVIDIA_NIM_KIMI_MODELS.map(id => [id, []])),
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
+    note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
   { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in

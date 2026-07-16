@@ -200,6 +200,7 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
+    const registryEntry = getProviderRegistryEntry(name);
     const dto: Record<string, unknown> = {
       adapter: provider.adapter,
       baseUrl: publicProviderBaseUrl(provider.baseUrl),
@@ -212,6 +213,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "allowPrivateNetwork",
       "authMode",
       "keyOptional",
+      "freeTier",
       "liveModels",
       "models",
       "contextWindow",
@@ -229,7 +231,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
-    const registryNote = getProviderRegistryEntry(name)?.note;
+    // Older saved configs omit free-tier flags (e.g. mimo-free, opencode-free, nvidia).
+    // Backfill from the registry so the GUI shows Free badge / Free filter correctly.
+    // keyOptional still means "no key required"; freeTier is pricing-only (key may still be needed).
+    if (dto.keyOptional === undefined && registryEntry?.keyOptional !== undefined) {
+      dto.keyOptional = registryEntry.keyOptional;
+    }
+    if (dto.freeTier === undefined && registryEntry?.freeTier !== undefined) {
+      dto.freeTier = registryEntry.freeTier;
+    }
+    const registryNote = registryEntry?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
     providers[name] = dto;
   }

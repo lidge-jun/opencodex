@@ -22,8 +22,10 @@ interface Preset {
   /** Where to create/copy the API key (for auth === "key" catalog providers). */
   dashboardUrl?: string;
   note?: string;
-  /** API key is optional — provider works without one (free public tier). */
+  /** API key is optional — provider works without one (keyless free). */
   keyOptional?: boolean;
+  /** Free pricing — may still require an API key (e.g. NVIDIA NIM). */
+  freeTier?: boolean;
 }
 
 interface FormState {
@@ -707,6 +709,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function isFreePreset(p: Preset): boolean {
+  if (p.freeTier) return true;
   if (p.keyOptional) return true;
   if (p.auth === "local") return true;
   try {

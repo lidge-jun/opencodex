@@ -592,6 +592,11 @@ export interface OcxProviderConfig {
   authMode?: "key" | "forward" | "oauth";
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
+  /**
+   * Free-tier pricing flag for UI/catalog (Free badge, Free filter). Not the same as
+   * `keyOptional` — free tiers may still require an API key.
+   */
+  freeTier?: boolean;
   /** Strip one trailing bracketed suffix from model ids before sending them upstream. */
   modelSuffixBracketStrip?: boolean;
   /**

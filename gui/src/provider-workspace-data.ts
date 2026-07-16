@@ -7,13 +7,15 @@
  *
  * Binning rules (applied in priority order):
  *  1. disabled === true              -> disabled
- *  2. keyOptional === true           -> ready  (free tier; key not required)
+ *  2. keyOptional === true           -> ready  (key not required — not the same as free pricing)
  *  3. authMode === "oauth"           -> ready  (credentials managed externally)
  *  4. authMode === "forward"         -> ready  (passes caller credentials through)
  *  5. authMode === "local"           -> ready  (local runtime, no key required)
  *  6. loopback base URL              -> ready  (local runtime, auth mode may be stripped)
  *  7. hasApiKey === true             -> ready  (key-auth with credential present)
  *  8. everything else                -> needsSetup
+ *
+ * Pricing (Free badge / Free filter) is separate: see `isFreeProvider` (`freeTier` or keyless free).
  */
 
 /**
@@ -28,6 +30,8 @@ export interface WorkspaceProvider {
   defaultModel?: string;
   authMode?: "key" | "forward" | "oauth" | "local" | string;
   keyOptional?: boolean;
+  /** Free pricing (may still require an API key). */
+  freeTier?: boolean;
   disabled?: boolean;
   note?: string;
 }
@@ -69,11 +73,13 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
 }
 
 /**
- * Free-tier / no-paid-key providers: explicit free flag, local runtimes, or loopback.
- * Everything else is treated as paid (API-key / cloud subscription providers).
+ * Free pricing (badge / filter / sort): `freeTier`, keyless free (`keyOptional`),
+ * local runtimes, or loopback. Does **not** imply ready-without-key — use
+ * `isConfigurationReady` / `binProviderStatus` for that.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
-  return p.keyOptional === true
+  return p.freeTier === true
+    || p.keyOptional === true
     || p.authMode === "local"
     || hasLoopbackBaseUrl(p.baseUrl);
 }

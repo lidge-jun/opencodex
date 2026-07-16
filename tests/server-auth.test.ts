@@ -185,6 +185,61 @@ describe("server local API auth", () => {
     });
   });
 
+  test("safeConfigDTO backfills keyOptional from registry when omitted on disk", () => {
+    // Real user configs often save mimo-free without keyOptional; GUI must still show Free/Ready.
+    const dto = safeConfigDTO({
+      ...config("127.0.0.1"),
+      providers: {
+        "mimo-free": {
+          adapter: "mimo-free",
+          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+          defaultModel: "mimo-auto",
+          liveModels: true,
+          models: ["mimo-auto"],
+        },
+        "opencode-free": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode.ai/zen/v1",
+          authMode: "key",
+        },
+      },
+    } as OcxConfig) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+
+    expect(dto.providers["mimo-free"]).toMatchObject({
+      adapter: "mimo-free",
+      keyOptional: true,
+      hasApiKey: false,
+    });
+    expect(dto.providers["opencode-free"]).toMatchObject({
+      adapter: "openai-chat",
+      keyOptional: true,
+      hasApiKey: false,
+    });
+  });
+
+  test("safeConfigDTO backfills freeTier without making keyOptional", () => {
+    const dto = safeConfigDTO({
+      ...config("127.0.0.1"),
+      providers: {
+        nvidia: {
+          adapter: "openai-chat",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+        },
+      },
+    } as OcxConfig) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+
+    expect(dto.providers.nvidia).toMatchObject({
+      adapter: "openai-chat",
+      freeTier: true,
+      hasApiKey: false,
+    });
+    expect(dto.providers.nvidia.keyOptional).toBeUndefined();
+  });
+
   test("safeConfigDTO strips URL-embedded provider secrets", () => {
     const dto = safeConfigDTO({
       ...config("127.0.0.1"),

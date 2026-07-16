@@ -12,7 +12,7 @@ import "../styles-provider-workspace.css";
 interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string }>;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; freeTier?: boolean; disabled?: boolean; note?: string }>;
 }
 
 interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
@@ -53,6 +53,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [layout, setLayout] = useState<"workspace" | "classic">("workspace");
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
+  /** Snapshot of draft when the JSON editor opened — used for dirty detection. */
+  const jsonBaselineRef = useRef("");
   const aliveRef = useRef(true);
   /** Bumped to invalidate an in-flight OAuth poll (Cancel / close modal). */
   const loginEpochRef = useRef(0);
@@ -66,11 +68,15 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/config`);
       const data = await res.json();
       setConfig(data);
-      setDraft(JSON.stringify(data, null, 2));
+      // Never overwrite the draft while the JSON editor is open — that cleared dirty state
+      // and made leave-prompts skip after a background refresh.
+      if (!jsonEditorOpen) {
+        setDraft(JSON.stringify(data, null, 2));
+      }
     } catch {
       notify(t("prov.loadConfigFail"), false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, t, jsonEditorOpen]);
 
   // Load the list of OAuth-capable providers, then each one's login status.
   const fetchOauth = useCallback(async () => {
@@ -87,10 +93,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const fetchProviderQuotas = useCallback(async (refresh = false) => {
     try {
-      const data = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`).then(r => r.json()) as { reports?: ProviderQuotaReport[] };
+      const res = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`);
+      if (!res.ok) return;
+      const data = await res.json() as { reports?: ProviderQuotaReport[] };
       setQuotaReports(Object.fromEntries((data.reports ?? []).map(report => [report.provider, report])));
     } catch {
-      setQuotaReports({});
+      /* keep last good reports — do not wipe on transient network blips */
     }
   }, [apiBase]);
 
@@ -230,7 +238,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timeout);
   }, [fetchKeyPools, keyCardProviders]);
 
-  const saveConfig = async () => {
+  const saveConfig = async (): Promise<boolean> => {
     try {
       const parsed = JSON.parse(draft);
       const res = await fetch(`${apiBase}/api/config`, {
@@ -242,29 +250,41 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         notify(t("prov.saved"), true);
         setEditing(false);
         setJsonEditorOpen(false);
+        jsonBaselineRef.current = draft;
         fetchConfig();
         fetchProviderQuotas(true);
-      } else {
-        // Full PUT may be disabled on newer proxies — surface the error body when present.
-        const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.saveFailed"), false);
+        return true;
       }
+      // Full PUT may be disabled on newer proxies — surface the error body when present.
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      notify(data.error || t("prov.saveFailed"), false);
+      return false;
     } catch {
       notify(t("prov.invalidJson"), false);
+      return false;
     }
   };
 
   const openJsonEditor = () => {
-    if (config) setDraft(JSON.stringify(config, null, 2));
+    const baseline = config ? JSON.stringify(config, null, 2) : draft;
+    // Snapshot first so the first render with open=true already has a stable baseline.
+    jsonBaselineRef.current = baseline;
+    setDraft(baseline);
     setJsonEditorOpen(true);
     setEditing(true);
   };
 
+  /** Discard edits and leave the JSON pane. */
   const closeJsonEditor = () => {
     setJsonEditorOpen(false);
     setEditing(false);
-    if (config) setDraft(JSON.stringify(config, null, 2));
+    const baseline = config ? JSON.stringify(config, null, 2) : jsonBaselineRef.current;
+    jsonBaselineRef.current = baseline;
+    setDraft(baseline);
   };
+
+  // Compare against ref every render while open (ref is stable; draft state drives updates).
+  const jsonIsDirty = jsonEditorOpen && draft !== jsonBaselineRef.current;
 
   const handleAddApiKey = async (provider: string, key: string): Promise<boolean> => {
     const res = await fetch(`${apiBase}/api/providers/keys`, {
@@ -484,6 +504,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             }}
             onUseLegacyView={() => setLayout("classic")}
             onEditConfig={openJsonEditor}
+            jsonEditor={{
+              open: jsonEditorOpen,
+              draft,
+              isDirty: jsonIsDirty,
+              onDraftChange: setDraft,
+              onSave: () => saveConfig(),
+              onClose: closeJsonEditor,
+            }}
             onSetDisabled={setProviderDisabled}
             onRemoveProvider={removeProvider}
             onUpdateProvider={updateProvider}
@@ -551,35 +579,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             accountManualCodeBusy={manualCodeBusy}
             accountManualCodeMsg={manualCodeMsg}
           />
-        )}
-        {jsonEditorOpen && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("prov.editJson")}
-            className="modal-overlay"
-            onClick={closeJsonEditor}
-          >
-            <div className="modal-card pwi-json-modal" onClick={e => e.stopPropagation()}>
-              <div className="modal-head">
-                <h3 style={{ margin: 0, fontSize: 16 }}>{t("prov.editJson")}</h3>
-              </div>
-              <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
-                {t("pws.jsonEditorDesc")}
-              </p>
-              <textarea
-                className="input mono pwi-json-textarea"
-                value={draft}
-                onChange={e => setDraft(e.target.value)}
-                spellCheck={false}
-                aria-label={t("prov.editJson")}
-              />
-              <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-                <button type="button" className="btn btn-ghost" onClick={closeJsonEditor}>{t("common.cancel")}</button>
-                <button type="button" className="btn btn-primary" onClick={() => void saveConfig()}>{t("common.save")}</button>
-              </div>
-            </div>
-          </div>
         )}
       </div>
     );
@@ -744,7 +743,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
                         {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
-                        {prov.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
+                        {(prov.freeTier || prov.keyOptional) && <span className="badge badge-green">{t("modal.badge.free")}</span>}
                       </div>
                       <div className="muted prov-meta text-control">
                         <code className="chip">{prov.adapter}</code>

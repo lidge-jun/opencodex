@@ -42,9 +42,12 @@ import {
   IconGlobe,
   IconKey,
   IconStar,
+  IconBraces,
 } from "../icons";
 import { Switch } from "../ui";
 import { useT, type TFn, type TKey } from "../i18n";
+import QuotaBars from "./QuotaBars";
+import type { AccountQuota } from "../codex-quota-utils";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -99,13 +102,25 @@ export interface ProviderWorkspaceProps {
   defaultProvider?: string;
   onAddProvider: (intent?: AddProviderIntent) => void;
   onUseLegacyView: () => void;
-  /** Open raw config JSON editor (workspace modal — do not leave workspace). */
+  /** Open raw config JSON editor in the workspace main pane (not a modal). */
   onEditConfig: () => void;
+  /** In-pane JSON editor state (fills the providers overview / main panel). */
+  jsonEditor?: {
+    open: boolean;
+    draft: string;
+    /** True when draft differs from the snapshot taken when the editor opened. */
+    isDirty: boolean;
+    onDraftChange: (value: string) => void;
+    /** Persist draft; resolve true only on successful save. */
+    onSave: () => Promise<boolean>;
+    /** Close without saving (discard). Parent should reset draft to baseline. */
+    onClose: () => void;
+  };
   onSetDisabled: (name: string, disabled: boolean) => void;
   onRemoveProvider: (name: string) => void;
   /** Partial update of a provider (settings form). */
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
-  quotaReports?: Record<string, { updatedAt: number; source?: string; quota?: unknown }>;
+  quotaReports?: Record<string, ProviderQuotaReportView>;
   oauthStatus?: Record<string, { loggedIn: boolean; email?: string; error?: string }>;
   /** OAuth multi-account sets keyed by provider name. */
   accountSets?: Record<string, { activeAccountId: string | null; accounts: OAuthAccountRow[] }>;
@@ -127,6 +142,30 @@ export type ProviderUpdatePatch = {
   note?: string;
   disabled?: boolean;
 };
+
+/** Per-provider quota report from `/api/provider-quotas` (workspace-friendly shape). */
+export type ProviderQuotaReportView = {
+  updatedAt: number;
+  source?: string;
+  quota?: AccountQuota | unknown;
+  label?: string;
+};
+
+/** Pull a displayable AccountQuota from a provider-quotas report payload. */
+function accountQuotaFromReport(report?: ProviderQuotaReportView): AccountQuota | null {
+  if (!report?.quota || typeof report.quota !== "object" || Array.isArray(report.quota)) return null;
+  const q = report.quota as Partial<AccountQuota>;
+  const hasWindow =
+    typeof q.fiveHourPercent === "number"
+    || typeof q.weeklyPercent === "number"
+    || typeof q.monthlyPercent === "number"
+    || (Array.isArray(q.customWindows) && q.customWindows.length > 0);
+  if (!hasWindow) return null;
+  return {
+    ...q,
+    updatedAt: typeof q.updatedAt === "number" ? q.updatedAt : report.updatedAt,
+  } as AccountQuota;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -249,16 +288,9 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
       />
       <span className="providers-workspace-rail-name">{displayName}</span>
       <span className="providers-workspace-rail-badges">
-        {isDefault && (
-          <span
-            className="pwi-rail-badge pwi-rail-badge--default"
-            title={t("pws.defaultTitle")}
-            aria-label={t("prov.defaultBadge")}
-          >
-            <IconStar width={11} height={11} aria-hidden="true" />
-          </span>
-        )}
-        {/* Only label exceptions (Local / Free). Paid is the unmarked default. */}
+        {/* Only label exceptions (Local / Free). Paid is the unmarked default.
+            Default star sits next to the status dot (see trail cluster) so the
+            model-count column does not wedge space between star and green. */}
         {local ? (
           <span className="pwi-rail-badge pwi-rail-badge--local" title={t("pws.localTitle")}>{t("modal.badge.local")}</span>
         ) : free ? (
@@ -269,7 +301,18 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
       <span className="providers-workspace-rail-model-count">
         {modelCount !== undefined && modelCount > 0 ? t("pws.modelCount", { count: modelCount }) : ""}
       </span>
-      <span className={railStatusCls(item)} aria-hidden="true" title={status} />
+      <span className="providers-workspace-rail-trail">
+        {isDefault && (
+          <span
+            className="pwi-default-star"
+            title={t("prov.defaultBadge")}
+            aria-label={t("prov.defaultBadge")}
+          >
+            <IconStar width={17} height={17} aria-hidden="true" />
+          </span>
+        )}
+        <span className={railStatusCls(item)} aria-hidden="true" title={status} />
+      </span>
       <IconChevron className="providers-workspace-rail-chevron" aria-hidden="true" />
     </button>
   );
@@ -1113,11 +1156,11 @@ function DetailPanel({
             <div className="providers-workspace-detail-title">{formatProviderDisplayName(item.name)}</div>
             {defaultProvider === item.name && (
               <span
-                className="pwi-rail-badge pwi-rail-badge--default"
-                title={t("pws.defaultTitle")}
+                className="pwi-default-star"
+                title={t("prov.defaultBadge")}
                 aria-label={t("prov.defaultBadge")}
               >
-                <IconStar width={12} height={12} aria-hidden="true" />
+                <IconStar width={18} height={18} aria-hidden="true" />
               </span>
             )}
             {isLocalProvider(item) ? (
@@ -1255,17 +1298,112 @@ function EmptyState({
 }
 
 // ---------------------------------------------------------------------------
+// JSON editor — fills the main/overview pane (not a modal)
+// ---------------------------------------------------------------------------
+
+function JsonEditorPanel({
+  draft, isDirty, onDraftChange, onSave, onRequestClose, saving,
+}: {
+  draft: string;
+  isDirty: boolean;
+  onDraftChange: (value: string) => void;
+  onSave: () => void;
+  /** Back / Cancel — parent decides dirty prompt. */
+  onRequestClose: () => void;
+  saving?: boolean;
+}) {
+  const t = useT();
+  return (
+    <div className="pwi-json-panel" role="region" aria-label={t("prov.editJson")}>
+      <div className="pwi-json-panel-toolbar">
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm pwi-back-overview"
+          onClick={onRequestClose}
+          aria-label={t("pws.backToAll")}
+          title={t("pws.backToAll")}
+          disabled={saving}
+        >
+          <IconChevron style={{ width: 14, height: 14, transform: "rotate(180deg)" }} aria-hidden="true" />
+          {t("pws.allProviders")}
+        </button>
+        <div className="pwi-json-panel-actions">
+          {isDirty && (
+            <span className="pwi-json-dirty-badge muted" title={t("pws.jsonUnsavedDesc")}>
+              {t("pws.jsonUnsavedBadge")}
+            </span>
+          )}
+          <button type="button" className="btn btn-ghost" onClick={onRequestClose} disabled={saving}>
+            {t("common.cancel")}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving || !isDirty}>
+            {saving ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
+      </div>
+      <p className="pwi-json-panel-desc muted">{t("pws.jsonEditorDesc")}</p>
+      <textarea
+        className="input mono pwi-json-textarea"
+        value={draft}
+        onChange={e => onDraftChange(e.target.value)}
+        spellCheck={false}
+        aria-label={t("prov.editJson")}
+        disabled={saving}
+      />
+    </div>
+  );
+}
+
+/** Unsaved JSON leave prompt: Save / Discard / Keep editing. */
+function JsonUnsavedDialog({
+  busy, onSave, onDiscard, onCancel,
+}: {
+  busy?: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+  onCancel: () => void;
+}) {
+  const t = useT();
+  return (
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pwi-json-unsaved-title"
+      onClick={onCancel}
+    >
+      <div className="modal-card pwi-json-unsaved-card" onClick={e => e.stopPropagation()}>
+        <h3 id="pwi-json-unsaved-title" className="pwi-json-unsaved-title">{t("pws.jsonUnsavedTitle")}</h3>
+        <p className="muted pwi-json-unsaved-desc">{t("pws.jsonUnsavedDesc")}</p>
+        <div className="pwi-json-unsaved-actions">
+          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
+            {t("pws.jsonKeepEditing")}
+          </button>
+          <button type="button" className="btn btn-ghost pwi-json-discard-btn" onClick={onDiscard} disabled={busy}>
+            {t("pws.jsonDiscard")}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
+            {busy ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Overview panel
 // ---------------------------------------------------------------------------
 
 function OverviewPanel({
-  sections, onSelect, onEditConfig, attentionItems, usageTotals
+  sections, onSelect, onEditConfig, attentionItems, usageTotals, quotaReports = {},
 }: {
   sections: WorkspaceSections;
   onSelect: (name: string) => void;
   onEditConfig: () => void;
   attentionItems: AttentionItem[];
   usageTotals: Record<string, ProviderUsageTotals>;
+  quotaReports?: Record<string, ProviderQuotaReportView>;
 }) {
   const t = useT();
   const providersByName = useMemo(
@@ -1280,15 +1418,44 @@ function OverviewPanel({
       .slice(0, 4),
     [usageTotals, providersByName],
   );
+  /** Providers that currently report 5h / week / month windows (classic-style reset bars). */
+  const quotaRows = useMemo(() => {
+    const rows: {
+      name: string;
+      item: WorkspaceItem | null;
+      quota: AccountQuota;
+      report: ProviderQuotaReportView;
+    }[] = [];
+    for (const [name, report] of Object.entries(quotaReports)) {
+      const item = providersByName.get(name) ?? null;
+      if (item?.disabled) continue;
+      const quota = accountQuotaFromReport(report);
+      if (!quota) continue;
+      rows.push({ name, item, quota, report });
+    }
+    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    return rows;
+  }, [quotaReports, providersByName]);
 
   return (
     <div className="providers-workspace-overview">
       <header className="providers-workspace-overview-head">
-        <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>
+        <div className="providers-workspace-overview-title-row">
+          <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>
+          <button
+            type="button"
+            className="btn btn-ghost pwi-edit-json-btn"
+            onClick={onEditConfig}
+            aria-label={t("prov.editJson")}
+            title={t("pws.editJsonDesc")}
+          >
+            <IconBraces width={18} height={18} aria-hidden="true" />
+            {t("prov.editJson")}
+          </button>
+        </div>
         <p className="providers-workspace-overview-sub">{t("pws.overviewSub")}</p>
       </header>
 
-      {/* Status counts — one strip, dividers between values (no cards) */}
       <section className="pwi-section pwi-overview-counts" aria-label={t("pws.overviewTitle")}>
         <div className="pwi-overview-count-strip" role="list">
           <div className="pwi-overview-count" role="listitem">
@@ -1306,52 +1473,81 @@ function OverviewPanel({
         </div>
       </section>
 
-      {/* Edit JSON | Recently used — sections with a vertical divider */}
-      <div className="pwi-overview-edit-recent">
-        <section className="pwi-section pwi-overview-config">
-          <h3 className="pwi-section-title">{t("prov.editJson")}</h3>
-          <button
-            type="button"
-            className="pwi-edit-json-link"
-            onClick={onEditConfig}
-            aria-label={t("prov.editJson")}
-          >
-            <span className="pwi-edit-json-link-title">{t("prov.editJson")}</span>
-            <span className="pwi-edit-json-link-desc muted">{t("pws.editJsonDesc")}</span>
-            <IconChevron style={{ width: 14, height: 14, color: "var(--muted)" }} aria-hidden="true" />
-          </button>
-        </section>
-        <section className="pwi-section pwi-overview-recent" aria-label={t("pws.recentlyUsed")}>
-          <h3 className="pwi-section-title">{t("pws.recentlyUsed")}</h3>
-          <div className="pwi-overview-recent-body">
-            {mostUsed.length === 0 ? (
-              <div className="pwi-recent-empty muted">{t("pws.noUsageRecorded")}</div>
-            ) : mostUsed.map(entry => {
-              const item = providersByName.get(entry.name)!;
-              const label = formatProviderDisplayName(entry.name);
+      <section className="pwi-section pwi-overview-quotas" aria-label={t("pws.rateLimits")}>
+        <h3 className="pwi-section-title">{t("pws.rateLimits")}</h3>
+        {quotaRows.length === 0 ? (
+          <div className="pwi-overview-quota-empty muted">{t("pws.noRateLimits")}</div>
+        ) : (
+          <div className="pwi-overview-quota-list">
+            {quotaRows.map(({ name, item, quota, report }) => {
+              const label = report.label?.trim()
+                || (item ? formatProviderDisplayName(item.name) : formatProviderDisplayName(name));
               return (
-                <button
-                  key={entry.name}
-                  type="button"
-                  className="pwi-recent-row"
-                  onClick={() => onSelect(entry.name)}
-                  aria-label={t("pws.openProvider", { name: label })}
-                >
-                  <ProviderIcon
-                    name={entry.name}
-                    adapter={item.adapter}
-                    baseUrl={item.baseUrl}
-                    cls="providers-workspace-rail-icon"
+                <div key={name} className="pwi-overview-quota-card">
+                  <button
+                    type="button"
+                    className="pwi-overview-quota-head"
+                    onClick={() => onSelect(name)}
+                    aria-label={t("pws.openProvider", { name: label })}
+                  >
+                    <ProviderIcon
+                      name={name}
+                      adapter={item?.adapter ?? "openai-chat"}
+                      baseUrl={item?.baseUrl ?? ""}
+                      cls="providers-workspace-rail-icon"
+                    />
+                    <span className="pwi-overview-quota-name">{label}</span>
+                    <span
+                      className="pwi-overview-quota-meta muted"
+                      title={report.source || undefined}
+                    >
+                      {t("pws.quotaUpdated", { when: formatRelativeTime(report.updatedAt) })}
+                    </span>
+                    <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+                  </button>
+                  <QuotaBars
+                    quota={quota}
+                    threshold={80}
+                    t={t}
+                    className="pwi-overview-quota-bars"
                   />
-                  <span className="pwi-recent-name">{label}</span>
-                  <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
-                  <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
-                </button>
+                </div>
               );
             })}
           </div>
-        </section>
-      </div>
+        )}
+      </section>
+
+      <section className="pwi-section pwi-overview-recent" aria-label={t("pws.recentlyUsed")}>
+        <h3 className="pwi-section-title">{t("pws.recentlyUsed")}</h3>
+        <div className="pwi-overview-recent-body">
+          {mostUsed.length === 0 ? (
+            <div className="pwi-recent-empty muted">{t("pws.noUsageRecorded")}</div>
+          ) : mostUsed.map(entry => {
+            const item = providersByName.get(entry.name)!;
+            const label = formatProviderDisplayName(entry.name);
+            return (
+              <button
+                key={entry.name}
+                type="button"
+                className="pwi-recent-row"
+                onClick={() => onSelect(entry.name)}
+                aria-label={t("pws.openProvider", { name: label })}
+              >
+                <ProviderIcon
+                  name={entry.name}
+                  adapter={item.adapter}
+                  baseUrl={item.baseUrl}
+                  cls="providers-workspace-rail-icon"
+                />
+                <span className="pwi-recent-name">{label}</span>
+                <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
+                <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {attentionItems.length > 0 && (
         <section className="pwi-section pwi-overview-attention" aria-label={t("pws.attentionRequired")}>
@@ -1384,8 +1580,8 @@ function OverviewPanel({
 
 export default function ProviderWorkspace({
   providers, apiBase, defaultProvider, onAddProvider,
-  onUseLegacyView: _onUseLegacyView, onEditConfig,
-  onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports = {}, oauthStatus = {},
+  onUseLegacyView: _onUseLegacyView, onEditConfig, jsonEditor,
+  onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports: quotaReportsProp = {}, oauthStatus = {},
   accountSets = {}, keyPools = {}, busyProvider = null, loginHint = null, authHandlers,
 }: ProviderWorkspaceProps) {
   void _onUseLegacyView;
@@ -1396,14 +1592,142 @@ export default function ProviderWorkspace({
   const [availableModels, setAvailableModels] = useState<ProviderAvailableModels>({});
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
+  /** Local quota fetch so overview does not depend solely on parent timing/HMR. */
+  const [quotaReportsLocal, setQuotaReportsLocal] = useState<Record<string, ProviderQuotaReportView>>({});
   /** Status + pricing facets shown in the rail (all on by default). */
   const [statusFilter, setStatusFilter] = useState({ ready: true, needsSetup: true, disabled: true });
   const [pricingFilter, setPricingFilter] = useState({ free: true, paid: true });
   const [sortMode, setSortMode] = useState<ProviderSortMode>("az");
   const [filterOpen, setFilterOpen] = useState(false);
   const filterWrapRef = useRef<HTMLDivElement>(null);
+  /** When leaving JSON editor with dirty draft: prompt then run this intent. */
+  const [jsonLeaveIntent, setJsonLeaveIntent] = useState<null | { kind: "close" } | { kind: "provider"; name: string }>(null);
+  const [jsonSaving, setJsonSaving] = useState(false);
+  /** Local dirty latch — set on first textarea edit so prompts work even if parent baseline races. */
+  const [jsonLocalDirty, setJsonLocalDirty] = useState(false);
+  const jsonOpenPrev = useRef(false);
 
   const sections = useMemo(() => buildProviderWorkspace(providers), [providers]);
+
+  const jsonOpen = !!jsonEditor?.open;
+  const jsonDirty = jsonOpen && (!!jsonEditor?.isDirty || jsonLocalDirty);
+
+  // Reset local dirty when the editor opens; keep it latched after the first edit.
+  useEffect(() => {
+    if (jsonOpen && !jsonOpenPrev.current) {
+      setJsonLocalDirty(false);
+    }
+    if (!jsonOpen) {
+      setJsonLocalDirty(false);
+      setJsonLeaveIntent(null);
+    }
+    jsonOpenPrev.current = jsonOpen;
+  }, [jsonOpen]);
+
+  const onJsonDraftChange = useCallback((value: string) => {
+    setJsonLocalDirty(true);
+    jsonEditor?.onDraftChange(value);
+  }, [jsonEditor]);
+
+  /** Select a provider, closing the JSON editor first (with dirty prompt if needed). */
+  const selectProvider = useCallback((name: string) => {
+    if (jsonOpen) {
+      if (jsonDirty) {
+        setJsonLeaveIntent({ kind: "provider", name });
+        return;
+      }
+      jsonEditor?.onClose();
+      setSelectedName(name);
+      return;
+    }
+    setSelectedName(name);
+  }, [jsonOpen, jsonDirty, jsonEditor]);
+
+  /** Back / Cancel from JSON editor. */
+  const requestCloseJson = useCallback(() => {
+    if (!jsonEditor?.open) return;
+    if (jsonDirty) {
+      setJsonLeaveIntent({ kind: "close" });
+      return;
+    }
+    jsonEditor.onClose();
+  }, [jsonEditor, jsonDirty]);
+
+  const finishJsonLeave = useCallback((intent: typeof jsonLeaveIntent) => {
+    setJsonLeaveIntent(null);
+    jsonEditor?.onClose();
+    if (intent?.kind === "provider") setSelectedName(intent.name);
+    else setSelectedName(null);
+  }, [jsonEditor]);
+
+  const confirmJsonSaveAndLeave = useCallback(async () => {
+    if (!jsonEditor) return;
+    setJsonSaving(true);
+    try {
+      const ok = await jsonEditor.onSave();
+      if (!ok) return; // stay on editor; leave dialog stays so user can discard/cancel
+      const intent = jsonLeaveIntent;
+      setJsonLeaveIntent(null);
+      // Parent closes editor on success; still ensure selection.
+      if (intent?.kind === "provider") setSelectedName(intent.name);
+      else setSelectedName(null);
+    } finally {
+      setJsonSaving(false);
+    }
+  }, [jsonEditor, jsonLeaveIntent]);
+
+  const confirmJsonDiscardAndLeave = useCallback(() => {
+    finishJsonLeave(jsonLeaveIntent);
+  }, [finishJsonLeave, jsonLeaveIntent]);
+
+  // Prefer parent reports when present; otherwise (or in addition) use a direct workspace fetch.
+  const quotaReports = useMemo(() => {
+    const merged: Record<string, ProviderQuotaReportView> = { ...quotaReportsLocal };
+    for (const [name, report] of Object.entries(quotaReportsProp)) {
+      merged[name] = report;
+    }
+    return merged;
+  }, [quotaReportsLocal, quotaReportsProp]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (refresh: boolean) => {
+      try {
+        const res = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`);
+        if (!res.ok) return;
+        const data = await res.json() as {
+          reports?: Array<{
+            provider: string;
+            label?: string;
+            source?: string;
+            updatedAt?: number;
+            quota?: unknown;
+          }>;
+        };
+        if (cancelled) return;
+        const next: Record<string, ProviderQuotaReportView> = {};
+        for (const report of data.reports ?? []) {
+          if (!report?.provider) continue;
+          next[report.provider] = {
+            label: report.label,
+            source: report.source,
+            updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
+            quota: report.quota,
+          };
+        }
+        setQuotaReportsLocal(next);
+      } catch {
+        /* parent prop may still supply data */
+      }
+    };
+    void load(false);
+    // Soft refresh shortly after mount so WHAM/oauth windows populate if the first pass was cached empty.
+    const timer = window.setTimeout(() => { void load(true); }, 1200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [apiBase]);
 
   const allItems = useMemo(
     () => [...sections.ready, ...sections.needsSetup, ...sections.disabled],
@@ -1574,55 +1898,53 @@ export default function ProviderWorkspace({
 
                 <div className="pwi-rail-filter-section">
                   <div className="pwi-rail-filter-menu-head">{t("pws.filterStatus")}</div>
-                  {statusFilterOptions.map(({ key, label, dotCls, count }) => (
-                    <label key={key} className={`pwi-rail-filter-option${statusFilter[key] ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={statusFilter[key]}>
-                      <span className={`pwi-rail-filter-check${statusFilter[key] ? " pwi-rail-filter-check--on" : ""}`} aria-hidden="true">
-                        {statusFilter[key] ? <IconCheck width={11} height={11} /> : null}
-                      </span>
-                      <input
-                        type="checkbox"
-                        className="pwi-rail-filter-native"
-                        checked={statusFilter[key]}
-                        onChange={() => setStatusFilter(prev => ({ ...prev, [key]: !prev[key] }))}
-                      />
-                      <span className={`pwi-dot ${dotCls}`} aria-hidden="true" />
-                      <span className="pwi-rail-filter-option-label">{label}</span>
-                      <span className="pwi-rail-filter-option-count">{count}</span>
-                    </label>
-                  ))}
+                  <div className="pwi-rail-filter-list">
+                    {statusFilterOptions.map(({ key, label, dotCls, count }) => (
+                      <label key={key} className={`pwi-rail-filter-option${statusFilter[key] ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={statusFilter[key]}>
+                        <input
+                          type="checkbox"
+                          className="pwi-rail-filter-native"
+                          checked={statusFilter[key]}
+                          onChange={() => setStatusFilter(prev => ({ ...prev, [key]: !prev[key] }))}
+                        />
+                        <span className="pwi-rail-filter-toggle" aria-hidden="true" />
+                        <span className={`pwi-dot ${dotCls}`} aria-hidden="true" />
+                        <span className="pwi-rail-filter-option-label">{label}</span>
+                        <span className="pwi-rail-filter-option-count">{count}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="pwi-rail-filter-section">
                   <div className="pwi-rail-filter-menu-head">{t("pws.pricing")}</div>
-                  <label className={`pwi-rail-filter-option${pricingFilter.free ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={pricingFilter.free}>
-                    <span className={`pwi-rail-filter-check${pricingFilter.free ? " pwi-rail-filter-check--on" : ""}`} aria-hidden="true">
-                      {pricingFilter.free ? <IconCheck width={11} height={11} /> : null}
-                    </span>
-                    <input
-                      type="checkbox"
-                      className="pwi-rail-filter-native"
-                      checked={pricingFilter.free}
-                      onChange={() => setPricingFilter(prev => ({ ...prev, free: !prev.free }))}
-                    />
-                    <span className="pwi-rail-filter-option-label">{t("modal.badge.free")}</span>
-                    <span className="pwi-rail-filter-option-count">{freeCount}</span>
-                  </label>
-                  <label className={`pwi-rail-filter-option${pricingFilter.paid ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={pricingFilter.paid}>
-                    <span className={`pwi-rail-filter-check${pricingFilter.paid ? " pwi-rail-filter-check--on" : ""}`} aria-hidden="true">
-                      {pricingFilter.paid ? <IconCheck width={11} height={11} /> : null}
-                    </span>
-                    <input
-                      type="checkbox"
-                      className="pwi-rail-filter-native"
-                      checked={pricingFilter.paid}
-                      onChange={() => setPricingFilter(prev => ({ ...prev, paid: !prev.paid }))}
-                    />
-                    <span className="pwi-rail-filter-option-label">{t("pws.paid")}</span>
-                    <span className="pwi-rail-filter-option-count">{paidCount}</span>
-                  </label>
+                  <div className="pwi-rail-filter-list">
+                    <label className={`pwi-rail-filter-option${pricingFilter.free ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={pricingFilter.free}>
+                      <input
+                        type="checkbox"
+                        className="pwi-rail-filter-native"
+                        checked={pricingFilter.free}
+                        onChange={() => setPricingFilter(prev => ({ ...prev, free: !prev.free }))}
+                      />
+                      <span className="pwi-rail-filter-toggle" aria-hidden="true" />
+                      <span className="pwi-rail-filter-option-label">{t("modal.badge.free")}</span>
+                      <span className="pwi-rail-filter-option-count">{freeCount}</span>
+                    </label>
+                    <label className={`pwi-rail-filter-option${pricingFilter.paid ? " pwi-rail-filter-option--on" : ""}`} role="menuitemcheckbox" aria-checked={pricingFilter.paid}>
+                      <input
+                        type="checkbox"
+                        className="pwi-rail-filter-native"
+                        checked={pricingFilter.paid}
+                        onChange={() => setPricingFilter(prev => ({ ...prev, paid: !prev.paid }))}
+                      />
+                      <span className="pwi-rail-filter-toggle" aria-hidden="true" />
+                      <span className="pwi-rail-filter-option-label">{t("pws.paid")}</span>
+                      <span className="pwi-rail-filter-option-count">{paidCount}</span>
+                    </label>
+                  </div>
                 </div>
 
-                <div className="pwi-rail-filter-section">
+                <div className="pwi-rail-filter-section pwi-rail-filter-section--sort">
                   <div className="pwi-rail-filter-menu-head">{t("pws.sort")}</div>
                   <div className="pwi-rail-sort-grid" role="group" aria-label={t("pws.sortProvidersAria")}>
                     {SORT_DEFS.map(opt => (
@@ -1673,18 +1995,43 @@ export default function ProviderWorkspace({
                 </div>
                 {items.map(item => (
                   <RailRow key={item.name} item={item}
-                    selected={selectedName === item.name}
+                    selected={!jsonOpen && selectedName === item.name}
                     modelCount={modelCounts[item.name]}
                     isDefault={defaultProvider === item.name}
-                    onClick={() => setSelectedName(item.name)} />
+                    onClick={() => selectProvider(item.name)} />
                 ))}
               </div>
             );
           })}
         </div>
       </aside>
+      {jsonLeaveIntent && (
+        <JsonUnsavedDialog
+          busy={jsonSaving}
+          onSave={() => { void confirmJsonSaveAndLeave(); }}
+          onDiscard={confirmJsonDiscardAndLeave}
+          onCancel={() => setJsonLeaveIntent(null)}
+        />
+      )}
       <main className="providers-workspace-main" aria-label={t("pws.workspaceMainAria")}>
-        {selectedItem ? (
+        {jsonEditor?.open ? (
+          <JsonEditorPanel
+            draft={jsonEditor.draft}
+            isDirty={jsonDirty}
+            onDraftChange={onJsonDraftChange}
+            onSave={() => { void (async () => {
+              setJsonSaving(true);
+              try {
+                const ok = await jsonEditor.onSave();
+                if (ok) setJsonLocalDirty(false);
+              } finally {
+                setJsonSaving(false);
+              }
+            })(); }}
+            onRequestClose={requestCloseJson}
+            saving={jsonSaving}
+          />
+        ) : selectedItem ? (
           <DetailPanel
             item={selectedItem}
             apiBase={apiBase}
@@ -1710,9 +2057,13 @@ export default function ProviderWorkspace({
           <OverviewPanel
             sections={sections}
             onSelect={setSelectedName}
-            onEditConfig={onEditConfig}
+            onEditConfig={() => {
+              setSelectedName(null);
+              onEditConfig();
+            }}
             attentionItems={attentionItems}
             usageTotals={usageTotals}
+            quotaReports={quotaReports}
           />
         )}
       </main>
