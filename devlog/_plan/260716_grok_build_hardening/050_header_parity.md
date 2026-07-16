@@ -732,3 +732,35 @@ bun run privacy:scan
   OAuth/API-key snapshots, blank-affinity coverage, and mixed-case overrides.
 - [ ] Confirm `git diff --name-only` lists only phase-owned implementation paths and that this
   planning worker changed only `devlog/_plan/260716_grok_build_hardening/050_header_parity.md`.
+
+## Implementation record (B)
+
+Implemented 2026-07-16 on top of `1bf9de02` without changing the landed 010-040 behavior.
+
+- Added the one-line-bump `XAI_GROK_COMPATIBILITY` profile, always-on outbound User-Agent,
+  OAuth-only official compatibility headers, stable hashed conversation/session affinity, and a
+  fresh UUIDv4 request ID generated inside every resolved xAI transport-fetch invocation.
+- Kept agent, deployment, model-override, turn, client-mode, and user identity headers omitted:
+  opencodex has no truthful local values for those official fields.
+- Added the executor argument to `fetchWithHeaderTimeout` and passed the current resolved provider
+  executor at all three serving call sites. `rebuildAndRefetch` performs the lookup at invocation
+  time, preserving 401 refresh and 429 rotation behavior.
+- Added exact OAuth/API-key outbound snapshots, per-attempt request-ID rotation and stable affinity
+  coverage, caller-override/blank-key/OMIT checks, plus real `/v1/responses` serving and hanging-
+  header timeout tests.
+- Scope adaptation: `src/types.ts` remained untouched as required by the delegated write scope.
+  The runtime-only executor shape is declared locally by `xai-transport.ts` and read structurally
+  by `responses.ts`; it is not part of persisted config. API-key UA/session defaults are applied
+  by the transport wrapper instead of exposed in the static provider header map, preserving the
+  landed key-failover contract while producing the specified exact outbound headers.
+- Test-fixture adaptation: the registered xAI provider does not permit base-URL override, so the
+  server-path tests use the repository's established xAI global-fetch interception seam instead
+  of an unreachable localhost override. They still enter through real `/v1/responses`; the timeout
+  mock accepts the provider call and rejects only when the combined timeout signal aborts before
+  headers arrive.
+
+Verification:
+
+- `bun test --isolate ./tests/xai-transport.test.ts ./tests/server-xai-header-parity.test.ts ./tests/server-xai-oauth-401-replay.test.ts`: 30 pass, 0 fail.
+- `bun test --isolate ./tests/`: 2628 pass, 0 fail across 246 files.
+- `bun run typecheck`: pass (`tsc --noEmit`).

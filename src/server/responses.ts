@@ -708,7 +708,7 @@ export async function handleResponses(
           method: request.method,
           headers: request.headers,
           body: request.body,
-        }, upstream.signal, connectMs, parsed.stream),
+        }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
     } catch (err) {
@@ -954,7 +954,7 @@ export async function handleResponses(
       : await fetchWithResetRetry(
           () => fetchWithHeaderTimeout(request.url, {
             method: request.method, headers: request.headers, body: request.body,
-          }, upstream.signal, connectMs, parsed.stream),
+          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
           { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
         );
   } catch (err) {
@@ -986,7 +986,7 @@ export async function handleResponses(
           ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
           : await fetchWithHeaderTimeout(retryRequest.url, {
               method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-            }, upstream.signal, connectMs, parsed.stream);
+            }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
       } catch (err) {
         cleanupUpstreamAbort();
         upstream.abort();
@@ -1264,12 +1264,17 @@ export function safeHostLabel(url: string): string {
   }
 }
 
+function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
+  return (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+}
+
 export async function fetchWithHeaderTimeout(
   url: string,
   init: Omit<RequestInit, "signal">,
   abortSignal: AbortSignal,
   timeoutMs: number,
   preferIdentityEncoding = false,
+  executor: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response> {
   const timeout = new AbortController();
   const timer = setTimeout(() => {
@@ -1282,7 +1287,7 @@ export async function fetchWithHeaderTimeout(
     headers.set("accept-encoding", "identity");
   }
   try {
-    return await fetch(url, {
+    return await executor(url, {
       ...init,
       headers,
       signal: AbortSignal.any([abortSignal, timeout.signal]),

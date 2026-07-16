@@ -12,6 +12,16 @@ import {
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { OcxAssistantMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const OMITTED = [
+  "x-grok-model-override",
+  "x-grok-agent-id",
+  "x-grok-turn-idx",
+  "x-grok-deployment-id",
+  "x-grok-user-id",
+  "x-grok-client-mode",
+] as const;
+
 function provider(authMode: "oauth" | "key"): OcxProviderConfig {
   return {
     adapter: "openai-chat",
@@ -64,10 +74,10 @@ describe("xAI auth-mode transport selection", () => {
     const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
     const modelsRequest = buildModelsRequest(configured, "xai-api-key", "xai");
 
-    expect(effective).toBe(configured);
+    expect(effective).not.toBe(configured);
     expect(request.url).toBe("https://api.x.ai/v1/chat/completions");
     expect(modelsRequest.url).toBe("https://api.x.ai/v1/models");
-    expect(request.headers).toEqual({
+    expect(request.headers).toMatchObject({
       "Content-Type": "application/json",
       Authorization: "Bearer xai-api-key",
     });
@@ -188,8 +198,8 @@ describe("xAI prompt-cache conv-id affinity", () => {
     expect(noKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
     expect(emptyKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
     expect(blankKeyOauth.headers?.[XAI_CONV_ID_HEADER]).toBeUndefined();
-    // Key mode without a conv-id stays the exact configured object (no clone churn).
-    expect(emptyKeyApi).toBe(configuredKey);
+    expect(emptyKeyApi).not.toBe(configuredKey);
+    expect(emptyKeyApi.fetch).toBeFunction();
   });
 
   test("user-configured conv-id header wins in any casing (no duplicate header pair)", () => {
@@ -219,6 +229,123 @@ describe("xAI prompt-cache conv-id affinity", () => {
     expect(resolved.headers?.["X-Grok-Client-Version"]).toBe("0.2.94");
     // Untouched defaults still apply.
     expect(resolved.headers?.["x-grok-client-identifier"]).toBe("opencodex");
+  });
+});
+
+function lower(headers: Headers): Record<string, string> {
+  return Object.fromEntries([...headers.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+async function capture(authMode: "oauth" | "key", calls = 1) {
+  const seen: Headers[] = [];
+  const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+  configured.fetch = async (_input, init) => {
+    seen.push(new Headers(init?.headers));
+    return new Response("{}", { status: 200 });
+  };
+  const effective = resolveProviderTransport("xai", configured, "codex-session-abc");
+  const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+  for (let index = 0; index < calls; index += 1) {
+    await effective.fetch!(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
+  }
+  return { effective, seen };
+}
+
+describe("xAI outbound compatibility headers", () => {
+  test("OAuth snapshot is exact", async () => {
+    const { effective, seen } = await capture("oauth");
+    expect(effective.baseUrl).toBe(XAI_GROK_CLI_BASE_URL);
+    expect(lower(seen[0])).toEqual({
+      authorization: "Bearer oauth-token",
+      "content-type": "application/json",
+      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "x-authenticateresponse": "authenticate-response",
+      "x-grok-client-identifier": "opencodex",
+      "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
+      "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
+      "x-grok-req-id": expect.stringMatching(UUID_V4),
+      "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
+      "x-xai-token-auth": "xai-grok-cli",
+    });
+    for (const name of OMITTED) expect(seen[0].has(name)).toBe(false);
+  });
+
+  test("API-key snapshot is exact and User-Agent is present", async () => {
+    const { effective, seen } = await capture("key");
+    expect(effective.baseUrl).toBe("https://api.x.ai/v1");
+    expect(lower(seen[0])).toEqual({
+      authorization: "Bearer xai-api-key",
+      "content-type": "application/json",
+      "user-agent": `opencodex-grok/${XAI_GROK_CLIENT_VERSION}`,
+      "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
+      "x-grok-req-id": expect.stringMatching(UUID_V4),
+      "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
+    });
+    for (const name of [
+      "x-authenticateresponse",
+      "x-grok-client-identifier",
+      "x-grok-client-version",
+      "x-xai-token-auth",
+      ...OMITTED,
+    ]) expect(seen[0].has(name)).toBe(false);
+  });
+
+  test("same resolved transport refreshes req-id but keeps conv-id stable", async () => {
+    const { seen } = await capture("oauth", 2);
+    expect(seen).toHaveLength(2);
+    expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
+    expect(seen[1].get("x-grok-req-id")).toMatch(UUID_V4);
+    expect(seen[1].get("x-grok-req-id")).not.toBe(seen[0].get("x-grok-req-id"));
+    expect(seen[0].get("x-grok-conv-id")).toBe(deriveXaiConvId("codex-session-abc"));
+    expect(seen[1].get("x-grok-conv-id")).toBe(seen[0].get("x-grok-conv-id"));
+    expect(seen[1].get("x-grok-session-id")).toBe(seen[0].get("x-grok-session-id"));
+    for (const headers of seen) {
+      expect(headers.get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      for (const name of OMITTED) expect(headers.has(name)).toBe(false);
+    }
+  });
+
+  test("mixed-case caller overrides win without duplicates", async () => {
+    const seen: Headers[] = [];
+    const configured = provider("oauth") as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+    configured.headers = { "user-agent": "custom-agent", "X-Grok-Req-Id": "caller-id" };
+    configured.fetch = async (_input, init) => {
+      seen.push(new Headers(init?.headers));
+      return new Response("{}", { status: 200 });
+    };
+    const effective = resolveProviderTransport("xai", configured, "codex-session-abc");
+    const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+    await effective.fetch!(request.url, { headers: request.headers });
+    await effective.fetch!(request.url, { headers: request.headers });
+    for (const headers of seen) {
+      expect(headers.get("user-agent")).toBe("custom-agent");
+      expect(headers.get("x-grok-req-id")).toBe("caller-id");
+      expect([...headers.keys()].filter(name => name === "user-agent")).toHaveLength(1);
+      expect([...headers.keys()].filter(name => name === "x-grok-req-id")).toHaveLength(1);
+    }
+  });
+
+  test("blank cache keys omit affinity but retain UA and fresh req-id in both modes", async () => {
+    for (const authMode of ["oauth", "key"] as const) {
+      const seen: Headers[] = [];
+      const configured = provider(authMode) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+      configured.fetch = async (_input, init) => {
+        seen.push(new Headers(init?.headers));
+        return new Response("{}", { status: 200 });
+      };
+      const effective = resolveProviderTransport("xai", configured, "   ");
+      const request = createOpenAIChatAdapter(effective).buildRequest(parsed());
+      await effective.fetch!(request.url, { headers: request.headers });
+      expect(seen[0].has("x-grok-conv-id")).toBe(false);
+      expect(seen[0].has("x-grok-session-id")).toBe(false);
+      expect(seen[0].get("user-agent")).toBe(`opencodex-grok/${XAI_GROK_CLIENT_VERSION}`);
+      expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
+      for (const name of OMITTED) expect(seen[0].has(name)).toBe(false);
+    }
   });
 });
 
