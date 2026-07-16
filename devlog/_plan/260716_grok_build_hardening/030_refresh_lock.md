@@ -764,3 +764,11 @@ git diff --check -- devlog/_plan/260716_grok_build_hardening/030_refresh_lock.md
 - [ ] Confirm generation is lowercase SHA-256 and compared only by equality/inequality across 020/030/040.
 - [ ] Confirm stale takeover, failed-create cleanup, and release each perform two exact-byte/stat checks and preserve replacements.
 - [ ] Confirm retry tests cover network, 429, 5xx exhaustion, permanent 4xx, caller abort, and token redaction.
+
+## Implementation record (B)
+
+- Implemented the shared async `O_EXCL` file-lock primitive, per-account refresh-intent lock, short-held store-write lock, and one promise-chain mutation funnel.
+- Converted all six OAuth store writers and every production/test caller found at implementation HEAD to async/await.
+- Replaced wp2's pre-refresh xAI reconciliation block with `refreshXaiAccountWithLock`; the transaction calls the exported `shouldAdoptGrokGeneration` policy under the intent lock.
+- Added generation-guarded account merge/reauth mutations, fingerprint-scoped permanent-failure TTL, and bounded abort-safe xAI token retries.
+- Deviation: tests were written compactly in the two required new files, while retaining the audited behavioral assertions; no production design deviation.

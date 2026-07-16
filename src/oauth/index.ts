@@ -3,8 +3,8 @@ import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
-import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential } from "./store";
-import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING } from "./xai";
+import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration } from "./store";
+import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
@@ -18,6 +18,11 @@ import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shou
 
 const REFRESH_SKEW_MS = 60_000;
 const tokenRefreshes = new Map<string, Promise<string>>();
+const XAI_PERMANENT_FAILURE_TTL_MS=30_000;
+const permanentRefreshFailures=new Map<string,number>();
+interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
+function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
+function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 
 export interface LoginOpts { forceLogin?: boolean }
 
@@ -181,6 +186,10 @@ function isTerminalRefreshError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return msg.includes("invalid_grant") || msg.includes("refresh_token_reused") || msg.includes("revoked");
 }
+function terminal(error:unknown):boolean{return error instanceof XaiTokenRequestError?["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??""):isTerminalRefreshError(error);}
+function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
+function merged(fresh:OAuthCredentials,previous:OAuthCredentials):OAuthCredentials{return{...fresh,source:previous.source==="local-cli"?"oauth":fresh.source??previous.source??"oauth",...(fresh.projectId===undefined&&previous.projectId?{projectId:previous.projectId}:{}),...(fresh.email===undefined&&previous.email?{email:previous.email}:{}),...(fresh.accountId===undefined&&previous.accountId?{accountId:previous.accountId}:{})};}
+export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(!terminal(error))throw error;permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),now()+XAI_PERMANENT_FAILURE_TTL_MS);await markAccountNeedsReauthIfGeneration(provider,accountId,generation);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 async function refreshAndPersistAccessToken(
   provider: string,
@@ -194,31 +203,18 @@ async function refreshAndPersistAccessToken(
   if (provider === "kiro" && isActive) {
     const imported = readFreshKiroCliCredential();
     if (imported) {
-      saveCredential(provider, imported);
+      await saveCredential(provider, imported);
       return imported.access;
     }
   }
-  if (provider === "xai" && cred.source === "local-cli") {
-    const disk = detectGrokCliToken();
-    const identityMatches = disk !== null && isSameGrokIdentity(cred, disk);
-    const noIdentityActiveBinding =
-      disk !== null && isActive && !hasComparableGrokIdentity(cred, disk);
-    if (
-      disk !== null &&
-      (identityMatches || noIdentityActiveBinding) &&
-      shouldAdoptGrokGeneration(cred, disk, Date.now(), REFRESH_SKEW_MS)
-    ) {
-      saveAccountCredential(provider, accountId, disk);
-      return disk.access;
-    }
-  }
+  if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred);
   try {
     const fresh = await def.refresh(cred.refresh);
     const detachedLocalCli = provider === "xai" && cred.source === "local-cli";
     if (detachedLocalCli) console.warn(XAI_LOCAL_CLI_DETACH_WARNING);
     // Persist to THIS account (rotation-safe: new refresh token hits disk before use) without
     // touching activeAccountId.
-    saveAccountCredential(provider, accountId, {
+    await saveAccountCredential(provider, accountId, {
       ...fresh,
       source: detachedLocalCli ? "oauth" : fresh.source ?? cred.source ?? "oauth",
       // Preserve a previously-discovered project id when a refresh-time re-discovery comes back empty
@@ -233,12 +229,12 @@ async function refreshAndPersistAccessToken(
     if (provider === "kiro" && isActive) {
       const imported = readFreshKiroCliCredential();
       if (imported) {
-        saveCredential(provider, imported);
+        await saveCredential(provider, imported);
         return imported.access;
       }
     }
     if (isTerminalRefreshError(err)) {
-      markAccountNeedsReauth(provider, accountId, true);
+      await markAccountNeedsReauth(provider, accountId, true);
       throw new OAuthLoginRequiredError(provider);
     }
     throw err;
@@ -369,7 +365,7 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const rawCred = await def.login(ctrl, opts);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
-  saveCredential(provider, cred);
+  await saveCredential(provider, cred);
   const config = loadConfig();
   upsertOAuthProvider(config, provider);
   saveConfig(config);

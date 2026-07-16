@@ -25,7 +25,7 @@ interface XaiDiscoveryPayload {
   token_endpoint?: unknown;
 }
 
-interface XaiTokenPayload {
+export interface XaiTokenPayload {
   access_token?: unknown;
   refresh_token?: unknown;
   expires_in?: unknown;
@@ -92,12 +92,18 @@ function getTokenIdentity(accessToken: string, idToken: string | undefined): { a
   return { accountId, email };
 }
 
-async function postXaiToken(
+export class XaiTokenRequestError extends Error { constructor(public readonly status?:number,public readonly oauthError?:string,message="xAI token request failed",options?:{cause?:unknown}){super(message,options);this.name="XaiTokenRequestError";} }
+export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number }
+function isAbortError(error:unknown):boolean{return error instanceof DOMException&&error.name==="AbortError";}
+function retryDelay(attempt:number,retryAfter:string|null,random:()=>number):number{const base=attempt===1?100:250,j=Math.round(base*(.75+random()*.5)),seconds=retryAfter!==null&&/^\d+$/.test(retryAfter)?Number(retryAfter):0;return Math.min(2000,Math.max(j,seconds*1000));}
+async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`);}
+export async function postXaiToken(
   tokenEndpoint: string,
   body: Record<string, string>,
-  signal?: AbortSignal,
+  signal?: AbortSignal, deps:XaiTokenRetryDeps={},
 ): Promise<XaiTokenPayload> {
-  const response = await fetch(tokenEndpoint, {
+ const sleep=deps.sleep??(ms=>Bun.sleep(ms)),random=deps.random??Math.random;let last:unknown;
+ for(let attempt=1;attempt<=3;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -105,11 +111,7 @@ async function postXaiToken(
     },
     body: new URLSearchParams(body).toString(),
     signal: requestSignal(signal),
-  });
-  if (!response.ok) {
-    throw new Error(`xAI token request failed: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as XaiTokenPayload;
+  });}catch(error){if(isAbortError(error)&&signal?.aborted)throw error;last=error;if(attempt===3)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});await sleep(retryDelay(attempt,null,random));continue;}if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===3)throw error;await sleep(retryDelay(attempt,response.headers.get("retry-after"),random));}throw last;
 }
 
 function credentialsFromTokenPayload(payload: XaiTokenPayload, refreshFallback = ""): OAuthCredentials {

@@ -96,7 +96,7 @@ function mockRefreshFetch(responses: Array<Response | Error>): { count: () => nu
 describe("oauth refresh hardening", () => {
   test("valid stored credential returns without refresh", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
-    saveCredential("kiro", { access: "aoa-valid", refresh: "rt", expires: Date.now() + 3600_000 });
+    await saveCredential("kiro", { access: "aoa-valid", refresh: "rt", expires: Date.now() + 3600_000 });
     await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-valid");
     expect(mock.count()).toBe(0);
   });
@@ -105,7 +105,7 @@ describe("oauth refresh hardening", () => {
     const mock = mockRefreshFetch([
       new Response(JSON.stringify({ accessToken: "aoa-fresh", refreshToken: "rt-fresh", expiresIn: 3600 }), { status: 200 }),
     ]);
-    saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
+    await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
     const [a, b] = await Promise.all([getValidAccessToken("kiro"), getValidAccessToken("kiro")]);
     expect(a).toBe("aoa-fresh");
     expect(b).toBe("aoa-fresh");
@@ -116,7 +116,7 @@ describe("oauth refresh hardening", () => {
   test("fresh Kiro CLI SQLite token is imported before refresh endpoint", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
     seedKiroCliDb({ access_token: "aoa-sqlite", refresh_token: "rt-sqlite", expires_at: "2099-01-01T00:00:00Z" });
-    saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
+    await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
     await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-sqlite");
     expect(mock.count()).toBe(0);
     expect(getCredential("kiro")?.refresh).toBe("rt-sqlite");
@@ -124,7 +124,7 @@ describe("oauth refresh hardening", () => {
   });
 
   test("failed refresh recovers from a now-fresh Kiro CLI SQLite token", async () => {
-    saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
+    await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
     let calls = 0;
     globalThis.fetch = (async () => {
       calls++;
@@ -142,7 +142,7 @@ describe("oauth refresh hardening", () => {
     mockRefreshFetch([
       new Response(JSON.stringify({ accessToken: "aoa-fresh", refreshToken: "rt-fresh", expiresIn: 3600 }), { status: 200 }),
     ]);
-    saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1, source: "manual" });
+    await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1, source: "manual" });
 
     await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-fresh");
     expect(getCredential("kiro")?.source).toBe("manual");
@@ -150,7 +150,7 @@ describe("oauth refresh hardening", () => {
 
   test("newer Grok generation is adopted before xAI refresh with zero endpoint calls", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
     seedGrokAuth({
@@ -165,7 +165,7 @@ describe("oauth refresh hardening", () => {
 
   test("newer-expiry Grok access token is adopted when refresh generation is unchanged", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-old", refresh: "rt-same", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
     const diskExpires = Date.now() + 3600_000;
@@ -179,7 +179,7 @@ describe("oauth refresh hardening", () => {
   });
 
   test("stale Grok generation refreshes once and detaches to OpenCodex ownership", async () => {
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
     seedGrokAuth({
@@ -209,7 +209,7 @@ describe("oauth refresh hardening", () => {
 
   test("stale different Grok generation with earlier expiry is not adopted", async () => {
     const storedExpiry = Date.now() - 1;
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-ours", refresh: "rt-ours", expires: storedExpiry, accountId: "user-1", source: "local-cli",
     });
     seedGrokAuth({
@@ -225,7 +225,7 @@ describe("oauth refresh hardening", () => {
   });
 
   test("mismatched Grok identity is not adopted into a local-cli account", async () => {
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-ours", refresh: "rt-ours", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
     seedGrokAuth({
@@ -242,7 +242,7 @@ describe("oauth refresh hardening", () => {
   });
 
   test("concurrent xAI local-cli refreshes share reconciliation and one detach exchange", async () => {
-    saveCredential("xai", {
+    await saveCredential("xai", {
       access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
     });
     seedGrokAuth({

@@ -75,7 +75,7 @@ describe("token guardian", () => {
   test("disabled by default → no refresh, no fetch", async () => {
     const mock = mockFetchOk(OK_TOKEN);
     writeConfig({}); // no tokenGuardian
-    saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 1000 });
+    await saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 1000 });
     const res = await guardianSweep(Date.now());
     expect(res.enabled).toBe(false);
     expect(res.refreshed).toEqual([]);
@@ -88,7 +88,7 @@ describe("token guardian", () => {
       tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
       providers: { kimi: kimiProvider("proactive") },
     });
-    saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
+    await saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
     const res = await guardianSweep(Date.now());
     expect(res.enabled).toBe(true);
     // Multiauth keys are oauth:<provider>:<accountId>
@@ -102,7 +102,7 @@ describe("token guardian", () => {
       tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
       providers: { kimi: kimiProvider("lazy-only") },
     });
-    saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
+    await saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
     const res = await guardianSweep(Date.now());
     expect(res.refreshed).toEqual([]);
     expect(mock.count()).toBe(0);
@@ -114,7 +114,7 @@ describe("token guardian", () => {
       tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
       providers: { kimi: kimiProvider("proactive") },
     });
-    saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 3600_000 }); // beyond 120s horizon
+    await saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 3600_000 }); // beyond 120s horizon
     const res = await guardianSweep(Date.now());
     expect(res.refreshed).toEqual([]);
     expect(mock.count()).toBe(0);
@@ -127,7 +127,7 @@ describe("token guardian", () => {
       // no explicit refreshPolicy → falls back to the built-in "disabled" default for anthropic
       providers: { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } },
     });
-    saveCredential("anthropic", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
+    await saveCredential("anthropic", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
     const res = await guardianSweep(Date.now());
     expect(res.refreshed).toEqual([]);
     expect(mock.count()).toBe(0);

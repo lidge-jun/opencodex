@@ -1071,7 +1071,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    removeCredential(provider);
+    await removeCredential(provider);
     clearLoginState(provider);
     return jsonResponse({ success: true });
   }
@@ -1090,7 +1090,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../oauth/store");
-    if (!setActiveAccount(provider, body.accountId)) return jsonResponse({ error: "account not found" }, 404);
+    if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
     const { clearProviderQuotaCache } = await import("../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
@@ -1101,7 +1101,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeAccount, getAccountSet } = await import("../oauth/store");
-    if (!removeAccount(provider, id)) return jsonResponse({ error: "account not found" }, 404);
+    if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearProviderQuotaCache } = await import("../providers/quota");
     clearProviderQuotaCache();

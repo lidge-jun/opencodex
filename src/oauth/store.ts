@@ -15,8 +15,8 @@
  *   same human on every re-login. Cursor login extracts JWT `sub` as accountId so multiauth
  *   can append distinct accounts.
  */
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, chmodSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
@@ -26,12 +26,21 @@ type AuthStore = Record<string, ProviderAccountSet>;
 /** Providers whose account set is pinned to a single slot (see module doc). */
 const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt"]);
 
-function authPath(): string {
+export function getAuthStorePath(): string {
   return join(getConfigDir(), "auth.json");
+}
+export function getAuthStoreLockPath(): string { return join(getConfigDir(), "auth.store.lock"); }
+export function getAuthRefreshIntentLockPath(provider: string, accountId: string): string {
+  const safeProvider = provider.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const accountHash = createHash("sha256").update(accountId).digest("hex").slice(0, 24);
+  return join(getConfigDir(), `auth.refresh.${safeProvider}.${accountHash}.lock`);
+}
+export function credentialGeneration(cred: OAuthCredentials): string {
+  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
 }
 
 function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
-  const path = authPath();
+  const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
   if (!existsSync(path)) return { store: {}, hadLegacy: false };
@@ -55,8 +64,24 @@ function persist(store: AuthStore): void {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
   hardenConfigDir();
-  atomicWriteFile(authPath(), JSON.stringify(store, null, 2) + "\n");
+  atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
 }
+
+export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
+interface LockSnapshot { bytes: string; dev: number; ino: number; mtimeMs: number; size: number }
+export interface OAuthFileLockOptions { path: string; waitTimeoutMs?: number; staleAfterMs?: number; pollMinMs?: number; pollMaxMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; random?: () => number; beforeStaleUnlink?: () => void; beforeReleaseUnlink?: () => void; beforeFailedCreateUnlink?: () => void; writeMetadata?: (fd: number, bytes: string) => void }
+export interface OAuthFileLockGuard { readonly ownerId: string; release(): void }
+function errorCode(error: unknown): string | undefined { return error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined; }
+function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:s.mtimeMs, size:s.size }; }
+function sameSnapshot(a: LockSnapshot,b: LockSnapshot): boolean { return a.bytes===b.bytes&&a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
+function sameFd(a: LockSnapshot,b: ReturnType<typeof fstatSync>): boolean { return a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
+export function createOAuthFileLock(options: OAuthFileLockOptions): { acquire(): Promise<OAuthFileLockGuard> } {
+ const wait=options.waitTimeoutMs??5000, stale=options.staleAfterMs??120000, min=options.pollMinMs??25,max=options.pollMaxMs??100,sleep=options.sleep??(ms=>Bun.sleep(ms)),now=options.now??Date.now,random=options.random??Math.random,write=options.writeMetadata??((fd,b)=>writeFileSync(fd,b,"utf8"));
+ if(wait<0||stale<=0||min<0||max<min) throw new OAuthFileLockError("Invalid OAuth file-lock timing options");
+ return { async acquire() { hardenConfigDir(); if(!existsSync(getConfigDir())) mkdirSync(getConfigDir(),{recursive:true,mode:0o700}); const ownerId=randomUUID(),started=now(); for(;;){ let fd:number|undefined; try { fd=openSync(options.path,"wx",0o600); const bytes=`${JSON.stringify({version:1,ownerId,pid:process.pid,createdAt:now()})}\n`; write(fd,bytes); const fs=fstatSync(fd); closeSync(fd); fd=undefined; const owned=snapshot(options.path); if(owned.bytes!==bytes||!sameFd(owned,fs)) throw new OAuthFileLockError("OAuth lock changed during creation"); let released=false; return {ownerId,release(){if(released)return;released=true;try{const a=snapshot(options.path);if(!sameSnapshot(owned,a))return;options.beforeReleaseUnlink?.();const b=snapshot(options.path);if(sameSnapshot(owned,b))unlinkSync(options.path);}catch(e){if(errorCode(e)!=="ENOENT")console.warn(`[oauth] lock release failed: ${e instanceof Error?e.message:String(e)}`);}}}; } catch(e) { if(fd!==undefined){let fs;try{fs=fstatSync(fd);}catch{}try{closeSync(fd);}catch{}if(fs)try{const a=snapshot(options.path);if(sameFd(a,fs)){options.beforeFailedCreateUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b)&&sameFd(b,fs))unlinkSync(options.path);}}catch{}} if(errorCode(e)!=="EEXIST")throw e instanceof OAuthFileLockError?e:new OAuthFileLockError("Could not create OAuth file lock",{cause:e}); }
+ try{const a=snapshot(options.path);let created=a.mtimeMs;try{const p=JSON.parse(a.bytes);if(typeof p.createdAt==="number")created=Math.max(created,p.createdAt);}catch{}if(now()-created>stale){options.beforeStaleUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b))unlinkSync(options.path);continue;}}catch(e){if(errorCode(e)==="ENOENT")continue;throw new OAuthFileLockError("Could not inspect OAuth file lock",{cause:e});} const elapsed=now()-started;if(elapsed>=wait)throw new OAuthFileLockError(`Timed out after ${wait}ms waiting for OAuth file lock`);await sleep(Math.min(wait-elapsed,min+Math.floor(random()*(max-min+1)))); } } };
+}
+export function createOAuthRefreshIntentLock(provider:string,accountId:string,overrides:Partial<OAuthFileLockOptions>={}) { return createOAuthFileLock({path:getAuthRefreshIntentLockPath(provider,accountId),staleAfterMs:120000,...overrides}); }
 
 /**
  * One-time downgrade safety net: the first time we persist the NEW shape over a file that
@@ -65,7 +90,7 @@ function persist(store: AuthStore): void {
  * store, destroying refresh tokens; the backup makes that recoverable.
  */
 function backupLegacyOnce(): void {
-  const path = authPath();
+  const path = getAuthStorePath();
   const backup = `${path}.pre-multiauth`;
   if (!existsSync(path) || existsSync(backup)) return;
   try {
@@ -155,23 +180,15 @@ function normalizeAuthStore(raw: unknown): { store: AuthStore; hadLegacy: boolea
  * a guardian refresh persisting a non-active account cannot roll back a concurrent
  * active-account switch (lost update). Cross-process races are accepted (single proxy).
  */
-let writeQueue: Promise<unknown> = Promise.resolve();
-function enqueueWrite<T>(fn: () => T): T {
-  // Synchronous mutations: chain onto the queue for ordering, but run eagerly since all
-  // current callers are sync. The queue exists so future async mutators serialize too.
-  const result = fn();
-  writeQueue = writeQueue.then(() => result);
-  return result;
-}
-
-function mutateStore<T>(fn: (store: AuthStore) => T): T {
-  return enqueueWrite(() => {
+let mutationTail: Promise<void> = Promise.resolve();
+function serializeMutation<T>(work:()=>Promise<T>):Promise<T>{const result=mutationTail.then(work,work);mutationTail=result.then(()=>undefined,()=>undefined);return result;}
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
-    const result = fn(store);
+    const result = await fn(store);
     persist(store);
     return result;
-  });
+  }finally{guard.release();}});
 }
 
 /** The ACTIVE account's credential for a provider (what requests should use). */
@@ -187,10 +204,10 @@ export function getCredential(provider: string): OAuthCredentials | null {
  * (rotating refresh tokens would fabricate duplicates) and single-slot providers replace the
  * active slot / whole set instead.
  */
-export function saveCredential(provider: string, cred: OAuthCredentials): void {
+export async function saveCredential(provider: string, cred: OAuthCredentials): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
-  mutateStore(store => {
+  await mutateStore(store => {
     const set = store[provider];
     const identity = safe.accountId ?? safe.email;
     if (!set || SINGLE_SLOT_PROVIDERS.has(provider)) {
@@ -225,8 +242,8 @@ export function saveCredential(provider: string, cred: OAuthCredentials): void {
 }
 
 /** Remove the ACTIVE account; remaining accounts promote the first one. */
-export function removeCredential(provider: string): void {
-  mutateStore(store => {
+export async function removeCredential(provider: string): Promise<void> {
+  await mutateStore(store => {
     const set = store[provider];
     if (!set) return;
     set.accounts = set.accounts.filter(a => a.id !== set.activeAccountId);
@@ -255,10 +272,10 @@ export function getAccountCredential(provider: string, accountId: string): OAuth
 }
 
 /** Persist a refreshed credential for a SPECIFIC account without touching activeAccountId. */
-export function saveAccountCredential(provider: string, accountId: string, cred: OAuthCredentials): void {
+export async function saveAccountCredential(provider: string, accountId: string, cred: OAuthCredentials): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
-  mutateStore(store => {
+  await mutateStore(store => {
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;
     account.credential = safe;
@@ -266,8 +283,8 @@ export function saveAccountCredential(provider: string, accountId: string, cred:
   });
 }
 
-export function setActiveAccount(provider: string, accountId: string): boolean {
-  return mutateStore(store => {
+export async function setActiveAccount(provider: string, accountId: string): Promise<boolean> {
+  return await mutateStore(store => {
     const set = store[provider];
     if (!set || !set.accounts.some(a => a.id === accountId)) return false;
     set.activeAccountId = accountId;
@@ -276,8 +293,8 @@ export function setActiveAccount(provider: string, accountId: string): boolean {
 }
 
 /** Remove one account by id; active removal promotes the first remaining account. */
-export function removeAccount(provider: string, accountId: string): boolean {
-  return mutateStore(store => {
+export async function removeAccount(provider: string, accountId: string): Promise<boolean> {
+  return await mutateStore(store => {
     const set = store[provider];
     if (!set) return false;
     const before = set.accounts.length;
@@ -292,11 +309,14 @@ export function removeAccount(provider: string, accountId: string): boolean {
   });
 }
 
-export function markAccountNeedsReauth(provider: string, accountId: string, needsReauth: boolean): void {
-  mutateStore(store => {
+export async function markAccountNeedsReauth(provider: string, accountId: string, needsReauth: boolean): Promise<void> {
+  await mutateStore(store => {
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;
     if (needsReauth) account.needsReauth = true;
     else delete account.needsReauth;
   });
 }
+
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;delete account.needsReauth;return{superseded:false};});}
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string):Promise<boolean>{return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;account.needsReauth=true;return true;});}

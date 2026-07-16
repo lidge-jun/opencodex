@@ -500,7 +500,7 @@ switch (command) {
   case "logout": {
     const { removeCredential } = await import("../oauth/store");
     const name = (args[1] ?? "").trim().toLowerCase();
-    removeCredential(name);
+    await removeCredential(name);
     console.log(`Logged out of ${name || "(none)"}.`);
     break;
   }
