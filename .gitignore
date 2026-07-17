@@ -1,16 +1,84 @@
+```
+# Dependencies
 node_modules/
+
+# Build artifacts
 dist/
+build/
+target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py.class
+venv/
+.venv/
 .env
+.env.local
+.env.*
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+
+# Logs
 *.log
+
+# Temp files
+*.tmp
+*.swp
+*.swo
+
+# Editors
+.vscode/
+.idea/
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
 .DS_Store
-devlog/
-.tmp/
-.opencode/
+Thumbs.db
 
-# Local agent/session artifacts
-.codexclaw/
-.omo/
+# MyPy
+.mypy_cache/
 
-# Test-generated artifacts
-tests/.tmp-*/
-.claude/
+# PyTest
+.pytest_cache/
+
+# Gradle
+.gradle/
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

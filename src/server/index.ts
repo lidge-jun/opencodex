@@ -123,6 +123,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
+import { getGlobalRateLimiter, setGlobalRateLimiter, RateLimiter, type RateLimitResult } from "../lib/rate-limiter";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -186,6 +187,17 @@ export function startServer(port?: number) {
 
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
+
+  // Initialize rate limiter if configured
+  if (config.rateLimit?.enabled) {
+    const limiter = new RateLimiter({
+      maxRequests: config.rateLimit.maxRequests ?? 20,
+      windowMs: config.rateLimit.windowMs ?? 60000,
+      evenDistribution: config.rateLimit.evenDistribution ?? true,
+    });
+    setGlobalRateLimiter(limiter);
+    console.log(`[rate-limit] Enabled: ${limiter.getConfig().maxRequests} requests per ${limiter.getConfig().windowMs / 1000}s, evenDistribution=${limiter.getConfig().evenDistribution}`);
+  }
 
   // Canonicalize an explicit "localhost" bind to IPv4 so it matches the injected base_url (which
   // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
@@ -404,6 +416,35 @@ export function startServer(port?: number) {
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
+        
+        // Rate limiting check for /v1/responses endpoint
+        if (config.rateLimit?.enabled) {
+          const limiter = getGlobalRateLimiter();
+          const result = limiter.checkGlobal();
+          
+          if (!result.allowed) {
+            const rateLimitResponse = new Response(
+              JSON.stringify({
+                error: {
+                  type: "rate_limit_error",
+                  message: `Too many requests. Maximum ${limiter.getConfig().maxRequests} requests per ${limiter.getConfig().windowMs / 1000} seconds allowed.`,
+                },
+              }),
+              {
+                status: 429,
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-RateLimit-Limit": String(limiter.getConfig().maxRequests),
+                  "X-RateLimit-Remaining": String(result.remaining),
+                  "Retry-After": String(result.retryAfter ?? Math.ceil(limiter.getConfig().windowMs / 1000)),
+                  ...corsHeaders(req, config),
+                },
+              }
+            );
+            return withCors(rateLimitResponse, req, config);
+          }
+        }
+        
         const start = Date.now();
         const requestId = nextRequestLogId(start);
         const logCtx = { model: "unknown", provider: "unknown" };

@@ -471,6 +471,17 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /** Rate limiting configuration for /v1/responses endpoint. Default: 20 requests per minute with even distribution. */
+  rateLimit?: {
+    /** Maximum requests per window. Default: 20 */
+    maxRequests?: number;
+    /** Window duration in milliseconds. Default: 60000 (1 minute) */
+    windowMs?: number;
+    /** When true, distributes requests evenly across the window. When false, allows bursts. Default: true */
+    evenDistribution?: boolean;
+    /** Enable/disable rate limiting. Default: false (disabled) */
+    enabled?: boolean;
+  };
 }
 
 /**
