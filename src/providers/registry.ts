@@ -206,7 +206,7 @@ const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntrie
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "openai",
-    label: "ChatGPT",
+    label: "OpenAI (ChatGPT login)",
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authKind: "forward",
@@ -291,7 +291,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "anthropic-apikey",
-    label: "Anthropic (API key)",
+    label: "Anthropic Claude (API key)",
     adapter: "anthropic",
     baseUrl: "https://api.anthropic.com",
     authKind: "key",
@@ -341,7 +341,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: KIRO_MODEL_CONTEXT_WINDOWS,
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
   },
-  { id: "openai-apikey", label: "OpenAI API", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5", models: ["gpt-5.5", ...OPENAI_GPT56_MODELS], liveModels: true, modelContextWindows: OPENAI_GPT56_CONTEXT_WINDOWS },
+  { id: "openai-apikey", label: "OpenAI (API-Key)", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5", models: ["gpt-5.5", ...OPENAI_GPT56_MODELS], liveModels: true, modelContextWindows: OPENAI_GPT56_CONTEXT_WINDOWS },
   {
     id: "umans",
     label: "Umans AI Coding Plan",
