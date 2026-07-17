@@ -15,6 +15,15 @@ export const IconList = (p: P) => (<svg {...S(p)}><path d="M8 6h13M8 12h13M8 18h
 export const IconMenu = (p: P) => (<svg {...S(p)}><path d="M4 6h16M4 12h16M4 18h16"/></svg>);
 export const IconTerminal = (p: P) => (<svg {...S(p)}><path d="m4 17 6-5-6-5"/><path d="M12 19h8"/></svg>);
 export const IconActivity = (p: P) => (<svg {...S(p)}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>);
+/** Scatter / frontier chart — guide page nav. */
+export const IconChart = (p: P) => (
+  <svg {...S(p)}>
+    <path d="M3 3v18h18" />
+    <circle cx="8" cy="14" r="1.5" fill="currentColor" stroke="none" />
+    <circle cx="13" cy="9" r="1.5" fill="currentColor" stroke="none" />
+    <circle cx="18" cy="12" r="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
 
 export const IconCheck = (p: P) => (<svg {...S(p)}><path d="m20 6-11 11-5-5"/></svg>);
 export const IconX = (p: P) => (<svg {...S(p)}><path d="M18 6 6 18M6 6l12 12"/></svg>);

@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.5",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
