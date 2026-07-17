@@ -67,16 +67,16 @@ const PROVIDER_BRAND_COLORS: Record<string, string> = {
 
 /** Canonical brand casing for known provider ids (config keys stay lowercase). */
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  anthropic: "Anthropic",
-  "anthropic-apikey": "Anthropic",
+  anthropic: "Anthropic Claude",
+  "anthropic-apikey": "Anthropic Claude",
   chatgpt: "ChatGPT",
-  openai: "OpenAI",
-  "openai-apikey": "OpenAI",
+  openai: "ChatGPT",
+  "openai-apikey": "OpenAI API",
   "azure-openai": "Azure OpenAI",
-  nvidia: "NVIDIA",
+  nvidia: "NVIDIA NIM",
   ollama: "Ollama",
   "ollama-cloud": "Ollama Cloud",
-  xai: "xAI",
+  xai: "xAI Grok",
   "mimo-free": "MiMo Free",
   xiaomi: "Xiaomi",
   momo: "MiMo",
@@ -131,4 +131,9 @@ export function formatProviderDisplayName(provider: string): string {
       .join(" ");
   }
   return provider;
+}
+
+/** True for known registry/preset ids (hide ID/adapter/URL behind Advanced by default). */
+export function isCatalogProviderId(provider: string): boolean {
+  return Object.prototype.hasOwnProperty.call(PROVIDER_DISPLAY_NAMES, provider.toLowerCase());
 }

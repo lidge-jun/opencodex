@@ -255,11 +255,11 @@ function customPreset(): DerivedProviderPreset {
 }
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {
-  if (entry.authKind === "forward") return "OpenAI — ChatGPT login (no key)";
+  if (entry.authKind === "forward") return "ChatGPT — account login (no key)";
   if (entry.authKind === "oauth") {
-    if (entry.id === "xai") return "xAI (Grok) — account login";
-    if (entry.id === "anthropic") return "Anthropic (Claude) — account login";
-    if (entry.id === "kimi") return "Kimi (Moonshot) — account login";
+    if (entry.id === "xai") return "xAI Grok — account login";
+    if (entry.id === "anthropic") return "Anthropic Claude — account login";
+    if (entry.id === "kimi") return "Kimi — account login";
     return `${entry.label} — account login`;
   }
   return entry.label;

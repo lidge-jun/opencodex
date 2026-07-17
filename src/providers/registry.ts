@@ -206,12 +206,12 @@ const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntrie
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "openai",
-    label: "OpenAI (ChatGPT login)",
+    label: "ChatGPT",
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authKind: "forward",
     featured: true,
-    note: "Uses your codex login — no API key",
+    note: "Uses your Codex login — no API key",
   },
   {
     id: "cursor",
@@ -284,14 +284,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     oauthId: "anthropic",
     jawcodeBundle: "anthropic",
-    note: "Log in with your Claude account",
+    note: "Sign in with your Claude account to use available models and usage limits.",
     models: [...ANTHROPIC_MODELS],
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
     defaultModel: "claude-sonnet-5",
   },
   {
     id: "anthropic-apikey",
-    label: "Anthropic (API key)",
+    label: "Anthropic Claude",
     adapter: "anthropic",
     baseUrl: "https://api.anthropic.com",
     authKind: "key",
@@ -341,7 +341,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: KIRO_MODEL_CONTEXT_WINDOWS,
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
   },
-  { id: "openai-apikey", label: "OpenAI (API key)", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5", models: ["gpt-5.5", ...OPENAI_GPT56_MODELS], liveModels: true, modelContextWindows: OPENAI_GPT56_CONTEXT_WINDOWS },
+  { id: "openai-apikey", label: "OpenAI API", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5", models: ["gpt-5.5", ...OPENAI_GPT56_MODELS], liveModels: true, modelContextWindows: OPENAI_GPT56_CONTEXT_WINDOWS },
   {
     id: "umans",
     label: "Umans AI Coding Plan",
@@ -367,7 +367,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     escapeBuiltinToolNames: true,
   },
   {
-    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    id: "opencode-go", label: "OpenCode Go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
     modelReasoningEfforts: {

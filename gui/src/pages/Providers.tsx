@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import ProviderWorkspace from "../components/ProviderWorkspace";
+import { pickChatGptForwardProvider } from "../components/CodexAccountPool";
 import { Notice } from "../ui";
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
@@ -19,13 +20,27 @@ interface ApiKeyEntry { id: string; label?: string; masked: string; active: bool
 
 // Friendly labels for the OAuth providers the proxy supports.
 const OAUTH_LABELS: Record<string, string> = {
-  xai: "xAI (Grok)",
-  anthropic: "Anthropic (Claude)",
-  kimi: "Kimi (Moonshot)",
+  xai: "xAI Grok",
+  anthropic: "Anthropic Claude",
+  kimi: "Kimi",
+  chatgpt: "ChatGPT",
+  cursor: "Cursor",
+  kiro: "Kiro",
+  "google-antigravity": "Google Antigravity",
 };
 const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;
 
-export default function Providers({ apiBase }: { apiBase: string }) {
+export default function Providers({
+  apiBase,
+  focusChatGptAuth = false,
+  onChatGptAuthFocused,
+}: {
+  apiBase: string;
+  /** When true (legacy #codex-auth), open the ChatGPT forward provider Overview. */
+  focusChatGptAuth?: boolean;
+  /** Called once the ChatGPT provider has been selected so the parent can clear the flag. */
+  onChatGptAuthFocused?: () => void;
+}) {
   const t = useT();
   const [config, setConfig] = useState<Config | null>(null);
   const [adding, setAdding] = useState(false);
@@ -88,14 +103,21 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`);
       if (!res.ok) return;
       const data = await res.json() as { reports?: ProviderQuotaReport[] };
-      setQuotaReports(Object.fromEntries((data.reports ?? []).map(report => [report.provider, report])));
+      // Merge so a partial/failed probe cannot wipe a previously good provider (e.g. Anthropic).
+      setQuotaReports(prev => {
+        const next = { ...prev };
+        for (const report of data.reports ?? []) {
+          if (report?.provider) next[report.provider] = report;
+        }
+        return next;
+      });
     } catch {
       /* keep last good reports — do not wipe on transient network blips */
     }
   }, [apiBase]);
 
   // Multiauth: per-provider logged-in account lists for the card dropdowns (oauth cards only;
-  // the Codex/ChatGPT passthrough pool has its own page).
+  // ChatGPT forward pool is embedded in ProviderWorkspace Overview via CodexAccountPool).
   const fetchAccountSets = useCallback(async (providers: string[]) => {
     const entries = await Promise.all(providers.map(async p => {
       const data = await fetch(`${apiBase}/api/oauth/accounts?provider=${p}`).then(r => r.json()).catch(() => null) as { activeAccountId?: string | null; accounts?: OAuthAccount[] } | null;
@@ -175,7 +197,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const timeout = window.setTimeout(() => {
       void fetchConfig();
       void fetchOauth();
-      void fetchProviderQuotas();
+      // Force refresh so Anthropic/ChatGPT OAuth probes aren't skipped by a stale cache.
+      void fetchProviderQuotas(true);
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [fetchConfig, fetchOauth, fetchProviderQuotas]);
@@ -285,12 +308,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setLoginInfo(null);
     setManualCode("");
     setManualCodeMsg("");
-    if (!p) return;
-    await fetch(`${apiBase}/api/oauth/login/cancel`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: p }),
-    }).catch(() => {});
+    if (p) {
+      notify(t("modal.oauthCancelled"), false);
+      await fetch(`${apiBase}/api/oauth/login/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: p }),
+      }).catch(() => {});
+    }
   };
 
   const loginOAuth = async (provider: string, addAccount = false) => {
@@ -452,8 +477,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>
           </div>
         )}
-        <div className="muted" style={{ padding: "24px 20px" }}>
-          {status ? null : t("prov.loadingConfig")}
+        <div className="muted" style={{ padding: "24px 20px" }} role="status">
+          {status ? null : t("pws.loadingProviders")}
         </div>
       </div>
     );
@@ -471,6 +496,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           providers={config.providers}
           apiBase={apiBase}
           defaultProvider={config.defaultProvider}
+          initialSelectedProvider={focusChatGptAuth ? pickChatGptForwardProvider(config.providers) : null}
+          onInitialProviderFocused={onChatGptAuthFocused}
           onAddProvider={(intent) => {
             setAddIntent(intent ?? {});
             setAdding(true);
@@ -526,7 +553,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             fetchProviderQuotas(true);
           }}
           accountRows={[
-            ...oauthProviders.map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
+            ...[...oauthProviders]
+              .sort((a, b) => {
+                // Keep ChatGPT near the top so status/action aren't clipped at the list edge.
+                const rank = (id: string) => (id === "chatgpt" || id === "openai" ? 0 : 1);
+                return rank(a) - rank(b) || a.localeCompare(b);
+              })
+              .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
             ...Object.entries(config.providers)
               .filter(([name, prov]) =>
                 prov.hasApiKey
@@ -544,6 +577,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           accountBusy={busy}
           accountLoginHint={loginInfo}
           onAccountLogin={(provider) => { void loginOAuth(provider); }}
+          onOpen={fetchOauth}
           onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
           onAccountLogout={(provider) => { void logoutOAuth(provider); }}
           accountManualCode={manualCode}

@@ -60,6 +60,7 @@ export default function AddProviderModal({
   onAccountManualCodeSubmit,
   accountManualCodeBusy = false,
   accountManualCodeMsg = "",
+  onOpen,
 }: {
   apiBase: string;
   existingNames: string[];
@@ -83,6 +84,8 @@ export default function AddProviderModal({
   onAccountManualCodeSubmit?: (provider: string) => void;
   accountManualCodeBusy?: boolean;
   accountManualCodeMsg?: string;
+  /** Called once when the modal mounts (e.g. refresh oauth status for Accounts tab). */
+  onOpen?: () => void;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
@@ -109,13 +112,18 @@ export default function AddProviderModal({
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
+  const [presetsLoading, setPresetsLoading] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
 
+  useEffect(() => { onOpen?.(); }, [onOpen]);
   useEffect(() => { if (!initialCustom && catalogView === "browse") searchRef.current?.focus(); }, [initialCustom, catalogView]);
-  useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { onClose(); return; }
@@ -147,12 +155,18 @@ export default function AddProviderModal({
     fetch(`${apiBase}/api/oauth/providers`).then(r => r.json()).then(d => setOauthSupported(d.providers ?? [])).catch(() => {});
   }, [apiBase]);
   useEffect(() => {
+    let cancelled = false;
+    setPresetsLoading(true);
     fetch(`${apiBase}/api/provider-presets`).then(r => r.json()).then((d: { providers?: Preset[] }) => {
+      if (cancelled) return;
       if (Array.isArray(d.providers) && d.providers.length > 0) {
         loadedPresetsRef.current = true;
         setPresets(d.providers);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setPresetsLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [apiBase]);
   useEffect(() => {
     fetch(`${apiBase}/api/usage?range=30d`).then(r => r.json()).then((d: {
@@ -258,7 +272,13 @@ export default function AddProviderModal({
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error || t("modal.failedStatus", { status: res.status }));
+        const raw = String(d.error || "");
+        const lower = raw.toLowerCase();
+        if (lower.includes("api key") || lower.includes("unauthorized") || lower.includes("invalid key") || res.status === 401) {
+          setError(t("modal.invalidApiKey"));
+        } else {
+          setError(raw || t("modal.failedStatus", { status: res.status }));
+        }
         return;
       }
       onAdded(name);
@@ -305,7 +325,12 @@ export default function AddProviderModal({
         if (s?.loggedIn) { onAdded(providerId); return; }
         if (s?.error) {
           setOauthMsgTone("warn");
-          setOauthMsg(t("modal.loginError", { error: s.error }));
+          const err = String(s.error).toLowerCase();
+          setOauthMsg(
+            err.includes("cancel") || err.includes("expired")
+              ? t("modal.oauthCancelled")
+              : t("modal.loginError", { error: s.error }),
+          );
           return;
         }
       }
@@ -390,14 +415,23 @@ export default function AddProviderModal({
                 role="tab"
                 aria-selected={tier === "accounts"}
                 className={`add-prov-segment-btn${tier === "accounts" ? " add-prov-segment-btn--active" : ""}`}
-                onClick={() => { setTier("accounts"); setCatalogView("home"); setQuery(""); }}
+                onClick={() => {
+                  setTier("accounts");
+                  setCatalogView("home");
+                  setQuery("");
+                  onOpen?.();
+                }}
               >
                 {t("modal.tab.accounts")}
               </button>
             </div>
 
             <div className="add-prov-body">
-            {tier === "accounts" ? (
+            {presetsLoading && tier !== "accounts" ? (
+              <div className="muted text-control pwi-inline-status" style={{ padding: "12px 4px" }} role="status">
+                {t("pws.catalogLoading")}
+              </div>
+            ) : tier === "accounts" ? (
               <div className="add-prov-list add-prov-list--browse">
                 {accountRows.length === 0 && (
                   <div className="muted text-control" style={{ padding: "12px 4px" }}>{t("modal.accountsEmpty")}</div>
@@ -411,9 +445,11 @@ export default function AddProviderModal({
                   const statusText = row.kind === "key"
                     ? (row.statusLabel ?? t("prov.hasApiKey"))
                     : st.loggedIn
-                      ? (st.email ?? t("prov.loggedIn"))
+                      ? (st.email?.trim() || t("prov.loggedIn"))
                       : t("prov.notLoggedIn");
-                  const statusOk = row.kind === "key" || st.loggedIn;
+                  const statusOk = row.kind === "key" || !!st.loggedIn;
+                  const showOauthActions = row.kind === "oauth";
+                  const statusDisplay = statusText.trim() || t("prov.notLoggedIn");
                   return (
                     <div key={row.id} className="add-prov-account-block">
                       <div className="add-prov-account-row">
@@ -429,14 +465,14 @@ export default function AddProviderModal({
                           <span className={`add-prov-account-status${statusOk ? " add-prov-account-status--ok" : ""}`}>
                             <span
                               className={`dot ${statusOk ? "dot-green" : "dot-muted"}`}
-                              title={statusText}
+                              title={statusDisplay}
                               aria-hidden="true"
                             />
-                            <span className="add-prov-account-status-text" title={statusText}>{statusText}</span>
+                            <span className="add-prov-account-status-text">{statusDisplay}</span>
                           </span>
                         </div>
                         <div className="add-prov-account-action">
-                          {row.kind === "oauth" ? (
+                          {showOauthActions ? (
                             isBusy ? (
                               <span className="add-prov-account-busy">
                                 <span className="add-prov-account-busy-label">
@@ -455,7 +491,7 @@ export default function AddProviderModal({
                                 {t("prov.logout")}
                               </button>
                             ) : (
-                              <button type="button" className="btn btn-primary btn-sm" onClick={() => onAccountLogin?.(row.id)}>
+                              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAccountLogin?.(row.id)}>
                                 <IconLock width={13} height={13} /> {t("prov.login")}
                               </button>
                             )
@@ -567,14 +603,17 @@ export default function AddProviderModal({
                     <ProviderConnectRow key={p.id} preset={p} t={t} onConnect={() => choosePreset(p)} />
                   ))}
                   {browseList.length === 0 && (
-                    <div className="muted text-control" style={{ padding: "12px 4px" }}>{t("modal.noMatch")}</div>
+                    <div className="muted text-control" style={{ padding: "12px 4px" }} role="status">
+                      {query.trim() ? t("pws.noSearchResults") : t("modal.noMatch")}
+                    </div>
                   )}
                 </div>
               </>
             )}
             </div>
 
-            {/* Always show footer so Free / Paid / Accounts keep the same total height. */}
+            {/* Custom endpoint is for Free/Paid catalogs — not account login. */}
+            {tier !== "accounts" && (
             <div className="add-prov-footer">
               <div className="add-prov-footer-copy">
                 <IconInfo width={15} height={15} aria-hidden="true" />
@@ -587,20 +626,30 @@ export default function AddProviderModal({
                 {t("modal.connectApiKey")}
               </button>
             </div>
+            )}
           </div>
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div className="muted text-control">{preset.note ?? t("modal.oauthDefaultNote")}</div>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 650, marginBottom: 6 }}>
+                  {t("modal.oauthConnectTitle", { label: formatProviderDisplayName(preset.label || preset.id) })}
+                </div>
+                <div className="muted text-control">
+                  {localizePresetNote(preset, t)}
+                </div>
+              </div>
               {oauthSupported.includes(preset.oauthProvider ?? "") ? (
                 <button className="btn btn-primary" onClick={() => loginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
                   style={{ width: "100%", padding: "12px 16px" }}>
-                  <IconLock />{oauthBusy ? t("modal.waitingBrowser") : t("modal.logInWith", { label: preset.label })}
+                  <IconLock />{oauthBusy
+                    ? t("modal.waitingBrowser")
+                    : t("modal.signInWithProvider", { label: formatProviderDisplayName(preset.label || preset.id) })}
                 </button>
               ) : (
                 <div className="text-control" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
-                  {t("modal.oauthComingSoon", { label: preset.label })}
+                  {t("modal.oauthComingSoon", { label: formatProviderDisplayName(preset.label || preset.id) })}
                 </div>
               )}
               {oauthMsg && (
@@ -685,9 +734,6 @@ export default function AddProviderModal({
                   {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
                 </details>
               )}
-              <Field label={t("modal.providerName")}>
-                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
-              </Field>
               {dup && (
                 <div
                   className="text-label leading-relaxed"
@@ -700,18 +746,38 @@ export default function AddProviderModal({
                   }}
                   role="alert"
                 >
-                  <strong>{t("modal.duplicateWarn", { name: form.name.trim() })}</strong>
+                  <strong>{t("modal.duplicateWarn", { name: formatProviderDisplayName(form.name.trim()) })}</strong>
                   <div style={{ marginTop: 4 }}>{t("modal.overwriteWarnDetail")}</div>
                 </div>
               )}
-              <Field label={t("modal.adapter")}>
-                <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
-                  {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </Field>
-              <Field label={t("modal.baseUrl")}>
-                <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
-              </Field>
+              {isCustom ? (
+                <>
+                  <Field label={t("modal.providerName")}>
+                    <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
+                  </Field>
+                  <Field label={t("modal.adapter")}>
+                    <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
+                      {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={t("modal.baseUrl")}>
+                    <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+                  </Field>
+                </>
+              ) : (
+                <details className="add-prov-advanced">
+                  <summary>{t("modal.advancedSettings")}</summary>
+                  <Field label={t("modal.providerName")}>
+                    <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
+                  </Field>
+                  <Field label={t("modal.adapter")}>
+                    <input className="input" value={form.adapter} readOnly disabled />
+                  </Field>
+                  <Field label={t("modal.baseUrl")}>
+                    <input className="input" value={form.baseUrl} readOnly disabled />
+                  </Field>
+                </details>
+              )}
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
                   {t("modal.forwardHintPrefix")}{" "}
@@ -793,6 +859,19 @@ function authBadge(p: Preset, t: TFn): string {
   if (p.auth === "oauth") return t("modal.badge.oauth");
   if (p.auth === "forward") return t("modal.badge.codexLogin");
   return t("modal.badge.api");
+}
+
+/** Prefer localized notes for known presets; fall back to registry English / generic body. */
+function localizePresetNote(preset: Preset, t: TFn): string {
+  const id = preset.id.toLowerCase();
+  if (id === "anthropic" || (preset.auth === "oauth" && id.includes("anthropic"))) {
+    return t("modal.anthropicOauthNote");
+  }
+  if (preset.auth === "forward" || id === "openai" || id === "chatgpt") {
+    return t("modal.forwardNote");
+  }
+  if (preset.note?.trim()) return preset.note.trim();
+  return t("modal.oauthConnectBody", { label: formatProviderDisplayName(preset.label || preset.id) });
 }
 
 function ProviderConnectRow({

@@ -516,7 +516,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .input:focus { border-color: var(--faint); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 textarea.input { resize: vertical; font-family: var(--font-code); line-height: var(--leading-relaxed); }
 .field-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); margin-bottom: 5px; display: block; }
-select.input { appearance: none; }
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 2rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'><path d='M2.5 4.5L6 8L9.5 4.5' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 12px;
+}
 .select-sm {
   padding: 6px 12px; border-radius: var(--radius-pill);
   background: color-mix(in oklab, canvas 75%, transparent);
@@ -689,6 +698,7 @@ select.input { appearance: none; }
 .bar-fill { height: 100%; border-radius: var(--radius-2xs); transition: width var(--motion-normal); }
 .bar-green { background: var(--green); }
 .bar-amber { background: linear-gradient(90deg, var(--green), var(--amber)); }
+.bar-warn { background: var(--amber); }
 .toggle { width: var(--toggle-w); height: var(--toggle-h); border-radius: var(--radius-pill); background: var(--toggle-off-bg); border: 1px solid var(--border); cursor: pointer; position: relative; transition: background var(--motion-normal), border-color var(--motion-normal); flex-shrink: 0; }
 .toggle.on { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
 .toggle-knob { width: 16px; height: 16px; background: light-dark(#ffffff, #ececec); border-radius: var(--radius-round); position: absolute; top: 1px; left: 1px; transition: left var(--motion-normal), background var(--motion-normal); }
@@ -803,9 +813,9 @@ select.input { appearance: none; }
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: 420px;
-  min-height: 420px;
-  max-height: 420px;
+  height: 480px;
+  min-height: 480px;
+  max-height: 480px;
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -877,20 +887,25 @@ select.input { appearance: none; }
 .add-prov-account-row {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 12px;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 0;
+  padding: 10px 12px;
+  min-height: 48px;
 }
 .add-prov-account-copy {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
   min-width: 0;
 }
 .add-prov-account-copy .add-prov-row-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 .add-prov-account-status {
   display: inline-flex;
@@ -905,9 +920,11 @@ select.input { appearance: none; }
 }
 .add-prov-account-status-text {
   min-width: 0;
-  overflow: visible;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.35;
+  max-width: 18rem;
 }
 .add-prov-account-action {
   display: inline-flex;
@@ -976,6 +993,9 @@ select.input { appearance: none; }
 .add-prov-list--browse {
   max-height: none;
   overflow-y: auto;
+  /* Let the last account row scroll fully into view (status + action). */
+  padding-bottom: 20px;
+  scroll-padding-bottom: 28px;
 }
 /* Home list (top picks) fills remaining body so Free/Paid match Accounts height */
 .add-prov-body > .add-prov-list,
@@ -1039,83 +1059,9 @@ select.input { appearance: none; }
 }
 .add-prov-row-connect {
   min-width: 72px;
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  color: var(--accent) !important;
-  font-weight: var(--weight-semibold);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
 }
-.add-prov-row-connect:hover:not(:disabled) {
-  background: transparent !important;
-  color: var(--accent-hover) !important;
-  text-decoration-color: var(--accent-hover);
-}
-.add-prov-row:hover .add-prov-row-connect {
-  text-decoration-color: var(--accent-hover);
-}
-.add-prov-footer-action {
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
-  text-underline-offset: 3px;
-}
-/* Flatten ghost/primary chrome inside the add-provider dialog — keep link affordance */
-.modal-card .add-prov-catalog .btn-ghost,
-.modal-card .add-prov-account-action .btn-ghost,
-.modal-card .add-prov-footer .btn-ghost,
-.modal-card .add-prov-account-busy .btn-ghost {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  color: var(--text);
-  font-weight: var(--weight-medium);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
-  text-underline-offset: 3px;
-}
-.modal-card .add-prov-catalog .btn-ghost:hover:not(:disabled),
-.modal-card .add-prov-account-action .btn-ghost:hover:not(:disabled),
-.modal-card .add-prov-footer .btn-ghost:hover:not(:disabled) {
-  background: transparent !important;
-  color: var(--accent-hover);
-  text-decoration-color: var(--accent-hover);
-}
-.modal-card .add-prov-account-action .btn-primary,
-.modal-card .add-prov-catalog .btn-primary,
-.modal-card .btn-primary {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  color: var(--accent) !important;
-  font-weight: var(--weight-semibold);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-}
-.modal-card .add-prov-account-action .btn-primary:hover:not(:disabled),
-.modal-card .add-prov-catalog .btn-primary:hover:not(:disabled),
-.modal-card .btn-primary:hover:not(:disabled) {
-  background: transparent !important;
-  color: var(--accent-hover) !important;
-  text-decoration-color: var(--accent-hover);
-}
-.modal-card .btn-ghost {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
-  text-underline-offset: 3px;
-}
-.modal-card .btn-ghost:hover:not(:disabled) {
-  background: transparent !important;
-  text-decoration-color: var(--accent-hover);
-  color: var(--accent-hover);
-}
+/* Modal actions use the global button hierarchy:
+   primary = filled, secondary = outlined ghost, tertiary = .link-btn */
 .modal-card .btn-icon {
   text-decoration: none !important;
 }

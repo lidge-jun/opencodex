@@ -15,6 +15,7 @@ import {
   formatTokenCount,
   isFreeProvider,
   sortWorkspaceItems,
+  hideRedundantChatGptForwardProviders,
   type ProviderSortMode,
   type AttentionItem,
   type ProviderModelCounts,
@@ -24,7 +25,8 @@ import {
   parseAvailableModels,
   parseSelectedModels,
 } from "../provider-workspace-data";
-import { formatProviderDisplayName, providerBrandColor, providerIconSrc } from "../provider-icons";
+import { formatProviderDisplayName, isCatalogProviderId, providerBrandColor, providerIconSrc } from "../provider-icons";
+import CodexAccountPool, { CodexForwardAuthStatus } from "./CodexAccountPool";
 import {
   IconSearch,
   IconFilter,
@@ -46,7 +48,7 @@ import {
   IconBraces,
 } from "../icons";
 import { Switch } from "../ui";
-import { useT, type TFn, type TKey } from "../i18n";
+import { useT, useI18n, type TFn, type TKey } from "../i18n";
 import QuotaBars, { maxQuotaUtilisation } from "./QuotaBars";
 import type { AccountQuota } from "../codex-quota-utils";
 
@@ -57,7 +59,7 @@ function useRelativeTimeLabels() {
   return useMemo(() => relativeTimeLabelsFromT(t), [t]);
 }
 
-function jsonErrorLocation(raw: string): { line: number } | null {
+function jsonErrorLocation(raw: string): { line: number; column: number } | null {
   try {
     JSON.parse(raw);
     return null;
@@ -67,13 +69,18 @@ function jsonErrorLocation(raw: string): { line: number } | null {
     if (match) {
       const pos = Number(match[1]);
       if (Number.isFinite(pos)) {
-        const line = raw.slice(0, pos).split(/\r\n|\r|\n/).length;
-        return { line };
+        const before = raw.slice(0, pos);
+        const lines = before.split(/\r\n|\r|\n/);
+        const line = lines.length;
+        const column = (lines[lines.length - 1] ?? "").length + 1;
+        return { line, column };
       }
     }
-    const lineMatch = /line\s+(\d+)/i.exec(message);
-    if (lineMatch) return { line: Number(lineMatch[1]) };
-    return { line: 1 };
+    const lineMatch = /line\s+(\d+)(?:\s+column\s+(\d+))?/i.exec(message);
+    if (lineMatch) {
+      return { line: Number(lineMatch[1]), column: Number(lineMatch[2] ?? 1) };
+    }
+    return { line: 1, column: 1 };
   }
 }
 
@@ -160,6 +167,10 @@ export interface ProviderWorkspaceProps {
   /** Live login hint (URL / instructions) for the busy OAuth provider. */
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
+  /** One-shot: select this provider when the workspace mounts (e.g. #codex-auth deep-link). */
+  initialSelectedProvider?: string | null;
+  /** Fired after `initialSelectedProvider` was applied so the parent can clear focus. */
+  onInitialProviderFocused?: () => void;
 }
 
 export type ProviderUpdatePatch = {
@@ -184,16 +195,52 @@ export type ProviderQuotaReportView = {
 function accountQuotaFromReport(report?: ProviderQuotaReportView): AccountQuota | null {
   if (!report?.quota || typeof report.quota !== "object" || Array.isArray(report.quota)) return null;
   const q = report.quota as Partial<AccountQuota>;
+  const custom = Array.isArray(q.customWindows) ? [...q.customWindows] : [];
+  // Promote Anthropic-style "5h" custom windows into the first-class 5-hour field.
+  let fiveHourPercent = q.fiveHourPercent;
+  let fiveHourResetAt = q.fiveHourResetAt;
+  const remainingCustom: typeof custom = [];
+  for (const w of custom) {
+    const label = (w.label ?? "").toLowerCase();
+    const isFiveHour = label === "5h" || label.includes("5h") || label.includes("five hour") || label.includes("5-hour");
+    if (isFiveHour && typeof fiveHourPercent !== "number" && typeof w.percent === "number") {
+      fiveHourPercent = w.percent;
+      if (typeof w.resetAt === "number") fiveHourResetAt = w.resetAt;
+      continue;
+    }
+    remainingCustom.push(w);
+  }
   const hasWindow =
-    typeof q.fiveHourPercent === "number"
+    typeof fiveHourPercent === "number"
     || typeof q.weeklyPercent === "number"
     || typeof q.monthlyPercent === "number"
-    || (Array.isArray(q.customWindows) && q.customWindows.length > 0);
+    || remainingCustom.length > 0;
   if (!hasWindow) return null;
   return {
     ...q,
+    fiveHourPercent,
+    fiveHourResetAt,
+    customWindows: remainingCustom.length > 0 ? remainingCustom : undefined,
     updatedAt: typeof q.updatedAt === "number" ? q.updatedAt : report.updatedAt,
   } as AccountQuota;
+}
+
+
+/** Human-readable quota source label; raw ids stay in diagnostics titles. */
+function formatQuotaSourceLabel(source: string | undefined, t: ReturnType<typeof useT>): string {
+  const raw = (source ?? "").trim();
+  if (!raw) return "";
+  const key = raw.toLowerCase();
+  if (key === "anthropic:oauth-usage" || key.includes("anthropic")) {
+    return t("pws.quotaSource.anthropicOauthUsage");
+  }
+  if (key.startsWith("cursor:") || key.includes("cursor")) {
+    return t("pws.quotaSource.cursorUsage");
+  }
+  if (key === "codex" || key.includes("chatgpt") || key.includes("openai")) {
+    return t("pws.quotaSource.codex");
+  }
+  return t("pws.quotaSource.unknown", { source: raw });
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +273,7 @@ function statusLabel(p: WorkspaceProvider, t: TFn): string {
 function authModeLabel(item: WorkspaceItem, t: TFn): string {
   switch (item.authMode) {
     case "oauth":   return t("modal.badge.oauth");
-    case "forward": return t("pws.auth.passthrough");
+    case "forward": return t("pws.auth.chatgptPassthrough");
     case "local":   return t("modal.badge.local");
     case "key":     return t("modal.badge.apiKey");
     default:        return item.authMode ?? (item.keyOptional ? t("pws.auth.noKey") : t("modal.badge.apiKey"));
@@ -300,11 +347,13 @@ function providerKind(item: WorkspaceProvider & { name?: string }): ProviderKind
   return "cloud";
 }
 
-function RailRow({ item, selected, modelCount, isDefault, onClick }: {
+function RailRow({ item, selected, modelCount, isDefault, showConfigId, onClick }: {
   item: WorkspaceItem;
   selected: boolean;
   modelCount?: number;
   isDefault?: boolean;
+  /** When display names collide (e.g. openai + chatgpt → ChatGPT), show the config id. */
+  showConfigId?: boolean;
   onClick: () => void;
 }) {
   const t = useT();
@@ -312,6 +361,7 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
   const local = isLocalProvider(item);
   const status = statusLabel(item, t);
   const displayName = formatProviderDisplayName(item.name);
+  const nameTitle = showConfigId ? `${displayName} (${item.name})` : displayName;
   const suffix = `${isDefault ? t("pws.rail.suffixDefault") : ""}${local ? t("pws.rail.suffixLocal") : free ? t("pws.rail.suffixFree") : ""}`;
   return (
     <button
@@ -320,7 +370,7 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
       onClick={onClick}
       role="option"
       aria-selected={selected}
-      aria-label={t("pws.rail.selectAria", { name: displayName, status, suffix })}
+      aria-label={t("pws.rail.selectAria", { name: nameTitle, status, suffix })}
     >
       <ProviderIcon
         name={item.name}
@@ -328,7 +378,12 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
         baseUrl={item.baseUrl}
         cls="providers-workspace-rail-icon"
       />
-      <span className="providers-workspace-rail-name" title={displayName}>{displayName}</span>
+      <span className="providers-workspace-rail-name" title={nameTitle}>
+        <span className="providers-workspace-rail-name-label">{displayName}</span>
+        {showConfigId ? (
+          <span className="providers-workspace-rail-name-id">{item.name}</span>
+        ) : null}
+      </span>
       <span className="providers-workspace-rail-badges">
         {/* Only label exceptions (Local / Free). Paid is the unmarked default.
             Default star sits next to the status dot (see trail cluster) so the
@@ -340,10 +395,19 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
         ) : null}
       </span>
       {/* Model text left of status so an empty count doesn't leave the dot floating mid-row. */}
-      <span className="providers-workspace-rail-model-count">
-        {modelCount !== undefined && modelCount > 0 ? t("pws.modelCount", { count: modelCount }) : ""}
+      <span
+        className="providers-workspace-rail-model-count"
+        title={
+          modelCount !== undefined && modelCount > 0
+            ? (modelCount === 1 ? t("pws.modelCountOne") : t("pws.modelCount", { count: modelCount }))
+            : undefined
+        }
+      >
+        {modelCount !== undefined && modelCount > 0
+          ? (modelCount === 1 ? t("pws.modelCountOne") : t("pws.modelCount", { count: modelCount }))
+          : ""}
       </span>
-      <span className="providers-workspace-rail-trail">
+        <span className="providers-workspace-rail-trail">
         {isDefault && (
           <span
             className="pwi-default-star"
@@ -353,7 +417,9 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
             <IconStar width={17} height={17} aria-hidden="true" />
           </span>
         )}
-        <span className={railStatusCls(item)} aria-hidden="true" title={status} />
+        <span className={railStatusCls(item)} title={status}>
+          <span className="sr-only">{status}</span>
+        </span>
       </span>
       <IconChevron className="providers-workspace-rail-chevron" aria-hidden="true" />
     </button>
@@ -363,6 +429,23 @@ function RailRow({ item, selected, modelCount, isDefault, onClick }: {
 // ---------------------------------------------------------------------------
 // Connection card
 // ---------------------------------------------------------------------------
+
+function localizeProviderNote(item: WorkspaceItem, t: TFn): string {
+  const note = (item.note ?? "").trim();
+  const id = item.name.toLowerCase();
+  if (id === "anthropic" || note.startsWith("Sign in with your Claude")) {
+    return t("modal.anthropicOauthNote");
+  }
+  if (
+    item.authMode === "forward"
+    || id === "openai"
+    || id === "chatgpt"
+    || note.startsWith("Uses your Codex login")
+  ) {
+    return t("modal.forwardNote");
+  }
+  return note;
+}
 
 function ConnectionCard({ item, onEdit, lastCheckedAt }: {
   item: WorkspaceItem;
@@ -421,7 +504,7 @@ function ConnectionCard({ item, onEdit, lastCheckedAt }: {
             : <IconAlert style={{ width: 13, height: 13 }} aria-hidden="true" />}
           {configurationText}
         </span>
-        <button type="button" className="btn btn-ghost btn-sm pwi-chrome-btn" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} aria-label={t("pws.editAria", { name: item.name })}>
           <IconInfo style={{ width: 13, height: 13 }} aria-hidden="true" />
           {t("pws.editSettings")}
         </button>
@@ -441,41 +524,50 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
   onViewUsage: () => void;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const timeLabels = useRelativeTimeLabels();
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   const hasRequests = typeof requests === "number";
   const hasTokens = typeof tokens === "number";
   const hasQuota = !!quotaReport;
+  const hasStatRows = hasRequests || hasTokens || hasQuota;
   return (
     <aside className="pwi-section pwi-section--side" aria-label={t("pws.statsAria")}>
       <h3 className="pwi-section-title">{t("pws.statsTitle")}</h3>
-      <dl className="pwi-kv pwi-kv--stack">
-        {hasRequests && (
-          <div className="pwi-kv-row">
-            <dt>{t("pws.stats.totalRequests")}</dt>
-            <dd className="pwi-kv-mono">{formatRequestCount(requests)}</dd>
-          </div>
-        )}
-        {hasTokens && (
-          <div className="pwi-kv-row">
-            <dt>{t("dash.tokens30d")}</dt>
-            <dd className="pwi-kv-mono">{formatTokenCount(tokens)}</dd>
-          </div>
-        )}
-        {hasQuota && (
-          <div className="pwi-kv-row">
-            <dt>{t("pws.stats.quotaUpdated")}</dt>
-            <dd className="pwi-kv-mono" title={quotaReport.source ? t("pws.stats.source", { source: quotaReport.source }) : undefined}>
-              {formatRelativeTime(quotaReport.updatedAt, timeLabels)}
-            </dd>
-          </div>
-        )}
-      </dl>
+      {hasStatRows && (
+        <dl className="pwi-kv pwi-kv--stack">
+          {hasRequests && (
+            <div className="pwi-kv-row">
+              <dt>{t("pws.stats.totalRequests")}</dt>
+              <dd className="pwi-kv-mono">{formatRequestCount(requests, locale)}</dd>
+            </div>
+          )}
+          {hasTokens && (
+            <div className="pwi-kv-row">
+              <dt>{t("dash.tokens30d")}</dt>
+              <dd className="pwi-kv-mono">{formatTokenCount(tokens, locale)}</dd>
+            </div>
+          )}
+          {hasQuota && (
+            <div className="pwi-kv-row">
+              <dt>{t("pws.stats.quotaUpdated")}</dt>
+              <dd className="pwi-kv-mono" title={quotaReport.source ? t("pws.stats.source", { source: formatQuotaSourceLabel(quotaReport.source, t) }) : undefined}>
+                {formatRelativeTime(quotaReport.updatedAt, timeLabels)}
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
       {!hasRequests && !hasTokens && (
         <p className="pwi-stats-unavailable muted">{t("pws.stats.dailyUnavailable")}</p>
       )}
-      <button type="button" className="pwi-stats-usage-link btn btn-ghost btn-sm pwi-chrome-btn" onClick={onViewUsage} aria-label={t("pws.stats.viewDetailed")}>
+      <button
+        type="button"
+        className={`pwi-stats-usage-link btn btn-ghost btn-sm${!hasStatRows ? " pwi-stats-usage-link--ruled" : ""}`}
+        onClick={onViewUsage}
+        aria-label={t("pws.stats.viewDetailed")}
+      >
         <IconActivity style={{ width: 12, height: 12 }} aria-hidden="true" />
         {t("pws.stats.viewDetailed")}
         <IconChevron style={{ width: 11, height: 11 }} aria-hidden="true" />
@@ -483,7 +575,7 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
       <div className="pwi-notes-block" aria-label={t("pws.notesAria")}>
         <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.notes")}</h4>
         {item.note ? (
-          <p className="pwi-stats-notes-body">{item.note}</p>
+          <p className="pwi-stats-notes-body">{localizeProviderNote(item, t)}</p>
         ) : (
           <p className="pwi-stats-notes-placeholder muted">{t("pws.notesPlaceholder")}</p>
         )}
@@ -497,10 +589,11 @@ function StatsSidebar({ item, usageTotals, quotaReport, onViewUsage }: {
 // ---------------------------------------------------------------------------
 
 function TabOverview({
-  item, usageTotals, quotaReport, onSelectTab, lastCheckedAt,
+  item, apiBase, usageTotals, quotaReport, onSelectTab, lastCheckedAt,
   oauth, accounts, keys, busy, loginHint, authHandlers,
 }: {
   item: WorkspaceItem;
+  apiBase: string;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
   onSelectTab: (tab: Tab) => void;
@@ -520,6 +613,7 @@ function TabOverview({
           <ConnectionCard item={item} onEdit={() => onSelectTab("settings")} lastCheckedAt={lastCheckedAt ?? quotaReport?.updatedAt} />
           <AuthAccountsCard
             item={item}
+            apiBase={apiBase}
             oauth={oauth}
             accounts={accounts}
             keys={keys}
@@ -539,9 +633,10 @@ function TabOverview({
 // ---------------------------------------------------------------------------
 
 function AuthAccountsCard({
-  item, oauth, accounts = [], keys = [], busy = false, loginHint, authHandlers,
+  item, apiBase, oauth, accounts = [], keys = [], busy = false, loginHint, authHandlers,
 }: {
   item: WorkspaceItem;
+  apiBase: string;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   accounts?: OAuthAccountRow[];
   keys?: ApiKeyRow[];
@@ -558,12 +653,28 @@ function AuthAccountsCard({
   const isOauth = mode === "oauth";
   const isForward = mode === "forward";
   const isLocal = mode === "local" || isLocalProvider(item);
+  const isKeyOptional = item.keyOptional === true;
+  const hasKeyMaterial = item.hasApiKey === true || keys.length > 0;
   // Key-auth: explicit key mode, or unspecified mode that is not oauth/forward/local.
-  const isKeyAuth = mode === "key" || (!isOauth && !isForward && !isLocal) || item.hasApiKey === true;
+  // Keyless free (keyOptional, no keys) must not show "No API key" / "Add API key".
+  const isKeyAuth =
+    (mode === "key" || (!isOauth && !isForward && !isLocal) || item.hasApiKey === true) &&
+    !(isKeyOptional && !hasKeyMaterial);
+
+  // ChatGPT forward: global Codex account pool lives here (not a separate sidebar page).
+  if (isForward) {
+    return (
+      <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
+        <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
+        <div className="pwi-auth-body">
+          <CodexAccountPool apiBase={apiBase} embedded />
+        </div>
+      </section>
+    );
+  }
 
   // Always show when handlers exist: oauth login, key pool, or at least a configured key/local note.
   if (!authHandlers) return null;
-  if (isForward) return null; // ChatGPT passthrough — no multi-key / multi-account here
   if (!isOauth && !isKeyAuth && !isLocal) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
@@ -581,45 +692,45 @@ function AuthAccountsCard({
   };
 
   return (
-    <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}>
+    <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
       <h3 className="pwi-section-title">
-        {isOauth ? t("prov.accountLogin") : t("pws.apiKeys")}
+        {isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}
       </h3>
       <div className="pwi-auth-body">
         {isOauth && (
           <>
-            <div className="pwi-auth-subsection">
-              <div className="pwi-auth-status-row">
-                <span className={`pwi-auth-dot ${oauth?.loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                <span className="pwi-auth-status-text">
-                  {oauth?.loggedIn
-                    ? (oauth.email ? oauth.email : t("pws.loggedInTitle"))
-                    : (oauth?.error || t("pws.notLoggedInTitle"))}
-                </span>
-                <span className="pwi-auth-actions">
-                  {oauth?.loggedIn ? (
-                    <button type="button" className="btn btn-ghost btn-sm pwi-chrome-btn" onClick={() => authHandlers.onLogout(item.name)}>
-                      {t("prov.logout")}
-                    </button>
-                  ) : busy ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm pwi-chrome-btn"
-                      onClick={() => authHandlers.onCancelLogin?.(item.name)}
-                    >
-                      {t("common.cancel")}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm pwi-chrome-btn"
-                      onClick={() => authHandlers.onLogin(item.name, false)}
-                    >
-                      <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}
-                    </button>
-                  )}
-                </span>
-              </div>
+            <div className="pwi-auth-status-row">
+              <span className={`pwi-auth-dot ${oauth?.loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+              <span className="pwi-auth-status-text">
+                {oauth?.loggedIn
+                  ? (accounts.length > 0
+                    ? t("pws.loggedInTitle")
+                    : (oauth.email ? oauth.email : t("pws.loggedInTitle")))
+                  : (oauth?.error || t("pws.notLoggedInTitle"))}
+              </span>
+              <span className="pwi-auth-actions">
+                {oauth?.loggedIn ? (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onLogout(item.name)}>
+                    {t("prov.logout")}
+                  </button>
+                ) : busy ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => authHandlers.onCancelLogin?.(item.name)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => authHandlers.onLogin(item.name, false)}
+                  >
+                    <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}
+                  </button>
+                )}
+              </span>
             </div>
 
             {busy && (
@@ -655,61 +766,49 @@ function AuthAccountsCard({
               </div>
             )}
 
-            {(() => {
-              const currentEmail = (oauth?.email ?? "").trim().toLowerCase();
-              const soleMatchesLogin = accounts.length === 1
-                && !!currentEmail
-                && (accounts[0]?.email ?? "").trim().toLowerCase() === currentEmail;
-              const listAccounts = soleMatchesLogin ? [] : accounts;
-              return (
-                <div className="pwi-auth-subsection">
-                  <h4 className="pwi-section-title pwi-section-title--sub">{t("pws.availableAccounts")}</h4>
-                  {listAccounts.length > 0 && (
-                    <div className="pwi-auth-list" role="list">
-                      {listAccounts.map(account => (
-                        <div
-                          key={account.id}
-                          className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}
-                          role="listitem"
-                        >
-                          <button
-                            type="button"
-                            className="pwi-auth-row-main"
-                            onClick={() => authHandlers.onSwitchAccount(item.name, account)}
-                            disabled={account.active}
-                            title={account.active ? t("pws.activeAccount") : t("pws.switchAccount")}
-                          >
-                            <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                            <span className="pwi-auth-row-label">{account.email ?? account.id}</span>
-                            {account.needsReauth && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                            {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                            onClick={() => authHandlers.onRemoveAccount(item.name, account)}
-                            aria-label={t("pws.removeAccountAria", { id: account.email ?? account.id })}
-                          >
-                            <IconTrash style={{ width: 13, height: 13 }} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    className="pwi-auth-add"
-                    onClick={() => busy
-                      ? authHandlers.onCancelLogin?.(item.name)
-                      : authHandlers.onLogin(item.name, true)}
+            {accounts.length > 0 && (
+              <div className="pwi-auth-list" role="list">
+                {accounts.map(account => (
+                  <div
+                    key={account.id}
+                    className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}
+                    role="listitem"
                   >
-                    {busy
-                      ? t("common.cancel")
-                      : <><IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.accountAdd")}</>}
-                  </button>
-                </div>
-              );
-            })()}
+                    <button
+                      type="button"
+                      className="pwi-auth-row-main"
+                      onClick={() => authHandlers.onSwitchAccount(item.name, account)}
+                      disabled={account.active}
+                      title={account.active ? t("pws.activeAccount") : t("pws.switchAccount")}
+                    >
+                      <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                      <span className="pwi-auth-row-label">{account.email ?? account.id}</span>
+                      {account.needsReauth && <span className="badge badge-amber">{t("pws.reauth")}</span>}
+                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm pwi-auth-row-remove"
+                      onClick={() => authHandlers.onRemoveAccount(item.name, account)}
+                      aria-label={t("pws.removeAccountAria", { id: account.email ?? account.id })}
+                    >
+                      <IconTrash style={{ width: 13, height: 13 }} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="pwi-auth-add"
+              onClick={() => busy
+                ? authHandlers.onCancelLogin?.(item.name)
+                : authHandlers.onLogin(item.name, true)}
+            >
+              {busy
+                ? t("common.cancel")
+                : <><IconPlus style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.accountAdd")}</>}
+            </button>
           </>
         )}
 
@@ -795,11 +894,17 @@ function TabModels({
   modelCount,
   availableModels,
   selectedModels,
+  modelsLoading = false,
+  modelsLoadFailed = false,
+  onRetryModels,
 }: {
   item: WorkspaceItem;
   modelCount: number;
   availableModels: string[];
   selectedModels: string[];
+  modelsLoading?: boolean;
+  modelsLoadFailed?: boolean;
+  onRetryModels?: () => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -846,7 +951,7 @@ function TabModels({
           {isSelected ? <span className="pwi-model-flag pwi-model-flag--selected">{t("pws.selected")}</span> : null}
           <button
             type="button"
-            className="btn btn-ghost btn-sm pwi-chrome-btn"
+            className="btn btn-ghost btn-sm"
             onClick={() => { void copyModelId(modelId); }}
             aria-label={t("pws.copyModelId")}
             title={t("pws.copyModelId")}
@@ -867,7 +972,19 @@ function TabModels({
         ) : null}
       </div>
       <div className="providers-workspace-section-body">
-        {availableModels.length > 0 || item.defaultModel ? (
+        {modelsLoading && availableModels.length === 0 && !item.defaultModel ? (
+          <p className="muted pwi-inline-status" role="status">{t("pws.modelsLoading")}</p>
+        ) : modelsLoadFailed && availableModels.length === 0 && !item.defaultModel ? (
+          <div className="pwi-inline-error" role="alert">
+            <span>{t("pws.modelsLoadFailed")}</span>
+            {onRetryModels && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onRetryModels}>
+                <IconRefresh style={{ width: 13, height: 13 }} aria-hidden="true" />
+                {t("pws.testConnection")}
+              </button>
+            )}
+          </div>
+        ) : availableModels.length > 0 || item.defaultModel ? (
           <>
             <div className="pwi-models-toolbar">
               <label className="pwi-models-search">
@@ -906,13 +1023,13 @@ function TabModels({
             )}
           </>
         ) : (
-          <div className="providers-workspace-row">
-            <span className="providers-workspace-row-label">
-              {t("pws.noDefaultModel")}
-              <span className="providers-workspace-row-label-desc">
-                {t("pws.modelsResolvedRuntime")}
-              </span>
-            </span>
+          <div className="pwi-models-empty">
+            <div className="pwi-models-empty-title">{t("pws.noStaticModels")}</div>
+            <p className="pwi-models-empty-desc muted">{t("pws.noStaticModelsDesc")}</p>
+            <div className="pwi-models-empty-default">
+              <span className="pwi-models-empty-default-label muted">{t("pws.defaultModelLabel")}</span>
+              <span className="pwi-models-empty-default-value">{t("pws.defaultModelNone")}</span>
+            </div>
           </div>
         )}
       </div>
@@ -926,6 +1043,7 @@ function TabUsage({ item, usageTotals, quotaReport }: {
   quotaReport?: ProviderQuotaReportView;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const timeLabels = useRelativeTimeLabels();
   const when = formatRelativeTime(quotaReport?.updatedAt, timeLabels);
   const hasUsage = usageTotals?.requests !== undefined;
@@ -942,11 +1060,11 @@ function TabUsage({ item, usageTotals, quotaReport }: {
           {hasUsage ? (
             <div className="pwi-usage-metrics" role="group" aria-label={t("pws.usageLast30d")}>
               <div className="pwi-usage-metric">
-                <span className="pwi-usage-metric-value">{formatRequestCount(usageTotals.requests)}</span>
+                <span className="pwi-usage-metric-value">{formatRequestCount(usageTotals.requests, locale)}</span>
                 <span className="pwi-usage-metric-label muted">{t("pws.metricRequests")}</span>
               </div>
               <div className="pwi-usage-metric">
-                <span className="pwi-usage-metric-value">{formatTokenCount(usageTotals.totalTokens)}</span>
+                <span className="pwi-usage-metric-value">{formatTokenCount(usageTotals.totalTokens, locale)}</span>
                 <span className="pwi-usage-metric-label muted">{t("pws.metricTokens")}</span>
               </div>
             </div>
@@ -971,7 +1089,7 @@ function TabUsage({ item, usageTotals, quotaReport }: {
                   {quotaReport.source?.trim() ? (
                     <div className="pwi-kv-row">
                       <dt>{t("pws.quotaSource")}</dt>
-                      <dd className="pwi-kv-mono">{quotaReport.source.trim()}</dd>
+                      <dd title={quotaReport.source.trim()}>{formatQuotaSourceLabel(quotaReport.source, t)}</dd>
                     </div>
                   ) : null}
                   <div className="pwi-kv-row">
@@ -982,7 +1100,7 @@ function TabUsage({ item, usageTotals, quotaReport }: {
               )}
             </>
           ) : (
-            <p className="muted pwi-usage-empty">{t("pws.noRateLimits")}</p>
+            <p className="muted pwi-usage-empty" role="status">{t("pws.quotaUnavailable")}</p>
           )}
           {!hasUsage && !hasQuotaMeta && (
             <p className="muted" style={{ marginTop: 8 }}>{t("pws.noUsageFor", { name: formatProviderDisplayName(item.name) })}</p>
@@ -995,16 +1113,16 @@ function TabUsage({ item, usageTotals, quotaReport }: {
 
 function TabSettings({
   item,
+  apiBase,
   oauth,
   availableModels,
-  onSetDisabled,
   onUpdateProvider,
   onDirtyChange,
 }: {
   item: WorkspaceItem;
+  apiBase: string;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   availableModels: string[];
-  onSetDisabled: (name: string, disabled: boolean) => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -1084,6 +1202,69 @@ function TabSettings({
   };
 
   const hasKey = item.hasApiKey === true;
+  const isPreset = isCatalogProviderId(item.name);
+
+  const discard = () => {
+    setAdapter(item.adapter);
+    setBaseUrl(item.baseUrl);
+    setDefaultModel(item.defaultModel ?? "");
+    setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
+    setApiKey("");
+    setNote(item.note ?? "");
+    setMsg(null);
+  };
+
+  const advancedFields = (
+    <>
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">
+          <IconLock style={{ width: 12, height: 12 }} aria-hidden="true" />
+          {t("pws.providerId")}
+        </span>
+        <input className="input" value={item.name} readOnly disabled title={t("pws.renameUnsupported")} />
+        <span className="pwi-settings-hint muted">{t("pws.immutableId")}</span>
+      </label>
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">{t("modal.adapter")}</span>
+        {isPreset ? (
+          <input className="input" value={adapter} readOnly disabled />
+        ) : (
+          <select className="input" value={adapter} onChange={e => setAdapter(e.target.value)}>
+            {adapterOptions.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
+      </label>
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
+        <input
+          className="input"
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          placeholder={t("modal.baseUrlPlaceholder")}
+          readOnly={isPreset}
+          disabled={isPreset}
+        />
+      </label>
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">{t("pws.authMode")}</span>
+        {isPreset ? (
+          <input className="input" value={authModeLabel(item, t)} readOnly disabled title={item.authMode === "forward" ? t("pws.auth.passthrough") : undefined} />
+        ) : (
+          <select className="input" value={authMode} onChange={e => setAuthMode(e.target.value)}>
+            <option value="key">{t("modal.badge.apiKey")}</option>
+            <option value="forward">{t("pws.auth.chatgptPassthrough")}</option>
+            <option value="oauth">{t("modal.badge.oauth")}</option>
+            <option value="local">{t("modal.badge.local")}</option>
+          </select>
+        )}
+        <span className="pwi-settings-hint muted">
+          {item.authMode === "forward"
+            ? t("pws.authCurrentForward", { label: authModeLabel(item, t), technical: t("pws.auth.passthrough") })
+            : t("pws.authCurrent", { mode: authModeLabel(item, t) })}
+        </span>
+      </label>
+    </>
+  );
 
   return (
     <>
@@ -1093,41 +1274,35 @@ function TabSettings({
           {dirty && <span className="providers-workspace-section-meta pwi-settings-dirty">{t("pws.settingsDirty")}</span>}
         </div>
         <div className="providers-workspace-section-body pwi-settings-form">
-          <label className="pwi-settings-field">
-            <span className="pwi-settings-label">
-              <IconLock style={{ width: 12, height: 12 }} aria-hidden="true" />
-              {t("pws.providerId")}
-            </span>
-            <input className="input" value={item.name} readOnly disabled title={t("pws.renameUnsupported")} />
-            <span className="pwi-settings-hint muted">{t("pws.immutableId")}</span>
-          </label>
-          <label className="pwi-settings-field">
-            <span className="pwi-settings-label">{t("modal.adapter")}</span>
-            <select className="input" value={adapter} onChange={e => setAdapter(e.target.value)}>
-              {adapterOptions.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </label>
-          <label className="pwi-settings-field">
-            <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
-            <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
-          </label>
+          {isPreset ? (
+            <details className="pwi-advanced-details">
+              <summary>{t("pws.advancedSettings")}</summary>
+              {advancedFields}
+            </details>
+          ) : advancedFields}
+
           <label className="pwi-settings-field">
             <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
             {modelOptions.length > 0 ? (
+              <select
+                className="input"
+                value={defaultModel}
+                onChange={e => setDefaultModel(e.target.value)}
+                aria-label={t("pws.cell.defaultModel")}
+              >
+                <option value="">{t("pws.defaultModelNone")}</option>
+                {modelOptions.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : (
               <input
                 className="input"
-                list={`pwi-models-${item.name}`}
                 value={defaultModel}
                 onChange={e => setDefaultModel(e.target.value)}
                 placeholder={t("pws.optionalPlaceholder")}
+                aria-label={t("pws.cell.defaultModel")}
               />
-            ) : (
-              <input className="input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)} placeholder={t("pws.optionalPlaceholder")} />
-            )}
-            {modelOptions.length > 0 && (
-              <datalist id={`pwi-models-${item.name}`}>
-                {modelOptions.map(m => <option key={m} value={m} />)}
-              </datalist>
             )}
           </label>
           <label className="pwi-settings-field">
@@ -1148,16 +1323,6 @@ function TabSettings({
           <span className="providers-workspace-section-title">{t("pws.cell.auth")}</span>
         </div>
         <div className="providers-workspace-section-body pwi-settings-form">
-          <label className="pwi-settings-field">
-            <span className="pwi-settings-label">{t("pws.authMode")}</span>
-            <select className="input" value={authMode} onChange={e => setAuthMode(e.target.value)}>
-              <option value="key">{t("modal.badge.apiKey")}</option>
-              <option value="forward">{t("pws.authForward")}</option>
-              <option value="oauth">{t("modal.badge.oauth")}</option>
-              <option value="local">{t("modal.badge.local")}</option>
-            </select>
-            <span className="pwi-settings-hint muted">{t("pws.authCurrent", { mode: authModeLabel(item, t) })}</span>
-          </label>
           {(authMode === "key" || (!authMode && !item.keyOptional)) && (
             <label className="pwi-settings-field">
               <span className="pwi-settings-label">{t("modal.apiKey")}</span>
@@ -1191,7 +1356,18 @@ function TabSettings({
               <span className="providers-workspace-row-value">{oauth?.loggedIn ? t("pws.status.ready") : t("pws.status.needsSetup")}</span>
             </div>
           )}
-          {item.keyOptional && (
+          {authMode === "forward" && (
+            <CodexForwardAuthStatus apiBase={apiBase} />
+          )}
+          {authMode === "local" && (
+            <div className="providers-workspace-row">
+              <span className="providers-workspace-row-label">
+                {t("modal.badge.local")}
+                <span className="providers-workspace-row-label-desc">{t("modal.localHint")}</span>
+              </span>
+            </div>
+          )}
+          {item.keyOptional && authMode !== "local" && (
             <div className="providers-workspace-row">
               <span className="providers-workspace-row-label">
                 {t("modal.freeTierTitle")}
@@ -1199,35 +1375,27 @@ function TabSettings({
               </span>
             </div>
           )}
-          <div className="pwi-settings-actions">
-            <button type="button" className="btn btn-primary btn-sm pwi-save-btn" onClick={() => void save()} disabled={saving || !onUpdateProvider || !dirty}>
-              {saving ? t("pws.saving") : t("pws.saveSettings")}
-            </button>
-            {msg && <span className={msg.ok ? "pwi-settings-msg pwi-settings-msg--ok" : "pwi-settings-msg pwi-settings-msg--err"}>{msg.text}</span>}
-          </div>
         </div>
       </div>
 
-      <div className="providers-workspace-section">
-        <div className="providers-workspace-section-head">
-          <span className="providers-workspace-section-title">{t("pws.providerState")}</span>
-        </div>
-        <div className="providers-workspace-section-body">
-          <div className="providers-workspace-row">
-            <span className="providers-workspace-row-label">
-              {item.disabled ? t("pws.providerDisabledLabel") : t("pws.providerEnabledLabel")}
-              <span className="providers-workspace-row-label-desc">{t("pws.disabledRoutingHint")}</span>
-            </span>
-            <span className="providers-workspace-row-controls">
-              <Switch
-                on={!item.disabled}
-                onClick={() => onSetDisabled(item.name, !item.disabled)}
-                label={item.disabled ? t("prov.enableAria", { name: item.name }) : t("prov.disableAria", { name: item.name })}
-              />
-            </span>
+      {dirty && (
+        <div className="pwi-settings-sticky-bar" role="status">
+          <span className="muted">{t("pws.settingsUnsavedBar")}</span>
+          <div className="pwi-settings-sticky-bar-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={discard} disabled={saving}>
+              {t("pws.discardSettings")}
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving || !onUpdateProvider}>
+              {saving ? t("pws.saving") : t("pws.saveSettings")}
+            </button>
           </div>
         </div>
-      </div>
+      )}
+      {msg && (
+        <div className={msg.ok ? "pwi-settings-msg pwi-settings-msg--ok" : "pwi-settings-msg pwi-settings-msg--err"} style={{ padding: "8px 12px" }}>
+          {msg.text}
+        </div>
+      )}
     </>
   );
 }
@@ -1239,6 +1407,7 @@ function TabSettings({
 function DetailPanel({
   item, apiBase, defaultProvider, onSetDisabled, onRemoveProvider, onDeselect, onUpdateProvider,
   usageTotals, quotaReport, oauth, modelCount, availableModels, selectedModels,
+  modelsLoading, modelsLoadFailed, onRetryModels,
   onTestDone, accounts, keys, busy, loginHint, authHandlers, onSettingsDirtyChange,
 }: {
   item: WorkspaceItem;
@@ -1254,6 +1423,9 @@ function DetailPanel({
   modelCount: number;
   availableModels: string[];
   selectedModels: string[];
+  modelsLoading?: boolean;
+  modelsLoadFailed?: boolean;
+  onRetryModels?: () => void;
   onTestDone?: () => void;
   accounts?: OAuthAccountRow[];
   keys?: ApiKeyRow[];
@@ -1329,6 +1501,7 @@ function DetailPanel({
       case "overview": return (
         <TabOverview
           item={item}
+          apiBase={apiBase}
           usageTotals={usageTotals}
           quotaReport={quotaReport}
           onSelectTab={requestTab}
@@ -1347,15 +1520,18 @@ function DetailPanel({
           modelCount={modelCount}
           availableModels={availableModels}
           selectedModels={selectedModels}
+          modelsLoading={modelsLoading}
+          modelsLoadFailed={modelsLoadFailed}
+          onRetryModels={onRetryModels}
         />
       );
       case "usage": return <TabUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} />;
       case "settings": return (
         <TabSettings
           item={item}
+          apiBase={apiBase}
           oauth={oauth}
           availableModels={availableModels}
-          onSetDisabled={onSetDisabled}
           onUpdateProvider={onUpdateProvider}
           onDirtyChange={setSettingsDirty}
         />
@@ -1369,7 +1545,7 @@ function DetailPanel({
       <div className="providers-workspace-detail-head">
         <button
           type="button"
-          className="btn btn-ghost btn-sm pwi-back-overview pwi-chrome-btn"
+          className="btn btn-ghost btn-sm pwi-back-overview"
           onClick={() => {
             if (tab === "settings" && settingsDirty && !window.confirm(t("pws.settingsUnsavedLeave"))) return;
             onDeselect();
@@ -1416,7 +1592,7 @@ function DetailPanel({
             </span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm pwi-chrome-btn"
+              className="btn btn-ghost btn-sm"
               onClick={() => void testConnection()}
               disabled={testing || item.disabled}
               aria-label={t("pws.testConnection")}
@@ -1547,7 +1723,7 @@ function EmptyState({
 // ---------------------------------------------------------------------------
 
 function JsonEditorPanel({
-  draft, isDirty, onDraftChange, onSave, onRequestClose, onRestore, saving,
+  draft, isDirty, onDraftChange, onSave, onRequestClose, onRestore, saving, saveMessage,
 }: {
   draft: string;
   isDirty: boolean;
@@ -1557,19 +1733,37 @@ function JsonEditorPanel({
   onRequestClose: () => void;
   onRestore: () => void;
   saving?: boolean;
+  saveMessage?: { ok: boolean; text: string } | null;
 }) {
   const t = useT();
   const [parseError, setParseError] = useState<string | null>(null);
+  const [errorLine, setErrorLine] = useState<number | null>(null);
   const lineCount = Math.max(1, draft.split(/\r\n|\r|\n/).length);
+  const invalid = jsonErrorLocation(draft) !== null;
+
+  useEffect(() => {
+    const loc = jsonErrorLocation(draft);
+    if (!loc) {
+      setParseError(null);
+      setErrorLine(null);
+      return;
+    }
+    setErrorLine(loc.line);
+    setParseError(t("pws.jsonInvalid", {
+      where: t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }),
+    }));
+  }, [draft, t]);
 
   const formatJson = () => {
     try {
       onDraftChange(JSON.stringify(JSON.parse(draft), null, 2));
       setParseError(null);
+      setErrorLine(null);
     } catch {
       const loc = jsonErrorLocation(draft);
+      setErrorLine(loc?.line ?? 1);
       setParseError(t("pws.jsonInvalid", {
-        where: loc ? t("pws.jsonInvalidAt", { line: loc.line }) : "",
+        where: loc ? t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }) : "",
       }));
     }
   };
@@ -1577,21 +1771,38 @@ function JsonEditorPanel({
   const saveWithValidation = () => {
     const loc = jsonErrorLocation(draft);
     if (loc) {
+      setErrorLine(loc.line);
       setParseError(t("pws.jsonInvalid", {
-        where: t("pws.jsonInvalidAt", { line: loc.line }),
+        where: t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }),
       }));
       return;
     }
     setParseError(null);
+    setErrorLine(null);
     onSave();
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!saving && isDirty && !invalid) saveWithValidation();
+      }
+      if (e.key === "Escape" && !saving) {
+        e.preventDefault();
+        onRequestClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
     <div className="pwi-json-panel" role="region" aria-label={t("prov.editJson")}>
       <div className="pwi-json-panel-toolbar">
         <button
           type="button"
-          className="btn btn-ghost btn-sm pwi-back-overview pwi-chrome-btn"
+          className="btn btn-ghost btn-sm pwi-back-overview"
           onClick={onRequestClose}
           aria-label={t("pws.backToAll")}
           title={t("pws.backToAll")}
@@ -1607,16 +1818,28 @@ function JsonEditorPanel({
               {t("pws.jsonUnsavedBadge")}
             </span>
           )}
-          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={formatJson} disabled={saving}>
+          <button type="button" className="btn btn-ghost" onClick={formatJson} disabled={saving}>
             {t("pws.jsonFormat")}
           </button>
-          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onRestore} disabled={saving || !isDirty}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onRestore}
+            disabled={saving || !isDirty}
+            title={t("pws.jsonRestoreTitle")}
+          >
             {t("pws.jsonRestore")}
           </button>
-          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onRequestClose} disabled={saving}>
+          <button type="button" className="btn btn-ghost" onClick={onRequestClose} disabled={saving}>
             {t("pws.jsonDiscard")}
           </button>
-          <button type="button" className="btn btn-primary pwi-save-btn" onClick={saveWithValidation} disabled={saving || !isDirty}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={saveWithValidation}
+            disabled={saving || !isDirty || invalid}
+            title={invalid ? t("pws.jsonInvalid", { where: "" }) : undefined}
+          >
             {saving ? t("common.saving") : t("common.save")}
           </button>
         </div>
@@ -1625,19 +1848,31 @@ function JsonEditorPanel({
       {parseError && (
         <div className="pwi-json-error" role="alert">{parseError}</div>
       )}
+      {saveMessage && (
+        <div
+          className={saveMessage.ok ? "pwi-json-error pwi-json-error--ok" : "pwi-json-error"}
+          role="status"
+        >
+          {saveMessage.text}
+        </div>
+      )}
       <div className="pwi-json-editor">
         <pre className="pwi-json-gutter" aria-hidden="true">
-          {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+          {Array.from({ length: lineCount }, (_, i) => i + 1).map(n => (
+            <span key={n} className={errorLine === n ? "pwi-json-gutter-line pwi-json-gutter-line--err" : "pwi-json-gutter-line"}>
+              {n}{"\n"}
+            </span>
+          ))}
         </pre>
         <textarea
-          className="input mono pwi-json-textarea"
+          className={`input mono pwi-json-textarea${invalid ? " pwi-json-textarea--invalid" : ""}`}
           value={draft}
           onChange={e => {
             onDraftChange(e.target.value);
-            if (parseError) setParseError(null);
           }}
           spellCheck={false}
           aria-label={t("prov.editJson")}
+          aria-invalid={invalid}
           disabled={saving}
         />
       </div>
@@ -1655,6 +1890,16 @@ function JsonUnsavedDialog({
   onCancel: () => void;
 }) {
   const t = useT();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (!busy) onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
   return (
     <div
       className="modal-overlay"
@@ -1667,13 +1912,13 @@ function JsonUnsavedDialog({
         <h3 id="pwi-json-unsaved-title" className="pwi-json-unsaved-title">{t("pws.jsonUnsavedTitle")}</h3>
         <p className="muted pwi-json-unsaved-desc">{t("pws.jsonUnsavedDesc")}</p>
         <div className="pwi-json-unsaved-actions">
-          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
             {t("pws.jsonKeepEditing")}
           </button>
-          <button type="button" className="btn btn-ghost pwi-chrome-btn pwi-json-discard-btn" onClick={onDiscard} disabled={busy}>
+          <button type="button" className="btn btn-danger" onClick={onDiscard} disabled={busy}>
             {t("pws.jsonDiscard")}
           </button>
-          <button type="button" className="btn btn-primary pwi-save-btn" onClick={onSave} disabled={busy}>
+          <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
             {busy ? t("common.saving") : t("common.save")}
           </button>
         </div>
@@ -1692,6 +1937,16 @@ function RemoveProviderDialog({
 }) {
   const t = useT();
   const display = formatProviderDisplayName(name);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   return (
     <div
       className="modal-overlay"
@@ -1706,7 +1961,7 @@ function RemoveProviderDialog({
         </h3>
         <p className="muted pwi-remove-confirm-desc">{t("pws.removeConfirmDesc")}</p>
         <div className="pwi-remove-confirm-actions">
-          <button type="button" className="btn btn-ghost pwi-chrome-btn" onClick={onCancel}>
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
             {t("common.cancel")}
           </button>
           <button type="button" className="btn pwi-remove-confirm-danger" onClick={onConfirm}>
@@ -1733,6 +1988,7 @@ function OverviewPanel({
   quotaReports?: Record<string, ProviderQuotaReportView>;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const providersByName = useMemo(
     () => new Map(
       [...sections.ready, ...sections.needsSetup, ...sections.disabled].map(item => [item.name, item]),
@@ -1757,7 +2013,8 @@ function OverviewPanel({
     }[] = [];
     for (const [name, report] of Object.entries(quotaReports)) {
       const item = providersByName.get(name) ?? null;
-      if (item?.disabled) continue;
+      // Skip orphan reports (e.g. hidden duplicate chatgpt) and disabled providers.
+      if (!item || item.disabled) continue;
       const quota = accountQuotaFromReport(report);
       if (!quota) continue;
       rows.push({ name, item, quota, report, urgency: maxQuotaUtilisation(quota) });
@@ -1776,7 +2033,7 @@ function OverviewPanel({
           <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>
           <button
             type="button"
-            className="btn btn-ghost pwi-edit-json-btn pwi-chrome-btn"
+            className="btn btn-ghost pwi-edit-json-btn pwi-link-btn"
             onClick={onEditConfig}
             aria-label={t("prov.editJson")}
             title={t("pws.editJsonDesc")}
@@ -1874,7 +2131,7 @@ function OverviewPanel({
                   cls="providers-workspace-rail-icon"
                 />
                 <span className="pwi-recent-name">{label}</span>
-                <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests) })}</span>
+                <span className="muted">{t("pws.requestsCount", { count: formatRequestCount(entry.requests, locale) })}</span>
                 <IconChevron style={{ width: 13, height: 13, color: "var(--muted)" }} aria-hidden="true" />
               </button>
             );
@@ -1916,6 +2173,8 @@ export default function ProviderWorkspace({
   onEditConfig, jsonEditor,
   onSetDisabled, onRemoveProvider, onUpdateProvider, quotaReports: quotaReportsProp = {}, oauthStatus = {},
   accountSets = {}, keyPools = {}, busyProvider = null, loginHint = null, authHandlers,
+  initialSelectedProvider = null,
+  onInitialProviderFocused,
 }: ProviderWorkspaceProps) {
   const t = useT();
   const [search, setSearch] = useState("");
@@ -1923,6 +2182,8 @@ export default function ProviderWorkspace({
   const [modelCounts, setModelCounts] = useState<ProviderModelCounts>({});
   const [availableModels, setAvailableModels] = useState<ProviderAvailableModels>({});
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
   /** Local quota fetch so overview does not depend solely on parent timing/HMR. */
   const [quotaReportsLocal, setQuotaReportsLocal] = useState<Record<string, ProviderQuotaReportView>>({});
@@ -1939,9 +2200,21 @@ export default function ProviderWorkspace({
   /** Local dirty latch — set on first textarea edit so prompts work even if parent baseline races. */
   const [jsonLocalDirty, setJsonLocalDirty] = useState(false);
   const [detailSettingsDirty, setDetailSettingsDirty] = useState(false);
+  const [jsonSaveMessage, setJsonSaveMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const jsonOpenPrev = useRef(false);
 
-  const sections = useMemo(() => buildProviderWorkspace(providers), [providers]);
+  const sections = useMemo(
+    () => buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers)),
+    [providers],
+  );
+
+  // Deep-link: select ChatGPT once when parent requests focus (legacy #codex-auth).
+  useEffect(() => {
+    if (!initialSelectedProvider) return;
+    if (!providers[initialSelectedProvider]) return;
+    setSelectedName(initialSelectedProvider);
+    onInitialProviderFocused?.();
+  }, [initialSelectedProvider, providers, onInitialProviderFocused]);
 
   const jsonOpen = !!jsonEditor?.open;
   const jsonDirty = jsonOpen && (!!jsonEditor?.isDirty || jsonLocalDirty);
@@ -2040,17 +2313,19 @@ export default function ProviderWorkspace({
           }>;
         };
         if (cancelled) return;
-        const next: Record<string, ProviderQuotaReportView> = {};
-        for (const report of data.reports ?? []) {
-          if (!report?.provider) continue;
-          next[report.provider] = {
-            label: report.label,
-            source: report.source,
-            updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
-            quota: report.quota,
-          };
-        }
-        setQuotaReportsLocal(next);
+        setQuotaReportsLocal(prev => {
+          const next = { ...prev };
+          for (const report of data.reports ?? []) {
+            if (!report?.provider) continue;
+            next[report.provider] = {
+              label: report.label,
+              source: report.source,
+              updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
+              quota: report.quota,
+            };
+          }
+          return next;
+        });
       } catch {
         /* parent prop may still supply data */
       }
@@ -2138,14 +2413,24 @@ export default function ProviderWorkspace({
   const attentionItems = useMemo(() => buildAttentionItems(sections, {}), [sections]);
 
   const fetchModelCounts = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsLoadFailed(false);
     try {
       const res = await fetch(`${apiBase}/api/selected-models`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        setModelsLoadFailed(true);
+        return;
+      }
       const data = await res.json();
       setModelCounts(countAvailableModels(data));
       setAvailableModels(parseAvailableModels(data));
       setSelectedModels(parseSelectedModels(data));
-    } catch { /* network unavailable */ }
+      setModelsLoadFailed(false);
+    } catch {
+      setModelsLoadFailed(true);
+    } finally {
+      setModelsLoading(false);
+    }
   }, [apiBase]);
 
   const fetchUsageTotals = useCallback(async () => {
@@ -2176,7 +2461,7 @@ export default function ProviderWorkspace({
     if (selectedName === name) setSelectedName(null);
   };
 
-  const total = Object.keys(providers).length;
+  const total = Object.keys(hideRedundantChatGptForwardProviders(providers)).length;
 
   if (total === 0) {
     return <EmptyState onAddProvider={onAddProvider} />;
@@ -2192,6 +2477,14 @@ export default function ProviderWorkspace({
     { id: "needs-setup", title: t("pws.groupNeedsSetup", { count: filteredSections.needsSetup.length }), items: filteredSections.needsSetup, dotCls: "pwi-dot--warning" },
     { id: "disabled", title: t("pws.groupDisabled", { count: filteredSections.disabled.length }), items: filteredSections.disabled, dotCls: "pwi-dot--inactive" },
   ];
+  const duplicateDisplayNames = (() => {
+    const counts = new Map<string, number>();
+    for (const item of [...sections.ready, ...sections.needsSetup, ...sections.disabled]) {
+      const label = formatProviderDisplayName(item.name);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([label]) => label));
+  })();
 
   return (
     <div className="providers-workspace-root">
@@ -2201,7 +2494,7 @@ export default function ProviderWorkspace({
           <div className="pwi-rail-header-actions">
             <button
               type="button"
-              className="btn btn-ghost btn-sm pwi-rail-add-btn pwi-chrome-btn"
+              className="btn btn-primary btn-sm pwi-rail-add-btn"
               onClick={() => onAddProvider()}
               aria-label={t("modal.add")}
               title={t("modal.add")}
@@ -2343,11 +2636,42 @@ export default function ProviderWorkspace({
             )}
           </div>
         </div>
-        <div className="providers-workspace-rail-list" role="listbox" aria-label={t("pws.providersAria")}>
+        <div
+          className="providers-workspace-rail-list"
+          role="listbox"
+          aria-label={t("pws.providersAria")}
+          tabIndex={0}
+          onKeyDown={e => {
+            const options = Array.from(
+              e.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'),
+            );
+            if (options.length === 0) return;
+            const active = document.activeElement as HTMLElement | null;
+            const idx = options.findIndex(el => el === active || el.contains(active));
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const delta = e.key === "ArrowDown" ? 1 : -1;
+              const next = idx < 0
+                ? (delta > 0 ? 0 : options.length - 1)
+                : (idx + delta + options.length) % options.length;
+              options[next]?.focus();
+              return;
+            }
+            if (e.key === "Home") {
+              e.preventDefault();
+              options[0]?.focus();
+              return;
+            }
+            if (e.key === "End") {
+              e.preventDefault();
+              options[options.length - 1]?.focus();
+            }
+          }}
+        >
           {Object.values(filteredSections).every(items => items.length === 0) && (
-            <span className="muted" style={{ fontSize: 12, padding: "8px 4px" }}>
+            <span className="muted" style={{ fontSize: 12, padding: "8px 4px" }} role="status">
               {search
-                ? t("pws.noResults", { search })
+                ? t("pws.noSearchResults")
                 : filterActive
                   ? t("pws.noMatchFilters")
                   : t("pws.noProvidersConfigured")}
@@ -2366,6 +2690,7 @@ export default function ProviderWorkspace({
                     selected={!jsonOpen && selectedName === item.name}
                     modelCount={modelCounts[item.name]}
                     isDefault={defaultProvider === item.name}
+                    showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name))}
                     onClick={() => selectProvider(item.name)} />
                 ))}
               </div>
@@ -2386,12 +2711,21 @@ export default function ProviderWorkspace({
           <JsonEditorPanel
             draft={jsonEditor.draft}
             isDirty={jsonDirty}
-            onDraftChange={onJsonDraftChange}
+            onDraftChange={(value) => {
+              setJsonSaveMessage(null);
+              onJsonDraftChange(value);
+            }}
             onSave={() => { void (async () => {
               setJsonSaving(true);
+              setJsonSaveMessage(null);
               try {
                 const ok = await jsonEditor.onSave();
-                if (ok) setJsonLocalDirty(false);
+                if (ok) {
+                  setJsonLocalDirty(false);
+                  setJsonSaveMessage({ ok: true, text: t("pws.jsonSaved") });
+                } else {
+                  setJsonSaveMessage({ ok: false, text: t("pws.jsonSaveFailed") });
+                }
               } finally {
                 setJsonSaving(false);
               }
@@ -2400,9 +2734,18 @@ export default function ProviderWorkspace({
             onRestore={() => {
               jsonEditor.onRestore?.();
               setJsonLocalDirty(false);
+              setJsonSaveMessage(null);
             }}
             saving={jsonSaving}
+            saveMessage={jsonSaveMessage}
           />
+        ) : selectedName && !selectedItem ? (
+          <div className="pwi-provider-gone" role="alert">
+            <p>{t("pws.providerGone")}</p>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedName(null)}>
+              {t("pws.providerGoneAction")}
+            </button>
+          </div>
         ) : selectedItem ? (
           <DetailPanel
             item={selectedItem}
@@ -2419,6 +2762,9 @@ export default function ProviderWorkspace({
             modelCount={modelCounts[selectedItem.name] ?? 0}
             availableModels={availableModels[selectedItem.name] ?? []}
             selectedModels={selectedModels[selectedItem.name] ?? []}
+            modelsLoading={modelsLoading}
+            modelsLoadFailed={modelsLoadFailed}
+            onRetryModels={() => { void fetchModelCounts(); }}
             onTestDone={() => { void fetchModelCounts(); }}
             accounts={accountSets[selectedItem.name]?.accounts}
             keys={keyPools[selectedItem.name]}

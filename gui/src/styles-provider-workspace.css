@@ -11,7 +11,7 @@
 .providers-workspace-root {
   display: grid;
   /* Wider rail so model counts + status + chevron stay aligned without crowding names */
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: minmax(380px, 28vw) 1fr;
   min-height: 100%;
   height: 100%;
   width: 100%;
@@ -86,11 +86,11 @@
    [Icon] name (flex) | badge (fixed) | models (right) | trail star+dot | chevron */
 .providers-workspace-rail-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 4.25rem 4.5rem 22px 14px;
+  grid-template-columns: 26px minmax(0, 1fr) 3.5rem 3.75rem 22px 14px;
   align-items: center;
   column-gap: 8px;
   padding: 11px 12px 11px 14px;
-  min-height: 34px;
+  min-height: 40px;
   border-radius: 0;
   border: none;
   border-bottom: 1px solid var(--border-soft);
@@ -153,10 +153,28 @@
 .providers-workspace-rail-name {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   font-weight: 500;
   font-size: 13px;
+  line-height: 1.2;
+}
+
+.providers-workspace-rail-name-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providers-workspace-rail-name-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 450;
+  color: var(--muted);
+  letter-spacing: 0.01em;
 }
 
 .providers-workspace-rail-badges {
@@ -1128,10 +1146,10 @@
   font: inherit;
   position: relative;
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -1271,21 +1289,33 @@
   margin: 0;
   cursor: pointer;
 }
-/* Round on/off indicator — not a checkbox chip; hollow = off, filled = on */
+/* Round radio-like indicator replaced with checkbox chip (multi-select per category). */
 .pwi-rail-filter-toggle {
   width: 14px;
   height: 14px;
-  border-radius: 50%;
+  border-radius: 3px;
   border: 1.5px solid color-mix(in oklab, var(--border) 90%, var(--muted));
   background: transparent;
   flex-shrink: 0;
   box-sizing: border-box;
+  position: relative;
   transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
 .pwi-rail-filter-option--on .pwi-rail-filter-toggle {
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 2.5px var(--surface);
+  box-shadow: none;
+}
+.pwi-rail-filter-option--on .pwi-rail-filter-toggle::after {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid light-dark(#fff, #111);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
 }
 .pwi-rail-filter-option .pwi-dot {
   align-self: center;
@@ -1370,41 +1400,32 @@
   margin-right: 2px;
   white-space: nowrap;
 }
-/* Flat toolbar actions — link affordance without pill boxes */
-.pwi-chrome-btn.btn,
-.pwi-chrome-btn.btn-ghost {
+/* Tertiary text-link actions only (nav / secondary affordances).
+   Primary/secondary keep global .btn-primary / .btn-ghost / .btn-danger. */
+.pwi-link-btn,
+.pwi-chrome-btn.pwi-link-btn {
   background: transparent !important;
   border-color: transparent !important;
-  box-shadow: none;
-  color: var(--text);
+  box-shadow: none !important;
+  color: var(--accent);
   font-weight: 550;
   text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
+  text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
+  padding-inline: 4px;
 }
-.pwi-chrome-btn.btn:hover:not(:disabled),
-.pwi-chrome-btn.btn-ghost:hover:not(:disabled) {
-  background: transparent !important;
-  border-color: transparent !important;
+.pwi-link-btn:hover:not(:disabled),
+.pwi-chrome-btn.pwi-link-btn:hover:not(:disabled) {
   color: var(--accent-hover);
   text-decoration-color: var(--accent-hover);
+  background: transparent !important;
 }
 .pwi-chrome-btn.btn:focus-visible,
-.pwi-chrome-btn.btn-ghost:focus-visible {
+.pwi-chrome-btn.btn-ghost:focus-visible,
+.pwi-link-btn:focus-visible {
   outline: 2px solid var(--accent-ring);
   outline-offset: 2px;
-}
-.pwi-chrome-btn.btn-primary,
-.pwi-auth-actions .btn-primary.pwi-chrome-btn {
-  color: var(--accent) !important;
-  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
-}
-.pwi-chrome-btn.btn-primary:hover:not(:disabled),
-.pwi-auth-actions .btn-primary.pwi-chrome-btn:hover:not(:disabled) {
-  color: var(--accent-hover) !important;
-  text-decoration-color: var(--accent-hover);
-  background: transparent !important;
 }
 .pwi-remove-btn {
   color: var(--red, #c44) !important;
@@ -1495,45 +1516,136 @@
   gap: 12px;
   padding-top: 4px;
 }
-.pwi-settings-actions .pwi-save-btn.btn-primary,
-.pwi-settings-actions .pwi-save-btn,
-.pwi-json-panel-actions .pwi-save-btn,
-.pwi-json-unsaved-actions .pwi-save-btn {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  color: var(--accent) !important;
-  padding-inline: 0 !important;
-  font-weight: 650;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-}
-.pwi-settings-actions .pwi-save-btn:hover:not(:disabled),
-.pwi-json-panel-actions .pwi-save-btn:hover:not(:disabled),
-.pwi-json-unsaved-actions .pwi-save-btn:hover:not(:disabled) {
-  color: var(--accent-hover) !important;
-  background: transparent !important;
-  text-decoration-color: var(--accent-hover);
-}
 .pwi-settings-actions .pwi-save-btn:disabled,
 .pwi-json-panel-actions .pwi-save-btn:disabled,
 .pwi-json-unsaved-actions .pwi-save-btn:disabled {
   opacity: 0.45;
 }
-.pwi-json-panel-actions .pwi-chrome-btn,
-.pwi-json-unsaved-actions .pwi-chrome-btn {
-  padding-inline: 6px !important;
+.pwi-json-unsaved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
-.pwi-json-discard-btn {
-  color: var(--amber) !important;
-  text-decoration-color: color-mix(in oklab, var(--amber) 45%, transparent) !important;
+.pwi-settings-sticky-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
 }
-.pwi-json-discard-btn:hover:not(:disabled) {
-  color: var(--amber) !important;
-  text-decoration-color: var(--amber) !important;
+.pwi-settings-sticky-bar-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
+.pwi-advanced-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+.pwi-advanced-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  margin: 0;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+.pwi-advanced-details > summary::-webkit-details-marker { display: none; }
+.pwi-advanced-details > summary::before {
+  content: "▸";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--raised);
+  border: 1px solid var(--border-soft);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  transition: transform 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.pwi-advanced-details[open] > summary::before {
+  transform: rotate(90deg);
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+}
+.pwi-advanced-details > summary:hover {
+  background: var(--hover);
+  color: var(--accent-hover);
+}
+.pwi-advanced-details > summary:hover::before {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+}
+.pwi-advanced-details > summary:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+.pwi-advanced-details .pwi-settings-field {
+  margin: 8px 12px 12px;
+}
+.add-prov-advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+.add-prov-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  margin: 0;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+.add-prov-advanced > summary::-webkit-details-marker { display: none; }
+.add-prov-advanced > summary::before {
+  content: "▸";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--raised);
+  border: 1px solid var(--border-soft);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+}
+.add-prov-advanced[open] > summary::before { content: "▾"; color: var(--accent); }
+.add-prov-advanced > summary:hover {
+  background: var(--hover);
+  color: var(--accent-hover);
+}
+
 .providers-workspace-model-meta .badge,
 .pwi-kv .badge.badge-muted {
   background: none !important;
@@ -1557,57 +1669,16 @@
   color: var(--green);
 }
 .providers-workspace-model-meta .btn-ghost {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  color: var(--text);
   padding-inline: 6px !important;
   font-weight: 550;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 32%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
 }
-.providers-workspace-model-meta .btn-ghost:hover:not(:disabled) {
-  background: transparent !important;
-  color: var(--accent-hover);
-  text-decoration-color: var(--accent-hover);
-}
-.pwi-section-meta-row .btn-ghost,
-.pwi-auth-actions .btn-ghost,
-.pwi-auth-actions .btn-primary,
-.pwi-auth-wait .btn-ghost,
 .pwi-auth-row-remove.btn-ghost {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--text) 28%, transparent);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-  font-weight: 550;
+  color: var(--red);
+  border-color: color-mix(in oklab, var(--red) 30%, transparent);
 }
-.pwi-auth-actions .btn-primary {
-  color: var(--accent) !important;
-  padding-inline: 6px !important;
-  text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
-}
-.pwi-auth-actions .btn-primary:hover:not(:disabled) {
-  color: var(--accent-hover) !important;
-  background: transparent !important;
-  text-decoration-color: var(--accent-hover);
-}
-.pwi-section-meta-row .btn-ghost,
-.pwi-auth-actions .btn-ghost,
-.pwi-auth-wait .btn-ghost {
-  color: var(--text);
-}
-.pwi-section-meta-row .btn-ghost:hover:not(:disabled),
-.pwi-auth-actions .btn-ghost:hover:not(:disabled),
-.pwi-auth-wait .btn-ghost:hover:not(:disabled) {
-  color: var(--accent-hover);
-  background: transparent !important;
-  text-decoration-color: var(--accent-hover);
+.pwi-auth-row-remove.btn-ghost:hover:not(:disabled) {
+  background: var(--red-soft);
+  color: var(--red);
 }
 .pwi-auth-add {
   display: flex;
@@ -1615,8 +1686,8 @@
   justify-content: flex-start;
   gap: 7px;
   width: auto;
-  padding: 6px 0;
-  margin-top: 4px;
+  padding: 0;
+  margin-top: 0;
   border: none;
   border-radius: 0;
   background: none;
@@ -1644,8 +1715,8 @@
 .pwi-auth-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 8px 0 0;
+  gap: 10px;
+  padding: 10px 0 0;
   background: none;
 }
 .pwi-auth-section .pwi-auth-body {
@@ -1832,6 +1903,12 @@
   flex-wrap: wrap;
   flex-shrink: 0;
   margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 0 8px;
+  background: color-mix(in oklab, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
 }
 .pwi-json-panel-actions {
   display: flex;
@@ -2097,6 +2174,9 @@
   padding: 11px 0;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
 }
+.pwi-kv-row:last-child {
+  border-bottom: none;
+}
 .pwi-kv-row dt {
   margin: 0;
   font-size: 12px;
@@ -2227,14 +2307,13 @@
 }
 .pwi-stats-usage-link {
   justify-content: space-between;
-  margin: 10px 0 0;
-  padding: 8px 0 0;
+  margin: 14px 0 0;
+  padding: 0;
   width: 100%;
   font-size: 12.5px;
   color: var(--accent);
   gap: 6px;
   border: none !important;
-  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent) !important;
   border-radius: 0;
   background: transparent !important;
   box-shadow: none !important;
@@ -2243,13 +2322,19 @@
   text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
   text-underline-offset: 3px;
 }
+/* When there are no stat rows, keep a single divider above the usage link. */
+.pwi-stats-usage-link--ruled {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent) !important;
+}
 .pwi-stats-usage-link:hover:not(:disabled) {
   background: transparent !important;
   color: var(--accent-hover);
   text-decoration-color: var(--accent-hover);
 }
 .pwi-notes-block {
-  margin-top: 18px;
+  margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
 }
@@ -2359,7 +2444,8 @@
 }
 .quota-stacked-bar-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Fixed used-column so longer status copy cannot shrink sibling bars. */
+  grid-template-columns: minmax(0, 1fr) 7.25rem;
   align-items: center;
   gap: 10px;
 }
@@ -2374,6 +2460,73 @@
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  text-align: right;
+}
+.quota-stacked-used--warn {
+  color: var(--amber);
+  font-weight: 600;
+}
+.quota-stacked-row--warn .quota-stacked-limit {
+  color: var(--amber);
+}
+.quota-stacked-limit-reached {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--amber);
+}
+.quota-val--warn {
+  color: var(--amber);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.providers-workspace-row--stack {
+  align-items: flex-start;
+  flex-direction: column;
+}
+.providers-workspace-row--stack .providers-workspace-row-label {
+  width: 100%;
+}
+.pwi-auth-next-session {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.codex-account-pool--embedded .pwi-auth-account-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.codex-account-pool--embedded .pwi-auth-method-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--muted);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  user-select: none;
 }
 
 .pwi-auth-subsection {
@@ -2822,4 +2975,209 @@
   .providers-workspace-tab {
     flex: 0 0 auto;
   }
+}
+
+/* ChatGPT account pool embedded in provider Overview Authentication */
+.codex-account-pool--embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.codex-account-pool--embedded .pwi-auth-list {
+  margin: 0;
+  border-top: none;
+  padding-top: 0;
+  gap: 6px;
+}
+.codex-account-pool--embedded .pwi-auth-add {
+  margin-top: 0;
+}
+.codex-account-pool--embedded .pwi-auth-status-row {
+  gap: 8px;
+  min-width: 0;
+}
+.codex-account-pool--embedded .pwi-auth-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+.codex-account-pool--embedded .pwi-auth-row-main:hover:not(:disabled) {
+  background: none;
+}
+.codex-account-pool-auto {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+}
+.codex-account-pool-auto-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.codex-account-pool-auto-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.codex-account-pool-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.codex-account-pool-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  flex: 1;
+  min-width: 0;
+}
+.codex-account-pool--embedded .card {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Compact empty ChatGPT account pool (standalone Codex Auth page). */
+.codex-pool-empty {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: 40px;
+  max-height: 100px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+.codex-pool-empty-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  min-width: 0;
+}
+.codex-add-account-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.codex-add-account-actions .btn {
+  min-width: 7rem;
+}
+.pwi-models-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+.pwi-models-empty-title {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.pwi-models-empty-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 40rem;
+}
+.pwi-models-empty-default {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.pwi-models-empty-default-label {
+  font-size: 12px;
+}
+.pwi-models-empty-default-value {
+  font-size: 13px;
+}
+.codex-account-pool--embedded .quota-stacked {
+  padding: 8px 12px 12px;
+}
+.codex-account-pool--embedded .quota-stacked-row {
+  gap: 6px;
+}
+
+.pwi-json-gutter-line { display: block; }
+.pwi-json-gutter-line--err {
+  color: var(--danger, #e5484d);
+  font-weight: 650;
+  background: color-mix(in oklab, var(--danger, #e5484d) 12%, transparent);
+}
+.pwi-json-textarea--invalid {
+  outline: 1px solid color-mix(in oklab, var(--danger, #e5484d) 55%, transparent);
+}
+.pwi-json-error--ok {
+  color: var(--green);
+  background: color-mix(in oklab, var(--green) 12%, transparent);
+  border-color: color-mix(in oklab, var(--green) 35%, transparent);
+}
+.add-prov-row-connect.btn-ghost {
+  border: 1px solid var(--border);
+  min-height: 40px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.pwi-inline-status {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pwi-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklab, var(--danger, #e5484d) 35%, transparent);
+  background: color-mix(in oklab, var(--danger, #e5484d) 10%, transparent);
+  color: var(--danger, #e5484d);
+  font-size: 13px;
+}
+
+.pwi-provider-gone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 28px 24px;
+  max-width: 28rem;
+}
+
+.pwi-provider-gone p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Expand toggle/switch hit targets without changing the visual control size. */
+.pwi-enabled-toggle .switch,
+.codex-account-pool .toggle {
+  position: relative;
+}
+.pwi-enabled-toggle .switch::before,
+.codex-account-pool .toggle::before {
+  content: "";
+  position: absolute;
+  inset: -10px -6px;
 }

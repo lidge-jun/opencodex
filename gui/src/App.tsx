@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
@@ -6,24 +6,26 @@ import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Debug from "./pages/Debug";
 import Usage from "./pages/Usage";
-import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "providers" | "models" | "subagents" | "logs" | "debug" | "usage" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "providers" | "models" | "subagents" | "logs" | "debug" | "usage" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "subagents", "logs", "debug", "usage", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "subagents", "logs", "debug", "usage", "api", "claude"]);
 
-function readPageFromHash(): Page {
+function readHashNavigation(): { page: Page; focusChatGptAuth: boolean } {
   const raw = location.hash.replace(/^#\/?/, "");
-  return VALID_PAGES.has(raw as Page) ? (raw as Page) : "dashboard";
+  // Legacy Codex Auth sidebar route → Providers → ChatGPT Authentication.
+  if (raw === "codex-auth") return { page: "providers", focusChatGptAuth: true };
+  if (VALID_PAGES.has(raw as Page)) return { page: raw as Page, focusChatGptAuth: false };
+  return { page: "dashboard", focusChatGptAuth: false };
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -37,7 +39,6 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "debug", tkey: "nav.debug", Icon: IconTerminal },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
-  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
   { id: "api", tkey: "nav.api", Icon: IconGlobe },
   { id: "claude", tkey: "nav.claude", Icon: IconSparkle },
 ];
@@ -57,7 +58,9 @@ function readStoredTheme(): Theme {
 }
 
 export default function App() {
-  const [page, setPageState] = useState<Page>(readPageFromHash);
+  const initialNav = readHashNavigation();
+  const [page, setPageState] = useState<Page>(initialNav.page);
+  const [focusChatGptAuth, setFocusChatGptAuth] = useState(initialNav.focusChatGptAuth);
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null);
   const { locale, setLocale } = useI18n();
@@ -71,14 +74,29 @@ export default function App() {
 
   useEffect(() => {
     // External navigation (hash edit, back/forward) also dismisses the mobile drawer.
-    const onHash = () => { setPageState(readPageFromHash()); setNavOpen(false); };
+    const onHash = () => {
+      const next = readHashNavigation();
+      setPageState(next.page);
+      if (next.focusChatGptAuth) setFocusChatGptAuth(true);
+      setNavOpen(false);
+      if (next.focusChatGptAuth && window.location.hash !== "#providers") {
+        history.replaceState(null, "", "#providers");
+      }
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Rewrite legacy #codex-auth on first paint so the Providers nav item stays active.
+  useEffect(() => {
+    if (focusChatGptAuth && window.location.hash === "#codex-auth") {
+      history.replaceState(null, "", "#providers");
+    }
+  }, [focusChatGptAuth]);
+
   useEffect(() => {
     const nextHash = `#${page}`;
-    if (window.location.hash !== nextHash) {
+    if (window.location.hash !== nextHash && window.location.hash !== "#codex-auth") {
       window.location.hash = page;
     }
   }, [page]);
@@ -105,6 +123,8 @@ export default function App() {
     const interval = setInterval(fetchRuntimeVersion, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
+
+  const clearChatGptAuthFocus = useCallback(() => setFocusChatGptAuth(false), []);
 
   const cycleTheme = () => setTheme(t => (t === "light" ? "dark" : t === "dark" ? "system" : "light"));
   const ThemeIcon = THEME_ICON[theme];
@@ -249,13 +269,18 @@ export default function App() {
       <main className="main" inert={navOpen}>
         <div className={`main-inner${page === "providers" ? " main-inner--providers" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
-          {page === "providers" && <Providers apiBase={API_BASE} />}
+          {page === "providers" && (
+            <Providers
+              apiBase={API_BASE}
+              focusChatGptAuth={focusChatGptAuth}
+              onChatGptAuthFocused={clearChatGptAuthFocus}
+            />
+          )}
           {page === "models" && <Models apiBase={API_BASE} />}
           {page === "subagents" && <Subagents apiBase={API_BASE} />}
           {page === "logs" && <Logs apiBase={API_BASE} />}
           {page === "debug" && <Debug apiBase={API_BASE} />}
           {page === "usage" && <Usage apiBase={API_BASE} />}
-          {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
           {page === "api" && <ApiKeys apiBase={API_BASE} />}
           {page === "claude" && <ClaudeCode apiBase={API_BASE} />}
         </div>

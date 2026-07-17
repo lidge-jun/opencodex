@@ -144,6 +144,37 @@ export function buildProviderWorkspace(
   return { ready, needsSetup, disabled };
 }
 
+/** True for the built-in ChatGPT passthrough (Codex login) surface. */
+export function isChatGptForwardProvider(name: string, p: WorkspaceProvider): boolean {
+  const id = name.toLowerCase();
+  if (id !== "openai" && id !== "chatgpt") return false;
+  if ((p.authMode ?? "").toLowerCase() !== "forward") return false;
+  if ((p.adapter ?? "").toLowerCase() !== "openai-responses") return false;
+  try {
+    const base = new URL(p.baseUrl).origin + new URL(p.baseUrl).pathname.replace(/\/+$/, "");
+    return base === "https://chatgpt.com/backend-api/codex";
+  } catch {
+    return (p.baseUrl ?? "").replace(/\/+$/, "") === "https://chatgpt.com/backend-api/codex";
+  }
+}
+
+/**
+ * Hide redundant `chatgpt` when canonical `openai` already covers the same
+ * ChatGPT passthrough. Backend may still keep both ids (OAuth scratch / images);
+ * the workspace should show one ChatGPT row.
+ */
+export function hideRedundantChatGptForwardProviders<T extends WorkspaceProvider>(
+  providers: Record<string, T>,
+): Record<string, T> {
+  const openai = providers.openai;
+  const chatgpt = providers.chatgpt;
+  if (!openai || !chatgpt) return providers;
+  if (!isChatGptForwardProvider("openai", openai)) return providers;
+  if (!isChatGptForwardProvider("chatgpt", chatgpt)) return providers;
+  const { chatgpt: _hidden, ...rest } = providers;
+  return rest;
+}
+
 // ---------------------------------------------------------------------------
 // Legacy aliases -- kept so any existing imports of the v1 names still compile.
 // ---------------------------------------------------------------------------
@@ -336,14 +367,23 @@ export function buildAttentionItems(
  * Format a raw request/token count for display.
  * Returns "—" when the value is undefined (data unavailable).
  */
-export function formatRequestCount(n: number | undefined): string {
+export function formatRequestCount(n: number | undefined, locale = "en"): string {
   if (n === undefined) return "\u2014";
+  const loc = locale.toLowerCase().slice(0, 2);
+  if (loc === "de") {
+    const trimDe = (s: string) => s.replace(/\.0+$/, "").replace(".", ",");
+    if (n >= 1_000_000_000) return `${trimDe((n / 1_000_000_000).toFixed(2))} Mrd.`;
+    if (n >= 1_000_000) return `${trimDe((n / 1_000_000).toFixed(1))} Mio.`;
+    if (n >= 1_000) return `${trimDe((n / 1_000).toFixed(1))} Tsd.`;
+    return String(n);
+  }
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2).replace(/\.?0+$/, "")}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
 
 /** Same as formatRequestCount but aliased for token quantities (same rules). */
-export function formatTokenCount(n: number | undefined): string {
-  return formatRequestCount(n);
+export function formatTokenCount(n: number | undefined, locale = "en"): string {
+  return formatRequestCount(n, locale);
 }

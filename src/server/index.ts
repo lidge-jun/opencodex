@@ -153,8 +153,16 @@ export function startServer(port?: number) {
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
   // adding/dropping models reaches existing configs on start — not just fresh installs.
   reconcileOAuthProviders(config);
-  // Ensure the ChatGPT passthrough provider exists so gpt-* models route correctly.
-  if (!config.providers["chatgpt"]) {
+  // Ensure a ChatGPT passthrough provider exists so gpt-* models route correctly.
+  // Prefer the canonical `openai` id; only seed `chatgpt` when nothing covers that surface yet
+  // (avoids a duplicate ChatGPT row next to the default openai forward provider).
+  const hasChatGptForward = Object.entries(config.providers).some(([name, p]) => {
+    const id = name.toLowerCase();
+    if (id !== "openai" && id !== "chatgpt") return false;
+    if (p.authMode !== "forward" || p.adapter !== "openai-responses") return false;
+    return p.baseUrl.replace(/\/+$/, "") === "https://chatgpt.com/backend-api/codex";
+  });
+  if (!hasChatGptForward) {
     upsertOAuthProvider(config, "chatgpt");
     saveConfig(config);
   }
