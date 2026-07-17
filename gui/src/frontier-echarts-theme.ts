@@ -572,7 +572,7 @@ export function buildFrontierChartOption(args: {
 }
 
 /** Preferred canvas height for bar charts (grows with row count). */
-export function frontierChartHeight(kind: FrontierChartKind, rowCount: number, _modelCount = rowCount): number {
+export function frontierChartHeight(kind: FrontierChartKind, rowCount: number): number {
   if (kind === "reasoning") {
     return 460;
   }

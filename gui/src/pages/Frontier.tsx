@@ -277,11 +277,7 @@ export default function Frontier() {
     });
   }, [active, chartRows, theme, locale, chartKind, modelColors]);
 
-  const chartModelCount = useMemo(
-    () => new Set(chartRows.map(r => r.model)).size,
-    [chartRows],
-  );
-  const chartHeight = frontierChartHeight(chartKind, chartRows.length, chartModelCount);
+  const chartHeight = frontierChartHeight(chartKind, chartRows.length);
 
   if (!active) {
     return <EmptyState title={t("frontier.empty")} />;
