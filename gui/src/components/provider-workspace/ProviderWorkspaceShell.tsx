@@ -23,6 +23,7 @@ import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
+import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 
 export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: boolean };
 
@@ -393,11 +394,14 @@ export default function ProviderWorkspaceShell({
               </button>
             </div>
           )
-        ) : (
-          <div className="pws-detail-placeholder">
-            <p className="muted">{t("pws.selectPrompt")}</p>
-          </div>
-        )}
+        ) : allItems.length > 0 ? (
+          <ProviderOverviewDashboard
+            sections={sections}
+            quotaReports={quotaReports}
+            usageTotals={usageTotals}
+            onSelectProvider={(name) => onSelect(name)}
+          />
+        ) : null}
       </main>
     </div>
   );

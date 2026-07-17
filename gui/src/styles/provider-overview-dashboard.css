@@ -1,0 +1,169 @@
+/* ProviderOverviewDashboard — aggregate overview (Phase 010) */
+
+.pws-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 4px 0;
+  max-width: 720px;
+}
+
+.pws-dashboard-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pws-dashboard-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.pws-dashboard-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+/* Summary cards */
+.pws-dashboard-summary {
+  display: flex;
+  gap: 12px;
+}
+
+.pws-dashboard-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg));
+  min-width: 90px;
+}
+
+.pws-dashboard-card-count {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pws-dashboard-card--ok .pws-dashboard-card-count { color: var(--green, #22c55e); }
+.pws-dashboard-card--warn .pws-dashboard-card-count { color: var(--yellow, #eab308); }
+.pws-dashboard-card--muted .pws-dashboard-card-count { color: var(--fg-muted, #888); }
+
+.pws-dashboard-card-label {
+  font-size: 0.75rem;
+  color: var(--fg-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Sections (Rate Limits / Recently Used) */
+.pws-dashboard-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pws-dashboard-section-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted, #888);
+  margin: 0;
+}
+
+/* Clickable provider rows */
+.pws-dashboard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pws-dashboard-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.pws-dashboard-row:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+.pws-dashboard-row-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pws-dashboard-row-icon img,
+.pws-dashboard-row-icon .provider-icon-mask {
+  width: 20px;
+  height: 20px;
+}
+
+.pws-dashboard-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pws-dashboard-row-name {
+  font-weight: 500;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pws-dashboard-row-meta {
+  font-size: 0.75rem;
+}
+
+.pws-dashboard-row-count {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.pws-dashboard-row-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--fg-muted, #888);
+  flex-shrink: 0;
+}
+
+/* QuotaBars inside the rate-limit rows */
+.pws-dashboard-row-bars {
+  grid-column: 1 / -1;
+  padding-left: 38px;
+  padding-top: 2px;
+}
+
+/* Responsive: stack cards on narrow viewports */
+@media (max-width: 600px) {
+  .pws-dashboard-summary {
+    flex-direction: column;
+  }
+  .pws-dashboard-card {
+    flex-direction: row;
+    justify-content: space-between;
+    min-width: 0;
+  }
+}
