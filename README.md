@@ -158,10 +158,26 @@ routing and catalog metadata for accounts and providers that can serve them.
   <img src="assets/codex-app-picker.png" alt="Codex App showing opencodex routed models with reasoning effort picker" width="480">
 </p>
 
-## ChatGPT account pool
+## OpenAI provider tiers
 
-Open **Codex Auth** in the dashboard to add pool accounts and choose which account should handle the
-next Codex session. opencodex keeps two separate behaviors:
+| Provider ID | Tier | Credential | Behavior |
+|---|---|---|---|
+| `openai` | Codex Direct | Main Codex login | Single account, no rotation |
+| `openai-multi` | Codex Multi-account | Main + added accounts | Affinity, quota, cooldown, failover |
+| `openai-apikey` | OpenAI API | API key/key pool | No Codex account routing |
+
+- The main Codex account participates in Multi-account rotation; it is not an out-of-band fallback.
+- Fresh installs default to Direct (`openai`).
+- Legacy configs with pool accounts are migrated to Multi-account on upgrade.
+- The API tier includes Pro virtual models (`gpt-5.6-sol-pro`, `gpt-5.6-terra-pro`,
+  `gpt-5.6-luna-pro`). At the wire level, each rewrites to its base model with
+  `reasoning.mode: "pro"`.
+- Official API metadata is 1,050,000 context tokens and 922,000 max input tokens.
+
+### Multi-account behavior
+
+Open **Codex Auth** in the dashboard to add accounts and choose which account should handle the
+next Codex session. opencodex keeps these behaviors:
 
 - **Existing sessions keep affinity.** A thread id is bound to the selected account and reused on
   later turns, so a long request or a mobile/SSH-attached session keeps using the same account.
