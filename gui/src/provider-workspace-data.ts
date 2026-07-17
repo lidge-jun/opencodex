@@ -171,8 +171,8 @@ export function hideRedundantChatGptForwardProviders<T extends WorkspaceProvider
   if (!openai || !chatgpt) return providers;
   if (!isChatGptForwardProvider("openai", openai)) return providers;
   if (!isChatGptForwardProvider("chatgpt", chatgpt)) return providers;
-  const { chatgpt, ...rest } = providers;
-  void chatgpt;
+  const rest = { ...providers };
+  delete rest.chatgpt;
   return rest;
 }
 
