@@ -176,7 +176,7 @@ describe("provider registry parity", () => {
   test("Anthropic API-key provider mirrors the OAuth entry's models on the key flow", () => {
     const anthropicOauth = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"]).toMatchObject({
-      label: "Anthropic (API key)",
+      label: "Anthropic Claude (API key)",
       adapter: "anthropic",
       baseUrl: "https://api.anthropic.com",
       dashboardUrl: "https://console.anthropic.com/settings/keys",
