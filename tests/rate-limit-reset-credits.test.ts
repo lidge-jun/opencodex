@@ -133,7 +133,7 @@ describe("rate-limit reset credits", () => {
     });
 
     it("does not exclude team or workspace plans from ticket badges", async () => {
-      const source = await Bun.file("gui/src/pages/CodexAuth.tsx").text();
+      const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
       expect(source).not.toContain("isWorkspaceAccount");
       expect(source).not.toContain("Not available for workspace accounts");
       expect(source).toContain("if (credits === undefined) return null;");
@@ -150,7 +150,7 @@ describe("rate-limit reset credits", () => {
     });
 
     it("renders reset tickets beside next-session badges instead of replacing them", async () => {
-      const source = await Bun.file("gui/src/pages/CodexAuth.tsx").text();
+      const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
       expect(source).toContain("className=\"card-badges\"");
       expect(source).toContain("<TicketBadge t={t} account={a} onClick={() => openResetPopup(a)} />");
       expect(source).toContain("{isNext(a.id) && !a.needsReauth && <span className=\"badge badge-primary\">{t(\"codexAuth.nextSession\")}</span>}");

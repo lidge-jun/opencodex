@@ -291,7 +291,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "anthropic-apikey",
-    label: "Anthropic Claude",
+    label: "Anthropic (API key)",
     adapter: "anthropic",
     baseUrl: "https://api.anthropic.com",
     authKind: "key",
