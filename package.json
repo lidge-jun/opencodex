@@ -46,7 +46,10 @@
     "prepublishOnly": "bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
-    "prepush": "bun run typecheck && bun run test && bun run privacy:scan",
+    "prepush": "bun run typecheck && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
+    "doctor:gui": "cd gui && bun run doctor",
+    "doctor:gui:full": "cd gui && bun run doctor:full",
+    "doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts",
     "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {

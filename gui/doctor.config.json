@@ -1,0 +1,9 @@
+{
+  "$schema": "https://react.doctor/schema/config.json",
+  "scope": "changed",
+  "base": "origin/main",
+  "blocking": "error",
+  "ignore": {
+    "files": ["dist/**", "node_modules/**"]
+  }
+}

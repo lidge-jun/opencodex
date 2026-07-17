@@ -28,3 +28,27 @@ bun run build:gui
 
 That command installs/builds this dashboard and copies the production assets into
 the package layout used by `ocx gui`.
+
+## Lint and React Doctor
+
+```bash
+cd gui
+bun run lint         # ESLint — hard local/CI gate (`GUI lint` in CI)
+bun run doctor       # React Doctor vs origin/main (changed-scope regressions)
+bun run doctor:full  # Full-project React Doctor scan
+```
+
+From the repo root:
+
+```bash
+bun run doctor:gui              # same as gui doctor
+bun run doctor:gui:full
+bun run setup:hooks             # pre-push runs doctor when gui/ changed
+```
+
+| Tool | Role |
+|------|------|
+| **ESLint** (`bun run lint`) | Hard gate in CI and expected before merge |
+| **React Doctor** (`bun run doctor`) | Extra React health check. Pre-push runs it only if `gui/` changed. CI workflow is advisory (does not fail the PR) |
+
+Fix ESLint errors first. Use `doctor` / `doctor:full` for deeper React triage.
