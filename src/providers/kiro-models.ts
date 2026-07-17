@@ -1,5 +1,9 @@
 export const KIRO_MODELS = [
   "kiro-auto",
+  // OpenAI GPT-5.6 (Kiro experimental, us-east-1) — added to official catalog 2026-07-13
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "claude-sonnet-5",
   "claude-opus-4.8",
   "claude-opus-4.7",
@@ -17,11 +21,12 @@ export const KIRO_MODELS = [
 ];
 
 // Per-model context windows as documented on Kiro's official model catalog
-// (https://kiro.dev/docs/models/ — "Quick comparison", page updated 2026-06-19).
-// claude-sonnet-5 is pre-seeded from Anthropic/OpenRouter 1M metadata until Kiro's
-// public catalog catches up.
+// (https://kiro.dev/docs/models/ — "Quick comparison", page updated 2026-07-14).
 // "Auto" is a router with no fixed window on Kiro's table, so it is intentionally omitted.
 export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gpt-5.6-sol": 272_000,
+  "gpt-5.6-terra": 272_000,
+  "gpt-5.6-luna": 272_000,
   "claude-sonnet-5": 1_000_000,
   "claude-opus-4.8": 1_000_000,
   "claude-opus-4.7": 1_000_000,

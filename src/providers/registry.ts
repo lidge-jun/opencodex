@@ -354,6 +354,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Import-first: reuses your installed kiro-cli login (no browser). Experimental third-party harness — see Kiro ToS.",
     models: KIRO_MODELS,
     defaultModel: "kiro-auto",
+    // Kiro speaks CodeWhisperer wire, not OpenAI-style GET /models. Keep the static
+    // catalog authoritative so a spurious 2xx from runtime.../models cannot drop seeded ids
+    // (e.g. newly listed GPT-5.6 tiers) via live-discovery reconciliation.
+    liveModels: false,
     // Per-model context metadata is maintained next to the Kiro model list.
     modelContextWindows: KIRO_MODEL_CONTEXT_WINDOWS,
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
