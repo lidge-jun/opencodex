@@ -1955,6 +1955,29 @@ function RemoveProviderDialog({
 // Overview panel
 // ---------------------------------------------------------------------------
 
+/** Reveal overlay scrollbar thumb only while the element is being scrolled. */
+function useScrollRevealScrollbar(timeoutMs = 900) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let timer = 0;
+    const onScroll = () => {
+      el.classList.add("is-scrolling");
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        el.classList.remove("is-scrolling");
+      }, timeoutMs);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      window.clearTimeout(timer);
+    };
+  }, [timeoutMs]);
+  return ref;
+}
+
 function OverviewPanel({
   sections, onSelect, onEditConfig, attentionItems, usageTotals, quotaReports = {},
 }: {
@@ -1967,6 +1990,7 @@ function OverviewPanel({
 }) {
   const t = useT();
   const { locale } = useI18n();
+  const overviewScrollRef = useScrollRevealScrollbar();
   const providersByName = useMemo(
     () => new Map(
       [...sections.ready, ...sections.needsSetup, ...sections.disabled].map(item => [item.name, item]),
@@ -2005,7 +2029,7 @@ function OverviewPanel({
   }, [quotaReports, providersByName]);
 
   return (
-    <div className="providers-workspace-overview">
+    <div className="providers-workspace-overview" ref={overviewScrollRef}>
       <header className="providers-workspace-overview-head">
         <div className="providers-workspace-overview-title-row">
           <h2 className="providers-workspace-overview-title">{t("pws.overviewTitle")}</h2>

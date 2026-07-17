@@ -339,6 +339,30 @@
   /* Extra left inset so Ready / Need setup / Disabled aren't flush to the rail edge */
   padding: 22px 28px 40px 40px;
   max-width: 920px;
+  /* Fill main column and scroll when content exceeds the viewport */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Thumb hidden until .is-scrolling (set while the user scrolls) */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.providers-workspace-overview.is-scrolling {
+  scrollbar-color: var(--border) transparent;
+}
+.providers-workspace-overview::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-color: transparent;
+}
+.providers-workspace-overview.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-color: var(--bg);
+}
+.providers-workspace-overview.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
 }
 
 .providers-workspace-overview-head {
