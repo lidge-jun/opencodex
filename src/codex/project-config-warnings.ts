@@ -213,7 +213,7 @@ export function dedupeRelatedProjectCodexWarnings(
   warnings: ProjectCodexConfigWarning[],
 ): ProjectCodexConfigWarning[] {
   const providerTables = new Set(
-    warnings.filter(w => w.code === "model_providers_table").map(w => w.detail),
+    warnings.flatMap(w => w.code === "model_providers_table" ? [w.detail] : []),
   );
   if (providerTables.size === 0) return warnings;
   return warnings.filter(w => {

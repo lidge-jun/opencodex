@@ -64,8 +64,8 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
   toolChoice?: OcxRequestOptions["toolChoice"],
   toWireName: (tool: Pick<OcxTool, "namespace" | "name">) => string = tool => namespacedToolName(tool.namespace, tool.name),
 ): string | undefined {
-  const visibleNames = tools
-    ?.filter(tool => toolChoiceAllows(tool, toolChoice))
-    .map(toWireName);
+  const visibleNames = tools?.flatMap(tool =>
+    toolChoiceAllows(tool, toolChoice) ? [toWireName(tool)] : [],
+  );
   return buildNonOpenAIToolCatalogNudgeFromNames(visibleNames);
 }

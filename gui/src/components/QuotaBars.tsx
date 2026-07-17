@@ -1,5 +1,8 @@
-import type { TFn } from "../i18n";
+import type { TFn } from "../i18n/shared";
 import { type AccountQuota, normalizeQuotaForPlan } from "../codex-quota-utils";
+
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+const DAY_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" });
 
 export default function QuotaBars({ quota, plan, threshold, t, className }: {
   quota: AccountQuota | null;
@@ -22,9 +25,9 @@ export default function QuotaBars({ quota, plan, threshold, t, className }: {
   if (rows.length === 0) return null;
   return (
     <div className={`quota-compact${className ? ` ${className}` : ""}`}>
-      {rows.map((row, index) => (
+      {rows.map(row => (
         <QuotaRow
-          key={`${row.label}-${index}`}
+          key={`${row.label}-${row.resetAt ?? "none"}-${row.percent}`}
           label={row.label}
           percent={row.percent}
           resetAt={row.resetAt}
@@ -66,11 +69,10 @@ function formatResetAt(resetAt: number | undefined, t: TFn): { day: string; time
   const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
   const date = new Date(ms);
   const now = new Date();
-  const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  const time = TIME_FORMATTER.format(date);
   const isToday = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate();
   if (isToday) return { day: t("codexAuth.today"), time };
-  const day = new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }).format(date);
-  return { day, time };
+  return { day: DAY_FORMATTER.format(date), time };
 }

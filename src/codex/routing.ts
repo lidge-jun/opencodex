@@ -211,11 +211,13 @@ function bindThreadAffinity(threadId: string, accountId: string, now: number): v
 }
 
 function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Date.now()): string[] {
-  const ids = (config.codexAccounts ?? [])
-    .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
-    .filter(account => !isCodexAccountInCooldown(account.id, now))
-    .filter(account => isCodexAccountUsable(config, account.id))
-    .map(account => account.id);
+  const ids = (config.codexAccounts ?? []).flatMap(account =>
+    !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id)
+      && !isCodexAccountInCooldown(account.id, now)
+      && isCodexAccountUsable(config, account.id)
+      ? [account.id]
+      : [],
+  );
   // The main Codex account is not stored in config.codexAccounts; include it as a
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (

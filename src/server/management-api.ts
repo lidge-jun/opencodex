@@ -670,12 +670,15 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const disabled = new Set(config.disabledModels ?? []);
     const { listCatalogNativeSlugs } = await import("../codex/catalog");
     const { CODEX_REASONING_LEVELS } = await import("../reasoning-effort");
-    const nativeModels = listCatalogNativeSlugs()
-      .filter(slug => !disabled.has(slug))
-      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
-    const routedModels = models
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: `${m.provider}/${m.id}` }))
-      .filter(m => !disabled.has(m.namespaced));
+    const nativeModels = listCatalogNativeSlugs().flatMap(slug =>
+      disabled.has(slug) ? [] : [{ provider: "openai", model: slug, namespaced: slug }],
+    );
+    const routedModels = models.flatMap(m => {
+      const namespaced = `${m.provider}/${m.id}`;
+      return disabled.has(namespaced)
+        ? []
+        : [{ provider: m.provider, model: m.id, namespaced }];
+    });
     return jsonResponse({
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
@@ -771,11 +774,15 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
-    const models = await fetchAllModels(config);
-    const { listCatalogNativeSlugs } = await import("../codex/catalog");
-    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
-    const { visibleNativeSlugs } = await import("../codex/catalog");
+    const [models, catalogMod, aliasMod, contextMod] = await Promise.all([
+      fetchAllModels(config),
+      import("../codex/catalog"),
+      import("../claude/alias"),
+      import("../claude/context-windows"),
+    ]);
+    const { listCatalogNativeSlugs, visibleNativeSlugs } = catalogMod;
+    const { claudeCodeAlias, claudeCodeNativeAlias } = aliasMod;
+    const { buildClaudeContextWindows, effectiveModelEnv } = contextMod;
     const disabled = new Set(config.disabledModels ?? []);
     const available = [
       ...listCatalogNativeSlugs(),
@@ -1176,7 +1183,10 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const body = await req.json() as { name?: string };
     const name = (body.name ?? "").trim() || "default";
     // Generate key from provider keys hash + random salt
-    const providerKeys = Object.values(config.providers).map(p => p.apiKey ?? "").filter(Boolean).join("|");
+    const providerKeys = Object.values(config.providers).flatMap(p => {
+      const v = p.apiKey ?? "";
+      return v ? [v] : [];
+    }).join("|");
     const salt = crypto.randomUUID();
     const hashInput = `${providerKeys}|${salt}|${Date.now()}`;
     const hashBuf = new Bun.CryptoHasher("sha256").update(hashInput).digest();

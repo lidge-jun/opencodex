@@ -8,12 +8,13 @@ function stringifyValue(value: unknown): string {
 function contentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => {
-      if (part.type === "text") return part.text;
-      if (part.type === "image") return `[image:${part.detail ?? "auto"}]`;
-      return "";
+    .flatMap(part => {
+      let v: string;
+      if (part.type === "text") v = part.text;
+      else if (part.type === "image") v = `[image:${part.detail ?? "auto"}]`;
+      else v = "";
+      return v ? [v] : [];
     })
-    .filter(Boolean)
     .join("\n");
 }
 

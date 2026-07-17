@@ -14,10 +14,18 @@ import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { antigravityUserAgent, ANTIGRAVITY_GOOG_API_CLIENT_UA } from "../adapters/client-fingerprint";
 
-const CLIENT_ID = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID
-  || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-const CLIENT_SECRET = process.env.GOOGLE_ANTIGRAVITY_CLIENT_SECRET
-  || "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";
+const CLIENT_ID = (() => {
+  const override = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID;
+  if (override) return override;
+  // Public Antigravity desktop OAuth client id (same value shipped in Google's client).
+  return "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+})();
+const CLIENT_SECRET = (() => {
+  const override = process.env.GOOGLE_ANTIGRAVITY_CLIENT_SECRET;
+  if (override) return override;
+  // Public Antigravity desktop OAuth client secret (installed-app style, not a user secret).
+  return "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";
+})();
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API = "https://cloudcode-pa.googleapis.com";

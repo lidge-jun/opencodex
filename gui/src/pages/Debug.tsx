@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { useI18n } from "../i18n";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+import { useI18n } from "../i18n/shared";
+import type { TFn } from "../i18n/shared";
 import { IconRefresh } from "../icons";
 import { Switch } from "../ui";
 
@@ -38,6 +40,7 @@ interface ClaudeInboundEntry {
 }
 
 type LogStream = "provider" | "usage" | "injection";
+type DebugFlag = "debug" | "usage" | "injection" | "claude";
 
 const STREAMS = ["provider", "usage", "injection"] as const;
 
@@ -46,13 +49,12 @@ const formatLogTime = (at: number): string =>
 
 export default function Debug({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
-  const [debug, setDebug] = useState<DebugSettings | null>(null);
+  const queryClient = useQueryClient();
   const [debugBusy, setDebugBusy] = useState(false);
   const [stream, setStream] = useState<LogStream>("provider");
   const [entries, setEntries] = useState<DebugLogEntry[]>([]);
   const [follow, setFollow] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [claudeEntries, setClaudeEntries] = useState<ClaudeInboundEntry[]>([]);
   const afterRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -63,22 +65,34 @@ export default function Debug({ apiBase }: { apiBase: string }) {
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => 20,
     overscan: 30,
-    // Rows are a rolling 2000-entry window: key by the server-assigned seq so
-    // cached measurements track entry identity when the head is trimmed.
     getItemKey: index => entries[index]!.seq,
   });
 
-  useEffect(() => {
-    const fetchDebug = async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/debug`);
-        if (res.ok) setDebug(await res.json());
-      } catch { /* ignore */ }
-    };
-    void fetchDebug();
-    const interval = setInterval(() => void fetchDebug(), 2000);
-    return () => clearInterval(interval);
-  }, [apiBase]);
+  const { data: debug = null } = useQuery({
+    queryKey: ["debug", apiBase],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/debug`);
+      if (!res.ok) throw new Error("debug fetch failed");
+      return res.json() as Promise<DebugSettings>;
+    },
+    refetchInterval: 2000,
+    retry: false,
+  });
+
+  const { data: claudeInboundData } = useQuery({
+    queryKey: ["claude-inbound-debug", apiBase],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/claude/inbound-debug`);
+      if (!res.ok) throw new Error("claude inbound debug fetch failed");
+      return res.json() as Promise<{ entries?: ClaudeInboundEntry[] }>;
+    },
+    enabled: !!debug?.claude,
+    refetchInterval: 2000,
+    retry: false,
+  });
+  const claudeEntries = debug?.claude
+    ? (Array.isArray(claudeInboundData?.entries) ? claudeInboundData.entries : [])
+    : [];
 
   const streamIsOn = useCallback(
     (s: LogStream): boolean =>
@@ -123,47 +137,32 @@ export default function Debug({ apiBase }: { apiBase: string }) {
     }
   }, [logsPath, streamEnabled]);
 
+  const fetchLogsEvent = useEffectEvent((initial: boolean) => {
+    void fetchLogs(initial);
+  });
+
   useEffect(() => {
     afterRef.current = 0;
     const timeout = window.setTimeout(() => {
       setEntries([]);
-      void fetchLogs(true);
+      fetchLogsEvent(true);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [stream, streamEnabled, fetchLogs]);
+  }, [stream, streamEnabled]);
 
   useEffect(() => {
     if (!follow || !streamEnabled) return;
-    const interval = setInterval(() => void fetchLogs(false), 1000);
+    const interval = setInterval(() => fetchLogsEvent(false), 1000);
     return () => clearInterval(interval);
-  }, [follow, streamEnabled, fetchLogs]);
+  }, [follow, streamEnabled]);
 
   useEffect(() => {
     if (follow && entries.length > 0) {
-      lineVirtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
+      lineVirtualizer.scrollToIndex(entries.length - 1, { align: "end" });
     }
   }, [entries, follow, lineVirtualizer]);
 
-  useEffect(() => {
-    if (!debug?.claude) {
-      setClaudeEntries([]);
-      return;
-    }
-    const fetchClaude = async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/claude/inbound-debug`);
-        if (res.ok) {
-          const data = await res.json() as { entries?: ClaudeInboundEntry[] };
-          setClaudeEntries(Array.isArray(data.entries) ? data.entries : []);
-        }
-      } catch { /* ignore */ }
-    };
-    void fetchClaude();
-    const interval = setInterval(() => void fetchClaude(), 2000);
-    return () => clearInterval(interval);
-  }, [apiBase, debug?.claude]);
-
-  const setDebugFlag = async (flag: "debug" | "usage" | "injection" | "claude", enabled: boolean) => {
+  const setDebugFlag = async (flag: DebugFlag, enabled: boolean) => {
     setDebugBusy(true);
     try {
       const res = await fetch(`${apiBase}/api/debug`, {
@@ -171,7 +170,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ [flag]: enabled }),
       });
-      if (res.ok) setDebug(await res.json());
+      if (res.ok) queryClient.setQueryData(["debug", apiBase], await res.json());
     } catch { /* ignore */ } finally {
       setDebugBusy(false);
     }
@@ -185,7 +184,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reset: true }),
       });
-      if (res.ok) setDebug(await res.json());
+      if (res.ok) queryClient.setQueryData(["debug", apiBase], await res.json());
     } catch { /* ignore */ } finally {
       setDebugBusy(false);
     }
@@ -193,179 +192,220 @@ export default function Debug({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <div className="page-head">
-        <h2>{t("debug.title")}</h2>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={refreshing || !streamEnabled}
-            onClick={() => void fetchLogs(true)}
-          >
-            <IconRefresh /> {t("debug.refresh")}
-          </button>
-          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />
-            {t("debug.follow")}
-          </label>
-        </div>
-      </div>
+      <DebugPageHeader
+        t={t}
+        follow={follow}
+        setFollow={setFollow}
+        refreshing={refreshing}
+        streamEnabled={streamEnabled}
+        onRefresh={() => void fetchLogs(true)}
+      />
       <p className="page-sub">{t("debug.subtitle")}</p>
 
       {!debug ? (
         <div className="empty">{t("debug.loading")}</div>
       ) : (
-        <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-              {(["debug", "usage", "injection", "claude"] as const).map(flag => {
-                const checked = flag === "debug" ? debug.enabled : flag === "usage" ? debug.usage : flag === "injection" ? debug.injection : debug.claude;
-                return (
-                  <div key={flag} style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 220 }}>
-                    <Switch
-                      on={checked}
-                      disabled={debugBusy}
-                      label={t(`debug.${flag}`)}
-                      onClick={() => void setDebugFlag(flag, !checked)}
-                    />
-                    <span className="text-control">{t(`debug.${flag}`)}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={debugBusy} onClick={() => void resetDebug()}>
-              {t("debug.reset")}
-            </button>
-          </div>
-
-          {(debug.enabled || debug.usage || debug.injection) && (
-            <div style={{ display: "inline-flex", gap: 6, marginTop: 12 }}>
-              {debug.enabled && (
-                <button
-                  type="button"
-                  className={`btn btn-sm${stream === "provider" ? " btn-primary" : " btn-ghost"}`}
-                  onClick={() => setStream("provider")}
-                >
-                  {t("debug.streamProvider")}
-                </button>
-              )}
-              {debug.usage && (
-                <button
-                  type="button"
-                  className={`btn btn-sm${stream === "usage" ? " btn-primary" : " btn-ghost"}`}
-                  onClick={() => setStream("usage")}
-                >
-                  {t("debug.streamUsage")}
-                </button>
-              )}
-              {debug.injection && (
-                <button
-                  type="button"
-                  className={`btn btn-sm${stream === "injection" ? " btn-primary" : " btn-ghost"}`}
-                  onClick={() => setStream("injection")}
-                >
-                  {t("debug.streamInjection")}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        <DebugFlagsPanel
+          debug={debug}
+          debugBusy={debugBusy}
+          stream={stream}
+          setStream={setStream}
+          t={t}
+          onSetFlag={setDebugFlag}
+          onReset={resetDebug}
+        />
       )}
 
-      {debug?.claude && (
-        <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
-          <div className="font-semibold" style={{ marginBottom: 4 }}>{t("debug.claudeInbound.title")}</div>
-          <div className="muted text-control" style={{ marginBottom: 10 }}>{t("debug.claudeInbound.sub")}</div>
-          {claudeEntries.length === 0 ? (
-            <div className="muted text-control">{t("debug.claudeInbound.empty")}</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table className="table text-label">
-                <thead>
-                  <tr>
-                    <th>{t("debug.claudeInbound.time")}</th>
-                    <th>{t("debug.claudeInbound.endpoint")}</th>
-                    <th>{t("debug.claudeInbound.model")}</th>
-                    {/* Protocol field names from Claude inbound capture — not prose. */}
-                    <th>thinking</th>
-                    <th>effort</th>
-                    <th>beta</th>
-                    <th>metadata</th>
-                    <th>system</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {claudeEntries.map((entry, i) => (
-                    <tr key={`${entry.at}-${i}`}>
-                      <td className="muted mono">{new Date(entry.at).toLocaleTimeString()}</td>
-                      <td className="mono">{entry.endpoint}</td>
-                      <td className="mono" title={entry.resolvedModel}>
-                        {entry.model}
-                        {entry.resolvedModel && entry.resolvedModel !== entry.model && (
-                          <span className="muted"> → {entry.resolvedModel}</span>
-                        )}
-                      </td>
-                      <td className="mono">
-                        {entry.thinkingType ?? "-"}
-                        {entry.thinkingBudgetTokens !== undefined && <span className="muted"> ({entry.thinkingBudgetTokens})</span>}
-                      </td>
-                      <td className="mono">{entry.outputConfigEffort ?? "-"}</td>
-                      <td className="mono" title={entry.anthropicBeta} style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.anthropicBeta ?? "-"}</td>
-                      <td className="mono" title={entry.metadataKeys?.join(", ")}>
-                        {entry.hasMetadataUserId ? `user_id ${entry.userIdTag ?? ""}` : t("debug.claudeInbound.none")}
-                      </td>
-                      <td className="mono">{entry.hasSystem ? entry.systemTag ?? "yes" : t("debug.claudeInbound.none")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      {debug?.claude && <DebugClaudeInboundPanel entries={claudeEntries} t={t} />}
 
-      {debug && !streamEnabled ? (
-        <div className="empty">
-          <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
-          <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t("debug.empty")}</div>
-        </div>
-      ) : debug && streamEnabled && entries.length === 0 ? (
-        <div className="empty">
-          <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
-          <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t(`debug.noLines.${stream}`)}</div>
-        </div>
-      ) : debug && streamEnabled ? (
-        <div
-          ref={scrollContainerRef}
-          className="log-detail-json"
-          style={{ maxHeight: "calc(100vh - 280px)", overflow: "auto" }}
-        >
-          <div
-            style={{
-              position: "relative",
-              height: lineVirtualizer.getTotalSize(),
-              width: "100%",
-            }}
-          >
-            {lineVirtualizer.getVirtualItems().map(virtualRow => (
-              <div
-                key={virtualRow.key}
-                ref={lineVirtualizer.measureElement}
-                data-index={virtualRow.index}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                {`${formatLogTime(entries[virtualRow.index]!.at)}${entries[virtualRow.index]!.line}`}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <DebugLogViewer
+        debug={debug}
+        stream={stream}
+        streamEnabled={streamEnabled}
+        entries={entries}
+        scrollContainerRef={scrollContainerRef}
+        lineVirtualizer={lineVirtualizer}
+        t={t}
+      />
     </>
+  );
+}
+
+function DebugPageHeader({
+  t, follow, setFollow, refreshing, streamEnabled, onRefresh,
+}: {
+  t: TFn;
+  follow: boolean;
+  setFollow: Dispatch<SetStateAction<boolean>>;
+  refreshing: boolean;
+  streamEnabled: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="page-head">
+      <h2>{t("debug.title")}</h2>
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={refreshing || !streamEnabled} onClick={onRefresh}>
+          <IconRefresh /> {t("debug.refresh")}
+        </button>
+        <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />
+          {t("debug.follow")}
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function DebugFlagsPanel({
+  debug, debugBusy, stream, setStream, t, onSetFlag, onReset,
+}: {
+  debug: DebugSettings;
+  debugBusy: boolean;
+  stream: LogStream;
+  setStream: Dispatch<SetStateAction<LogStream>>;
+  t: TFn;
+  onSetFlag: (flag: DebugFlag, enabled: boolean) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+          {(["debug", "usage", "injection", "claude"] as const).map(flag => {
+            const checked = flag === "debug" ? debug.enabled : flag === "usage" ? debug.usage : flag === "injection" ? debug.injection : debug.claude;
+            return (
+              <div key={flag} style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 220 }}>
+                <Switch on={checked} disabled={debugBusy} label={t(`debug.${flag}`)} onClick={() => void onSetFlag(flag, !checked)} />
+                <span className="text-control">{t(`debug.${flag}`)}</span>
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={debugBusy} onClick={() => void onReset()}>
+          {t("debug.reset")}
+        </button>
+      </div>
+
+      {(debug.enabled || debug.usage || debug.injection) && (
+        <div style={{ display: "inline-flex", gap: 6, marginTop: 12 }}>
+          {debug.enabled && (
+            <button type="button" className={`btn btn-sm${stream === "provider" ? " btn-primary" : " btn-ghost"}`} onClick={() => setStream("provider")}>
+              {t("debug.streamProvider")}
+            </button>
+          )}
+          {debug.usage && (
+            <button type="button" className={`btn btn-sm${stream === "usage" ? " btn-primary" : " btn-ghost"}`} onClick={() => setStream("usage")}>
+              {t("debug.streamUsage")}
+            </button>
+          )}
+          {debug.injection && (
+            <button type="button" className={`btn btn-sm${stream === "injection" ? " btn-primary" : " btn-ghost"}`} onClick={() => setStream("injection")}>
+              {t("debug.streamInjection")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DebugClaudeInboundPanel({ entries, t }: { entries: ClaudeInboundEntry[]; t: TFn }) {
+  return (
+    <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
+      <div className="font-semibold" style={{ marginBottom: 4 }}>{t("debug.claudeInbound.title")}</div>
+      <div className="muted text-control" style={{ marginBottom: 10 }}>{t("debug.claudeInbound.sub")}</div>
+      {entries.length === 0 ? (
+        <div className="muted text-control">{t("debug.claudeInbound.empty")}</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="table text-label">
+            <thead>
+              <tr>
+                <th>{t("debug.claudeInbound.time")}</th>
+                <th>{t("debug.claudeInbound.endpoint")}</th>
+                <th>{t("debug.claudeInbound.model")}</th>
+                <th>thinking</th>
+                <th>effort</th>
+                <th>beta</th>
+                <th>metadata</th>
+                <th>system</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(entry => (
+                <tr key={`${entry.at}-${entry.endpoint}-${entry.model}`}>
+                  <td className="muted mono">{new Date(entry.at).toLocaleTimeString()}</td>
+                  <td className="mono">{entry.endpoint}</td>
+                  <td className="mono" title={entry.resolvedModel}>
+                    {entry.model}
+                    {entry.resolvedModel && entry.resolvedModel !== entry.model && (
+                      <span className="muted"> → {entry.resolvedModel}</span>
+                    )}
+                  </td>
+                  <td className="mono">
+                    {entry.thinkingType ?? "-"}
+                    {entry.thinkingBudgetTokens !== undefined && <span className="muted"> ({entry.thinkingBudgetTokens})</span>}
+                  </td>
+                  <td className="mono">{entry.outputConfigEffort ?? "-"}</td>
+                  <td className="mono" title={entry.anthropicBeta} style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.anthropicBeta ?? "-"}</td>
+                  <td className="mono" title={entry.metadataKeys?.join(", ")}>
+                    {entry.hasMetadataUserId ? `user_id ${entry.userIdTag ?? ""}` : t("debug.claudeInbound.none")}
+                  </td>
+                  <td className="mono">{entry.hasSystem ? entry.systemTag ?? "yes" : t("debug.claudeInbound.none")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DebugLogViewer({
+  debug, stream, streamEnabled, entries, scrollContainerRef, lineVirtualizer, t,
+}: {
+  debug: DebugSettings | null;
+  stream: LogStream;
+  streamEnabled: boolean;
+  entries: DebugLogEntry[];
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+  lineVirtualizer: Virtualizer<HTMLDivElement, Element>;
+  t: TFn;
+}) {
+  if (debug && !streamEnabled) {
+    return (
+      <div className="empty">
+        <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.emptyTitle")}</div>
+        <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t("debug.empty")}</div>
+      </div>
+    );
+  }
+  if (debug && streamEnabled && entries.length === 0) {
+    return (
+      <div className="empty">
+        <div className="font-semibold" style={{ marginBottom: 6 }}>{t("debug.noLinesTitle")}</div>
+        <div className="muted text-control" style={{ maxWidth: 560, marginInline: "auto" }}>{t(`debug.noLines.${stream}`)}</div>
+      </div>
+    );
+  }
+  if (!debug || !streamEnabled) return null;
+
+  return (
+    <div ref={scrollContainerRef} className="log-detail-json" style={{ maxHeight: "calc(100vh - 280px)", overflow: "auto" }}>
+      <div style={{ position: "relative", height: lineVirtualizer.getTotalSize(), width: "100%" }}>
+        {lineVirtualizer.getVirtualItems().map(virtualRow => (
+          <div
+            key={virtualRow.key}
+            ref={lineVirtualizer.measureElement}
+            data-index={virtualRow.index}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}
+          >
+            {`${formatLogTime(entries[virtualRow.index]!.at)}${entries[virtualRow.index]!.line}`}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

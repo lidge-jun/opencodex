@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Notice, EmptyState } from "../ui";
 import { IconArrowUp, IconArrowDown, IconX, IconCheck, IconSearch, IconBot, IconInfo } from "../icons";
-import { useT, Trans } from "../i18n";
+import { useT } from "../i18n/shared";
+import { Trans } from "../i18n/provider";
 import { modelLabel } from "../model-display";
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
@@ -13,12 +14,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const [ok, setOk] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const chosenSet = useMemo(() => new Set(chosen), [chosen]);
+
   const load = useCallback(async () => {
     try {
       const r = await fetch(`${apiBase}/api/subagent-models`).then(res => res.json());
       const avail: string[] = r.available ?? [];
+      const availSet = new Set(avail);
       setAvailable(avail);
-      setChosen((r.chosen ?? []).filter((m: string) => avail.includes(m)));
+      setChosen((r.chosen ?? []).filter((m: string) => availSet.has(m)));
     } catch {
       setOk(false);
       setStatus(t("sub.loadFail"));
@@ -93,13 +97,13 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
             <div key={m} className="card panel-accent row" style={{ padding: "8px 12px", gap: 10 }}>
               <span className="mono font-bold" style={{ width: 18, color: "var(--accent)" }}>{i + 1}</span>
               <code className="mono" style={{ flex: 1, color: "var(--text)" }}>{modelLabel(m)}</code>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => move(i, -1)} disabled={i === 0} aria-label={t("sub.moveUp", { m })}>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(i, -1)} disabled={i === 0} aria-label={t("sub.moveUp", { m })}>
                 <IconArrowUp />
               </button>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => move(i, 1)} disabled={i === chosen.length - 1} aria-label={t("sub.moveDown", { m })}>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(i, 1)} disabled={i === chosen.length - 1} aria-label={t("sub.moveDown", { m })}>
                 <IconArrowDown />
               </button>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => toggle(m)} aria-label={t("sub.removeAria", { m })} style={{ color: "var(--red)" }}>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => toggle(m)} aria-label={t("sub.removeAria", { m })} style={{ color: "var(--red)" }}>
                 <IconX />
               </button>
             </div>
@@ -108,37 +112,33 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       )}
 
       <div style={{ marginTop: 14 }}>
-        <button className="btn btn-primary" onClick={save}>{t("common.save")}</button>
+        <button type="button" className="btn btn-primary" onClick={save}>{t("common.save")}</button>
       </div>
 
       <div className="h-section">{t("sub.models")} <span className="count">{filtered.length}</span></div>
-      <div style={{ position: "relative", marginBottom: 10 }}>
-        <IconSearch style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", width: 15, height: 15, color: "var(--faint)", pointerEvents: "none" }} />
+      <div className="row" style={{ marginBottom: 10, gap: 8 }}>
+        <IconSearch width={15} height={15} aria-hidden="true" style={{ color: "var(--faint)", flexShrink: 0 }} />
         <input
           className="input"
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder={t("sub.search")}
-          style={{ paddingLeft: 34 }}
+          style={{ flex: 1 }}
         />
       </div>
       <div className="stack" style={{ gap: 6, maxHeight: 360, overflowY: "auto" }}>
         {filtered.map(m => {
-          const sel = chosen.includes(m);
+          const sel = chosenSet.has(m);
           const full = !sel && chosen.length >= 5;
           return (
             <button
               key={m}
-              className="card row"
+              type="button"
+              className={`card row${sel ? " panel-accent" : ""}`}
               onClick={() => toggle(m)}
               disabled={full}
               aria-pressed={sel}
-              style={{
-                padding: "9px 12px", gap: 10, width: "100%", textAlign: "left", cursor: full ? "not-allowed" : "pointer",
-                opacity: full ? 0.45 : 1,
-                background: sel ? "var(--accent-soft)" : undefined,
-                borderColor: sel ? "var(--accent-ring)" : undefined,
-              }}
+              style={{ width: "100%", opacity: full ? 0.45 : 1, cursor: full ? "not-allowed" : "pointer" }}
             >
               <span style={{ width: 16, height: 16, flexShrink: 0, color: "var(--accent)", display: "inline-flex" }}>
                 {sel && <IconCheck style={{ width: 16, height: 16 }} />}

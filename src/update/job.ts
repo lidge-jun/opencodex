@@ -8,6 +8,8 @@ import { isServiceInstalled } from "../service";
 import {
   type Channel,
   type Installer,
+  PKG,
+  assertUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
   detectInstall,
@@ -320,12 +322,13 @@ export function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boo
     }
 
     const cmd = updateExecutionCommand(check.installer, channel);
+    const EXPECTED_SHA = assertUpdatePackageIntegrity(channel, check.latestVersion);
     job = updateJob(job, {
       currentVersion: check.currentVersion,
       latestVersion: check.latestVersion,
       installer: check.installer,
       command: cmd.display,
-    });
+    }, `Verified ${PKG}@${check.latestVersion} integrity ${EXPECTED_SHA.slice(0, 24)}…`);
 
     /* [Decision Log]
     - 목적: GUI 요청 처리 프로세스가 자신이 실행 중인 패키지를 직접 덮어쓰지 않도록 업데이트를 별도 worker에서 수행한다.

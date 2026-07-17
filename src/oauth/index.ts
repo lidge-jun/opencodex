@@ -350,7 +350,7 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
  */
 function cloneProviderField(value: unknown): unknown {
   if (Array.isArray(value)) return [...value];
-  if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
+  if (value && typeof value === "object") return structuredClone(value);
   return value;
 }
 
@@ -388,7 +388,7 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       changed = true;
     }
     // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-    if (prov.defaultModel && preset.defaultModel && !(prov.models ?? []).includes(prov.defaultModel)) {
+    if (prov.defaultModel && preset.defaultModel && !new Set(prov.models ?? []).has(prov.defaultModel)) {
       prov.defaultModel = preset.defaultModel;
       changed = true;
     }

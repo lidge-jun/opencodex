@@ -133,10 +133,13 @@ export const DEFAULT_BLOCKED_SKILLS = ["claude-api"];
 /** Shared effective policy for proxy elision and generated routed-agent guards. */
 export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "blockedSkills">): string[] {
   const names = cc?.blockedSkills ?? DEFAULT_BLOCKED_SKILLS;
-  return [...new Set(names
-    .filter((name): name is string => typeof name === "string")
-    .map(name => name.trim().toLowerCase())
-    .filter(name => name.length > 0))];
+  const normalized: string[] = [];
+  for (const name of names) {
+    if (typeof name !== "string") continue;
+    const trimmed = name.trim().toLowerCase();
+    if (trimmed.length > 0) normalized.push(trimmed);
+  }
+  return [...new Set(normalized)];
 }
 
 /**
@@ -155,8 +158,7 @@ export function extractOcxRouteDirective(body: unknown): string | null {
   if (typeof system === "string") text = system;
   else if (Array.isArray(system)) {
     text = system
-      .filter((b): b is Rec => isRec(b) && b.type === "text" && typeof b.text === "string")
-      .map(b => b.text as string)
+      .flatMap(b => isRec(b) && b.type === "text" && typeof b.text === "string" ? [b.text as string] : [])
       .join("\n");
   }
   if (!text) return null;
@@ -207,7 +209,10 @@ function skillElisionStub(callId: string): string {
 function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly string[]): Set<string> {
   const ids = new Set<string>();
   if (blocked.length === 0) return ids;
-  const needles = blocked.map(name => name.toLowerCase()).filter(name => name.length > 0);
+  const needles = blocked.flatMap(name => {
+    const lower = name.toLowerCase();
+    return lower.length > 0 ? [lower] : [];
+  });
   if (needles.length === 0) return ids;
   for (const msg of messages) {
     if (!isRec(msg) || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;

@@ -97,13 +97,13 @@ function recordFailure(key: string, nowMs: number, baseSeconds: number, maxSecon
 
 async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (cursor < tasks.length) {
-      const task = tasks[cursor++];
-      if (task) await task();
-    }
-  });
-  await Promise.all(workers);
+  const worker = async (): Promise<void> => {
+    const task = tasks[cursor++];
+    if (!task) return;
+    await task();
+    await worker();
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
 }
 
 /**

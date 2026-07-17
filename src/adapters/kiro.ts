@@ -70,18 +70,22 @@ function kiroToolWireNames(tools: readonly unknown[]): string[] {
 
 function userContentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  return content.map(p => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n");
+  return content.flatMap(p => {
+    const v = p.type === "text" ? p.text : "";
+    return v ? [v] : [];
+  }).join("\n");
 }
 
 function usageContentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
   return content
-    .map(p => {
-      if (p.type === "text") return p.text;
-      if (p.type === "image") return `[image:${p.detail ?? "auto"}]`;
-      return "";
+    .flatMap(p => {
+      let v: string;
+      if (p.type === "text") v = p.text;
+      else if (p.type === "image") v = `[image:${p.detail ?? "auto"}]`;
+      else v = "";
+      return v ? [v] : [];
     })
-    .filter(Boolean)
     .join("\n");
 }
 function serializeForUsage(value: unknown): string {
@@ -122,11 +126,13 @@ function messageUsageText(msg: OcxMessage): string {
 
 function messageLogText(msg: OcxMessage): string {
   if (msg.role !== "assistant") return messageUsageText(msg);
-  return msg.content.map(part => {
-    if (part.type === "text") return part.text;
-    if (part.type === "toolCall") return [part.name, part.id, serializeForUsage(part.arguments)].join("\n");
-    return part.thinking;
-  }).filter(Boolean).join("\n");
+  return msg.content.flatMap(part => {
+    let v: string;
+    if (part.type === "text") v = part.text;
+    else if (part.type === "toolCall") v = [part.name, part.id, serializeForUsage(part.arguments)].join("\n");
+    else v = part.thinking;
+    return v ? [v] : [];
+  }).join("\n");
 }
 
 function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
@@ -135,8 +141,10 @@ function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
 
 function estimateKiroInputTokens(parsed: OcxParsedRequest): number {
   const parts = currentTurnUsageMessages(parsed.context.messages)
-    .map(messageUsageText)
-    .filter(Boolean);
+    .flatMap(msg => {
+      const v = messageUsageText(msg);
+      return v ? [v] : [];
+    });
 
   if (shouldCountStablePromptOverhead(parsed)) {
     if (parsed.context.systemPrompt?.length) parts.push(...parsed.context.systemPrompt);
@@ -147,7 +155,10 @@ function estimateKiroInputTokens(parsed: OcxParsedRequest): number {
 }
 
 function estimateKiroLogInputTokens(parsed: OcxParsedRequest): number {
-  const parts = parsed.context.messages.map(messageLogText).filter(Boolean);
+  const parts = parsed.context.messages.flatMap(msg => {
+    const v = messageLogText(msg);
+    return v ? [v] : [];
+  });
   if (parsed.context.systemPrompt?.length) parts.push(...parsed.context.systemPrompt);
   if (parsed.context.tools?.length) parts.push(serializeForUsage(parsed.context.tools));
   return Math.max(estimateKiroInputTokens(parsed), estimateTokens(parts.join("\n"), parsed.modelId));

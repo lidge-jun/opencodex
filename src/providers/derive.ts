@@ -158,13 +158,17 @@ export function deriveOAuthDefaultModel(id: string): string | undefined {
 }
 
 export function deriveOAuthIds(): string[] {
-  return PROVIDER_REGISTRY.filter(entry => entry.authKind === "oauth").map(entry => entry.oauthId ?? entry.id);
+  return PROVIDER_REGISTRY.flatMap(entry =>
+    entry.authKind === "oauth" ? [entry.oauthId ?? entry.id] : [],
+  );
 }
 
 export function deriveProviderPresets(): DerivedProviderPreset[] {
-  const presets = PROVIDER_REGISTRY
-    .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset)
-    .map(entryToPreset);
+  const presets = PROVIDER_REGISTRY.flatMap(entry =>
+    entry.featured || entry.authKind === "key" || entry.dashboardPreset
+      ? [entryToPreset(entry)]
+      : [],
+  );
   return [...dedupePresets(presets), customPreset()];
 }
 
@@ -199,7 +203,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
 }
 
 export function deriveFeaturedProviderIds(): string[] {
-  return PROVIDER_REGISTRY.filter(entry => entry.featured).map(entry => entry.id);
+  return PROVIDER_REGISTRY.flatMap(entry => entry.featured ? [entry.id] : []);
 }
 
 export function deriveJawcodeAliases(): Record<string, string> {

@@ -395,7 +395,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       searchesExecuted++;
       results.push({ query: "", outcome: { text: "", sources: [], error: "the model called web_search with an empty query" } });
     }
-    for (const query of call.queries) {
+    for await (const query of call.queries) {
       // Stall-watchdog seam: batched queries run sequentially inside ONE begin/end cell, and
       // placeholder outcomes (repeat/limit) emit no cell at all — without this, consecutive
       // bounded units chain into one silent span past the stall deadline (audit 011 B1).

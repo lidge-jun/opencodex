@@ -198,15 +198,15 @@ export function lsExec(execMsg: ExecServerMessage): Uint8Array {
   const path = resolve(execMsg.message.value.path);
   try {
     const entries = readdirSync(path, { withFileTypes: true }).slice(0, 200);
-    const childrenDirs = entries.filter(e => e.isDirectory()).map(e => create(LsDirectoryTreeNodeSchema, {
+    const childrenDirs = entries.flatMap(e => e.isDirectory() ? [create(LsDirectoryTreeNodeSchema, {
       absPath: resolve(path, e.name),
       childrenDirs: [],
       childrenFiles: [],
       childrenWereProcessed: false,
       fullSubtreeExtensionCounts: {},
       numFiles: 0,
-    }));
-    const childrenFiles = entries.filter(e => e.isFile()).map(e => create(LsDirectoryTreeNode_FileSchema, { name: e.name }));
+    })] : []);
+    const childrenFiles = entries.flatMap(e => e.isFile() ? [create(LsDirectoryTreeNode_FileSchema, { name: e.name })] : []);
     return execBytes(execMsg, "lsResult", create(LsResultSchema, {
       result: {
         case: "success",

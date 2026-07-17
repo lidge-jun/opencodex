@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useI18n } from "../i18n";
+import { useI18n, type TFn } from "../i18n/shared";
+import type { Locale } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { EmptyState } from "../ui";
 import { modelLabel } from "../model-display";
@@ -80,8 +81,6 @@ function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
-// Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
-// across days and renders. Saturation/lightness are fixed for a cohesive palette on the dark chart.
 function modelColor(model: string, provider: string): string {
   const key = `${provider}/${model}`;
   let h = 0;
@@ -89,8 +88,6 @@ function modelColor(model: string, provider: string): string {
   return `hsl(${h % 360} 55% 55%)`;
 }
 
-// Last 7 calendar days (oldest → newest), zero-filled, for the 7d bar chart. The API's `days` only
-// carries dates with activity, so missing days are backfilled to 0 to keep a stable 7-bar axis.
 function lastSevenDays(days: UsageDay[]): UsageDay[] {
   const byDate = new Map(days.map(d => [d.date, d]));
   const out: UsageDay[] = [];
@@ -144,7 +141,6 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
   today.setHours(0, 0, 0, 0);
   const start = new Date(today);
   start.setDate(start.getDate() - 364);
-  // Align to Sunday
   start.setDate(start.getDate() - start.getDay());
 
   const weeks: HeatmapCell[][] = [];
@@ -186,6 +182,349 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
   return { weeks, months, buckets };
 }
 
+function UsageFilters({
+  surface,
+  range,
+  onSurface,
+  onRange,
+  t,
+}: {
+  surface: UsageSurface;
+  range: Range;
+  onSurface: (s: UsageSurface) => void;
+  onRange: (r: Range) => void;
+  t: TFn;
+}) {
+  return (
+    <div className="usage-filters">
+      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+        {(["all", "codex", "claude"] as UsageSurface[]).map(choice => {
+          const label = t(`logs.filter.surface.${choice}`);
+          return (
+            <button
+              key={choice}
+              type="button"
+              className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+              aria-label={label}
+              aria-pressed={surface === choice}
+              onClick={() => onSurface(choice)}
+            >
+              {choice === "codex" && (
+                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+              )}
+              {choice === "claude" && (
+                <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
+              )}
+              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+        {(["all", "30d", "7d"] as Range[]).map(r => {
+          const label = t(`usage.range.${r}`);
+          return (
+            <button
+              key={r}
+              type="button"
+              className={`usage-segmented-btn${range === r ? " active" : ""}`}
+              aria-label={label}
+              aria-pressed={range === r}
+              onClick={() => onRange(r)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function UsageSummaryCards({
+  summary,
+  activeDays,
+  locale,
+  t,
+}: {
+  summary: UsageSummaryTotals;
+  activeDays: number;
+  locale: Locale;
+  t: TFn;
+}) {
+  return (
+    <div className="usage-cards usage-cards-3x2">
+      <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
+      <div className="stat" title={t("usage.card.cachedTokensHint")}>
+        <div className="muted">{t("usage.card.cachedTokens")}</div>
+        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
+        {(summary.cacheCreationInputTokens ?? 0) > 0 && (
+          <div className="muted text-caption">
+            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
+          </div>
+        )}
+      </div>
+      <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
+    </div>
+  );
+}
+
+function WeekDayBars({
+  weekBars,
+  locale,
+}: {
+  weekBars: UsageDay[];
+  locale: Locale;
+}) {
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const max = Math.max(1, ...weekBars.map(x => x.totalTokens));
+
+  return (
+    <div className="daybars">
+      {weekBars.map(d => {
+        const pct = Math.round((d.totalTokens / max) * 100);
+        const label = d.date.slice(5);
+        return (
+          <div
+            key={d.date}
+            className="daybar"
+            onMouseEnter={() => setHoverDay(d.date)}
+            onMouseLeave={() => setHoverDay(h => (h === d.date ? null : h))}
+          >
+            <div className="daybar-track">
+              <div className="daybar-stack" style={{ height: `${pct}%` }}>
+                {d.models.map(m => (
+                  <div
+                    key={`${m.provider}/${m.model}`}
+                    className="daybar-seg"
+                    style={{ flexGrow: m.totalTokens, background: modelColor(m.model, m.provider) }}
+                  />
+                ))}
+                {d.models.length === 0 && d.totalTokens > 0 && (
+                  <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
+                )}
+              </div>
+            </div>
+            {hoverDay === d.date && d.totalTokens > 0 && (
+              <div className="daybar-tip">
+                <div className="daybar-tip-date">{d.date}</div>
+                {d.models.slice(0, 8).map(m => (
+                  <div key={`${m.provider}/${m.model}`} className="daybar-tip-row">
+                    <span className="daybar-tip-swatch" style={{ background: modelColor(m.model, m.provider) }} />
+                    <span className="daybar-tip-name">{modelLabel(m.model)}</span>
+                    <span className="daybar-tip-val">{formatTokens(m.totalTokens, locale)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <span className="daybar-count">{formatTokens(d.totalTokens, locale)}</span>
+            <span className="daybar-label muted">{label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function UsageHeatmapPanel({
+  range,
+  heatmap,
+  weekBars,
+  locale,
+  t,
+}: {
+  range: Range;
+  heatmap: ReturnType<typeof buildHeatmap>;
+  weekBars: UsageDay[];
+  locale: Locale;
+  t: TFn;
+}) {
+  const heatmapRef = useRef<HTMLDivElement | null>(null);
+  const [hoverCell, setHoverCell] = useState<{ wi: number; di: number; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const el = heatmapRef.current;
+    if (!el) return;
+    const pinRight = () => { el.scrollLeft = el.scrollWidth; };
+    pinRight();
+    const observer = new ResizeObserver(pinRight);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [heatmap, range]);
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <h3 className="panel-title">{t("usage.section.heatmap")}</h3>
+      {range === "7d" ? (
+        <WeekDayBars weekBars={weekBars} locale={locale} />
+      ) : (
+        <div className="heatmap" ref={heatmapRef}>
+          <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
+            <span className="heatmap-day-spacer" />
+            {heatmap.months.map(m => (
+              <span key={`${m.label}-${m.col}`} className="heatmap-month" style={{ gridColumn: m.col + 2 }}>{m.label}</span>
+            ))}
+          </div>
+          <div className="heatmap-body">
+            <div className="heatmap-days">
+              <span /><span>{t("usage.dayMon")}</span><span /><span>{t("usage.dayWed")}</span><span /><span>{t("usage.dayFri")}</span><span />
+            </div>
+            <div className="heatmap-grid" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}>
+              {heatmap.weeks.map((week, wi) => (
+                <div key={week[0]?.date || `week-${wi}`} className="heatmap-week">
+                  {week.map((cell, di) => (
+                    <div
+                      key={cell.date || `pad-${wi}-${di}`}
+                      className={`heatmap-cell heatmap-cell-${cell.level}`}
+                      onMouseEnter={e => {
+                        if (!cell.date) return;
+                        const rect = (e.target as HTMLElement).getBoundingClientRect();
+                        setHoverCell({ wi, di, x: rect.left + rect.width / 2, y: rect.top });
+                      }}
+                      onMouseLeave={() => setHoverCell(h => (h?.wi === wi && h?.di === di ? null : h))}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          {hoverCell && (() => {
+            const cell = heatmap.weeks[hoverCell.wi]?.[hoverCell.di];
+            if (!cell?.date) return null;
+            return (
+              <div className="heatmap-tip" style={{ left: hoverCell.x, top: hoverCell.y }}>
+                <div className="heatmap-tip-date">{cell.date}</div>
+                <div className="heatmap-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(cell.totalTokens, locale) })}</div>
+                <div className="heatmap-tip-req muted">{t("usage.heatmap.tooltipRequests", { requests: cell.requests })}</div>
+              </div>
+            );
+          })()}
+          <div className="heatmap-legend muted">
+            <span>{t("usage.heatmap.less")}</span>
+            {[0, 1, 2, 3, 4].map(l => <span key={l} className={`heatmap-cell heatmap-cell-${l}`} />)}
+            <span>{t("usage.heatmap.more")}</span>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UsageModelsTable({
+  models,
+  modelQuery,
+  onModelQuery,
+  locale,
+  t,
+}: {
+  models: UsageModel[];
+  modelQuery: string;
+  onModelQuery: (q: string) => void;
+  locale: Locale;
+  t: TFn;
+}) {
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-head">
+        <h3 className="panel-title">{t("usage.section.models")}</h3>
+        <input
+          className="input"
+          placeholder={t("usage.search.models")}
+          value={modelQuery}
+          onChange={e => onModelQuery(e.target.value)}
+        />
+      </div>
+      <div className="tbl-wrap usage-scroll">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>{t("logs.col.model")}</th>
+              <th>{t("logs.col.provider")}</th>
+              <th className="num">{t("usage.col.requests")}</th>
+              <th className="num">{t("usage.col.measured")}</th>
+              <th className="num">{t("usage.col.tokens")}</th>
+              <th>{t("usage.col.share")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map(m => (
+              <tr key={`${m.provider}/${m.model}/${m.resolvedModel ?? ""}`}>
+                <td className="mono">{modelLabel(m.resolvedModel ?? m.model)}</td>
+                <td className="muted">{m.provider}</td>
+                <td className="num">{m.requests}</td>
+                <td className="num">{m.measuredRequests}</td>
+                <td className="num mono">{formatTokens(m.totalTokens, locale)}</td>
+                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(m.shareRatio * 100)}%` }} /></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function UsageProvidersTable({
+  providers,
+  locale,
+  t,
+}: {
+  providers: UsageProvider[];
+  locale: Locale;
+  t: TFn;
+}) {
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <h3 className="panel-title">{t("usage.section.providers")}</h3>
+      <div className="tbl-wrap usage-scroll">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>{t("logs.col.provider")}</th>
+              <th className="num">{t("usage.col.requests")}</th>
+              <th className="num">{t("usage.col.measured")}</th>
+              <th className="num">{t("usage.col.tokens")}</th>
+              <th>{t("usage.col.share")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {providers.map(p => (
+              <tr key={p.provider}>
+                <td className="mono">{p.provider}</td>
+                <td className="num">{p.requests}</td>
+                <td className="num">{p.measuredRequests}</td>
+                <td className="num mono">{formatTokens(p.totalTokens, locale)}</td>
+                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(p.shareRatio * 100)}%` }} /></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function UsageCoveragePanel({ summary, t }: { summary: UsageSummaryTotals; t: TFn }) {
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <h3 className="panel-title">{t("usage.section.coverage")}</h3>
+      <div className="usage-cards usage-cards-3x2">
+        <div className="stat"><div className="muted">{t("usage.coverage.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
+        <div className="stat"><div className="muted">{t("usage.coverage.reported")}</div><div className="stat-value">{summary.reportedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("usage.coverage.estimated")}</div><div className="stat-value">{summary.estimatedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("logs.tokens.unreported")}</div><div className="stat-value">{summary.unreportedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("logs.tokens.unsupported")}</div><div className="stat-value">{summary.unsupportedRequests}</div></div>
+      </div>
+      <p className="muted text-control" style={{ marginTop: 12 }}>{t("usage.coverage.note")}</p>
+    </section>
+  );
+}
+
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
@@ -193,8 +532,6 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [modelQuery, setModelQuery] = useState("");
-  const [hoverDay, setHoverDay] = useState<number | null>(null);
-  const [hoverCell, setHoverCell] = useState<{ wi: number; di: number; x: number; y: number } | null>(null);
 
   const fetchUsage = useCallback(async (nextRange: Range, nextSurface: UsageSurface, signal: AbortSignal) => {
     setLoading(true);
@@ -205,7 +542,6 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       if (signal.aborted) return;
       setData(json);
     } catch {
-      // A stale request (range/apiBase changed, or unmount) must not overwrite newer state.
       if (signal.aborted) return;
       setData(null);
     } finally {
@@ -225,24 +561,12 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   }, [fetchUsage, range, surface]);
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
-  // Keep the heatmap scrolled to the right edge (most recent weeks): cells are fixed-size,
-  // so on narrow panels the grid overflows and the ResizeObserver re-pins the right edge.
-  const heatmapRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = heatmapRef.current;
-    if (!el) return;
-    const pinRight = () => { el.scrollLeft = el.scrollWidth; };
-    pinRight();
-    const observer = new ResizeObserver(pinRight);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [heatmap, range, loading]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
     const models = data?.models ?? [];
-    const sorted = [...models].sort((a, b) => b.totalTokens - a.totalTokens);
+    const sorted = models.toSorted((a, b) => b.totalTokens - a.totalTokens);
     if (!q) return sorted.slice(0, 100);
     return sorted.filter(m =>
       m.model.toLowerCase().includes(q) ||
@@ -252,7 +576,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   }, [data?.models, modelQuery]);
 
   const sortedProviders = useMemo(() =>
-    [...(data?.providers ?? [])].sort((a, b) => b.totalTokens - a.totalTokens),
+    (data?.providers ?? []).toSorted((a, b) => b.totalTokens - a.totalTokens),
     [data?.providers],
   );
 
@@ -260,50 +584,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head usage-head">
         <h2>{t("usage.title")}</h2>
-        <div className="usage-filters">
-          <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-            {(["all", "codex", "claude"] as UsageSurface[]).map(choice => {
-              const label = t(`logs.filter.surface.${choice}`);
-              return (
-                <button
-                  key={choice}
-                  type="button"
-                  className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
-                  aria-label={label}
-                  aria-pressed={surface === choice}
-                  onClick={() => setSurface(choice)}
-                >
-                  {choice === "codex" && (
-                    <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-                  )}
-                  {choice === "claude" && (
-                    <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
-                  )}
-                  <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
-                    {label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-            {(["all", "30d", "7d"] as Range[]).map(r => {
-              const label = t(`usage.range.${r}`);
-              return (
-                <button
-                  key={r}
-                  type="button"
-                  className={`usage-segmented-btn${range === r ? " active" : ""}`}
-                  aria-label={label}
-                  aria-pressed={range === r}
-                  onClick={() => setRange(r)}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
 
@@ -313,189 +594,11 @@ export default function Usage({ apiBase }: { apiBase: string }) {
         <EmptyState title={t("usage.empty")} />
       ) : (
         <>
-          <div className="usage-cards usage-cards-3x2">
-            <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{data.summary.requests}</div></div>
-            <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{data.summary.measuredRequests}</div></div>
-            <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(data.summary.totalTokens, locale)}</div></div>
-            <div className="stat" title={t("usage.card.cachedTokensHint")}>
-              <div className="muted">{t("usage.card.cachedTokens")}</div>
-              <div className="stat-value">{formatTokens(data.summary.cacheReadInputTokens ?? data.summary.cachedInputTokens, locale)}</div>
-              {(data.summary.cacheCreationInputTokens ?? 0) > 0 && (
-                <div className="muted text-caption">
-                  {t("usage.card.cacheWriteTokens")}: {formatTokens(data.summary.cacheCreationInputTokens ?? 0, locale)}
-                </div>
-              )}
-            </div>
-            <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(data.summary.coverageRatio)}</div></div>
-            <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
-          </div>
-
-          <section className="panel" style={{ marginTop: 16 }}>
-            <h3 className="panel-title">{t("usage.section.heatmap")}</h3>
-            {range === "7d" ? (
-              <div className="daybars">
-                {weekBars.map((d, i) => {
-                  const max = Math.max(1, ...weekBars.map(x => x.totalTokens));
-                  const pct = Math.round((d.totalTokens / max) * 100);
-                  const label = d.date.slice(5);
-                  return (
-                    <div key={i} className="daybar"
-                      onMouseEnter={() => setHoverDay(i)}
-                      onMouseLeave={() => setHoverDay(h => (h === i ? null : h))}>
-                      <div className="daybar-track">
-                        <div className="daybar-stack" style={{ height: `${pct}%` }}>
-                          {d.models.map(m => (
-                            <div key={`${m.provider}/${m.model}`} className="daybar-seg"
-                              style={{
-                                flexGrow: m.totalTokens,
-                                background: modelColor(m.model, m.provider),
-                              }} />
-                          ))}
-                          {d.models.length === 0 && d.totalTokens > 0 && (
-                            <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
-                          )}
-                        </div>
-                      </div>
-                      {hoverDay === i && d.totalTokens > 0 && (
-                        <div className="daybar-tip">
-                          <div className="daybar-tip-date">{d.date}</div>
-                          {d.models.slice(0, 8).map(m => (
-                            <div key={`${m.provider}/${m.model}`} className="daybar-tip-row">
-                              <span className="daybar-tip-swatch" style={{ background: modelColor(m.model, m.provider) }} />
-                              <span className="daybar-tip-name">{modelLabel(m.model)}</span>
-                              <span className="daybar-tip-val">{formatTokens(m.totalTokens, locale)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      <span className="daybar-count">{formatTokens(d.totalTokens, locale)}</span>
-                      <span className="daybar-label muted">{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-            <div className="heatmap" ref={heatmapRef}>
-              <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
-                <span className="heatmap-day-spacer" />
-                {heatmap.months.map((m, i) => (
-                  <span key={i} className="heatmap-month" style={{ gridColumn: m.col + 2 }}>{m.label}</span>
-                ))}
-              </div>
-              <div className="heatmap-body">
-                <div className="heatmap-days">
-                  <span /><span>{t("usage.dayMon")}</span><span /><span>{t("usage.dayWed")}</span><span /><span>{t("usage.dayFri")}</span><span />
-                </div>
-                <div className="heatmap-grid" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}>
-                  {heatmap.weeks.map((week, wi) => (
-                    <div key={wi} className="heatmap-week">
-                      {week.map((cell, di) => (
-                        <div key={`${wi}-${di}`}
-                          className={`heatmap-cell heatmap-cell-${cell.level}`}
-                          onMouseEnter={e => {
-                            if (!cell.date) return;
-                            const rect = (e.target as HTMLElement).getBoundingClientRect();
-                            setHoverCell({ wi, di, x: rect.left + rect.width / 2, y: rect.top });
-                          }}
-                          onMouseLeave={() => setHoverCell(h => (h?.wi === wi && h?.di === di ? null : h))} />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {hoverCell && (() => {
-                const cell = heatmap.weeks[hoverCell.wi]?.[hoverCell.di];
-                if (!cell?.date) return null;
-                return (
-                  <div className="heatmap-tip" style={{ left: hoverCell.x, top: hoverCell.y }}>
-                    <div className="heatmap-tip-date">{cell.date}</div>
-                    <div className="heatmap-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(cell.totalTokens, locale) })}</div>
-                    <div className="heatmap-tip-req muted">{t("usage.heatmap.tooltipRequests", { requests: cell.requests })}</div>
-                  </div>
-                );
-              })()}
-              <div className="heatmap-legend muted">
-                <span>{t("usage.heatmap.less")}</span>
-                {[0, 1, 2, 3, 4].map(l => <span key={l} className={`heatmap-cell heatmap-cell-${l}`} />)}
-                <span>{t("usage.heatmap.more")}</span>
-              </div>
-            </div>
-            )}
-          </section>
-
-          <section className="panel" style={{ marginTop: 16 }}>
-            <div className="panel-head">
-              <h3 className="panel-title">{t("usage.section.models")}</h3>
-              <input className="input" placeholder={t("usage.search.models")}
-                value={modelQuery} onChange={e => setModelQuery(e.target.value)} />
-            </div>
-            <div className="tbl-wrap usage-scroll">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>{t("logs.col.model")}</th>
-                    <th>{t("logs.col.provider")}</th>
-                    <th className="num">{t("usage.col.requests")}</th>
-                    <th className="num">{t("usage.col.measured")}</th>
-                    <th className="num">{t("usage.col.tokens")}</th>
-                    <th>{t("usage.col.share")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredModels.map(m => (
-                    <tr key={`${m.provider}/${m.model}/${m.resolvedModel ?? ""}`}>
-                      <td className="mono">{modelLabel(m.resolvedModel ?? m.model)}</td>
-                      <td className="muted">{m.provider}</td>
-                      <td className="num">{m.requests}</td>
-                      <td className="num">{m.measuredRequests}</td>
-                      <td className="num mono">{formatTokens(m.totalTokens, locale)}</td>
-                      <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(m.shareRatio * 100)}%` }} /></div></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel" style={{ marginTop: 16 }}>
-            <h3 className="panel-title">{t("usage.section.providers")}</h3>
-            <div className="tbl-wrap usage-scroll">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>{t("logs.col.provider")}</th>
-                    <th className="num">{t("usage.col.requests")}</th>
-                    <th className="num">{t("usage.col.measured")}</th>
-                    <th className="num">{t("usage.col.tokens")}</th>
-                    <th>{t("usage.col.share")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedProviders.map(p => (
-                    <tr key={p.provider}>
-                      <td className="mono">{p.provider}</td>
-                      <td className="num">{p.requests}</td>
-                      <td className="num">{p.measuredRequests}</td>
-                      <td className="num mono">{formatTokens(p.totalTokens, locale)}</td>
-                      <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(p.shareRatio * 100)}%` }} /></div></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel" style={{ marginTop: 16 }}>
-            <h3 className="panel-title">{t("usage.section.coverage")}</h3>
-            <div className="usage-cards usage-cards-3x2">
-              <div className="stat"><div className="muted">{t("usage.coverage.measured")}</div><div className="stat-value">{data.summary.measuredRequests}</div></div>
-              <div className="stat"><div className="muted">{t("usage.coverage.reported")}</div><div className="stat-value">{data.summary.reportedRequests}</div></div>
-              <div className="stat"><div className="muted">{t("usage.coverage.estimated")}</div><div className="stat-value">{data.summary.estimatedRequests}</div></div>
-              <div className="stat"><div className="muted">{t("logs.tokens.unreported")}</div><div className="stat-value">{data.summary.unreportedRequests}</div></div>
-              <div className="stat"><div className="muted">{t("logs.tokens.unsupported")}</div><div className="stat-value">{data.summary.unsupportedRequests}</div></div>
-            </div>
-            <p className="muted text-control" style={{ marginTop: 12 }}>{t("usage.coverage.note")}</p>
-          </section>
+          <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
+          <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
+          <UsageModelsTable models={filteredModels} modelQuery={modelQuery} onModelQuery={setModelQuery} locale={locale} t={t} />
+          <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} />
+          <UsageCoveragePanel summary={data.summary} t={t} />
         </>
       )}
     </>

@@ -146,7 +146,7 @@ export function toolAllowedByChoice(tool: Pick<OcxTool, "namespace" | "name">, a
 }
 
 export function resolveToolChoiceWireName(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined, name: string): string {
-  const match = tools?.find(tool => toolChoiceAliases(tool).includes(name));
+  const match = tools?.find(tool => new Set(toolChoiceAliases(tool)).has(name));
   return match ? namespacedToolName(match.namespace, match.name) : name;
 }
 

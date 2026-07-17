@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { IconPlus, IconX, IconCheck } from "../icons";
-import { useI18n, LOCALES } from "../i18n";
+import { useI18n, LOCALES } from "../i18n/shared";
 
 interface ApiKeyEntry {
   id: string;
   name: string;
   prefix: string;
   createdAt: string;
+}
+
+function formatCreatedDate(iso: string, localeTag?: string): string {
+  return new Date(iso).toLocaleDateString(localeTag);
 }
 
 export default function ApiKeys({ apiBase }: { apiBase: string }) {
@@ -105,11 +109,11 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
           <p className="muted small">{t("api.newKeyNote")}</p>
           <div className="api-form-row">
             <code className="api-code" style={{ flex: 1, wordBreak: "break-all" }}>{newKey}</code>
-            <button className="btn btn-sm btn-ghost" onClick={copyKey}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={copyKey}>
               {copied ? <><IconCheck /> {t("api.copied")}</> : t("api.copy")}
             </button>
           </div>
-          <button className="btn btn-sm btn-ghost" style={{ alignSelf: "flex-start" }} onClick={() => setNewKey(null)}>
+          <button type="button" className="btn btn-sm btn-ghost" style={{ alignSelf: "flex-start" }} onClick={() => setNewKey(null)}>
             {t("api.dismiss")}
           </button>
         </div>
@@ -119,13 +123,15 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         <h3 className="panel-title">{t("api.generateTitle")}</h3>
         <div className="api-form-row">
           <input
+            id="api-key-name"
             type="text"
             placeholder={t("api.keyNamePlaceholder")}
+            aria-label={t("api.keyNamePlaceholder")}
             value={newName}
             onChange={e => setNewName(e.target.value)}
             className="input"
           />
-          <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
+          <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>
             <IconPlus /> {creating ? t("api.generating") : t("api.generate")}
           </button>
         </div>
@@ -146,15 +152,15 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
                   <tr key={k.id}>
                     <td>{k.name}</td>
                     <td><code>{k.prefix}</code></td>
-                    <td>{new Date(k.createdAt).toLocaleDateString(localeTag)}</td>
+                    <td>{formatCreatedDate(k.createdAt, localeTag)}</td>
                     <td>
                       {confirmDelete === k.id ? (
                         <span className="api-actions">
-                          <button className="btn btn-sm btn-danger" onClick={() => handleDelete(k.id)}>{t("api.confirm")}</button>
-                          <button className="btn btn-sm btn-ghost" onClick={() => setConfirmDelete(null)}>{t("common.cancel")}</button>
+                          <button type="button" className="btn btn-sm btn-danger" onClick={() => handleDelete(k.id)}>{t("api.confirm")}</button>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirmDelete(null)}>{t("common.cancel")}</button>
                         </span>
                       ) : (
-                        <button className="btn btn-sm btn-ghost" aria-label={t("api.deleteAria")} onClick={() => setConfirmDelete(k.id)}><IconX /></button>
+                        <button type="button" className="btn btn-sm btn-ghost" aria-label={t("api.deleteAria")} onClick={() => setConfirmDelete(k.id)}><IconX /></button>
                       )}
                     </td>
                   </tr>

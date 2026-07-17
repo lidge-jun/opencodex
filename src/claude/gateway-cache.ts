@@ -57,12 +57,13 @@ export async function refreshGatewayModelCacheFromProxy(port: number, timeoutMs 
     if (!res.ok) return null;
     const body = await res.json() as { data?: unknown };
     if (!Array.isArray(body.data)) return null;
-    const models: GatewayModelRow[] = body.data
-      .filter(m => typeof m.id === "string" && (m.id as string).length > 0)
-      .map(m => ({
+    const models: GatewayModelRow[] = body.data.flatMap(m => {
+      if (typeof m.id !== "string" || (m.id as string).length === 0) return [];
+      return [{
         id: m.id as string,
         display_name: typeof m.display_name === "string" ? m.display_name : undefined,
-      }));
+      }];
+    });
     return writeGatewayModelCache(`http://127.0.0.1:${port}`, models, configDir);
   } catch {
     return null;

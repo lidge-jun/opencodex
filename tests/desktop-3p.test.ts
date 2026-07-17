@@ -109,7 +109,7 @@ describe("Claude Desktop 3P models", () => {
       [{ provider: "anthropic", id: "claude-opus-4-6" }, { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 }],
       "test-key",
     );
-    const reparsed = JSON.parse(JSON.stringify(config));
+    const reparsed = structuredClone(config);
     expect(reparsed).toMatchObject({
       inferenceProvider: "gateway",
       inferenceCredentialKind: "static",
@@ -133,14 +133,14 @@ describe("Claude Desktop 3P models", () => {
 
   test("hybrid mode keeps the static list AND discovery on (CCR-defensive)", () => {
     const config = generateDesktop3pConfig(4096, ["gpt-5.6-sol"], [], "test-key", "hybrid");
-    const reparsed = JSON.parse(JSON.stringify(config));
+    const reparsed = structuredClone(config);
     expect(reparsed.modelDiscoveryEnabled).toBe(true);
     expect(reparsed.inferenceModels.map((m: { name: string }) => m.name)).toEqual(["claude-opus-4-8-ncb"]);
   });
 
   test("generates a discovery-only config with --discovery-only", () => {
     const config = generateDesktop3pConfig(4096, ["gpt-5.6-sol"], [], "test-key", "discovery");
-    const reparsed = JSON.parse(JSON.stringify(config));
+    const reparsed = structuredClone(config);
     expect(reparsed.modelDiscoveryEnabled).toBe(true);
     expect(reparsed.inferenceModels).toBeUndefined();
     expect(resolveDesktop3pAlias("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
@@ -165,7 +165,7 @@ describe("Claude Desktop 3P models", () => {
       "test-key",
       "static",
     );
-    const reparsed = JSON.parse(JSON.stringify(config));
+    const reparsed = structuredClone(config);
     expect(reparsed).toMatchObject({
       inferenceProvider: "gateway",
       inferenceCredentialKind: "static",

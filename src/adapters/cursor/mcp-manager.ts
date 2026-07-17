@@ -170,14 +170,17 @@ export class CursorMcpManager {
   async listResources(server?: string): Promise<McpResourceListing[]> {
     await this.ensureConnected();
     const targets = server ? [this.servers.get(server)].filter(Boolean) as ConnectedServer[] : [...this.servers.values()];
-    const out: McpResourceListing[] = [];
-    for (const conn of targets) {
+    const listings = await Promise.all(targets.map(async (conn) => {
       const { resources } = await this.withTimeout(conn.client.listResources(), this.callTimeoutMs, `listResources ${conn.server.serverName}`);
-      for (const r of resources ?? []) {
-        out.push({ uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType, server: conn.server.serverName });
-      }
-    }
-    return out;
+      return (resources ?? []).map(r => ({
+        uri: r.uri,
+        name: r.name,
+        description: r.description,
+        mimeType: r.mimeType,
+        server: conn.server.serverName,
+      }));
+    }));
+    return listings.flat();
   }
 
   async readResource(server: string, uri: string): Promise<McpResourceContent> {

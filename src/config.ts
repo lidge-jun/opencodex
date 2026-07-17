@@ -83,11 +83,11 @@ function resolveRuntimePortPath(): string {
 
 const warnedConfigFallbacks = new Set<string>();
 
-const providerConfigSchema = z.object({
+const providerConfigSchema = z.looseObject({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
   allowPrivateNetwork: z.boolean().optional(),
-}).passthrough();
+});
 
 const RESERVED_PROVIDER_NAMES = new Set(["__proto__", "prototype", "constructor"]);
 const PROVIDER_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
@@ -138,13 +138,13 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
-const configSchema = z.object({
+const configSchema = z.looseObject({
   port: z.number().int().min(0).max(65535).default(10100),
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
-}).passthrough().superRefine((config, ctx) => {
+}).superRefine((config, ctx) => {
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {
       ctx.addIssue({

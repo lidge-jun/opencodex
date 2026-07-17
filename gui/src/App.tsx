@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
@@ -10,7 +11,7 @@ import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
-import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
+import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
@@ -59,7 +60,7 @@ function readStoredTheme(): Theme {
 export default function App() {
   const [page, setPageState] = useState<Page>(readPageFromHash);
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
-  const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const { locale, setLocale } = useI18n();
   const t = useT();
 
@@ -89,30 +90,23 @@ export default function App() {
     else { el.setAttribute("data-theme", theme); localStorage.setItem(THEME_KEY, theme); }
   }, [theme]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchRuntimeVersion = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/healthz`);
-        if (!res.ok) return;
-        const version = readRuntimeVersion(await res.json());
-        if (!cancelled && version) setRuntimeVersion(version);
-      } catch {
-        // Keep the build-time fallback when the proxy is unavailable.
-      }
-    };
-    fetchRuntimeVersion();
-    const interval = setInterval(fetchRuntimeVersion, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  const { data: healthData } = useQuery({
+    queryKey: ["healthz", API_BASE],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/healthz`);
+      if (!res.ok) throw new Error("health check failed");
+      return res.json();
+    },
+    refetchInterval: 30_000,
+    retry: false,
+  });
 
   const cycleTheme = () => setTheme(t => (t === "light" ? "dark" : t === "dark" ? "system" : "light"));
   const ThemeIcon = THEME_ICON[theme];
-  const displayedVersion = runtimeVersion ?? __APP_VERSION__;
+  const displayedVersion = readRuntimeVersion(healthData) ?? __APP_VERSION__;
 
   const [stopping, setStopping] = useState(false);
   // Sidebar "Claude ON" toggle — literal label in every locale (product name).
-  const [claudeEnabled, setClaudeEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!navOpen) return;
@@ -142,28 +136,31 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/api/claude-code`)
-      .then(res => res.json())
-      .then(d => { if (!cancelled && typeof d.enabled === "boolean") setClaudeEnabled(d.enabled); })
-      .catch(() => { /* toggle stays hidden until the API answers */ });
-    return () => { cancelled = true; };
-  }, []);
+  const { data: claudeData } = useQuery({
+    queryKey: ["claude-code", API_BASE],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/claude-code`);
+      if (!res.ok) throw new Error("claude-code fetch failed");
+      return res.json() as Promise<{ enabled?: boolean }>;
+    },
+    retry: false,
+  });
+  const claudeEnabled =
+    claudeData !== undefined && typeof claudeData.enabled === "boolean" ? claudeData.enabled : null;
 
   const toggleClaude = async () => {
     if (claudeEnabled === null) return;
     const next = !claudeEnabled;
-    setClaudeEnabled(next); // optimistic
+    queryClient.setQueryData(["claude-code", API_BASE], { enabled: next });
     try {
       const res = await fetch(`${API_BASE}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: next }),
       });
-      if (!res.ok) setClaudeEnabled(!next);
+      if (!res.ok) queryClient.setQueryData(["claude-code", API_BASE], { enabled: !next });
     } catch {
-      setClaudeEnabled(!next);
+      queryClient.setQueryData(["claude-code", API_BASE], { enabled: !next });
     }
   };
   const handleStop = async () => {
@@ -206,7 +203,7 @@ export default function App() {
         </div>
         <nav>
           {NAV.map(({ id, tkey, Icon }) => (
-            <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
+            <button type="button" key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
               onClick={() => { setPageState(id); setNavOpen(false); }}
               aria-current={page === id ? "page" : undefined}>
               <Icon /> {t(tkey)}

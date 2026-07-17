@@ -70,7 +70,7 @@ export async function runCursorTurnWithRetry(
   signal: AbortSignal | undefined,
   onEvent: (message: CursorServerMessage, transport: CursorTransport) => void,
 ): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
+  const attemptOnce = async (attempt: number): Promise<void> => {
     if (signal?.aborted) throw abortError(signal);
     const transport = makeTransport(input);
     let emittedAny = false;
@@ -104,10 +104,12 @@ export async function runCursorTurnWithRetry(
         backoffMs,
       });
       await sleepWithAbort(backoffMs, signal);
+      return attemptOnce(attempt + 1);
     } finally {
       await transport.close?.();
     }
-  }
+  };
+  return attemptOnce(0);
 }
 
 export type { CursorTransportFactory };

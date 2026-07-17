@@ -273,12 +273,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function toolOutputText(output: unknown): string {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return JSON.stringify(output ?? "");
-  return output.map(part => {
-    if (!isPlainObject(part)) return "";
-    if (typeof part.text === "string") return part.text;
-    if (part.type === "refusal" && typeof part.refusal === "string") return `[refusal] ${part.refusal}`;
-    return "";
-  }).filter(Boolean).join("\n");
+  return output.flatMap(part => {
+    let v = "";
+    if (isPlainObject(part)) {
+      if (typeof part.text === "string") v = part.text;
+      else if (part.type === "refusal" && typeof part.refusal === "string") v = `[refusal] ${part.refusal}`;
+    }
+    return v ? [v] : [];
+  }).join("\n");
 }
 
 /**

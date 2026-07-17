@@ -392,6 +392,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .update-restart { border-top: 1px solid var(--border-soft); padding-top: 12px; }
 .injection-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .injection-label { font-weight: var(--weight-semibold); }
+.dash-info-btn { width: 24px; height: 24px; min-width: 24px; flex: 0 0 24px; padding: 0; border-radius: var(--radius-pill); color: var(--muted); }
+.dash-mode-toggle { display: inline-flex; border-radius: var(--radius-pill); background: var(--surface-soft, var(--raised)); padding: 3px; gap: 2; }
 
 @media (max-width: 800px) {
   .injection-head { gap: 8px; }
@@ -603,6 +605,25 @@ select.input { appearance: none; }
 
 /* ---- modal ---- */
 /* Liquid-glass modal: heavy tint + blur so background content is unreadable */
+dialog.modal-overlay {
+  border: none;
+  margin: 0;
+  padding: 8vh 16px;
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  height: 100%;
+  background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82));
+  backdrop-filter: blur(40px) saturate(1.2);
+  -webkit-backdrop-filter: blur(40px) saturate(1.2);
+}
+dialog.modal-overlay:not([open]) { display: none; }
+dialog.modal-overlay[open] { display: flex; align-items: flex-start; justify-content: center; }
+dialog.modal-overlay::backdrop {
+  background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82));
+  backdrop-filter: blur(40px) saturate(1.2);
+  -webkit-backdrop-filter: blur(40px) saturate(1.2);
+}
 .modal-overlay { position: fixed; inset: 0; background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82)); backdrop-filter: blur(40px) saturate(1.2); -webkit-backdrop-filter: blur(40px) saturate(1.2); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; z-index: 50; }
 .modal-card { background: color-mix(in oklab, canvas 92%, transparent); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; width: 100%; max-width: 520px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.18); max-height: 84vh; overflow-y: auto; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -613,6 +634,63 @@ select.input { appearance: none; }
 .card-head strong { min-width: 0; overflow-wrap: anywhere; }
 .card-sub { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); padding: 0 16px 10px; min-width: 0; overflow-wrap: anywhere; }
 .card-active { border-color: var(--accent-ring); }
+button.card.card-selectable {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  cursor: pointer;
+}
+button.card.card-selectable:disabled { cursor: default; }
+.card-select-hit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  cursor: pointer;
+}
+.card-select-hit:disabled { cursor: default; }
+.modal-card-narrow { max-width: 440px; }
+.modal-title-sm { margin-bottom: 4px; }
+.input-mb { margin-bottom: 12px; }
+.list-row-mb { margin-bottom: 8px; }
+.list-row-inner { display: flex; align-items: center; gap: 10px; }
+.notice-mt { margin-top: 8px; }
+.notice-mt-lg { margin-top: 12px; }
+.btn-block { width: 100%; }
+.btn-block-mt { width: 100%; justify-content: center; margin-top: 12px; }
+.modal-spinner { text-align: center; padding: 24px 0; }
+.spin-lg { width: 24px; height: 24px; }
+.help-popup-anchor { position: relative; display: inline-flex; }
+.help-popup-trigger { width: 22px; height: 22px; min-width: 22px; padding: 0; border-radius: var(--radius-pill); color: var(--muted); }
+.help-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(360px, calc(100vw - 48px));
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  color: var(--text);
+  z-index: 10;
+}
+.help-popup::backdrop { background: transparent; }
+.help-popup-close { position: absolute; top: 4px; right: 4; width: 24px; height: 24px; min-width: 24px; }
+.help-popup-body { padding-right: 16px; }
 .card-right { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: var(--text-caption); color: var(--faint); }
 .btn-icon-danger.card-right {
   appearance: none;

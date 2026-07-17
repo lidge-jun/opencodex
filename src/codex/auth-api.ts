@@ -200,13 +200,13 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await mapper(items[index]!);
-    }
-  });
-  await Promise.all(workers);
+  const worker = async (): Promise<void> => {
+    const index = next++;
+    if (index >= items.length) return;
+    results[index] = await mapper(items[index]!);
+    await worker();
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
   return results;
 }
 
@@ -350,14 +350,16 @@ export function clearCodexQuotaPrimeState(): void {
 export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
   const runtimeConfig = getRuntimeConfig(config);
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(a => !a.isMain);
-  const mainInfo = await fetchMainAccountInfo(forceRefresh);
-  const withQuota = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
-    const cred = getCodexAccountCredential(a.id);
-    const quotaResult = cred
-      ? await fetchPoolAccountQuota(a.id, forceRefresh, a.plan)
-      : { quota: null, needsReauth: true };
-    return poolAccountDto(a, quotaResult, !!cred);
-  });
+  const [mainInfo, withQuota] = await Promise.all([
+    fetchMainAccountInfo(forceRefresh),
+    mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
+      const cred = getCodexAccountCredential(a.id);
+      const quotaResult = cred
+        ? await fetchPoolAccountQuota(a.id, forceRefresh, a.plan)
+        : { quota: null, needsReauth: true };
+      return poolAccountDto(a, quotaResult, !!cred);
+    }),
+  ]);
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: maskEmail(mainInfo.email) ?? "Codex App login",

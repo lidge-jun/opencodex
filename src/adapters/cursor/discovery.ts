@@ -33,8 +33,10 @@ export function inferCursorContextWindow(modelId: string): number {
 
 function normalizeInputModalities(input: string[] | undefined): string[] {
   const values = (input ?? [...CURSOR_DEFAULT_INPUT_MODALITIES])
-    .map(item => item.trim())
-    .filter(Boolean);
+    .flatMap(item => {
+      const v = item.trim();
+      return v ? [v] : [];
+    });
   return values.length > 0 ? [...new Set(values)] : [...CURSOR_DEFAULT_INPUT_MODALITIES];
 }
 

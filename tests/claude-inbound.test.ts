@@ -229,7 +229,7 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
 
   test("cacheKeySource never leaks into the serialized wire body", () => {
     const { body } = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: "be nice" });
-    const wire = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+    const wire = structuredClone(body) as Record<string, unknown>;
     for (const key of Object.keys(wire)) {
       expect(key.toLowerCase()).not.toContain("cachekeysource");
     }

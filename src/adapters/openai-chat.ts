@@ -47,11 +47,12 @@ function extractErrorDetail(parsed: unknown): string | undefined {
   const det = obj.detail;
   if (typeof det === "string" && det.trim()) return det.trim();
   if (Array.isArray(det)) {
-    const msgs = det
-      .map(item => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).msg === "string"
+    const msgs = det.flatMap(item => {
+      const m = item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).msg === "string"
         ? ((item as Record<string, unknown>).msg as string).trim()
-        : ""))
-      .filter(m => m.length > 0);
+        : "";
+      return m.length > 0 ? [m] : [];
+    });
     if (msgs.length > 0) return msgs.join("; ");
   }
   // Generic fallbacks: { message } / RFC7807 { title }
@@ -131,7 +132,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         // with neither content, tool calls, nor a provider-supported reasoning_content field.
         if (chatMsg.content === undefined && chatMsg.tool_calls === undefined && chatMsg.reasoning_content === undefined) break;
         out.push(chatMsg);
-        pendingToolCallIds = new Set(toolCalls.map(tc => tc.id).filter(Boolean));
+        pendingToolCallIds = new Set(toolCalls.flatMap(tc => (tc.id ? [tc.id] : [])));
         break;
       }
       case "toolResult": {

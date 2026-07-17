@@ -35,8 +35,12 @@ export interface ResolvedMcpServer extends CursorMcpServerConfig {
 export function resolveMcpServers(provider: OcxProviderConfig): ResolvedMcpServer[] {
   const raw = provider.mcpServers;
   if (!raw) return [];
-  return Object.entries(raw)
-    .map(([serverName, cfg]) => ({ serverName, ...cfg }))
-    .filter(server => server.enabled !== false)
-    .filter(server => Boolean(server.command || server.url));
+  const servers: ResolvedMcpServer[] = [];
+  for (const [serverName, cfg] of Object.entries(raw)) {
+    const server = { serverName, ...cfg };
+    if (server.enabled !== false && Boolean(server.command || server.url)) {
+      servers.push(server);
+    }
+  }
+  return servers;
 }

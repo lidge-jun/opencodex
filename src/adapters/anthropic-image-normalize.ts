@@ -291,29 +291,28 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   interface Entry { target: NormalizeTarget; sourceB64: string; sourceMedia: string; pos: number; size: number; done: boolean }
   const entries: (Entry | null)[] = new Array(n).fill(null);
 
-  for (let i = 0; i < n; i++) {
-    const target = targets[i];
+  await Promise.all(targets.map(async (target, i) => {
     const b64 = target.base64;
-    if (!b64) continue; // URL source: no base64 weight, never touched here.
+    if (!b64) return; // URL source: no base64 weight, never touched here.
     const newestFirstIndex = n - 1 - i;
     // Images beyond the processing limit are left untouched (anthropic passes 100:
     // its guard textifies the surplus anyway, so decode/encode work there is waste).
-    if (newestFirstIndex >= processLimit) continue;
+    if (newestFirstIndex >= processLimit) return;
     if (b64.length > MAX_INPUT_BASE64_LENGTH) {
       target.drop(BOMB_TEXT);
-      continue;
+      return;
     }
     const dims = sniffImageDimensions(b64);
     if (dims && dims.width * dims.height > MAX_INPUT_PIXELS) {
       target.drop(BOMB_TEXT);
-      continue;
+      return;
     }
     const sourceMedia = target.mediaType.toLowerCase();
     const pos = initialPosition(newestFirstIndex, bias);
     const result = await processAt(b64, pos, sourceMedia, encode, validate);
     if (result.kind === "failed") {
       target.drop(UNDECODABLE_TEXT);
-      continue;
+      return;
     }
     let size = b64.length;
     if (result.kind === "encoded") {
@@ -321,7 +320,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
       size = result.data.length;
     }
     entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
-  }
+  }));
 
   // Aggregate demotion loop (audit rounds 1+3): while the measured total exceeds the
   // budget, demote the OLDEST not-yet-terminal image one position and re-encode.

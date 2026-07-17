@@ -339,9 +339,11 @@ function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknow
     // Anthropic rejects tool_result with empty text content blocks.
     content = msg.content || "(empty tool output)";
   } else {
-    const parts = (msg.content as OcxContentPart[])
-      .map(toAnthropicContentPart)
-      .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text));
+    const parts = (msg.content as OcxContentPart[]).flatMap(part => {
+      const p = toAnthropicContentPart(part);
+      if ((p as { type?: string }).type === "text" && !(p as { text?: string }).text) return [];
+      return [p];
+    });
     content = parts.length > 0 ? parts : "(empty tool output)";
   }
   return {
@@ -385,9 +387,11 @@ function messagesToAnthropicFormat(
           // Anthropic rejects empty string text content blocks.
           content = msg.content || "(empty)";
         } else {
-          const parts = (msg.content as OcxContentPart[])
-            .map(toAnthropicContentPart)
-            .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text));
+          const parts = (msg.content as OcxContentPart[]).flatMap(part => {
+            const p = toAnthropicContentPart(part);
+            if ((p as { type?: string }).type === "text" && !(p as { text?: string }).text) return [];
+            return [p];
+          });
           content = parts.length > 0 ? parts : "(empty)";
         }
         messages.push({ role: "user", content });

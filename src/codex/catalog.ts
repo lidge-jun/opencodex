@@ -184,11 +184,13 @@ export function applyNativeVisibility(entries: RawEntry[], disabledNative: Set<s
  * snapshot strictly improves on (exact ladders: luna has NO ultra; sol defaults to low).
  */
 const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
-  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
-    .filter(m => typeof m.slug === "string"
+  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? []).flatMap(m =>
+    typeof m.slug === "string"
       && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string)
-      && (m.slug as string).startsWith("gpt-5.6-"))
-    .map(m => [m.slug as string, m]),
+      && (m.slug as string).startsWith("gpt-5.6-")
+      ? [[m.slug as string, m] as const]
+      : [],
+  ),
 );
 
 /**
@@ -202,7 +204,7 @@ const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
 export function upstreamNativeEntry(slug: string): RawEntry | null {
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   if (!entry) return null;
-  const clone = JSON.parse(JSON.stringify(entry)) as RawEntry;
+  const clone = structuredClone(entry) as RawEntry;
   delete clone.minimal_client_version;
   return clone;
 }
@@ -696,7 +698,7 @@ export function loadCatalogTemplate(): RawEntry | null {
     ?? findNativeTemplate(readCatalogBackup(catalogPath))
     ?? findNativeTemplate(readCatalog(activeCodexModelsCachePath()))
     ?? findNativeTemplate(loadBundledCodexCatalog());
-  return native ? JSON.parse(JSON.stringify(native)) : null;
+  return native ? structuredClone(native) : null;
 }
 
 /**
@@ -823,7 +825,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
     if (upstream) return finishUpstreamNativeEntry(upstream, priority);
   }
   if (template) {
-    const e = JSON.parse(JSON.stringify(template)) as RawEntry;
+    const e = structuredClone(template) as RawEntry;
     e.slug = slug;
     e.display_name = slug;
     e.description = desc;
@@ -937,9 +939,11 @@ export function listCatalogNativeSlugs(): string[] {
  * never advertise an unsupported native. Exported for regression coverage.
  */
 export function filterSupportedNativeSlugs(models: RawEntry[]): string[] {
-  return models
-    .filter(m => typeof m.slug === "string" && !(m.slug as string).includes("/") && m.visibility === "list" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
-    .map(m => m.slug as string);
+  return models.flatMap(m =>
+    typeof m.slug === "string" && !(m.slug as string).includes("/") && m.visibility === "list" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string)
+      ? [m.slug as string]
+      : [],
+  );
 }
 
 /**
@@ -1078,7 +1082,7 @@ export function isDatedVariantId(liveId: string, configuredId: string): boolean 
 // repeated on every poll is pure noise. Warn once per provider until the id set changes.
 const lastDropWarnSignature = new Map<string, string>();
 function warnDroppedConfiguredIdsOnce(name: string, droppedConfiguredIds: string[]): void {
-  const signature = [...droppedConfiguredIds].sort().join(",");
+  const signature = droppedConfiguredIds.toSorted().join(",");
   if (lastDropWarnSignature.get(name) === signature) return;
   lastDropWarnSignature.set(name, signature);
   console.warn(
@@ -1185,13 +1189,15 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
     }
     const items = data;
-    const live = items.map(m => applyProviderConfigHints(name, prov, {
-      id: m.id,
-      provider: name,
-      owned_by: m.owned_by,
-      ...catalogHintsFromModelsApiItem(name, m),
-    }, contextCap))
-      .filter(m => shouldExposeProviderModel(name, m.id));
+    const live = items.flatMap(m => {
+      const entry = applyProviderConfigHints(name, prov, {
+        id: m.id,
+        provider: name,
+        owned_by: m.owned_by,
+        ...catalogHintsFromModelsApiItem(name, m),
+      }, contextCap);
+      return shouldExposeProviderModel(name, entry.id) ? [entry] : [];
+    });
     const liveIds = new Set(live.map(m => m.id));
     // Dated-release aliases (Anthropic pattern): older models may appear in the live catalog
     // ONLY under their dated id (claude-haiku-4-5-20251001) while the config names the
@@ -1275,13 +1281,12 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
   // same merged view or its advertisements drift from actual proxy behavior (e.g. a
   // vision-sidecar model advertised text-only, blocking image attachments app-side).
   // Enrich a CLONE: hydrated defaults must never leak into the persisted config.
-  const activeProviders = Object.entries(config.providers)
-    .filter(([, prov]) => prov.disabled !== true)
-    .map(([name, prov]): [string, OcxProviderConfig] => {
-      const enriched = { ...prov };
-      enrichProviderFromRegistry(name, enriched);
-      return [name, enriched];
-    });
+  const activeProviders = Object.entries(config.providers).flatMap(([name, prov]): [string, OcxProviderConfig][] => {
+    if (prov.disabled === true) return [];
+    const enriched = { ...prov };
+    enrichProviderFromRegistry(name, enriched);
+    return [[name, enriched]];
+  });
   const lists = await Promise.all(
     activeProviders.map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
   );
@@ -1338,7 +1343,7 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
   if (!featured || featured.length === 0) return goModels;
   const rank = new Map(featured.map((id, i) => [id, i]));
   const keyOf = (m: CatalogModel) => `${m.provider}/${m.id}`;
-  return [...goModels].sort((a, b) => {
+  return goModels.toSorted((a, b) => {
     const ra = rank.has(keyOf(a)) ? rank.get(keyOf(a))! : Number.MAX_SAFE_INTEGER;
     const rb = rank.has(keyOf(b)) ? rank.get(keyOf(b))! : Number.MAX_SAFE_INTEGER;
     return ra - rb;
@@ -1362,13 +1367,14 @@ export function mergeCatalogEntriesForSync(
   multiAgentMode: MultiAgentMode = "default",
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
-  const native = catalogModels
-    .filter(m => typeof m.slug === "string"
-      && !(m.slug as string).includes("/")
-      && !goIds.has(m.slug as string)
-      && !isUnsupportedOpenAiNativeSlug(m.slug as string))
-    .map(m => {
-      const slug = m.slug as string;
+  const native = catalogModels.flatMap(m => {
+    if (typeof m.slug !== "string"
+      || (m.slug as string).includes("/")
+      || goIds.has(m.slug as string)
+      || isUnsupportedOpenAiNativeSlug(m.slug as string)) {
+      return [];
+    }
+    const slug = m.slug as string;
       // Featured models rank first (rank order); non-featured natives are pushed below the featured
       // block when any model is featured, else keep their pristine baseline priority.
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
@@ -1390,13 +1396,13 @@ export function mergeCatalogEntriesForSync(
             : typeof upstream.priority === "number" ? upstream.priority : priority;
         const finished = finishUpstreamNativeEntry(upstream, 9);
         finished.priority = upgradePriority;
-        return finished;
+        return [finished];
       }
       const preserved = normalizeServiceTiers({ ...m, priority });
       // Older natives kept from disk still need the mock top tiers (max + ultra always
       // for subagent max spawns; wire-clamped to the model's real top rung).
       if (!isGpt56NativeSlug(slug)) ensureUltraReasoningLevel(preserved);
-      return preserved;
+      return [preserved];
     });
 
   // Backfill any native OpenAI slug that the on-disk catalog is missing (e.g. gpt-5.5), so a
@@ -1410,7 +1416,7 @@ export function mergeCatalogEntriesForSync(
       : featured.length > 0
         ? featured.length + 100
         : 9;
-    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
+    native.push(deriveEntry(template ? structuredClone(template) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
   }
 
   let finalRoutedEntries = routedEntries;
@@ -1495,16 +1501,16 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   const featured = config.subagentModels ?? [];
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-  const goEntries = buildCatalogEntries(template ? JSON.parse(JSON.stringify(template)) : null, [], orderedGoModels, featured, websocketsEnabled(config), multiAgentMode);
+  const goEntries = buildCatalogEntries(template ? structuredClone(template) : null, [], orderedGoModels, featured, websocketsEnabled(config), multiAgentMode);
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
   const baseline = readNativeBaseline(catalogPath);
   const goIds = new Set(enabledGo.map(m => m.id));
   const gatheredProviderNames = new Set(
-    Object.entries(config.providers ?? {})
-      .filter(([, prov]) => prov.disabled !== true)
-      .map(([name]) => name),
+    Object.entries(config.providers ?? {}).flatMap(([name, prov]) =>
+      prov.disabled === true ? [] : [name],
+    ),
   );
   // Central WS capability override on the FINAL on-disk catalog (the file Codex reads). Applies to
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a

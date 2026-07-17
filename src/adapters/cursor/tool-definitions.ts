@@ -231,9 +231,7 @@ export function buildCursorToolGuidanceSystemNote(
 ): string | undefined {
   if (!tools?.length) return undefined;
   const wireNames = [...new Set(
-    tools
-      .filter(tool => toolChoiceAllows(tool, toolChoice))
-      .map(tool => cursorToolWireName(tool)),
+    tools.flatMap(tool => toolChoiceAllows(tool, toolChoice) ? [cursorToolWireName(tool)] : []),
   )];
   if (wireNames.length === 0) return undefined;
 
@@ -291,14 +289,15 @@ export function buildCursorToolDefinitions(
   toolChoice?: OcxRequestOptions["toolChoice"],
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
-  return tools.filter(tool => toolChoiceAllows(tool, toolChoice)).map(tool => {
+  return tools.flatMap(tool => {
+    if (!toolChoiceAllows(tool, toolChoice)) return [];
     const wireName = cursorToolWireName(tool);
-    return create(McpToolDefinitionSchema, {
+    return [create(McpToolDefinitionSchema, {
       name: wireName,
       toolName: wireName,
       providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
       description: tool.description,
       inputSchema: encodeCursorInputSchema(cursorToolInputSchema(tool)),
-    });
+    })];
   });
 }

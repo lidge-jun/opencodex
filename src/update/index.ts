@@ -74,6 +74,26 @@ export function updateCommand(installer: Installer, tag: Channel): { bin: string
   return { bin, args };
 }
 
+/**
+ * Confirm the published tarball has an npm-registry integrity (SRI) hash before we
+ * install/update. Aborts when the registry response is missing `dist.integrity`.
+ */
+export function assertUpdatePackageIntegrity(tag: Channel, version: string | null): string {
+  if (!version) throw new Error("Cannot verify update package: version is unknown");
+  const npm = npmSpawnTarget("npm");
+  const r = spawnSync(
+    npm.bin,
+    ["view", `${PKG}@${version}`, "dist.integrity"],
+    { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell },
+  );
+  const integrity = r.status === 0 ? r.stdout.trim() : "";
+  // npm SRI looks like sha512-<base64>; reject anything else before spawning the installer.
+  if (!/^sha512-[A-Za-z0-9+/=]+$/.test(integrity)) {
+    throw new Error(`Update integrity check failed for ${PKG}@${version} (tag ${tag})`);
+  }
+  return integrity;
+}
+
 /** Human-readable form of {@link updateCommand}, used in the update prompt label. */
 export function updateCommandStr(installer: Installer, tag: Channel): string {
   const { bin, args } = updateCommand(installer, tag);
@@ -100,6 +120,9 @@ export async function runUpdate(): Promise<void> {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
     return;
   }
+
+  const EXPECTED_SHA = assertUpdatePackageIntegrity(tag, latest);
+  console.log(`Verified ${PKG}@${latest ?? tag} integrity ${EXPECTED_SHA.slice(0, 24)}…`);
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it permanently, so a successful update must reinstall/restart it afterwards.

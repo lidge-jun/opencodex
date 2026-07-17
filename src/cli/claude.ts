@@ -12,8 +12,8 @@ import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
-import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
+import { ensureProxyForClaude } from "./proxy-bootstrap";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -121,25 +121,6 @@ export async function fetchClaudeContextWindows(config: OcxConfig, port: number,
     console.error("⚠ 모델 컨텍스트 정보를 불러오지 못했습니다 — 1M 자동 표시는 이번 실행에서 생략됩니다.");
     return {};
   }
-}
-
-async function ensureProxyForClaude(): Promise<number | null> {
-  const live = await findLiveProxy();
-  if (live) return live.port;
-  const child = spawn(process.execPath, [process.argv[1], "start"], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: { ...process.env, OCX_SERVICE: "1" },
-  });
-  child.unref();
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const started = await findLiveProxy();
-    if (started) return started.port;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  return null;
 }
 
 const CLAUDE_INSTALL_HINT = "❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code";
