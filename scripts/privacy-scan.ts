@@ -52,6 +52,8 @@ function isAllowedEmail(file: string, email: string): boolean {
   if (domain === "example.test" || domain === "example.com" || domain === "test.com" || domain.endsWith(".test")) {
     return true;
   }
+  // URL-userinfo fixtures (https://user:pw@host/...) read as "pw@host" — not emails.
+  if (file.startsWith("tests/") && email === ["pw", "chatgpt.com"].join("@")) return true;
   return file.startsWith("tests/") && email === "a@b.com";
 }
 

@@ -4,6 +4,9 @@ import {
   getNormalizeStatsForTests,
   resetNormalizeStateForTests,
   TIER_SPECS,
+  IMAGE_NORMALIZE_CONCURRENCY,
+  normalizeImageTargets,
+  type NormalizeTarget,
   type EncodeFn,
 } from "../src/adapters/anthropic-image-normalize";
 import {
@@ -235,5 +238,233 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     const raw = [userMsg(Array.from({ length: 8 }, () => imageBlock(bigB64)))];
     enforceAnthropicImageLimits(raw);
     expect(contentOf(raw).some(b => b.type === "text")).toBe(true);
+  });
+});
+
+describe("bounded parallel first pass (WP170)", () => {
+  beforeEach(() => resetNormalizeStateForTests());
+
+  /** Deterministic counting barrier: encode calls park until released. */
+  function gatedEncoder() {
+    let active = 0;
+    let peak = 0;
+    let arrivals = 0;
+    let releaseAll: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { releaseAll = resolve; });
+    let onArrival: (() => void) | undefined;
+    const encode: EncodeFn = async (_input, spec) => {
+      active++;
+      arrivals++;
+      peak = Math.max(peak, active);
+      onArrival?.();
+      await gate;
+      active--;
+      // Under the hard cap immediately so each image encodes exactly once.
+      const b64len = 4 * 1024;
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), Math.ceil((b64len / 4) * 3));
+      return { data: px.slice(0, b64len), mediaType: "image/webp" };
+    };
+    return {
+      encode,
+      release: () => releaseAll!(),
+      stats: () => ({ active, peak, arrivals }),
+      waitForArrivals: (count: number) => new Promise<void>(resolve => {
+        const check = () => { if (arrivals >= count) resolve(); else onArrival = check; };
+        check();
+      }),
+    };
+  }
+
+  /** Unique fake PNGs (distinct hashes) so the tier cache cannot collapse encode calls. */
+  function distinctImages(count: number): string[] {
+    // Width > tier-0 maxEdge (2000) so no image rides the pass-through+validate lane —
+    // every fixture provably reaches the injected encoder.
+    return Array.from({ length: count }, (_, i) => fakePngBase64(2100 + i, 1500 + i, 8192));
+  }
+
+  test("parallelism is real but never exceeds the fixed concurrency limit", async () => {
+    const g = gatedEncoder();
+    const messages = [userMsg(distinctImages(10).map(b64 => imageBlock(b64)))];
+    const run = normalizeAnthropicImages(messages, { encode: g.encode });
+
+    // All pool workers must arrive at the gate together: parallel, and bounded.
+    await g.waitForArrivals(IMAGE_NORMALIZE_CONCURRENCY);
+    expect(g.stats().active).toBe(IMAGE_NORMALIZE_CONCURRENCY);
+    expect(g.stats().peak).toBeGreaterThan(1);
+
+    g.release();
+    await run;
+    expect(g.stats().peak).toBe(IMAGE_NORMALIZE_CONCURRENCY);
+    expect(g.stats().active).toBe(0);
+    // Every image reached the encoder (10 distinct hashes, one encode each).
+    expect(g.stats().arrivals).toBe(10);
+  });
+
+  test("a thrown target callback rejects the call, settles in-flight work, and stops new pulls", async () => {
+    // processAt swallows encode/validate throws into {kind:"failed"} (its own catch),
+    // so the production escape hatch is a throwing target callback (drop/replace).
+    const unhandled: unknown[] = [];
+    const trap = (err: unknown) => { unhandled.push(err); };
+    process.on("unhandledRejection", trap);
+    try {
+      let encodeCalls = 0;
+      const smallEncode: EncodeFn = async () => {
+        encodeCalls++;
+        const px = fakePngBase64(64, 64, 3 * 1024);
+        return { data: px.slice(0, 4 * 1024), mediaType: "image/webp" };
+      };
+      const images = distinctImages(9);
+      let replaceCalls = 0;
+      const targets: NormalizeTarget[] = images.map((b64, i) => ({
+        base64: b64,
+        mediaType: "image/png",
+        replace: () => {
+          replaceCalls++;
+          if (i === 2) throw new Error("wire mutation failed");
+        },
+        drop: () => {},
+      }));
+
+      await expect(normalizeImageTargets(targets, { encode: smallEncode })).rejects.toThrow("wire mutation failed");
+      // The failure stopped workers from pulling every remaining index: fewer encode
+      // calls than images proves no full-queue drain after the fatal error.
+      expect(encodeCalls).toBeLessThan(images.length);
+      expect(replaceCalls).toBeGreaterThan(0);
+      // Give any leaked rejection a macrotask to surface before asserting none did.
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", trap);
+    }
+  });
+
+  test("zero encoder starts after a fatal replace error (synchronous failure flag)", async () => {
+    // All four workers park at the encoder gate. Index 0's replace throws when the
+    // first batch settles; once the throw has happened, NO new encode may start even
+    // though three other continuations are queued to resume.
+    const events: string[] = [];
+    let fatalThrown = false;
+    const parked: Array<() => void> = [];
+    const encode: EncodeFn = async (input, spec) => {
+      if (fatalThrown) events.push("encode-after-fatal");
+      events.push("encode");
+      await new Promise<void>(resolve => { parked.push(resolve); });
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), 3 * 1024);
+      return { data: px.slice(0, 4 * 1024), mediaType: "image/webp" };
+    };
+    const images = distinctImages(8);
+    const targets: NormalizeTarget[] = images.map((b64, i) => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: () => {
+        if (i === 0) {
+          fatalThrown = true;
+          throw new Error("fatal-0");
+        }
+      },
+      drop: () => {},
+    }));
+    const run = normalizeImageTargets(targets, { encode });
+    while (parked.length < 4) await new Promise(resolve => setTimeout(resolve, 1));
+    // Release the first batch: index 0 throws inside its replace.
+    for (const release of parked.splice(0, 4)) release();
+    await expect(run).rejects.toThrow("fatal-0");
+    // Settle any stragglers so the assertion below is final.
+    for (const release of parked.splice(0)) release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(events).not.toContain("encode-after-fatal");
+  });
+
+  test("output order is deterministic regardless of completion order", async () => {
+    // Later images complete FIRST (reverse-release), yet entries stay index-addressed.
+    const parked: Array<{ key: string; resolve: () => void }> = [];
+    const encode: EncodeFn = async (input, spec) => {
+      const key = Bun.hash(input).toString(36);
+      await new Promise<void>(resolve => { parked.push({ key, resolve }); });
+      const b64len = 4 * 1024;
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), 3 * 1024);
+      // Tag the payload with the SOURCE hash so replace() can prove payload-to-index identity.
+      return { data: px.slice(0, b64len - key.length - 1) + ":" + key, mediaType: "image/webp" };
+    };
+
+    const images = distinctImages(4); // == pool width: all park concurrently
+    const order: number[] = [];
+    const received: Record<number, string> = {};
+    const targets: NormalizeTarget[] = images.map((b64, i) => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: data => { order.push(i); received[i] = data; },
+      drop: () => {},
+    }));
+    const run = normalizeImageTargets(targets, { encode });
+
+    // Wait until all four workers are parked, then release newest-first.
+    while (parked.length < 4) await new Promise(resolve => setTimeout(resolve, 1));
+    for (const p of [...parked].reverse()) p.resolve();
+    await run;
+
+    // Completion order was reversed, and replace() ran in that scrambled order —
+    // but every target got its own index's payload (no cross-index mixups).
+    expect(order.length).toBe(4);
+    expect([...order].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+    for (let i = 0; i < 4; i++) {
+      const expectedKey = Bun.hash(Uint8Array.from(Buffer.from(images[i], "base64"))).toString(36);
+      expect(received[i]?.endsWith(":" + expectedKey)).toBe(true);
+    }
+  });
+
+  test("entries stay index-addressed under reversed completion: overflow drop hits index 0, not first-completed", async () => {
+    // Same reverse-release scramble, but with a budget small enough that the
+    // terminal-overflow path must drop the OLDEST target (index 0). A mutant storing
+    // entries[] in completion order would drop the first-COMPLETED target (index 3).
+    const parked: Array<() => void> = [];
+    let firstPassCalls = 0;
+    const encode: EncodeFn = async (input, spec) => {
+      // Only the first-pass calls park (to scramble completion order); the sequential
+      // demotion loop's re-encodes must run through immediately.
+      if (firstPassCalls < 4) {
+        firstPassCalls++;
+        await new Promise<void>(resolve => { parked.push(resolve); });
+      }
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), 3 * 1024);
+      return { data: px.slice(0, 4 * 1024), mediaType: "image/webp" };
+    };
+    const images = distinctImages(4);
+    const droppedForOverflow: number[] = [];
+    const targets: NormalizeTarget[] = images.map((b64, i) => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: () => {},
+      drop: note => { if (note.includes("provider request budget")) droppedForOverflow.push(i); },
+    }));
+    // Budget fits 3 of the 4 terminal outputs (4KiB each): exactly one must be dropped.
+    const run = normalizeImageTargets(targets, { encode, budget: 3 * 4 * 1024, overflowAction: "drop" });
+    while (parked.length < 4) await new Promise(resolve => setTimeout(resolve, 1));
+    for (const release of [...parked].reverse()) release();
+    await run;
+    expect(droppedForOverflow).toEqual([0]);
+  });
+
+  test("skip paths free the worker slot: URL sources and over-limit images never reach the encoder", async () => {
+    const g = gatedEncoder();
+    const real = distinctImages(3);
+    const targets: NormalizeTarget[] = [
+      { base64: null, mediaType: "image/png", replace: () => {}, drop: () => {} },
+      // Over-length base64 (> MAX_INPUT_BASE64_LENGTH): dropped before decode, no slot used.
+      { base64: "A".repeat(64 * 1024 * 1024 + 4), mediaType: "image/png", replace: () => {}, drop: () => {} },
+      // Decode-bomb dimensions (> MAX_INPUT_PIXELS via sniffed header): dropped, no slot used.
+      { base64: fakePngBase64(20_000, 20_000, 4096), mediaType: "image/png", replace: () => {}, drop: () => {} },
+      ...real.map(b64 => ({ base64: b64, mediaType: "image/png", replace: () => {}, drop: () => {} })),
+    ];
+    const dropped: number[] = [];
+    targets[1]!.drop = () => { dropped.push(1); };
+    targets[2]!.drop = () => { dropped.push(2); };
+    const run = normalizeImageTargets(targets, { encode: g.encode });
+    await g.waitForArrivals(3);
+    g.release();
+    await run;
+    // Only the three real images encoded; URL + over-limit sources consumed no slot.
+    expect(g.stats().arrivals).toBe(3);
+    expect(dropped.sort()).toEqual([1, 2]);
   });
 });

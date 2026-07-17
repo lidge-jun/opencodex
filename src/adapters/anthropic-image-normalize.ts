@@ -53,6 +53,14 @@ const TIER1_COUNT = 14;
 
 /** Decode-bomb guards: refuse to decode absurd inputs (020 guards; "extreme values excluded"). */
 export const MAX_INPUT_BASE64_LENGTH = 64 * MiB;
+
+/**
+ * First-pass worker-pool width. Memory-bound, not CPU-bound: each in-flight item can
+ * hold a decoded bitmap, so this bounds peak memory to ~4 decoded images while still
+ * overlapping I/O and native-encode threadpool work. Fixed on purpose — a config knob
+ * would widen the adapter contract with no demonstrated need.
+ */
+export const IMAGE_NORMALIZE_CONCURRENCY = 4;
 export const MAX_INPUT_PIXELS = 100_000_000;
 
 const UNDECODABLE_TEXT = "[image omitted: undecodable or corrupt image data]";
@@ -291,37 +299,70 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   interface Entry { target: NormalizeTarget; sourceB64: string; sourceMedia: string; pos: number; size: number; done: boolean }
   const entries: (Entry | null)[] = new Array(n).fill(null);
 
-  for (let i = 0; i < n; i++) {
-    const target = targets[i];
-    const b64 = target.base64;
-    if (!b64) continue; // URL source: no base64 weight, never touched here.
-    const newestFirstIndex = n - 1 - i;
-    // Images beyond the processing limit are left untouched (anthropic passes 100:
-    // its guard textifies the surplus anyway, so decode/encode work there is waste).
-    if (newestFirstIndex >= processLimit) continue;
-    if (b64.length > MAX_INPUT_BASE64_LENGTH) {
-      target.drop(BOMB_TEXT);
-      continue;
+  // Bounded parallel first pass: a shared index queue with a small fixed worker pool.
+  // Unbounded Promise.all across up to `processLimit` (anthropic passes 100) large
+  // images would hold that many decoded bitmaps in flight at once — the limit bounds
+  // peak memory, not throughput (native encode parallelism lives below this layer).
+  // entries[] stays index-addressed, so completion order never affects output order
+  // or the sequential demotion loop below.
+  let nextIndex = 0;
+  let firstError: unknown;
+  let failed = false;
+  const workerCount = Math.min(IMAGE_NORMALIZE_CONCURRENCY, n);
+  const worker = async (): Promise<void> => {
+    // A fatal error stops workers from pulling NEW indices; in-flight items settle.
+    while (!failed) {
+      const i = nextIndex++;
+      if (i >= n) return;
+      const target = targets[i];
+      const b64 = target.base64;
+      if (!b64) continue; // URL source: no base64 weight, never touched here.
+      const newestFirstIndex = n - 1 - i;
+      // Images beyond the processing limit are left untouched (anthropic passes 100:
+      // its guard textifies the surplus anyway, so decode/encode work there is waste).
+      if (newestFirstIndex >= processLimit) continue;
+      if (b64.length > MAX_INPUT_BASE64_LENGTH) {
+        target.drop(BOMB_TEXT);
+        continue;
+      }
+      const dims = sniffImageDimensions(b64);
+      if (dims && dims.width * dims.height > MAX_INPUT_PIXELS) {
+        target.drop(BOMB_TEXT);
+        continue;
+      }
+      const sourceMedia = target.mediaType.toLowerCase();
+      const pos = initialPosition(newestFirstIndex, bias);
+      const result = await processAt(b64, pos, sourceMedia, encode, validate);
+      if (result.kind === "failed") {
+        target.drop(UNDECODABLE_TEXT);
+        continue;
+      }
+      let size = b64.length;
+      if (result.kind === "encoded") {
+        // Set the failure flag SYNCHRONOUSLY when the wire callback throws: other
+        // parked worker continuations may resume before our .catch() runs, and they
+        // must not pull new indices after a fatal error (C-gate round 1, blocker 1).
+        try {
+          target.replace(result.data, result.mediaType);
+        } catch (err) {
+          if (!failed) {
+            failed = true;
+            firstError = err;
+          }
+          throw err;
+        }
+        size = result.data.length;
+      }
+      entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
     }
-    const dims = sniffImageDimensions(b64);
-    if (dims && dims.width * dims.height > MAX_INPUT_PIXELS) {
-      target.drop(BOMB_TEXT);
-      continue;
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => worker().catch(err => {
+    if (!failed) {
+      failed = true;
+      firstError = err;
     }
-    const sourceMedia = target.mediaType.toLowerCase();
-    const pos = initialPosition(newestFirstIndex, bias);
-    const result = await processAt(b64, pos, sourceMedia, encode, validate);
-    if (result.kind === "failed") {
-      target.drop(UNDECODABLE_TEXT);
-      continue;
-    }
-    let size = b64.length;
-    if (result.kind === "encoded") {
-      target.replace(result.data, result.mediaType);
-      size = result.data.length;
-    }
-    entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
-  }
+  })));
+  if (failed) throw firstError;
 
   // Aggregate demotion loop (audit rounds 1+3): while the measured total exceeds the
   // budget, demote the OLDEST not-yet-terminal image one position and re-encode.
