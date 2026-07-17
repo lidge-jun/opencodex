@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import ProviderWorkspace from "../components/ProviderWorkspace";
-import { pickChatGptForwardProvider } from "../components/CodexAccountPool";
 import { Notice } from "../ui";
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
+import { pickChatGptForwardProvider } from "../provider-workspace-data";
 import "../styles-provider-workspace.css";
 
 interface Config {
@@ -61,7 +61,7 @@ export default function Providers({
   /** Raw JSON editor as a modal over the workspace (does not leave workspace layout). */
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
   /** Snapshot of draft when the JSON editor opened — used for dirty detection. */
-  const jsonBaselineRef = useRef("");
+  const [jsonBaseline, setJsonBaseline] = useState("");
   const aliveRef = useRef(true);
   /** Bumped to invalidate an in-flight OAuth poll (Cancel / close modal). */
   const loginEpochRef = useRef(0);
@@ -244,7 +244,7 @@ export default function Providers({
       if (res.ok) {
         notify(t("prov.saved"), true);
         setJsonEditorOpen(false);
-        jsonBaselineRef.current = draft;
+        setJsonBaseline(draft);
         fetchConfig();
         fetchProviderQuotas(true);
         return true;
@@ -262,7 +262,7 @@ export default function Providers({
   const openJsonEditor = () => {
     const baseline = config ? JSON.stringify(config, null, 2) : draft;
     // Snapshot first so the first render with open=true already has a stable baseline.
-    jsonBaselineRef.current = baseline;
+    setJsonBaseline(baseline);
     setDraft(baseline);
     setJsonEditorOpen(true);
   };
@@ -270,18 +270,17 @@ export default function Providers({
   /** Discard edits and leave the JSON pane. */
   const closeJsonEditor = () => {
     setJsonEditorOpen(false);
-    const baseline = config ? JSON.stringify(config, null, 2) : jsonBaselineRef.current;
-    jsonBaselineRef.current = baseline;
+    const baseline = config ? JSON.stringify(config, null, 2) : jsonBaseline;
+    setJsonBaseline(baseline);
     setDraft(baseline);
   };
 
   /** Reset draft to the open-time baseline without closing. */
   const restoreJsonEditor = () => {
-    setDraft(jsonBaselineRef.current);
+    setDraft(jsonBaseline);
   };
 
-  // Compare against ref every render while open (ref is stable; draft state drives updates).
-  const jsonIsDirty = jsonEditorOpen && draft !== jsonBaselineRef.current;
+  const jsonIsDirty = jsonEditorOpen && draft !== jsonBaseline;
 
   const handleAddApiKey = async (provider: string, key: string): Promise<boolean> => {
     const res = await fetch(`${apiBase}/api/providers/keys`, {

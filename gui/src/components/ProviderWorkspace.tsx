@@ -923,6 +923,7 @@ function TabModels({
   }, [availableModels, item.defaultModel, query]);
 
   const virtualize = models.length > 40;
+  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const virtualizer = useVirtualizer({
     count: virtualize ? models.length : 0,
     getScrollElement: () => listRef.current,
@@ -1736,49 +1737,26 @@ function JsonEditorPanel({
   saveMessage?: { ok: boolean; text: string } | null;
 }) {
   const t = useT();
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [errorLine, setErrorLine] = useState<number | null>(null);
   const lineCount = Math.max(1, draft.split(/\r\n|\r|\n/).length);
-  const invalid = jsonErrorLocation(draft) !== null;
-
-  useEffect(() => {
-    const loc = jsonErrorLocation(draft);
-    if (!loc) {
-      setParseError(null);
-      setErrorLine(null);
-      return;
-    }
-    setErrorLine(loc.line);
-    setParseError(t("pws.jsonInvalid", {
+  const loc = useMemo(() => jsonErrorLocation(draft), [draft]);
+  const invalid = loc !== null;
+  const errorLine = loc?.line ?? null;
+  const parseError = loc
+    ? t("pws.jsonInvalid", {
       where: t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }),
-    }));
-  }, [draft, t]);
+    })
+    : null;
 
   const formatJson = () => {
     try {
       onDraftChange(JSON.stringify(JSON.parse(draft), null, 2));
-      setParseError(null);
-      setErrorLine(null);
     } catch {
-      const loc = jsonErrorLocation(draft);
-      setErrorLine(loc?.line ?? 1);
-      setParseError(t("pws.jsonInvalid", {
-        where: loc ? t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }) : "",
-      }));
+      /* invalid JSON — derived parseError already reflects draft */
     }
   };
 
   const saveWithValidation = () => {
-    const loc = jsonErrorLocation(draft);
-    if (loc) {
-      setErrorLine(loc.line);
-      setParseError(t("pws.jsonInvalid", {
-        where: t("pws.jsonInvalidAt", { line: loc.line, column: loc.column }),
-      }));
-      return;
-    }
-    setParseError(null);
-    setErrorLine(null);
+    if (loc) return;
     onSave();
   };
 
@@ -2201,35 +2179,33 @@ export default function ProviderWorkspace({
   const [jsonLocalDirty, setJsonLocalDirty] = useState(false);
   const [detailSettingsDirty, setDetailSettingsDirty] = useState(false);
   const [jsonSaveMessage, setJsonSaveMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const jsonOpenPrev = useRef(false);
+  const [jsonOpenTracked, setJsonOpenTracked] = useState(!!jsonEditor?.open);
 
   const sections = useMemo(
     () => buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers)),
     [providers],
   );
 
+  const jsonOpen = !!jsonEditor?.open;
+  // Reset local dirty / leave intent when the JSON pane opens or closes (render-time adjust).
+  if (jsonOpen !== jsonOpenTracked) {
+    setJsonOpenTracked(jsonOpen);
+    setJsonLocalDirty(false);
+    if (!jsonOpen) setJsonLeaveIntent(null);
+  }
+
   // Deep-link: select ChatGPT once when parent requests focus (legacy #codex-auth).
   useEffect(() => {
     if (!initialSelectedProvider) return;
     if (!providers[initialSelectedProvider]) return;
-    setSelectedName(initialSelectedProvider);
-    onInitialProviderFocused?.();
+    const timeout = window.setTimeout(() => {
+      setSelectedName(initialSelectedProvider);
+      onInitialProviderFocused?.();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [initialSelectedProvider, providers, onInitialProviderFocused]);
 
-  const jsonOpen = !!jsonEditor?.open;
   const jsonDirty = jsonOpen && (!!jsonEditor?.isDirty || jsonLocalDirty);
-
-  // Reset local dirty when the editor opens; keep it latched after the first edit.
-  useEffect(() => {
-    if (jsonOpen && !jsonOpenPrev.current) {
-      setJsonLocalDirty(false);
-    }
-    if (!jsonOpen) {
-      setJsonLocalDirty(false);
-      setJsonLeaveIntent(null);
-    }
-    jsonOpenPrev.current = jsonOpen;
-  }, [jsonOpen]);
 
   const onJsonDraftChange = useCallback((value: string) => {
     setJsonLocalDirty(true);

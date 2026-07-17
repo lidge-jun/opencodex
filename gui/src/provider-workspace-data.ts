@@ -171,8 +171,19 @@ export function hideRedundantChatGptForwardProviders<T extends WorkspaceProvider
   if (!openai || !chatgpt) return providers;
   if (!isChatGptForwardProvider("openai", openai)) return providers;
   if (!isChatGptForwardProvider("chatgpt", chatgpt)) return providers;
-  const { chatgpt: _hidden, ...rest } = providers;
+  const { chatgpt, ...rest } = providers;
+  void chatgpt;
   return rest;
+}
+
+/** Prefer built-in `openai`, else first forward provider in config. */
+export function pickChatGptForwardProvider(providers: Record<string, { authMode?: string }>): string | null {
+  if (providers.openai && (providers.openai.authMode ?? "").toLowerCase() === "forward") return "openai";
+  if (providers.chatgpt && (providers.chatgpt.authMode ?? "").toLowerCase() === "forward") return "chatgpt";
+  for (const [name, p] of Object.entries(providers)) {
+    if ((p.authMode ?? "").toLowerCase() === "forward") return name;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

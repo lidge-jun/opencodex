@@ -113,10 +113,17 @@ export default function AddProviderModal({
   const [manualCodeOk, setManualCodeOk] = useState(true);
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
   const [presetsLoading, setPresetsLoading] = useState(true);
+  const [presetsApiBase, setPresetsApiBase] = useState(apiBase);
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
+
+  // Adjust loading flag while rendering when the API base changes (avoids setState-in-effect).
+  if (presetsApiBase !== apiBase) {
+    setPresetsApiBase(apiBase);
+    setPresetsLoading(true);
+  }
 
   useEffect(() => { onOpen?.(); }, [onOpen]);
   useEffect(() => { if (!initialCustom && catalogView === "browse") searchRef.current?.focus(); }, [initialCustom, catalogView]);
@@ -156,7 +163,6 @@ export default function AddProviderModal({
   }, [apiBase]);
   useEffect(() => {
     let cancelled = false;
-    setPresetsLoading(true);
     fetch(`${apiBase}/api/provider-presets`).then(r => r.json()).then((d: { providers?: Preset[] }) => {
       if (cancelled) return;
       if (Array.isArray(d.providers) && d.providers.length > 0) {

@@ -533,13 +533,3 @@ function TicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onCl
     </button>
   );
 }
-
-/** Prefer built-in `openai`, else first forward provider in config. */
-export function pickChatGptForwardProvider(providers: Record<string, { authMode?: string }>): string | null {
-  if (providers.openai && (providers.openai.authMode ?? "").toLowerCase() === "forward") return "openai";
-  if (providers.chatgpt && (providers.chatgpt.authMode ?? "").toLowerCase() === "forward") return "chatgpt";
-  for (const [name, p] of Object.entries(providers)) {
-    if ((p.authMode ?? "").toLowerCase() === "forward") return name;
-  }
-  return null;
-}
