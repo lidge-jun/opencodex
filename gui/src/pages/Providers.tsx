@@ -10,7 +10,7 @@ import { providerIconSrc } from "../provider-icons";
 interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string }>;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
 }
 
 interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
@@ -354,11 +354,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     notify(data.error || (disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
   };
 
-  if (!config) return <div className="muted">{t("prov.loadingConfig")}</div>;
+  if (!config) {
+    return (
+      <>
+        <div className="page-head">
+          <h2>{t("nav.providers")}</h2>
+        </div>
+        {status
+          ? <Notice tone="err">{status}</Notice>
+          : <div className="muted">{t("prov.loadingConfig")}</div>}
+      </>
+    );
+  }
 
   // API-key providers shown alongside OAuth logins in the account panel.
   const keyProviders = Object.entries(config.providers)
-    .filter(([name, prov]) => prov.hasApiKey && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
+    .filter(([name, prov]) => (prov.hasApiKey || name === "openai-apikey") && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
     .map(([name]) => name);
 
   return (
@@ -468,6 +479,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             const provider = config?.providers[name];
             const icon = providerIconSrc(name);
             const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
+            const missingOpenAiKey = name === "openai-apikey" && !provider?.hasApiKey;
             return (
               <div key={name} className="oauth-row">
                 <span className="oauth-name" title={name}>
@@ -475,10 +487,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                   <span className="oauth-name-text">{name}</span>
                 </span>
                 <span className="oauth-status">
-                  <span className="dot dot-green" />
-                  <span className="oauth-email muted">{keylessFree ? "free tier" : t("prov.hasApiKey")}</span>
+                  <span className={`dot ${missingOpenAiKey ? "dot-amber" : "dot-green"}`} />
+                  <span className="oauth-email muted">{missingOpenAiKey ? t("prov.openaiApiMissing") : keylessFree ? t("modal.badge.free") : t("prov.hasApiKey")}</span>
                 </span>
-                <span className="oauth-actions" aria-hidden="true" />
+                <span className="oauth-actions">
+                  {missingOpenAiKey && <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>{t("prov.openaiApiSetup")}</button>}
+                </span>
               </div>
             );
           })}
@@ -508,6 +522,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             const showAccounts = (!!accountSet && accountSet.accounts.length > 0) || keyPool.length > 0;
             const accountsOpen = openAccounts[name] === true;
             const dropdownCount = accountSet?.accounts.length ?? keyPool.length;
+            const tierDescription = prov.codexAccountMode === "direct"
+              ? t("prov.openaiDirectDesc")
+              : prov.codexAccountMode === "pool"
+                ? t("prov.openaiMultiDesc")
+                : name === "openai-apikey"
+                  ? t("prov.openaiApiDesc")
+                  : prov.note;
             return (
               <div key={name} className={`card prov-card${isDisabled ? " prov-card-disabled" : ""}`}>
                 <div className="prov-card-main">
@@ -519,7 +540,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
-                        {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
+                        {prov.codexAccountMode === "direct" && <span className="badge badge-green">{t("modal.badge.direct")}</span>}
+                        {prov.codexAccountMode === "pool" && <span className="badge badge-accent">{t("modal.badge.multi")}</span>}
+                        {name === "openai-apikey" && <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>}
+                        {prov.authMode === "forward" && !prov.codexAccountMode && <span className="badge badge-amber">passthrough</span>}
                         {prov.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
                       </div>
                       <div className="muted prov-meta text-control">
@@ -529,9 +553,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {prov.hasApiKey && <span>{t("prov.hasApiKey")}</span>}
                         {prov.hasHeaders && <span>{t("prov.hasHeaders")}</span>}
                       </div>
-                      {prov.note && (
+                      {tierDescription && (
                         <div className="muted text-label leading-body" style={{ marginTop: 4 }}>
-                          {prov.note}
+                          {tierDescription}
+                          {prov.codexAccountMode === "pool" && <> · <a href="#codex-auth">{t("prov.manageCodexAccounts")}</a></>}
                         </div>
                       )}
                     </div>

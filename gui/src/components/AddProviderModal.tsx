@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconX, IconLock, IconKey, IconExternal } from "../icons";
 import { useT } from "../i18n";
-import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
+import {
+  buildProviderPostBody,
+  codexPresetDescriptionKey,
+  isReservedCodexForwardPreset,
+  type ProviderPayload,
+  type ProviderPayloadForm,
+} from "../provider-payload";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -20,16 +26,11 @@ interface Preset {
   note?: string;
   /** API key is optional — provider works without one (free public tier). */
   keyOptional?: boolean;
+  codexAccountMode?: "direct" | "pool";
+  provider?: ProviderPayload;
 }
 
-interface FormState {
-  name: string;
-  adapter: string;
-  baseUrl: string;
-  authMode: "key" | "forward" | "oauth" | "local";
-  apiKey: string;
-  defaultModel: string;
-}
+type FormState = ProviderPayloadForm;
 
 export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded,
@@ -91,6 +92,11 @@ export default function AddProviderModal({
     return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
   }, [query, presets]);
 
+  const presetDescription = (candidate: Preset): string | undefined => {
+    const key = codexPresetDescriptionKey(candidate);
+    return key ? t(key) : candidate.note;
+  };
+
   const choosePreset = (p: Preset) => {
     setPreset(p);
     setForm({
@@ -122,10 +128,16 @@ export default function AddProviderModal({
 
   const submit = async () => {
     if (!form) return;
-    const name = form.name.trim();
-    if (!name) { setError(t("modal.nameRequired")); return; }
-    if (!form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
-    const provider = buildProviderPayload(form);
+    const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
+    if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
+    if (!reserved && !form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
+    let postBody: { name: string; provider: ProviderPayload };
+    try {
+      postBody = buildProviderPostBody(preset ?? { id: "custom" }, form);
+    } catch {
+      setError(t("modal.invalidPreset"));
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -133,14 +145,14 @@ export default function AddProviderModal({
       const res = await fetch(`${apiBase}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, provider }),
+        body: JSON.stringify(postBody),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || t("modal.failedStatus", { status: res.status }));
         return;
       }
-      onAdded(name);
+      onAdded(postBody.name);
     } catch {
       setError(t("modal.networkError"));
     } finally {
@@ -234,6 +246,7 @@ export default function AddProviderModal({
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
   const isCustom = preset?.id === "custom";
   const isLocal = form?.authMode === "local";
+  const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
 
   return (
     <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
@@ -257,11 +270,15 @@ export default function AddProviderModal({
                 <button key={p.id} className="list-row" onClick={() => choosePreset(p)}>
                   <div>
                     <div className="title">{p.label}</div>
-                    <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
+                    <div className="sub"><code className="chip">{p.adapter}</code>{presetDescription(p) ? ` · ${presetDescription(p)}` : ""}</div>
                   </div>
                   <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
                     {p.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
-                    {p.auth === "oauth"
+                    {p.codexAccountMode === "direct"
+                      ? <span className="badge badge-green">{t("modal.badge.direct")}</span>
+                      : p.codexAccountMode === "pool"
+                        ? <span className="badge badge-accent">{t("modal.badge.multi")}</span>
+                        : p.auth === "oauth"
                       ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
                       : p.auth === "forward"
                         ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
@@ -356,7 +373,7 @@ export default function AddProviderModal({
           ) : (
             // API key / Codex-forward / free-tier form
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {!isCustom && !isLocal && !preset.keyOptional && preset.note && (
+              {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
                 <details className="setup-guide">
                   <summary>{t("modal.setupGuide")}</summary>
                   <ol className="text-label leading-relaxed" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--muted)" }}>
@@ -374,22 +391,22 @@ export default function AddProviderModal({
                 </details>
               )}
               <Field label={t("modal.providerName")}>
-                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
+                <input className="input" value={form.name} readOnly={isReservedForward} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
               </Field>
               {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
-              <Field label={t("modal.adapter")}>
-                <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
-                  {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </Field>
-              <Field label={t("modal.baseUrl")}>
-                <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
-              </Field>
+              {!isReservedForward && <>
+                <Field label={t("modal.adapter")}>
+                  <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
+                    {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </Field>
+                <Field label={t("modal.baseUrl")}>
+                  <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+                </Field>
+              </>}
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
-                  {t("modal.forwardHintPrefix")}{" "}
-                  <code className="chip">{t("modal.forwardCredentials")}</code>{" "}
-                  {t("modal.forwardHintSuffix")}
+                  {presetDescription(preset)}
                 </div>
               ) : form.authMode === "local" ? (
                 <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
@@ -411,9 +428,9 @@ export default function AddProviderModal({
                   </Field>
                 </>
               )}
-              <Field label={t("modal.defaultModel")}>
+              {!isReservedForward && <Field label={t("modal.defaultModel")}>
                 <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
-              </Field>
+              </Field>}
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
                 <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>

@@ -553,8 +553,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   const off = disabled.has(m.namespaced);
                   return (
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
-                      <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.id} />
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{modelLabel(m.id)}</code>
+                      <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
                       {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </div>
                   );

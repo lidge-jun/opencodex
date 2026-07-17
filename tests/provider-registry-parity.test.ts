@@ -438,6 +438,8 @@ describe("provider registry parity", () => {
     ]);
 
     const presets = deriveProviderPresets();
+    expect(presets.filter(p => p.id === "chatgpt" || p.id === "openai" || p.id.startsWith("openai-")).map(p => p.id))
+      .toEqual(["openai", "openai-multi", "openai-apikey"]);
     expect(presets.find(p => p.id === "openai")).toMatchObject({ label: "Codex Direct", codexAccountMode: "direct" });
     expect(presets.find(p => p.id === "openai-multi")).toMatchObject({ label: "Codex Multi-account", codexAccountMode: "pool" });
     expect(presets.find(p => p.id === "openai-apikey")?.label).toBe("OpenAI API");
@@ -456,6 +458,14 @@ describe("provider registry parity", () => {
       defaultModel: "umans-coder",
     });
     expect(presets.find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
+
+    const nextPresets = deriveProviderPresets();
+    const directSeed = presets.find(p => p.id === "openai")!.provider!;
+    directSeed.baseUrl = "https://mutated.example.test";
+    expect(nextPresets.find(p => p.id === "openai")!.provider).toEqual(
+      providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "openai")!),
+    );
+    expect(presets.find(p => p.id === "openai-apikey")?.provider).toBeUndefined();
   });
 
   test("Umans registry metadata reaches routed Codex catalog entries", () => {

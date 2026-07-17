@@ -273,7 +273,6 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "models",
       "contextWindow",
       "modelContextWindows",
-      "modelMaxInputTokens",
       "reasoningEfforts",
       "modelReasoningEfforts",
       "noVisionModels",

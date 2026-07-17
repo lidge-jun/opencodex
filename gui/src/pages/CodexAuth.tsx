@@ -5,6 +5,7 @@ import { Notice, EmptyState } from "../ui";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "../components/QuotaBars";
+import { codexMultiProviderState, type CodexMultiProviderState } from "../codex-multi-state";
 
 interface AccountEntry {
   id: string; email: string; plan?: string; isMain: boolean;
@@ -26,16 +27,19 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
+  const [multiProviderState, setMultiProviderState] = useState<CodexMultiProviderState | null>(null);
 
   const load = useCallback(async (refreshQuota = false) => {
     try {
-      const [accts, active] = await Promise.all([
+      const [accts, active, config] = await Promise.all([
         fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`).then(r => r.json()),
         fetch(`${apiBase}/api/codex-auth/active`).then(r => r.json()),
+        fetch(`${apiBase}/api/config`).then(r => r.json()),
       ]);
       setAccounts(accts.accounts ?? []);
       setActiveId(active.activeCodexAccountId ?? null);
       setAutoThreshold(active.autoSwitchThreshold ?? 80);
+      setMultiProviderState(codexMultiProviderState(config));
       return true;
     } catch {
       return false;
@@ -158,6 +162,21 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
       </div>
 
       {toast && <Notice tone="ok">{toast}</Notice>}
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <strong>{t("codexAuth.multiOwnerTitle")}</strong>
+        <p className="card-sub" style={{ margin: "6px 0 0" }}>{t("codexAuth.multiOwnerDesc")}</p>
+        {multiProviderState === "absent" && (
+          <p className="card-sub" style={{ margin: "8px 0 0" }}>
+            {t("codexAuth.multiMissing")} <a href="#providers">{t("codexAuth.addMultiProvider")}</a>
+          </p>
+        )}
+        {multiProviderState === "disabled" && (
+          <p className="card-sub" style={{ margin: "8px 0 0" }}>
+            {t("codexAuth.multiDisabled")} <a href="#providers">{t("codexAuth.openProviders")}</a>
+          </p>
+        )}
+      </div>
 
       <div className={`card ${isMainActive ? "card-active" : ""}`}
         onClick={() => !isMainActive ? setConfirm({ id: "__main__", email: main?.email ?? "Codex App", plan: main?.plan, isMain: true, hasCredential: true, quota: main?.quota ?? null }) : undefined}

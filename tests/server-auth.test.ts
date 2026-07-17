@@ -11,7 +11,8 @@ import {
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
-import { saveConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
+import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
   assertServerAuthConfig,
@@ -162,17 +163,37 @@ describe("server local API auth", () => {
   });
 
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
-    const dto = safeConfigDTO(config("127.0.0.1")) as {
+    const unsafe = config("127.0.0.1");
+    unsafe.openaiProviderTierVersion = 1;
+    Object.assign(unsafe.providers.openai as unknown as Record<string, unknown>, {
+      apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
+      modelMaxInputTokens: { "gpt-test": 1000 },
+      codexAccountMode: "pool",
+      virtualModels: { "gpt-test-pro": { wireModelId: "gpt-test", reasoningMode: "pro" } },
+      codexAuthContext: { accessToken: "runtime-token" },
+      selectedForwardHeaders: { authorization: "Bearer runtime-token" },
+      sidecarOutcomeRecorder: "recorder-runtime",
+      _codexAccountOverride: { accessToken: "override-token" },
+      _codexAccountRequired: true,
+    });
+    const dto = safeConfigDTO(unsafe) as {
       providers: Record<string, Record<string, unknown>>;
     };
-    expect(JSON.stringify(dto)).not.toContain("sk-secret-value");
-    expect(JSON.stringify(dto)).not.toContain("provider-secret");
+    const serialized = JSON.stringify(dto);
+    for (const forbidden of [
+      "sk-secret-value", "provider-secret", "openaiProviderTierVersion",
+      "apiKeyPool", "pool-secret", "private-pool-label", "modelMaxInputTokens",
+      "virtualModels", "codexAuthContext", "selectedForwardHeaders",
+      "sidecarOutcomeRecorder", "recorder-runtime", "_codexAccountOverride",
+      "_codexAccountRequired", "runtime-token", "override-token",
+    ]) expect(serialized).not.toContain(forbidden);
     expect(dto.providers.openai).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.example.test/v1",
       defaultModel: "gpt-test",
       hasApiKey: true,
       hasHeaders: true,
+      codexAccountMode: "direct",
     });
     expect(dto.providers.openai).not.toHaveProperty("apiKey");
     expect(dto.providers.openai).not.toHaveProperty("headers");
@@ -436,10 +457,7 @@ describe("server local API auth", () => {
         });
         expect(rejected.status).toBe(400);
       }
-      const preserved = await fetch(new URL("/api/config", server.url)).then(response => response.json()) as {
-        providers: Record<string, { modelMaxInputTokens?: Record<string, number> }>;
-      };
-      expect(preserved.providers["custom-max-input"].modelMaxInputTokens).toEqual({ model: 1000 });
+      expect(loadConfig().providers["custom-max-input"].modelMaxInputTokens).toEqual({ model: 1000 });
       const legacy = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -452,6 +470,18 @@ describe("server local API auth", () => {
       };
       expect(dto.providers.openai.codexAccountMode).toBe("direct");
       expect(dto.providers["openai-multi"].codexAccountMode).toBe("pool");
+      expect(dto.providers["custom-max-input"]).not.toHaveProperty("modelMaxInputTokens");
+
+      const presetResponse = await fetch(new URL("/api/provider-presets", server.url)).then(response => response.json()) as {
+        providers: ReturnType<typeof deriveProviderPresets>;
+      };
+      const openAiIds = presetResponse.providers
+        .map(preset => preset.id)
+        .filter(id => id === "chatgpt" || id === "openai" || id.startsWith("openai-"));
+      expect(openAiIds).toEqual(["openai", "openai-multi", "openai-apikey"]);
+      expect(presetResponse.providers.filter(row => !openAiIds.includes(row.id))).toEqual(
+        deriveProviderPresets().filter(row => !["openai", "openai-multi", "openai-apikey"].includes(row.id)),
+      );
     } finally {
       await server.stop(true);
     }
@@ -483,6 +513,61 @@ describe("server local API auth", () => {
       expect(saved.providers["opencode-free"]).toBeDefined();
       expect(saved.providers["opencode-free"]?.headers).toBeUndefined();
       expect(saved.providers["opencode-free"]?.keyOptional).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("management selections preserve an OpenAI API Pro selected id without wire rewriting", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const selected = "openai-apikey/gpt-5.6-sol-pro";
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai-apikey",
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-test",
+          liveModels: false,
+        },
+      },
+    });
+    const server = startServer(0);
+    try {
+      const put = (path: string, body: unknown) => fetch(new URL(path, server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      expect((await put("/api/disabled-models", { models: [selected] })).status).toBe(200);
+      const modelRows = await fetch(new URL("/api/models", server.url)).then(response => response.json()) as Array<{
+        namespaced: string;
+        disabled: boolean;
+      }>;
+      expect(modelRows.find(row => row.namespaced === selected)).toMatchObject({ namespaced: selected, disabled: true });
+
+      expect((await put("/api/subagent-models", { models: [selected] })).status).toBe(200);
+      const subagent = await fetch(new URL("/api/subagent-models", server.url)).then(response => response.json()) as {
+        chosen: string[];
+      };
+      expect(subagent.chosen).toEqual([selected]);
+
+      expect((await put("/api/injection-model", { model: selected, effort: "high" })).status).toBe(200);
+      const injection = await fetch(new URL("/api/injection-model", server.url)).then(response => response.json()) as {
+        model: string | null;
+        effort: string | null;
+      };
+      expect(injection).toMatchObject({ model: selected, effort: "high" });
+      expect(loadConfig()).toMatchObject({
+        disabledModels: [selected],
+        subagentModels: [selected],
+        injectionModel: selected,
+      });
     } finally {
       await server.stop(true);
     }
