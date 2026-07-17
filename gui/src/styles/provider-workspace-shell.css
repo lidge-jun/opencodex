@@ -8,6 +8,12 @@
   min-height: 480px;
 }
 
+@media (min-width: 1200px) {
+  .pws-root {
+    grid-template-columns: 280px minmax(0, 800px);
+  }
+}
+
 .pws-rail {
   display: flex;
   flex-direction: column;
@@ -316,6 +322,7 @@
 
 .pws-main {
   min-width: 0;
+  padding: 0 8px;
 }
 
 .pws-detail-placeholder {
@@ -362,6 +369,9 @@
   color: inherit;
   font: inherit;
 }
+
+/* Prevent rail-row content overflow */
+.providers-workspace-rail-row { overflow: hidden; }
 
 .pws-empty-tile:hover {
   background: var(--surface);
