@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { formatUptime } from "../formatUptime";
 import { IconAlert, IconExternal, IconInfo, IconRefresh, IconX } from "../icons";
@@ -305,7 +305,7 @@ async function fetchDashboardPoll(apiBase: string): Promise<DashboardPollData> {
   const sidecar = await scRes.json() as SidecarData;
   let shadowCall: ShadowCallData | null = null;
   try { if (shRes.ok) shadowCall = await shRes.json() as ShadowCallData; } catch { shadowCall = null; }
-  let usage30d: UsageSummary30d | null = null;
+  let usage30d: UsageSummary30d | null;
   try { usage30d = uRes.ok ? await uRes.json() as UsageSummary30d : null; } catch { usage30d = null; }
 
   let multiAgentMode: DashboardPollData["multiAgentMode"] = "default";
@@ -334,13 +334,7 @@ async function fetchDashboardPoll(apiBase: string): Promise<DashboardPollData> {
 
 function useDashboardController(apiBase: string) {
   const { locale, t } = useI18n();
-  const [health, setHealth] = useState<HealthData | null>(null);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [sidecar, setSidecar] = useState<SidecarData | null>(null);
-  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
-  const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(null);
+  const queryClient = useQueryClient();
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -360,13 +354,13 @@ function useDashboardController(apiBase: string) {
     subagentEffortCap: "",
     saving: false,
   });
-  const [projectConfigWarnings, setProjectConfigWarnings] = useState<ProjectCodexConfigGroup[]>([]);
+  const [diagnosticsOverride, setDiagnosticsOverride] = useState<ProjectCodexConfigGroup[] | null>(null);
   const [updateUi, dispatchUpdate] = useReducer(updateUiReducer, initialUpdateUi);
   const updateRetryRef = useRef(0);
   const updateRetryTimerRef = useRef<number | null>(null);
   const updateRequestEpochRef = useRef(0);
-  const [reconnecting, setReconnecting] = useState(false);
-  const [error, setError] = useState(false);
+  const [appliedDashboard, setAppliedDashboard] = useState<DashboardPollData | null>(null);
+  const [appliedUpdateJobKey, setAppliedUpdateJobKey] = useState<string | null>(null);
 
   const { data: dashboardData, isError: dashboardError } = useQuery({
     queryKey: ["dashboard", apiBase],
@@ -387,6 +381,15 @@ function useDashboardController(apiBase: string) {
     retry: false,
   });
 
+  const error = dashboardError;
+  const health = dashboardData?.health ?? null;
+  const providers = dashboardData?.providers ?? [];
+  const settings = dashboardData?.settings ?? null;
+  const sidecar = dashboardData?.sidecar ?? null;
+  const shadowCall = dashboardData?.shadowCall ?? null;
+  const usage30d = dashboardData?.usage30d ?? null;
+  const projectConfigWarnings = diagnosticsOverride ?? diagnosticsData ?? [];
+
   const { data: modelsData, isFetching: modelsLoading } = useQuery({
     queryKey: ["models", apiBase],
     queryFn: async () => {
@@ -397,6 +400,7 @@ function useDashboardController(apiBase: string) {
     enabled: !error,
     retry: false,
   });
+  const models = useMemo(() => modelsData ?? [], [modelsData]);
 
   useEffect(() => () => {
     updateRequestEpochRef.current += 1;
@@ -406,18 +410,9 @@ function useDashboardController(apiBase: string) {
     }
   }, []);
 
-  useEffect(() => {
-    setError(dashboardError);
-  }, [dashboardError]);
-
-  useEffect(() => {
-    if (!dashboardData) return;
-    setHealth(dashboardData.health);
-    setProviders(dashboardData.providers);
-    setSettings(dashboardData.settings);
-    setSidecar(dashboardData.sidecar);
-    setShadowCall(dashboardData.shadowCall);
-    setUsage30d(dashboardData.usage30d);
+  // Sync editable UI slices when poll data identity changes (render-time adjust).
+  if (dashboardData && dashboardData !== appliedDashboard) {
+    setAppliedDashboard(dashboardData);
     dispatchMa({ type: "setMode", mode: dashboardData.multiAgentMode });
     if (dashboardData.injection) {
       dispatchInjection({
@@ -435,15 +430,8 @@ function useDashboardController(apiBase: string) {
         subagentEffortCap: dashboardData.effortCaps.subagentEffortCap ?? "",
       });
     }
-  }, [dashboardData]);
-
-  useEffect(() => {
-    setProjectConfigWarnings(diagnosticsData ?? []);
-  }, [diagnosticsData]);
-
-  useEffect(() => {
-    if (modelsData) setModels(modelsData);
-  }, [modelsData]);
+    setDiagnosticsOverride(null);
+  }
 
   const updateJobId = updateUi.job?.id;
   const updateJobRestart = updateUi.job?.restart;
@@ -486,13 +474,27 @@ function useDashboardController(apiBase: string) {
     },
   });
 
+  const updateJobKey = updatePoll?.job
+    ? `${updatePoll.job.id}:${updatePoll.job.status}:${updatePoll.job.error ?? ""}:${updatePoll.job.log.length}`
+    : null;
+  if (updatePoll?.job && updateJobKey !== appliedUpdateJobKey) {
+    setAppliedUpdateJobKey(updateJobKey);
+    dispatchUpdate({ type: "setJob", job: updatePoll.job });
+  }
+
+  const reconnecting = Boolean(
+    updatePoll && !updatePoll.failed && !updatePoll.shouldReload && updatePoll.reconnecting,
+  );
+
   useEffect(() => {
-    if (!updatePoll) return;
-    if (updatePoll.job) dispatchUpdate({ type: "setJob", job: updatePoll.job });
-    if (updatePoll.failed || updatePoll.shouldReload) setReconnecting(false);
-    else if (updatePoll.reconnecting) setReconnecting(true);
-    if (updatePoll.shouldReload) window.location.reload();
-  }, [updatePoll]);
+    if (updatePoll?.shouldReload) window.location.reload();
+  }, [updatePoll?.shouldReload]);
+
+  const patchDashboard = (patch: Partial<DashboardPollData>) => {
+    queryClient.setQueryData<DashboardPollData>(["dashboard", apiBase], prev => (
+      prev ? { ...prev, ...patch } : prev
+    ));
+  };
 
   const sidecarModels = useMemo(() => sidecarModelOptions(models), [models]);
   const grouped = useMemo(() => {
@@ -516,8 +518,9 @@ function useDashboardController(apiBase: string) {
       webSearch: mergeSetting(sidecar.webSearch, patch.webSearch),
       vision: mergeSetting(sidecar.vision, patch.vision),
     };
+    const previous = sidecar;
     setSidecarSaving(true);
-    setSidecar(next);
+    patchDashboard({ sidecar: next });
     try {
       const res = await fetch(`${apiBase}/api/sidecar-settings`, {
         method: "PUT",
@@ -526,9 +529,9 @@ function useDashboardController(apiBase: string) {
       });
       if (!res.ok) throw new Error("save failed");
       const data = await res.json();
-      setSidecar({ webSearch: data.webSearch, vision: data.vision });
+      patchDashboard({ sidecar: { webSearch: data.webSearch, vision: data.vision } });
     } catch {
-      setSidecar(sidecar);
+      patchDashboard({ sidecar: previous });
     } finally {
       setSidecarSaving(false);
     }
@@ -536,17 +539,25 @@ function useDashboardController(apiBase: string) {
 
   const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
     if (!shadowCall || shadowCallSaving) return;
+    const previous = shadowCall;
     setShadowCallSaving(true);
-    setShadowCall({ ...shadowCall, ...patch });
+    patchDashboard({ shadowCall: { ...shadowCall, ...patch } });
     try {
       await fetch(`${apiBase}/api/shadow-call-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+    } catch {
+      patchDashboard({ shadowCall: previous });
     } finally {
       setShadowCallSaving(false);
     }
+  };
+
+  const patchShadowCall = (patch: Partial<ShadowCallData>) => {
+    if (!shadowCall) return;
+    patchDashboard({ shadowCall: { ...shadowCall, ...patch } });
   };
 
   const switchMaMode = async (mode: "v1" | "default" | "v2") => {
@@ -558,7 +569,10 @@ function useDashboardController(apiBase: string) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ multiAgentMode: mode }),
       });
-      if (r.ok) dispatchMa({ type: "setMode", mode });
+      if (r.ok) {
+        dispatchMa({ type: "setMode", mode });
+        patchDashboard({ multiAgentMode: mode });
+      }
     } catch { /* ignore */ }
     finally { dispatchMa({ type: "setBusy", busy: false }); }
   };
@@ -566,8 +580,9 @@ function useDashboardController(apiBase: string) {
   const toggleCodexAutoStart = async () => {
     if (!settings || settingsSaving) return;
     const next = !settings.codexAutoStart;
+    const previous = settings;
     setSettingsSaving(true);
-    setSettings({ ...settings, codexAutoStart: next });
+    patchDashboard({ settings: { ...settings, codexAutoStart: next } });
     try {
       const res = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
@@ -575,11 +590,10 @@ function useDashboardController(apiBase: string) {
         body: JSON.stringify({ codexAutoStart: next }),
       });
       if (!res.ok) throw new Error("save failed");
-      const data = await res.json();
-      setSettings(prev => prev ? { ...prev, codexAutoStart: data.codexAutoStart } : prev);
+      const data = await res.json() as { codexAutoStart: boolean };
+      patchDashboard({ settings: { ...settings, codexAutoStart: data.codexAutoStart } });
     } catch {
-      setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
-      setError(true);
+      patchDashboard({ settings: previous });
     } finally {
       setSettingsSaving(false);
     }
@@ -594,7 +608,10 @@ function useDashboardController(apiBase: string) {
       if (!res.ok) throw new Error("error" in data && data.error ? data.error : "sync failed");
       dispatchSync({ type: "done", result: data as SyncResult });
       const groupedWarnings = (data as SyncResult & { projectConfigGrouped?: ProjectCodexConfigGroup[] }).projectConfigGrouped;
-      if (groupedWarnings) setProjectConfigWarnings(groupedWarnings);
+      if (groupedWarnings) setDiagnosticsOverride(groupedWarnings);
+      void queryClient.invalidateQueries({ queryKey: ["project-config-diagnostics", apiBase] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", apiBase] });
+      void queryClient.invalidateQueries({ queryKey: ["models", apiBase] });
     } catch (err) {
       dispatchSync({ type: "fail", error: err instanceof Error ? err.message : String(err) });
     }
@@ -663,7 +680,6 @@ function useDashboardController(apiBase: string) {
       const data = await res.json() as { job?: UpdateJob; error?: string };
       if (!res.ok || !data.job) throw new Error(data.error ?? "update failed to start");
       dispatchUpdate({ type: "setJob", job: data.job });
-      setReconnecting(false);
       closeUpdateDialog();
     } catch (err) {
       dispatchUpdate({ type: "checkFail", error: err instanceof Error ? err.message : String(err) });
@@ -690,7 +706,7 @@ function useDashboardController(apiBase: string) {
     projectConfigWarnings, updateUi, dispatchUpdate, reconnecting, sidecarModels, grouped, online,
     saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync,
     closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate, fetchUpdateCheck, updateJobLabel,
-    setShadowCall,
+    patchShadowCall,
   };
 }
 
@@ -768,7 +784,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         shadowCallSaving={c.shadowCallSaving}
         models={c.models}
         onSaveShadowCall={c.saveShadowCall}
-        onPatchShadowCall={patch => c.setShadowCall(s => s ? { ...s, ...patch } : s)}
+        onPatchShadowCall={c.patchShadowCall}
       />
 
       <ProvidersTable providers={c.providers} t={c.t} />
