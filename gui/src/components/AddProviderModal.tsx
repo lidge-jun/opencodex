@@ -8,27 +8,13 @@ import {
   type ProviderPayload,
   type ProviderPayloadForm,
 } from "../provider-payload";
+import ProviderCatalog from "./provider-catalog/ProviderCatalog";
+import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
 export type ProviderConfig = ProviderPayload;
 
-interface Preset {
-  id: string;
-  label: string;
-  adapter: string;
-  baseUrl: string;
-  defaultModel?: string;
-  /** "oauth": account login · "forward": ChatGPT passthrough · "key": API key · "local": local scaffold. */
-  auth: "oauth" | "forward" | "key" | "local";
-  /** OAuth registry id (for auth === "oauth"). */
-  oauthProvider?: string;
-  /** Where to create/copy the API key (for auth === "key" catalog providers). */
-  dashboardUrl?: string;
-  note?: string;
-  /** API key is optional — provider works without one (free public tier). */
-  keyOptional?: boolean;
-  codexAccountMode?: "direct" | "pool";
-  provider?: ProviderPayload;
-}
+/** Local alias — the DTO type is owned by provider-catalog/provider-presets.ts. */
+type Preset = CatalogPreset;
 
 type FormState = ProviderPayloadForm;
 
@@ -44,7 +30,6 @@ export default function AddProviderModal({
   const fallbackPresets = useMemo<Preset[]>(() => [
     { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
   ], [t]);
-  const [query, setQuery] = useState("");
   const [preset, setPreset] = useState<Preset | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -58,11 +43,11 @@ export default function AddProviderModal({
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
 
-  useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -78,19 +63,22 @@ export default function AddProviderModal({
         loadedPresetsRef.current = true;
         setPresets(d.providers);
       }
+    }).catch(() => {}).finally(() => setPresetsLoading(false));
+  }, [apiBase]);
+  // Usage rank drives the catalog's default row order (most-used first).
+  useEffect(() => {
+    fetch(`${apiBase}/api/usage?range=30d`).then(r => r.json()).then((d: {
+      providers?: Array<{ provider: string; requests: number }>;
+    }) => {
+      const rank: Record<string, number> = {};
+      for (const row of d.providers ?? []) rank[row.provider] = row.requests;
+      setUsageRank(rank);
     }).catch(() => {});
   }, [apiBase]);
   // Keep the custom fallback label in sync when language changes and API presets never loaded.
   useEffect(() => {
     if (!loadedPresetsRef.current) setPresets(fallbackPresets);
   }, [fallbackPresets]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return presets;
-    // Match by provider name/id — not adapter, since most share "openai-chat" and would all match.
-    return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
-  }, [query, presets]);
 
   const presetDescription = (candidate: Preset): string | undefined => {
     const key = codexPresetDescriptionKey(candidate);
@@ -257,42 +245,13 @@ export default function AddProviderModal({
         </div>
 
         {!preset ? (
-          <>
-            <input
-              ref={searchRef}
-              className="input"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder={t("modal.search")}
-            />
-            <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-              {filtered.map(p => (
-                <button key={p.id} className="list-row" onClick={() => choosePreset(p)}>
-                  <div>
-                    <div className="title">{p.label}</div>
-                    <div className="sub"><code className="chip">{p.adapter}</code>{presetDescription(p) ? ` · ${presetDescription(p)}` : ""}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                    {p.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
-                    {p.codexAccountMode === "direct"
-                      ? <span className="badge badge-green">{t("modal.badge.direct")}</span>
-                      : p.codexAccountMode === "pool"
-                        ? <span className="badge badge-accent">{t("modal.badge.pool")}</span>
-                        : p.auth === "oauth"
-                      ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
-                      : p.auth === "forward"
-                        ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
-                        : p.auth === "local"
-                          ? <span className="badge badge-amber">{t("modal.badge.local")}</span>
-                          : !p.keyOptional
-                            ? <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>
-                            : null}
-                  </div>
-                </button>
-              ))}
-              {filtered.length === 0 && <div className="muted text-control" style={{ padding: 8 }}>{t("modal.noMatch")}</div>}
-            </div>
-          </>
+          <ProviderCatalog
+            presets={presets}
+            usageRank={usageRank}
+            presetsLoading={presetsLoading}
+            onSelectPreset={p => choosePreset(p)}
+            onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
+          />
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane

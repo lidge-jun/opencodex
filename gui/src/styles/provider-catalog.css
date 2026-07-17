@@ -1,0 +1,67 @@
+/* Add-provider catalog: tabs, browse rows, account rows (WP050b). */
+
+.provider-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-catalog-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-catalog-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.provider-catalog-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.provider-catalog-accounts-hint {
+  padding: 2px 2px 0;
+}
+
+.provider-catalog-search {
+  width: 100%;
+}
+
+.provider-catalog-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.provider-catalog-badges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.provider-catalog-empty {
+  padding: 8px;
+}
+
+.provider-catalog-account-row .sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-catalog-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

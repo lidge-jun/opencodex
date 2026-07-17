@@ -7,6 +7,8 @@
    `data-theme` (or the OS) picks the side.
    ============================================================================ */
 
+@import "./styles/provider-catalog.css";
+
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
   color-scheme: light dark;
