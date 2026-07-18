@@ -4,75 +4,122 @@ export interface OcxErrorPayload {
   code: string | null;
 }
 
+function isSubscriptionGateMessage(text: string): boolean {
+  return (
+    text.includes("requires a subscription")
+    || text.includes("requires subscription")
+    || text.includes("subscription required")
+    || text.includes("upgrade for access")
+    || text.includes("upgrade to pro")
+    || text.includes("pro subscription")
+    || text.includes("ollama.com/upgrade")
+    || (text.includes("upgrade") && text.includes("subscription"))
+  );
+}
+
+function isAuthenticationMessage(text: string): boolean {
+  return (
+    text.includes("authentication failed")
+    || text.includes("invalid_api_key")
+    || text.includes("invalid api key")
+    || text.includes("invalid token")
+    || text.includes("unauthorizedexception")
+    || text.includes("unrecognizedclientexception")
+    || text.includes("unrecognizedclient")
+    || text.includes("expired token")
+    || text.includes("expiredtoken")
+    || text.includes("unauthenticated")
+    || text.includes("unauthorized")
+    // Kiro / AWS often wrap credential failures as AccessDeniedException.
+    || text.includes("access denied")
+  );
+}
+
+function isPermissionMessage(text: string): boolean {
+  return (
+    text.includes("permission_denied")
+    || text.includes("permission denied")
+    || text.includes("forbidden")
+    || text.includes("not allowed to use")
+    || text.includes("model access")
+    || isSubscriptionGateMessage(text)
+  );
+}
+
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
   if (
-    text.includes("context_length_exceeded") ||
-    text.includes("context window") ||
-    text.includes("context length") ||
-    text.includes("maximum context") ||
-    text.includes("too many tokens")
+    text.includes("context_length_exceeded")
+    || text.includes("context window")
+    || text.includes("context length")
+    || text.includes("maximum context")
+    || text.includes("too many tokens")
   ) {
     return { message, type: "invalid_request_error", code: "context_length_exceeded" };
   }
   if (
-    text.includes("insufficient_quota") ||
-    text.includes("exceeded your current quota") ||
-    text.includes("quota exhausted") ||
-    text.includes("account quota exceeded") ||
-    text.includes("monthly quota exceeded") ||
-    text.includes("daily quota exceeded")
+    text.includes("insufficient_quota")
+    || text.includes("exceeded your current quota")
+    || text.includes("quota exhausted")
+    || text.includes("account quota exceeded")
+    || text.includes("monthly quota exceeded")
+    || text.includes("daily quota exceeded")
   ) {
     return { message, type: "insufficient_quota", code: "insufficient_quota" };
   }
   if (
-    status === 429 ||
-    text.includes("rate limit") ||
-    text.includes("rate limited") ||
-    text.includes("too many requests") ||
-    text.includes("resource_exhausted") ||
-    text.includes("resource exhausted") ||
-    text.includes("throttlingexception") ||
-    text.includes("throttling")
+    status === 429
+    || text.includes("rate limit")
+    || text.includes("rate limited")
+    || text.includes("too many requests")
+    || text.includes("resource_exhausted")
+    || text.includes("resource exhausted")
+    || text.includes("throttlingexception")
+    || text.includes("throttling")
   ) {
     return { message, type: "rate_limit_error", code: "rate_limit_exceeded" };
   }
   if (type === "origin_rejected") {
     return { message, type: "invalid_request_error", code: "origin_rejected" };
   }
+  // Plan / model gates before auth: providers (e.g. Ollama Cloud) return 403 for Pro-only
+  // models with a valid key. Those must not look like invalid_api_key in Logs.
+  if (isSubscriptionGateMessage(text)) {
+    return { message, type: "permission_error", code: "subscription_required" };
+  }
   if (
-    status === 401 ||
-    status === 403 ||
-    type === "authentication_error" ||
-    text.includes("authentication failed") ||
-    text.includes("access denied") ||
-    text.includes("unauthorizedexception") ||
-    text.includes("unrecognizedclientexception") ||
-    text.includes("unrecognizedclient") ||
-    text.includes("expired token") ||
-    text.includes("expiredtoken")
+    status === 401
+    || type === "authentication_error"
+    || isAuthenticationMessage(text)
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
   }
   if (
-    status === 503 ||
-    text.includes("overloaded") ||
-    text.includes("server is busy") ||
-    text.includes("temporarily unavailable")
+    status === 403
+    || type === "permission_error"
+    || isPermissionMessage(text)
+  ) {
+    return { message, type: "permission_error", code: "permission_denied" };
+  }
+  if (
+    status === 503
+    || text.includes("overloaded")
+    || text.includes("server is busy")
+    || text.includes("temporarily unavailable")
   ) {
     // Codex recognizes "server_is_overloaded" and applies retry-after backoff
     // (responses.rs is_server_overloaded_error); generic "upstream_server_error" is not recognized.
     return { message, type: "server_error", code: "server_is_overloaded" };
   }
   if (
-    text.includes("validationexception") ||
-    text.includes("invalid request") ||
-    text.includes("model unavailable") ||
-    text.includes("model not found") ||
-    text.includes("unsupported model") ||
-    text.includes("profile arn") ||
-    text.includes("wrong region") ||
-    text.includes("invalid region")
+    text.includes("validationexception")
+    || text.includes("invalid request")
+    || text.includes("model unavailable")
+    || text.includes("model not found")
+    || text.includes("unsupported model")
+    || text.includes("profile arn")
+    || text.includes("wrong region")
+    || text.includes("invalid region")
   ) {
     return { message, type: "invalid_request_error", code: "invalid_request_error" };
   }
@@ -105,41 +152,42 @@ export function parseRetryAfterFromMessage(message: string): number | undefined 
 export function inferHttpStatusFromAdapterMessage(message: string): number {
   const lower = message.toLowerCase();
   if (
-    lower.includes("resource_exhausted") ||
-    lower.includes("resource exhausted") ||
-    lower.includes("rate limit") ||
-    lower.includes("too many requests") ||
-    lower.includes("throttling")
+    lower.includes("resource_exhausted")
+    || lower.includes("resource exhausted")
+    || lower.includes("rate limit")
+    || lower.includes("too many requests")
+    || lower.includes("throttling")
   ) return 429;
+  if (isSubscriptionGateMessage(lower) || isPermissionMessage(lower)) return 403;
   if (
-    lower.includes("unauthenticated") ||
-    lower.includes("unauthorized") ||
-    lower.includes("permission_denied") ||
-    lower.includes("permission denied") ||
-    lower.includes("forbidden") ||
-    lower.includes("invalid token") ||
-    lower.includes("expired token") ||
-    lower.includes("authentication") ||
-    lower.includes("access denied")
+    lower.includes("unauthenticated")
+    || lower.includes("unauthorized")
+    || lower.includes("invalid token")
+    || lower.includes("expired token")
+    || lower.includes("authentication")
+    || lower.includes("invalid api key")
+    || lower.includes("invalid_api_key")
   ) return 401;
+  // AccessDenied without an auth/subscription cue — keep historical 401 mapping for Kiro-style text.
+  if (lower.includes("access denied")) return 401;
   if (
-    lower.includes("unavailable") ||
-    lower.includes("overloaded") ||
-    lower.includes("temporarily") ||
-    lower.includes("server is busy")
+    lower.includes("unavailable")
+    || lower.includes("overloaded")
+    || lower.includes("temporarily")
+    || lower.includes("server is busy")
   ) return 503;
   if (
-    lower.includes("invalid") ||
-    lower.includes("not found") ||
-    lower.includes("unsupported") ||
-    lower.includes("malformed") ||
-    lower.includes("unimplemented")
+    lower.includes("invalid")
+    || lower.includes("not found")
+    || lower.includes("unsupported")
+    || lower.includes("malformed")
+    || lower.includes("unimplemented")
   ) return 400;
   if (
-    lower.includes("timed out") ||
-    lower.includes("timeout") ||
-    lower.includes("etimedout") ||
-    lower.includes("deadline")
+    lower.includes("timed out")
+    || lower.includes("timeout")
+    || lower.includes("etimedout")
+    || lower.includes("deadline")
   ) return 504;
   return 502;
 }
@@ -156,11 +204,13 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
     ? "rate_limit_error"
     : httpStatus === 401
       ? "authentication_error"
-      : httpStatus === 503 || httpStatus === 504
-        ? "server_error"
-        : httpStatus === 400
-          ? "invalid_request_error"
-          : "upstream_error";
+      : httpStatus === 403
+        ? "permission_error"
+        : httpStatus === 503 || httpStatus === 504
+          ? "server_error"
+          : httpStatus === 400
+            ? "invalid_request_error"
+            : "upstream_error";
   return {
     httpStatus,
     error: classifyError(httpStatus, errorType, finalMessage),
@@ -176,6 +226,11 @@ export function httpStatusFromTerminalError(error: {
   if (!error) return 502;
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
+  if (
+    error.type === "permission_error"
+    || error.code === "permission_denied"
+    || error.code === "subscription_required"
+  ) return 403;
   if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
   if (error.type === "invalid_request_error") return 400;

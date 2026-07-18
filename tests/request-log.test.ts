@@ -91,12 +91,57 @@ describe("request log metadata", () => {
     expect(requestLogErrorCode(200)).toBeUndefined();
     expect(requestLogErrorCode(400)).toBe("invalid_request_error");
     expect(requestLogErrorCode(401)).toBe("invalid_api_key");
+    expect(requestLogErrorCode(403)).toBe("permission_denied");
+    expect(requestLogErrorCode(403, "Provider error 403")).toBe("permission_denied");
+    expect(requestLogErrorCode(
+      403,
+      "Provider error 403: this model requires a subscription, upgrade for access: https://ollama.com/upgrade",
+    )).toBe("subscription_required");
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(503)).toBe("server_is_overloaded");
     expect(requestLogErrorCode(502)).toBe("upstream_server_error");
     expect(requestLogErrorCode(404)).toBe("http_404");
     expect(requestLogErrorCode(418)).toBe("http_418");
+  });
+
+  test("final 403 logs use permission/subscription codes instead of invalid_api_key", () => {
+    const entries: RequestLogEntry[] = [];
+    addFinalRequestLog(
+      "ocx-test-403-perm",
+      Date.now(),
+      {
+        model: "kimi-k2.7-code",
+        provider: "ollama-cloud",
+        upstreamError: "Provider error 403",
+      },
+      403,
+      { closeReason: "non_stream" },
+      entry => entries.push(entry),
+    );
+    expect(entries[0]).toMatchObject({
+      status: 403,
+      errorCode: "permission_denied",
+      upstreamError: "Provider error 403",
+    });
+
+    const subEntries: RequestLogEntry[] = [];
+    addFinalRequestLog(
+      "ocx-test-403-sub",
+      Date.now(),
+      {
+        model: "kimi-k2.7-code",
+        provider: "ollama-cloud",
+        upstreamError: "Provider error 403: this model requires a subscription, upgrade for access: https://ollama.com/upgrade",
+      },
+      403,
+      { closeReason: "non_stream" },
+      entry => subEntries.push(entry),
+    );
+    expect(subEntries[0]).toMatchObject({
+      status: 403,
+      errorCode: "subscription_required",
+    });
   });
 
   test("maps Codex fast service tier spellings to a display speed label", () => {
