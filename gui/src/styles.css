@@ -289,6 +289,33 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 .main { min-width: 0; }
 .main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; }
+/* Combos (and Providers workspace) need a full-height master-detail shell — do not constrain width. */
+.main-inner.main-inner--providers {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.main-inner.main-inner--providers > .combos-workspace-shell,
+.main-inner.main-inner--providers > .providers-workspace-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.main-inner.main-inner--providers > .combos-workspace-root,
+.main-inner.main-inner--providers > .combos-workspace-empty-root,
+.main-inner.main-inner--providers > .providers-workspace-root,
+.main-inner.main-inner--providers > .providers-workspace-empty-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
 
 /* ---- page header ---- */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
@@ -783,6 +810,7 @@ select.input { appearance: none; }
   }
   .drawer-scrim { display: block; }
   .main-inner { padding: 22px 18px 48px; }
+  .main-inner.main-inner--providers { padding: 0; min-height: 100dvh; height: 100dvh; overflow: hidden; }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }
