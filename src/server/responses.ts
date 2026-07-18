@@ -528,10 +528,11 @@ export async function handleResponses(
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
 
-  // Combo default effort: fill reasoning when the client omitted it (client-sent wins).
+  // Combo default effort: fill reasoning when the client omitted it AND the
+  // resolved target exposes a reasoning ladder (never force onto no-effort models).
   if (comboPick) {
     const { applyComboDefaultEffort } = await import("../combos");
-    applyComboDefaultEffort(parsed, config, comboPick.comboId);
+    applyComboDefaultEffort(parsed, config, comboPick.comboId, route);
   }
 
   // Fast mode override: when config.fastMode is explicitly set, inject or strip
