@@ -164,6 +164,11 @@
   line-height: 1.45;
   color: var(--muted);
   max-width: 88ch;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: calc(1.45em * 2);
 }
 
 .frontier-workspace-detail-body {
@@ -233,6 +238,11 @@
   width: 100%;
   line-height: 1.5;
   font-size: var(--text-label);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: calc(1.5em * 2);
 }
 .frontier-filters {
   display: flex;
