@@ -149,7 +149,10 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain('version: "0.7.8"');
 
     // Advisory + least privilege: read-only token, all write-scoped outputs off.
-    expect(workflow).toContain("permissions:\n  contents: read");
+    // pull-requests: read is required so the action can list PR files for
+    // --changed-files-from; without it, fork PRs fail with ENOENT on that file.
+    expect(workflow).toContain("contents: read");
+    expect(workflow).toContain("pull-requests: read");
     expect(workflow).not.toContain(": write");
     expect(workflow).toContain("blocking: none");
     expect(workflow).toContain("comment: false");
