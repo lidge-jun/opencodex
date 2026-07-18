@@ -34,7 +34,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
-  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
+  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "gitlab-duo",
 ];
 
 describe("provider registry parity", () => {

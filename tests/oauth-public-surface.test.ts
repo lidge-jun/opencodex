@@ -49,6 +49,8 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     expect(isPublicOAuthProvider("chatgpt")).toBe(false);
     expect(listOAuthProviders()).not.toContain("chatgpt");
     expect(listOAuthProviders()).toContain("xai");
+    expect(listOAuthProviders()).toContain("github-copilot");
+    expect(isPublicOAuthProvider("github-copilot")).toBe(true);
   });
 
   test("generic management OAuth endpoints reject chatgpt before touching login state", async () => {
