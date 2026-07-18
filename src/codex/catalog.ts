@@ -292,6 +292,8 @@ export interface CatalogModel {
   provider: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  /** Preferred Codex `default_reasoning_level` when set (e.g. combo defaultEffort). */
+  defaultReasoningLevel?: string;
   contextWindow?: number;
   contextCap?: number;
   contextCapped?: boolean;
@@ -720,7 +722,7 @@ function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void 
   }
 }
 
-function applyReasoningLevels(entry: RawEntry, effortsOverride?: string[]): void {
+function applyReasoningLevels(entry: RawEntry, effortsOverride?: string[], defaultOverride?: string): void {
   let efforts = sanitizeCodexReasoningEfforts(effortsOverride) ?? ROUTED_REASONING_LEVELS.map(l => l.effort);
   // Mock top tiers (user decision 260709): every reasoning-capable model advertises `max`
   // even when the provider ladder stops lower — subagent spawns pass `max` DIRECTLY
@@ -747,6 +749,10 @@ function applyReasoningLevels(entry: RawEntry, effortsOverride?: string[]): void
   });
   if (efforts.length === 0) {
     delete entry.default_reasoning_level;
+    return;
+  }
+  if (defaultOverride && efforts.includes(defaultOverride)) {
+    entry.default_reasoning_level = defaultOverride;
     return;
   }
   entry.default_reasoning_level = efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high" : efforts[0];
@@ -843,7 +849,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
           `You are a coding agent powered by the ${modelName} model. Do not claim to be GPT-5 or made by OpenAI.`,
         );
       }
-      applyReasoningLevels(e, model?.reasoningEfforts);
+      applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningLevel);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
       applyJawcodeCatalogMetadata(e, slug, model?.contextCap);
       applyCatalogModelMetadata(e, model);
@@ -872,7 +878,7 @@ function deriveEntry(template: RawEntry | null, slug: string, desc: string, prio
     priority, base_instructions: "You are a helpful coding assistant.",
     ...(slug.includes("/") ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
   };
-  if (slug.includes("/")) applyReasoningLevels(entry, model?.reasoningEfforts);
+  if (slug.includes("/")) applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningLevel);
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
     if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(entry);
@@ -1292,8 +1298,16 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     .filter(shouldExposeRoutedModel);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Virtual combo models (issue #133): advertise as combo/<id> for clients / catalog.
+  const { getCombo } = await import("../combos");
   for (const id of Object.keys(config.combos ?? {}).sort((a, b) => a.localeCompare(b))) {
-    all.push({ provider: "combo", id, owned_by: "combo" });
+    const combo = getCombo(config, id);
+    all.push({
+      provider: "combo",
+      id,
+      owned_by: "combo",
+      reasoningEfforts: ROUTED_REASONING_LEVELS.map(l => l.effort),
+      defaultReasoningLevel: combo?.defaultEffort ?? "medium",
+    });
   }
   return all;
 }

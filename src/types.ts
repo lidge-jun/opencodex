@@ -495,6 +495,11 @@ export interface OcxComboConfig {
   strategy?: OcxComboStrategy;
   /** Sticky RR: stay on the winning target for N successes before rotating (default 1). */
   stickyLimit?: number;
+  /**
+   * Codex reasoning effort applied when the client omits `reasoning.effort` (default `medium`).
+   * Client-sent effort always wins. Ladder: low | medium | high | xhigh | max | ultra.
+   */
+  defaultEffort?: string;
 }
 
 /**

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   advanceComboAfterFailure,
+  applyComboDefaultEffort,
   clearComboStickyState,
   clearComboTargetCooldowns,
   comboConfigError,
   comboFailureDecision,
   comboModelId,
   noteComboSuccess,
+  normalizeComboConfig,
   parseComboModelId,
   pickComboTarget,
   tryPickComboModel,
@@ -60,6 +62,51 @@ describe("comboConfigError", () => {
       strategy: "failover",
       targets: [{ provider: "a", model: "m1" }],
     }, config)).toBeNull();
+  });
+
+  test("rejects invalid defaultEffort", () => {
+    const config = baseConfig();
+    expect(comboConfigError("ok", {
+      defaultEffort: "turbo",
+      targets: [{ provider: "a", model: "m1" }],
+    }, config)).toMatch(/defaultEffort/);
+    expect(comboConfigError("ok", {
+      defaultEffort: "high",
+      targets: [{ provider: "a", model: "m1" }],
+    }, config)).toBeNull();
+  });
+});
+
+describe("normalizeComboConfig defaultEffort", () => {
+  test("defaults to medium and keeps valid ladder values", () => {
+    expect(normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1" }],
+    }).defaultEffort).toBe("medium");
+    expect(normalizeComboConfig({
+      defaultEffort: "high",
+      targets: [{ provider: "a", model: "m1" }],
+    }).defaultEffort).toBe("high");
+
+    const parsed = {
+      modelId: "combo/free",
+      options: { reasoning: undefined as string | undefined },
+      _rawBody: {} as { reasoning?: { effort?: string } },
+    };
+    const applied = applyComboDefaultEffort(parsed as never, baseConfig({
+      combos: {
+        free: {
+          defaultEffort: "high",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      },
+    }), "free");
+    expect(applied).toBe("high");
+    expect(parsed.options.reasoning).toBe("high");
+    expect(parsed._rawBody.reasoning?.effort).toBe("high");
+
+    parsed.options.reasoning = "low";
+    expect(applyComboDefaultEffort(parsed as never, baseConfig(), "free")).toBeNull();
+    expect(parsed.options.reasoning).toBe("low");
   });
 });
 

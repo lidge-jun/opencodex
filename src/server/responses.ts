@@ -528,6 +528,12 @@ export async function handleResponses(
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
 
+  // Combo default effort: fill reasoning when the client omitted it (client-sent wins).
+  if (comboPick) {
+    const { applyComboDefaultEffort } = await import("../combos");
+    applyComboDefaultEffort(parsed, config, comboPick.comboId);
+  }
+
   // Fast mode override: when config.fastMode is explicitly set, inject or strip
   // service_tier for OpenAI-routed models. Undefined = passthrough (client decides).
   if (config.fastMode !== undefined && route.provider.adapter === "openai-responses") {

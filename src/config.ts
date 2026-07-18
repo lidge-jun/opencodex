@@ -205,9 +205,19 @@ const configSchema = z.object({
           ctx.addIssue({ code: "custom", path: ["combos", id], message: "combo must be an object" });
           continue;
         }
-        const body = raw as { strategy?: unknown; stickyLimit?: unknown; targets?: unknown };
+        const body = raw as { strategy?: unknown; stickyLimit?: unknown; targets?: unknown; defaultEffort?: unknown };
         if (body.strategy !== undefined && body.strategy !== "failover" && body.strategy !== "round-robin") {
           ctx.addIssue({ code: "custom", path: ["combos", id, "strategy"], message: 'strategy must be "failover" or "round-robin"' });
+        }
+        if (body.defaultEffort !== undefined) {
+          const effort = body.defaultEffort;
+          if (typeof effort !== "string" || !["low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["combos", id, "defaultEffort"],
+              message: 'defaultEffort must be one of: low, medium, high, xhigh, max, ultra',
+            });
+          }
         }
         if (!Array.isArray(body.targets) || body.targets.length === 0) {
           ctx.addIssue({ code: "custom", path: ["combos", id, "targets"], message: "targets must be a non-empty array" });

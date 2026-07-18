@@ -1,4 +1,5 @@
 export {
+  COMBO_DEFAULT_EFFORT,
   COMBO_NAMESPACE,
   comboConfigError,
   comboModelId,
@@ -6,9 +7,11 @@ export {
   isValidComboId,
   listComboIds,
   normalizeComboConfig,
+  normalizeComboDefaultEffort,
   parseComboModelId,
   targetKey,
 } from "./types";
+export { applyComboDefaultEffort } from "./effort";
 export {
   clearComboTargetCooldowns,
   comboFailureDecision,

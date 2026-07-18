@@ -1,7 +1,9 @@
 import type { OcxComboConfig, OcxComboStrategy, OcxComboTarget, OcxConfig } from "../types";
 import { hasOwnProvider, isValidProviderName } from "../config";
+import { isCodexReasoningEffort } from "../reasoning-effort";
 
 export const COMBO_NAMESPACE = "combo";
+export const COMBO_DEFAULT_EFFORT = "medium";
 
 const COMBO_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
@@ -26,6 +28,10 @@ export function targetKey(target: Pick<OcxComboTarget, "provider" | "model">): s
   return `${target.provider}/${target.model}`;
 }
 
+export function normalizeComboDefaultEffort(raw: unknown): string {
+  return typeof raw === "string" && isCodexReasoningEffort(raw) ? raw : COMBO_DEFAULT_EFFORT;
+}
+
 export function normalizeComboConfig(raw: OcxComboConfig): OcxComboConfig {
   const strategy: OcxComboStrategy = raw.strategy === "round-robin" ? "round-robin" : "failover";
   const stickyLimit = typeof raw.stickyLimit === "number" && Number.isFinite(raw.stickyLimit)
@@ -38,7 +44,12 @@ export function normalizeComboConfig(raw: OcxComboConfig): OcxComboConfig {
       ? { weight: Math.min(10_000, Math.trunc(t.weight)) }
       : {}),
   }));
-  return { strategy, stickyLimit, targets };
+  return {
+    strategy,
+    stickyLimit,
+    defaultEffort: normalizeComboDefaultEffort(raw.defaultEffort),
+    targets,
+  };
 }
 
 /** Validate a combo definition against the live provider map. Returns an error string or null. */
@@ -55,6 +66,9 @@ export function comboConfigError(comboId: string, raw: unknown, config: OcxConfi
     if (typeof body.stickyLimit !== "number" || !Number.isFinite(body.stickyLimit) || body.stickyLimit < 1) {
       return "stickyLimit must be a positive number";
     }
+  }
+  if (body.defaultEffort !== undefined && !isCodexReasoningEffort(body.defaultEffort)) {
+    return 'defaultEffort must be one of: low, medium, high, xhigh, max, ultra';
   }
   if (!Array.isArray(body.targets) || body.targets.length === 0) {
     return "targets must be a non-empty array";
