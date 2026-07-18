@@ -23,10 +23,10 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     de: { label: "Zahlung erforderlich", description: "Der Upstream-Anbieter hat die Anfrage abgelehnt, weil Abrechnung, Guthaben oder Planzugriff nicht verfügbar ist. Guthaben aufladen, Abrechnung aktualisieren oder Anbieter wechseln." },
   },
   403: {
-    en: { label: "Forbidden", description: "The account is authenticated but not allowed to use this model or operation. Check provider permissions, org access, and policy restrictions." },
-    ko: { label: "권한 없음", description: "계정 인증은 되었지만 이 모델 또는 작업을 사용할 권한이 없습니다. 제공자 권한, 조직 접근, 정책 제한을 확인해야 합니다." },
-    zh: { label: "禁止访问", description: "账号已认证，但无权使用此模型或操作。请检查提供商权限、组织访问权限和策略限制。" },
-    de: { label: "Verboten", description: "Das Konto ist authentifiziert, darf dieses Modell oder diese Operation aber nicht nutzen. Prüfe Anbieterberechtigungen, Organisationszugriff und Richtlinien." },
+    en: { label: "Forbidden", description: "The account is authenticated but not allowed to use this model or operation. Often a plan/subscription gate (e.g. Ollama Cloud Pro), org policy, or model permission — not necessarily a bad API key." },
+    ko: { label: "권한 없음", description: "계정 인증은 되었지만 이 모델 또는 작업을 사용할 권한이 없습니다. 플랜/구독 제한(예: Ollama Cloud Pro), 조직 정책, 모델 권한 문제인 경우가 많으며 API 키가 잘못된 것은 아닐 수 있습니다." },
+    zh: { label: "禁止访问", description: "账号已认证，但无权使用此模型或操作。常见原因是套餐/订阅限制（例如 Ollama Cloud Pro）、组织策略或模型权限——不一定是 API 密钥无效。" },
+    de: { label: "Verboten", description: "Das Konto ist authentifiziert, darf dieses Modell oder diese Operation aber nicht nutzen. Oft Plan-/Abo-Sperre (z. B. Ollama Cloud Pro), Organisationsrichtlinie oder Modellrecht — nicht zwingend ein ungültiger API-Key." },
   },
   404: {
     en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and opencodex provider configuration." },

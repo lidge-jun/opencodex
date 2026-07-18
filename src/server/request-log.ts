@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
-import { httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError } from "../lib/errors";
+import {
+  classifyError,
+  httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
+} from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { OcxUsage } from "../types";
@@ -120,10 +123,19 @@ export function nextRequestLogId(timestamp = Date.now()): string {
   return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
 }
 
-export function requestLogErrorCode(status: number): string | undefined {
+export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   if (status === 400 || status === 409) return "invalid_request_error";
-  if (status === 401 || status === 403) return "invalid_api_key";
+  if (status === 401) return "invalid_api_key";
+  if (status === 403) {
+    // Prefer message-aware codes (e.g. Ollama Cloud subscription gates) over a blunt
+    // invalid_api_key — 403 usually means authenticated but not allowed.
+    if (upstreamError?.trim()) {
+      const code = classifyError(403, "upstream_error", upstreamError).code;
+      if (code) return code;
+    }
+    return "permission_denied";
+  }
   if (status === 429) return "rate_limit_exceeded";
   if (status === 499) return "client_closed_request";
   if (status === 503) return "server_is_overloaded";
@@ -376,7 +388,7 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  const errorCode = requestLogErrorCode(status);
+  const errorCode = requestLogErrorCode(status, logCtx.upstreamError);
   // Estimated-usage detection prefers the route ADAPTER: configured provider names
   // ("cursor-mykey") broke the old exact-name match and cursor rows logged as
   // accurately "reported" (devlog 130 B2).

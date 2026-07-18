@@ -25,4 +25,15 @@ describe("adapterFailureFromMessage", () => {
       error: { type: "authentication_error" },
     });
   });
+
+  test("maps forbidden / subscription gates to 403 permission_error", () => {
+    expect(adapterFailureFromMessage("Provider stream error: forbidden")).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "permission_denied" },
+    });
+    expect(adapterFailureFromMessage("this model requires a subscription, upgrade for access: https://ollama.com/upgrade")).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "subscription_required" },
+    });
+  });
 });

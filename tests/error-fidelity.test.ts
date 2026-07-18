@@ -54,6 +54,14 @@ describe("error fidelity", () => {
       type: "authentication_error",
       code: "invalid_api_key",
     });
+    expect(classifyError(403, "upstream_error", "Provider error 403")).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
+    expect(classifyError(403, "upstream_error", "this model requires a subscription, upgrade for access: https://ollama.com/upgrade")).toMatchObject({
+      type: "permission_error",
+      code: "subscription_required",
+    });
     expect(classifyError(502, "upstream_error", "Kiro invalid request: ValidationException: model not found")).toMatchObject({
       type: "invalid_request_error",
       code: "invalid_request_error",
