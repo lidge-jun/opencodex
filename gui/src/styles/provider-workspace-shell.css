@@ -608,6 +608,8 @@
 .pws-detail-tabs {
   display: flex;
   gap: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
   border-bottom: 1px solid var(--border);
   margin-bottom: 16px;
   margin-top: 8px;
@@ -622,19 +624,22 @@
   font: inherit;
   font-size: 0.82rem;
   font-weight: 500;
-  color: var(--fg-muted, #888);
+  color: var(--muted);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }
 
 .pws-detail-tab:hover {
-  color: var(--fg);
+  color: var(--text);
 }
 
 .pws-detail-tab--active {
-  color: var(--fg);
-  border-bottom-color: var(--fg);
+  color: var(--text);
+  border-bottom-color: var(--text);
 }
+
+.pws-detail-tab:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.pws-detail-panel:focus { outline: none; }
 
 /* Section blocks */
 .pws-section {
@@ -646,7 +651,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-muted, #888);
+  color: var(--muted);
   margin: 0 0 8px 0;
 }
 
@@ -673,7 +678,7 @@
 .pws-kv-row dt {
   flex-shrink: 0;
   width: 130px;
-  color: var(--fg-muted, #888);
+  color: var(--muted);
   font-weight: 400;
 }
 

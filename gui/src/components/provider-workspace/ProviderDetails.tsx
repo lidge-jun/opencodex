@@ -8,6 +8,7 @@ import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { isFreeProvider } from "../../provider-workspace/catalog";
 import { isLocalProvider } from "../../provider-workspace/kind";
+import { providerAuthSurface } from "../../provider-workspace/auth";
 import { ProviderIcon } from "./ProviderRail";
 import { Switch } from "../../ui";
 import { IconChevron, IconTrash } from "../../icons";
@@ -17,9 +18,9 @@ import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import ProviderSettings from "./ProviderSettings";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
+import type { AccountLoadState, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
 
-type Tab = "overview" | "models" | "usage" | "settings";
+type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
 export default function ProviderDetails({
   item,
@@ -35,6 +36,8 @@ export default function ProviderDetails({
   apiBase,
   oauth,
   accounts,
+  accountLoadState,
+  switchingAccountId,
   keys,
   busyProvider,
   loginHint,
@@ -57,6 +60,8 @@ export default function ProviderDetails({
   apiBase: string;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   accounts?: OAuthAccountRow[];
+  accountLoadState?: AccountLoadState;
+  switchingAccountId?: string | null;
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
@@ -72,12 +77,14 @@ export default function ProviderDetails({
   const isDisabled = item.disabled === true;
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
-  const tabs: { id: Tab; label: string }[] = [
+  const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
     { id: "usage", label: t("pws.tab.usage") },
+    ...(authSurface ? [{ id: "accounts" as const, label: authSurface === "api-keys" ? t("pws.apiKeys") : t("pws.tab.accounts") }] : []),
     { id: "settings", label: t("pws.tab.settings") },
-  ];
+  ], [authSurface, t]);
 
   const switchTab = useCallback((next: Tab) => {
     if (settingsDirty && tab === "settings" && next !== "settings") {
@@ -86,7 +93,24 @@ export default function ProviderDetails({
     setTab(next);
   }, [tab, settingsDirty, t]);
 
-    return (
+  const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next: number;
+    if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    switchTab(tabs[next]!.id);
+    event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]
+      ?.focus();
+  }, [switchTab, tabs]);
+
+  const activeTabId = `pws-tab-${tab}`;
+  const activePanelId = `pws-panel-${tab}`;
+
+  return (
     <div className="pws-detail">
       <div className="pws-detail-head">
         <button type="button" className="pws-detail-back-link" onClick={onDeselect}>
@@ -129,63 +153,77 @@ export default function ProviderDetails({
         </div>
       </div>
       <div className="pws-detail-tabs" role="tablist">
-        {tabs.map(candidate => (
+        {tabs.map((candidate, index) => (
           <button
             key={candidate.id}
             type="button"
             role="tab"
+            id={`pws-tab-${candidate.id}`}
+            aria-controls={`pws-panel-${candidate.id}`}
             aria-selected={tab === candidate.id}
+            tabIndex={tab === candidate.id ? 0 : -1}
             className={`pws-detail-tab${tab === candidate.id ? " pws-detail-tab--active" : ""}`}
             onClick={() => switchTab(candidate.id)}
+            onKeyDown={event => onTabKeyDown(event, index)}
           >
             {candidate.label}
           </button>
         ))}
       </div>
-      {tab === "overview" && (
-        <ProviderOverview
-          item={item}
-          usageTotals={usageTotals}
-          quotaReport={quotaReport}
-          oauthEmail={oauthEmail}
-          onEditSettings={() => switchTab("settings")}
-          onViewUsage={() => switchTab("usage")}
-          onUpdateProvider={onUpdateProvider}
-        />
-      )}
-      {tab === "models" && (
-        <ProviderModels
-          item={item}
-          availableModels={availableModels}
-          selectedModels={selectedModels}
-          modelsLoading={modelsLoading}
-          modelsLoadFailed={modelsLoadFailed}
-          onRetryModels={onRetryModels}
-        />
-      )}
-      {tab === "usage" && (
-        <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} />
-      )}
-      {tab === "settings" && (
-        <>
-          <ProviderSettings
+      <div
+        className="pws-detail-panel"
+        role="tabpanel"
+        id={activePanelId}
+        aria-labelledby={activeTabId}
+        tabIndex={0}
+      >
+        {tab === "overview" && (
+          <ProviderOverview
+            item={item}
+            usageTotals={usageTotals}
+            quotaReport={quotaReport}
+            oauthEmail={oauthEmail}
+            onEditSettings={() => switchTab("settings")}
+            onViewUsage={() => switchTab("usage")}
+            onUpdateProvider={onUpdateProvider}
+          />
+        )}
+        {tab === "models" && (
+          <ProviderModels
             item={item}
             availableModels={availableModels}
-            onUpdateProvider={onUpdateProvider}
-            onDirtyChange={setSettingsDirty}
+            selectedModels={selectedModels}
+            modelsLoading={modelsLoading}
+            modelsLoadFailed={modelsLoadFailed}
+            onRetryModels={onRetryModels}
           />
+        )}
+        {tab === "usage" && (
+          <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} />
+        )}
+        {tab === "accounts" && (
           <ProviderAuthPanel
             item={item}
             apiBase={apiBase}
             oauth={oauth}
             accounts={accounts}
             keys={keys}
+            accountLoadState={accountLoadState}
+            switchingAccountId={switchingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
             authHandlers={authHandlers}
           />
-        </>
-      )}
+        )}
+        {tab === "settings" && (
+          <ProviderSettings
+            item={item}
+            availableModels={availableModels}
+            onUpdateProvider={onUpdateProvider}
+            onDirtyChange={setSettingsDirty}
+          />
+        )}
+      </div>
     </div>
   );
 }

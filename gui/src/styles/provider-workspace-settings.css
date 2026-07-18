@@ -15,6 +15,15 @@
 .pwi-auth-dot--warn { background: var(--amber); }
 .pwi-auth-status-text { font-size: var(--text-control); color: var(--text); }
 
+.pwi-auth-state {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 36px; padding: 8px 10px;
+  font-size: var(--text-label); color: var(--muted);
+  background: var(--raised); border-radius: var(--radius-xs);
+}
+.pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
+.pwi-auth-state--empty { justify-content: center; }
+
 .pwi-auth-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .pwi-auth-wait { display: flex; flex-direction: column; gap: 6px; }
@@ -30,7 +39,14 @@
 }
 .pwi-auth-row:hover { background: var(--hover); }
 .pwi-auth-row--active { background: var(--accent-soft); }
-.pwi-auth-row-main  { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.pwi-auth-row-main  {
+  appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;
+  cursor: pointer; border-radius: var(--radius-2xs);
+}
+.pwi-auth-row-main:disabled { cursor: default; opacity: 0.72; }
+.pwi-auth-row-main:focus-visible,
+.pwi-auth-row-remove:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .pwi-auth-row-label  { font-size: var(--text-control); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pwi-auth-row-remove {
   background: none; border: none; cursor: pointer; padding: 2px;

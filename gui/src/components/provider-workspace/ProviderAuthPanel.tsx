@@ -7,19 +7,21 @@ import { useState } from "react";
 import { useT } from "../../i18n";
 import { IconLock, IconExternal, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { isLocalProvider } from "../../provider-workspace/kind";
-import { authModeLabel } from "./ProviderRail";
+import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import CodexAccountPool from "../CodexAccountPool";
-import type { OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
+import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
 export default function ProviderAuthPanel({
-  item, apiBase, oauth, accounts = [], keys = [], busy = false, loginHint, authHandlers,
+  item, apiBase, oauth, accounts = [], keys = [], accountLoadState = "ready",
+  switchingAccountId = null, busy = false, loginHint, authHandlers,
 }: {
   item: WorkspaceItem;
   apiBase: string;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   accounts?: OAuthAccountRow[];
   keys?: ApiKeyRow[];
+  accountLoadState?: AccountLoadState;
+  switchingAccountId?: string | null;
   busy?: boolean;
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
@@ -29,17 +31,11 @@ export default function ProviderAuthPanel({
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
 
-  const mode = (item.authMode ?? "").toLowerCase();
-  const isOauth = mode === "oauth";
-  const isForward = mode === "forward";
-  const isLocal = mode === "local" || isLocalProvider(item);
-  const isKeyOptional = item.keyOptional === true;
-  const hasKeyMaterial = item.hasApiKey === true || keys.length > 0;
-  const isKeyAuth =
-    (mode === "key" || (!isOauth && !isForward && !isLocal) || item.hasApiKey === true) &&
-    !(isKeyOptional && !hasKeyMaterial);
+  const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
+  const isOauth = surface === "oauth-accounts";
+  const isKeyAuth = surface === "api-keys";
 
-  if (isForward) {
+  if (surface === "codex-accounts") {
     return (
       <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
         <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
@@ -50,10 +46,10 @@ export default function ProviderAuthPanel({
     );
   }
 
-  if (!authHandlers) return null;
-  if (!isOauth && !isKeyAuth && !isLocal) return null;
+  if (!surface || !authHandlers) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
+  const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
 
   const submitKey = async () => {
     const key = newKey.trim();
@@ -71,20 +67,19 @@ export default function ProviderAuthPanel({
         {isOauth && (
           <>
             <div className="pwi-auth-status-row">
-              <span className={`pwi-auth-dot ${oauth?.loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} />
+              <span className={`pwi-auth-dot ${loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">
-                {oauth?.loggedIn
-                  ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth.email ?? t("pws.loggedInTitle")))
+                {loggedIn
+                  ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
                   : (oauth?.error || t("pws.notLoggedInTitle"))}
               </span>
               <span className="pwi-auth-actions">
-                {oauth?.loggedIn ? (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
-                ) : busy ? (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => authHandlers.onCancelLogin?.(item.name)}>{t("common.cancel")}</button>
+                {loggedIn ? (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
                 ) : (
-                  <button type="button" className="btn btn-primary btn-sm" onClick={() => authHandlers.onLogin(item.name, false)}>
-                    <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.login")}
+                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onLogin(item.name, false)}>
+                    {busy ? <span className="pwi-spin-inline" aria-hidden="true" /> : <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" />}
+                    {busy ? t("prov.waitingBrowser") : t("prov.login")}
                   </button>
                 )}
               </span>
@@ -102,29 +97,58 @@ export default function ProviderAuthPanel({
                 </div>
               </div>
             )}
-            {accounts.length > 0 && (
-              <div className="pwi-auth-list" role="list">
-                {accounts.map(account => (
-                  <div key={account.id} className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`} role="listitem">
-                    <button type="button" className="pwi-auth-row-main"
-                      onClick={() => authHandlers.onSwitchAccount(item.name, account)}
-                      disabled={account.active}>
-                      <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} />
-                      <span className="pwi-auth-row-label">{account.email ?? account.id}</span>
-                      {account.needsReauth && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      onClick={() => authHandlers.onRemoveAccount(item.name, account)}>
-                      <IconTrash style={{ width: 13, height: 13 }} />
-                    </button>
-                  </div>
-                ))}
+            {accountLoadState === "loading" && accounts.length === 0 && (
+              <div className="pwi-auth-state" role="status">
+                <span className="pwi-spin-inline" aria-hidden="true" />
+                {t("pws.accountsLoading")}
               </div>
             )}
-            {oauth?.loggedIn && (
+            {accountLoadState === "error" && (
+              <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+                <span>{t("pws.accountsLoadFailed")}</span>
+                {authHandlers.onRetryAccounts && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onRetryAccounts?.(item.name)}>
+                    {t("pws.retryAccounts")}
+                  </button>
+                )}
+              </div>
+            )}
+            {accounts.length > 0 && (
+              <div className="pwi-auth-list" role="list">
+                {accounts.map(account => {
+                  const label = oauthAccountDisplayLabel(accounts, account, t);
+                  const switching = switchingAccountId === account.id;
+                  return (
+                  <div key={account.id} className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`} role="listitem">
+                    <button type="button" className="pwi-auth-row-main"
+                      onClick={() => { if (!account.active && !account.needsReauth && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
+                      aria-current={account.active ? "true" : undefined}
+                      aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      disabled={Boolean(account.needsReauth || (switchingAccountId && !switching))}>
+                      <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                      <span className="pwi-auth-row-label">{label}</span>
+                      {account.needsReauth && <span className="badge badge-amber">{t("pws.reauth")}</span>}
+                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                      {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
+                      aria-label={`${t("common.remove")} — ${label}`}
+                      title={`${t("common.remove")} — ${label}`}
+                      disabled={Boolean(switchingAccountId)}
+                      onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
+                      <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
+                    </button>
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+            {accountLoadState === "ready" && loggedIn && accounts.length === 0 && (
+              <div className="pwi-auth-state pwi-auth-state--empty">{t("pws.noAccounts")}</div>
+            )}
+            {loggedIn && (
               <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }}
-                onClick={() => authHandlers.onLogin(item.name, true)}>
+                onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
                 {t("pws.addAccount")}
               </button>
             )}
@@ -138,15 +162,17 @@ export default function ProviderAuthPanel({
                 {keys.map(entry => (
                   <div key={entry.id} className={`pwi-auth-row${entry.active ? " pwi-auth-row--active" : ""}`} role="listitem">
                     <button type="button" className="pwi-auth-row-main"
-                      onClick={() => authHandlers.onSwitchApiKey(item.name, entry)}
+                      onClick={() => void authHandlers.onSwitchApiKey(item.name, entry)}
                       disabled={entry.active}>
-                      <span className={`pwi-auth-dot ${entry.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} />
+                      <span className={`pwi-auth-dot ${entry.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <code className="pwi-auth-row-label">{entry.masked}</code>
                       {entry.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                     </button>
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      onClick={() => authHandlers.onRemoveApiKey(item.name, entry)}>
-                      <IconTrash style={{ width: 13, height: 13 }} />
+                      aria-label={`${t("common.remove")} — ${entry.label ?? entry.masked}`}
+                      title={`${t("common.remove")} — ${entry.label ?? entry.masked}`}
+                      onClick={() => void authHandlers.onRemoveApiKey(item.name, entry)}>
+                      <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -168,12 +194,6 @@ export default function ProviderAuthPanel({
           </>
         )}
 
-        {isLocal && !isKeyAuth && (
-          <div className="pwi-auth-status-row">
-            <span className="pwi-auth-dot pwi-auth-dot--ok" />
-            <span className="pwi-auth-status-text">{t("modal.badge.local")} — {authModeLabel(item, t)}</span>
-          </div>
-        )}
       </div>
     </section>
   );

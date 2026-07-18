@@ -45,15 +45,18 @@ export type LoginHint = {
   instructions?: string;
 };
 
+export type AccountLoadState = "idle" | "loading" | "ready" | "error";
+
 export interface ProviderAuthHandlers {
-  onLogin: (provider: string, addAccount?: boolean) => void;
+  onLogin: (provider: string, addAccount?: boolean) => void | Promise<void>;
   onCancelLogin?: (provider: string) => void;
-  onLogout: (provider: string) => void;
-  onSwitchAccount: (provider: string, account: OAuthAccountRow) => void;
-  onRemoveAccount: (provider: string, account: OAuthAccountRow) => void;
+  onLogout: (provider: string) => void | Promise<void>;
+  onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
+  onRemoveAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
+  onRetryAccounts?: (provider: string) => void | Promise<void>;
   onAddApiKey: (provider: string, key: string) => Promise<boolean>;
-  onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void;
-  onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void;
+  onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
+  onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
 }
 
 export type ProviderUpdatePatch = {

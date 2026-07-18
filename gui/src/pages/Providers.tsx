@@ -4,6 +4,8 @@ import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/pr
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
+import type { AccountLoadState } from "../components/provider-workspace/types";
+import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 import { Notice } from "../ui";
 import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, IconLink } from "../icons";
 import { useT } from "../i18n";
@@ -54,6 +56,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
+  const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
+  const [switchingAccount, setSwitchingAccount] = useState<{ provider: string; accountId: string } | null>(null);
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
@@ -63,6 +67,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const aliveRef = useRef(true);
+  const accountRequestGenerationRef = useRef<Record<string, number>>({});
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
 
@@ -113,28 +118,53 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // Multiauth: per-provider logged-in account lists for the card dropdowns (oauth cards only;
   // the Codex/ChatGPT passthrough pool has its own page).
   const fetchAccountSets = useCallback(async (providers: string[]) => {
-    const entries = await Promise.all(providers.map(async p => {
-      const data = await fetch(`${apiBase}/api/oauth/accounts?provider=${p}`).then(r => r.json()).catch(() => null) as { activeAccountId?: string | null; accounts?: OAuthAccount[] } | null;
-      return [p, { activeAccountId: data?.activeAccountId ?? null, accounts: data?.accounts ?? [] }] as const;
+    const uniqueProviders = [...new Set(providers)];
+    setAccountLoadStates(current => {
+      const next = { ...current };
+      for (const provider of uniqueProviders) next[provider] = "loading";
+      return next;
+    });
+    await Promise.all(uniqueProviders.map(async provider => {
+      const generation = (accountRequestGenerationRef.current[provider] ?? 0) + 1;
+      accountRequestGenerationRef.current[provider] = generation;
+      try {
+        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
+        if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return;
+        setAccountSets(current => ({
+          ...current,
+          [provider]: { activeAccountId: data.activeAccountId ?? null, accounts: data.accounts ?? [] },
+        }));
+        setAccountLoadStates(current => ({ ...current, [provider]: "ready" }));
+      } catch {
+        if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return;
+        setAccountLoadStates(current => ({ ...current, [provider]: "error" }));
+      }
     }));
-    setAccountSets(Object.fromEntries(entries));
   }, [apiBase]);
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
-    if (account.active) return;
-    const res = await fetch(`${apiBase}/api/oauth/accounts/active`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, accountId: account.id }),
-    });
-    if (res.ok) {
-      notify(t("prov.accountSwitched", { email: account.email ?? account.id }), true);
-      fetchAccountSets(Object.keys(accountSets));
-      fetchOauth();
-      fetchProviderQuotas(true);
-    } else {
-      const data = await res.json().catch(() => ({}));
-      notify(data.error || t("prov.accountSwitchFail"), false);
+    if (account.active || account.needsReauth || switchingAccount) return;
+    setSwitchingAccount({ provider, accountId: account.id });
+    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/accounts/active`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, accountId: account.id }),
+      });
+      if (!res.ok) {
+        notify(t("prov.accountSwitchFail"), false);
+        return;
+      }
+      await fetchAccountSets([provider]);
+      await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      notify(t("prov.accountSwitched", { email: label }), true);
+    } catch {
+      notify(t("prov.accountSwitchFail"), false);
+    } finally {
+      if (aliveRef.current) setSwitchingAccount(current => current?.provider === provider && current.accountId === account.id ? null : current);
     }
   };
 
@@ -175,35 +205,47 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const addApiKey = async (provider: string) => {
-    const key = newKeyValue.trim();
-    if (!key) return;
-    const res = await fetch(`${apiBase}/api/providers/keys`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: provider, key }),
-    });
-    if (res.ok) {
-      notify(t("prov.keyAdded", { name: provider }), true);
-      setNewKeyValue("");
-      setAddingKeyFor(null);
-      fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]);
-      fetchConfig();
-      fetchProviderQuotas(true);
-    } else {
-      const data = await res.json().catch(() => ({}));
+  const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
+    const key = rawKey.trim();
+    if (!key) return false;
+    try {
+      const res = await fetch(`${apiBase}/api/providers/keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: provider, key }),
+      });
+      if (res.ok) {
+        notify(t("prov.keyAdded", { name: provider }), true);
+        setAddingKeyFor(null);
+        await Promise.all([
+          fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]),
+          fetchConfig(),
+          fetchProviderQuotas(true),
+        ]);
+        return true;
+      }
+      const data = await res.json().catch(() => ({})) as { error?: string };
       notify(data.error || t("prov.keyAddFail"), false);
+      return false;
+    } catch {
+      notify(t("prov.keyAddFail"), false);
+      return false;
     }
   };
 
+  const addApiKey = async (provider: string) => {
+    const ok = await addApiKeyValue(provider, newKeyValue);
+    if (ok) setNewKeyValue("");
+  };
+
   const removeAccount = async (provider: string, account: OAuthAccount) => {
-    if (!window.confirm(t("prov.accountRemoveConfirm", { email: account.email ?? account.id }))) return;
-    const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${provider}&id=${encodeURIComponent(account.id)}`, { method: "DELETE" });
+    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    if (!window.confirm(t("prov.accountRemoveConfirm", { email: label }))) return;
+    const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}`, { method: "DELETE" });
     if (res.ok) {
-      notify(t("prov.accountRemoved", { email: account.email ?? account.id }), true);
-      fetchAccountSets(Object.keys(accountSets));
-      fetchOauth();
-      fetchProviderQuotas(true);
+      notify(t("prov.accountRemoved", { email: label }), true);
+      await fetchAccountSets([provider]);
+      await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
     }
   };
 
@@ -463,6 +505,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
           detail={(item, data) => (
             <ProviderDetails
+              key={item.name}
               item={item}
               usageTotals={data.usageTotals}
               quotaReport={data.quotaReport}
@@ -470,9 +513,26 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               selectedModels={data.selectedModels}
               modelsLoading={data.modelsLoading}
               modelsLoadFailed={data.modelsLoadFailed}
-             oauthEmail={oauthStatus[item.name]?.email}
+              oauthEmail={oauthStatus[item.name]?.email}
               onDeselect={() => setWorkspaceSelected(null)}
               apiBase={apiBase}
+              oauth={oauthStatus[item.name]}
+              accounts={accountSets[item.name]?.accounts ?? []}
+              keys={keyPools[item.name] ?? []}
+              accountLoadState={accountLoadStates[item.name] ?? (item.authMode === "oauth" ? "idle" : "ready")}
+              switchingAccountId={switchingAccount?.provider === item.name ? switchingAccount.accountId : null}
+              busyProvider={busy}
+              loginHint={loginInfo}
+              authHandlers={{
+                onLogin: loginOAuth,
+                onLogout: logoutOAuth,
+                onSwitchAccount: switchAccount,
+                onRemoveAccount: removeAccount,
+                onRetryAccounts: provider => fetchAccountSets([provider]),
+                onAddApiKey: addApiKeyValue,
+                onSwitchApiKey: switchApiKey,
+                onRemoveApiKey: removeApiKey,
+              }}
               isDefault={item.name === config.defaultProvider}
               onRemoveProvider={removeProvider}
               onSetDisabled={setProviderDisabled}
@@ -735,7 +795,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </button>
                     {accountsOpen && (
                       <div className="prov-accounts-list">
-                        {(accountSet?.accounts ?? []).map(account => (
+                        {(accountSet?.accounts ?? []).map(account => {
+                          const accountLabel = oauthAccountDisplayLabel(accountSet?.accounts ?? [account], account, t);
+                          return (
                           <button
                             key={account.id}
                             className={`prov-account-row${account.active ? " active" : ""}`}
@@ -743,19 +805,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                             title={account.active ? undefined : t("prov.accountSwitchTitle")}
                           >
                             <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
-                            <span className="prov-account-email">{account.email ?? t("prov.accountNoLabel", { id: account.id })}</span>
+                            <span className="prov-account-email">{accountLabel}</span>
                             {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
                             {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                             <span
                               className="prov-account-remove"
                               role="button"
-                              aria-label={t("prov.accountRemoveAria", { email: account.email ?? account.id })}
+                              aria-label={t("prov.accountRemoveAria", { email: accountLabel })}
                               onClick={e => { e.stopPropagation(); removeAccount(name, account); }}
                             >
                               <IconTrash style={{ width: 13, height: 13 }} />
                             </span>
                           </button>
-                        ))}
+                          );
+                        })}
                         {keyPool.map(entry => (
                           <button
                             key={entry.id}
