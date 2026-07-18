@@ -1,7 +1,7 @@
 /* ============================================================================
    combos-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
    Namespace: combos-workspace-  |  widgets: cwi-
-   Includes a small set of pwi-* helpers so Combos does not depend on the Providers workspace CSS.
+   Shared pwi-* chrome comes from styles-provider-workspace.css (import that first).
    Uses only design tokens from styles.css. No gradients.
    ============================================================================ */
 
@@ -537,77 +537,3 @@
   }
 }
 
-/* Shared chrome helpers (formerly from providers-workspace) */
-.pwi-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-  background: var(--muted);
-}
-.pwi-back-overview {
-  flex: 0 0 auto;
-  gap: 4px;
-  margin-right: 2px;
-  white-space: nowrap;
-}
-.pwi-section {
-  background: none;
-  border: none;
-  border-radius: 0;
-  min-width: 0;
-  padding: 0;
-}
-.pwi-section-title {
-  margin: 0 0 4px;
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.pwi-empty-right-icon {
-  color: var(--faint);
-}
-.pwi-empty-right-sub {
-  font-size: 13.5px;
-  color: var(--muted);
-  margin: 0;
-  max-width: 44ch;
-  line-height: 1.5;
-}
-.pwi-json-unsaved-card,
-.pwi-remove-confirm-card {
-  max-width: 420px;
-  width: min(420px, 92vw);
-  padding: 20px 22px 16px;
-}
-.pwi-json-unsaved-title,
-.pwi-remove-confirm-title {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--text);
-}
-.pwi-json-unsaved-desc,
-.pwi-remove-confirm-desc {
-  margin: 0 0 18px;
-  font-size: 13.5px;
-  line-height: 1.45;
-}
-.pwi-json-unsaved-actions,
-.pwi-remove-confirm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.pwi-remove-confirm-danger {
-  background: var(--red) !important;
-  color: #fff !important;
-  border-color: transparent !important;
-}
-.pwi-remove-confirm-danger:hover:not(:disabled) {
-  filter: brightness(1.08);
-}

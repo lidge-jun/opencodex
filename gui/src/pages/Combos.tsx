@@ -8,6 +8,7 @@ import {
 } from "../combo-workspace-data";
 import { Notice } from "../ui";
 import { useT } from "../i18n";
+import "../styles-provider-workspace.css";
 import "../styles-combos-workspace.css";
 
 type ProviderOption = {
