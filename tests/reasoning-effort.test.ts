@@ -223,6 +223,72 @@ describe("provider-specific reasoning effort mapping", () => {
     expect(body).not.toHaveProperty("tool_choice");
   });
 
+  test("Kimi K3 context aliases share the k3 wire id and normalize the documented effort tiers", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "kimi",
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          apiKey: "test-token",
+        },
+      },
+    };
+    for (const selector of ["kimi/k3", "kimi/k3[1m]"]) {
+      const route = routeModel(config, selector);
+      expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["low", "high", "max"]);
+      for (const [requested, wire] of Object.entries({
+        none: "none",
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+        ultra: "max",
+      })) {
+        const body = buildBody(route.provider, route.modelId, {
+          reasoning: requested,
+          temperature: 0.2,
+          topP: 0.7,
+          presencePenalty: 1,
+          frequencyPenalty: 1,
+        });
+
+        expect(body.model).toBe("k3");
+        expect(body.reasoning_effort).toBe(wire);
+        expect(body).not.toHaveProperty("temperature");
+        expect(body).not.toHaveProperty("top_p");
+        expect(body).not.toHaveProperty("presence_penalty");
+        expect(body).not.toHaveProperty("frequency_penalty");
+      }
+    }
+  });
+
+  test("Kimi K3 stale max-only configs self-heal from the registry map without mutation", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "kimi",
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          apiKey: "test-token",
+          modelReasoningEfforts: { k3: ["max"], "k3[1m]": ["max"] },
+        },
+      },
+    };
+
+    for (const selector of ["kimi/k3", "kimi/k3[1m]"]) {
+      const route = routeModel(config, selector);
+      expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["max"]);
+      expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["low", "high", "max"]);
+    }
+    expect(config.providers.kimi.modelReasoningEfforts).toEqual({ k3: ["max"], "k3[1m]": ["max"] });
+  });
+
   test("OpenAI-compatible chat omits tool_choice when there are no tools", () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-chat",
@@ -428,11 +494,37 @@ describe("thinking-toggle models (260707)", () => {
     expect(mediumBody.thinking).toEqual({ type: "enabled" });
     const body = buildBody(route.provider, "mimo-v2.5", { reasoning: "xhigh" });
     expect(body.thinking).toEqual({ type: "enabled" });
-    // kimi stays fully unadvertised (no fake knob).
+    // Kimi K2.7 stays fully unadvertised (no fake knob).
     const kimiRoute = routeModel(config, "opencode-go/kimi-k2.7-code");
     const kimiBody = buildBody(kimiRoute.provider, "kimi-k2.7-code", { reasoning: "high" });
     expect(kimiBody).not.toHaveProperty("thinking");
     expect(kimiBody).not.toHaveProperty("reasoning_effort");
+
+    // Kimi K3 is live on Zen Go and shares Kimi Code's documented three-tier contract.
+    const k3Route = routeModel(config, "opencode-go/kimi-k3");
+    expect(configuredReasoningEfforts(k3Route.provider, k3Route.modelId)).toEqual(["low", "high", "max"]);
+    for (const [requested, wire] of Object.entries({
+      none: "none",
+      low: "low",
+      medium: "high",
+      high: "high",
+      xhigh: "max",
+      max: "max",
+      ultra: "max",
+    })) {
+      const body = buildBody(k3Route.provider, k3Route.modelId, {
+        reasoning: requested,
+        temperature: 0.2,
+        topP: 0.7,
+        presencePenalty: 1,
+        frequencyPenalty: 1,
+      });
+      expect(body.reasoning_effort).toBe(wire);
+      expect(body).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("top_p");
+      expect(body).not.toHaveProperty("presence_penalty");
+      expect(body).not.toHaveProperty("frequency_penalty");
+    }
   });
 });
 
@@ -559,7 +651,7 @@ describe("ultra reasoning effort (upstream codex-rs parity)", () => {
   });
 });
 
-describe("stale-ladder max self-heal (260709)", () => {
+describe("stale reasoning-ladder self-heal", () => {
   const base: OcxProviderConfig = { baseUrl: "https://x", apiKey: "k" };
 
   test("ladder stopping at xhigh gains max when the wire map routes xhigh -> max", () => {
@@ -585,5 +677,25 @@ describe("stale-ladder max self-heal (260709)", () => {
   test("no wire map means no heal — an xhigh-top ladder without max evidence is preserved", () => {
     const prov: OcxProviderConfig = { ...base, modelReasoningEfforts: { m: ["low", "medium", "high", "xhigh"] } };
     expect(configuredReasoningEfforts(prov, "m")).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
+  test("Codex-native mapped values restore multiple missing tiers but wire sentinels stay hidden", () => {
+    const prov: OcxProviderConfig = {
+      ...base,
+      modelReasoningEfforts: { k3: ["max"] },
+      modelReasoningEffortMap: {
+        k3: { none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" },
+      },
+    };
+    expect(configuredReasoningEfforts(prov, "k3")).toEqual(["low", "high", "max"]);
+  });
+
+  test("an intentional empty ladder stays empty even when a wire map exists", () => {
+    const prov: OcxProviderConfig = {
+      ...base,
+      modelReasoningEfforts: { model: [] },
+      modelReasoningEffortMap: { model: { low: "low", high: "high" } },
+    };
+    expect(configuredReasoningEfforts(prov, "model")).toEqual([]);
   });
 });

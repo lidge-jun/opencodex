@@ -1,7 +1,9 @@
 export interface AccountQuota {
   weeklyPercent?: number;
+  fiveHourPercent?: number;
   monthlyPercent?: number;
   weeklyResetAt?: number;
+  fiveHourResetAt?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
   resetCredits?: number;

@@ -70,6 +70,7 @@ Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled automaticall
 
 ```bash
 # Install (bundles the Bun runtime automatically — only Node 18+ required)
+# Prefer a user-owned Node (nvm/fnm) — avoid `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 
 # Interactive setup (writes config, injects into Codex, and offers autostart shim install)
@@ -86,18 +87,30 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>"bundled Bun runtime is missing" error?</b></summary>
+<summary><b>"bundled Bun runtime is missing" / npm blocked Bun install scripts?</b></summary>
 
 <br/>
 
 opencodex bundles the Bun runtime as a dependency and runs it via a Node
 launcher, so you do **not** need to install Bun yourself. If you see a
 "bundled Bun runtime is missing" error, the install skipped lifecycle scripts
-or optional dependencies. Reinstall without those flags:
+(including npm blocking bun's postinstall under `allowScripts`) or optional
+dependencies. Reinstall without those flags, allowing bun's install script:
 
 ```bash
-npm install -g @bitkyc08/opencodex   # no --ignore-scripts, no --omit=optional
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # no --ignore-scripts, no --omit=optional
+
+# if the original install used sudo, keep using sudo:
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+npm's own warning suggests an abbreviated command without the package name —
+that would reinstall the current directory, so always pass
+`@bitkyc08/opencodex` explicitly.
+
+If you installed with `sudo` into a root-owned prefix, the sudo reinstall above
+unblocks that prefix — but prefer migrating to a user-owned Node (nvm, fnm, or
+a user npm prefix) when you can.
 
 </details>
 
@@ -123,6 +136,11 @@ You can also add providers through `ocx init` (interactive CLI) or by editing `~
 ## Model routing
 
 Target any configured provider and model using the `provider/model` syntax:
+
+Providers whose own model ids contain `/` (zenmux, openrouter, nvidia, …) are exposed to
+Codex with inner slashes aliased to `-` (e.g. `zenmux/moonshotai-kimi-k3-free`); the
+proxy transparently routes them back to the native id, and the raw full-slash form keeps
+working too.
 
 ```bash
 # Use Claude Opus through Anthropic
@@ -158,10 +176,38 @@ routing and catalog metadata for accounts and providers that can serve them.
   <img src="assets/codex-app-picker.png" alt="Codex App showing opencodex routed models with reasoning effort picker" width="480">
 </p>
 
-## ChatGPT account pool
+## OpenAI provider account modes
 
-Open **Codex Auth** in the dashboard to add pool accounts and choose which account should handle the
-next Codex session. opencodex keeps two separate behaviors:
+| Provider ID | Route | Credential | Behavior |
+|---|---|---|---|
+| `openai` | Codex login | Main + added Codex accounts | Pool by default; optional Direct mode |
+| `openai-apikey` | OpenAI API | API key/key pool | No Codex account routing |
+
+- Pool includes the main Codex login and added accounts, with affinity, quota, cooldown, and failover.
+- Direct short-circuits pool state and uses only the current caller/main-login bearer.
+- Fresh installs and configs with no persisted mode default to Pool. Change the mode on the
+  dashboard's **Providers** page; model ids stay bare in either mode.
+- The legacy public provider id `chatgpt` is hidden after migration. The original config is retained
+  once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
+  `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+- Current configs use `openaiProviderTierVersion: 2`. Earlier v1 three-provider configs migrate
+  automatically into the single `openai` row.
+- The API tier includes Pro virtual models (`gpt-5.6-sol-pro`, `gpt-5.6-terra-pro`,
+  `gpt-5.6-luna-pro`). At the wire level, each rewrites to its base model with
+  `reasoning.mode: "pro"`.
+- Its catalog is fixed to eight ids: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three
+  corresponding Pro virtual ids. There is no generic `gpt-5.6-pro` alias.
+- Compact requests keep the selected tier but send the base model without a reasoning object.
+- Official API metadata is 1,050,000 context tokens and 922,000 max input tokens.
+
+Use `gpt-5.6-sol` for the configured `openai` account mode and
+`openai-apikey/gpt-5.6-sol` for the API key. Codex-login and API credentials never fall through to
+one another.
+
+### Pool account behavior
+
+Open **Codex Auth** in the dashboard to add accounts and choose which account should handle the
+next Codex session. opencodex keeps these behaviors:
 
 - **Existing sessions keep affinity.** A thread id is bound to the selected account and reused on
   later turns, so a long request or a mobile/SSH-attached session keeps using the same account.
@@ -183,8 +229,8 @@ next Codex session. opencodex keeps two separate behaviors:
 - **Log in once, skip the API key.** OAuth support for xAI, Anthropic, and Kimi means you can authenticate with your existing account. Tokens auto-refresh. Or forward your `codex login`, paste an API key, or use `${ENV_VAR}` references — your call.
 - **Works everywhere Codex does.** Injects into Codex CLI, TUI, App, and SDK automatically. Routed models show up in Codex's model picker just like native ones.
 - **History-safe injection.** On local installs the proxy points Codex's own built-in `openai` provider at itself via a single `openai_base_url` line — new threads keep their native provider tag, so ongoing chat history is never remapped and an unclean shutdown can't hide it. (Threads re-tagged by older versions are migrated back once on the first start; remote/LAN binds use a dedicated provider entry instead, since they need an API-key header.)
-- **Delegate to the right model.** Feature up to five routed or native models in Codex's subagent picker from the dashboard or config — route complex tasks to a reasoning model, fast tasks to a cheap one. On the v2 multi-agent surface (GPT-5.6 Sol/Terra) the proxy injects compact delegation guidance: a preferred sub-agent model and effort (`injectionModel` / `injectionEffort`), the featured-model roster with the effort ladder each supports, and the `fork_turns` rules that make cross-model `spawn_agent` calls actually stick. Want your own wording? Set `injectionPrompt` with `{{model}}` / `{{effort}}` / `{{roster}}` placeholders.
-- **Prepare for preview-gated OpenAI rollouts.** GPT-5.6 Sol/Terra/Luna entries ship with the exact upstream spec (Sol/Terra reach `ultra`, Luna caps at `max`; 372k usable context) for ChatGPT passthrough, OpenAI API key, and OpenRouter routes when upstream access is available.
+- **Delegate to the right model.** Feature up to five routed or native models in Codex's subagent picker from the dashboard or config — route complex tasks to a reasoning model, fast tasks to a cheap one. On the v2 multi-agent surface (GPT-5.6 Sol/Terra) the proxy injects compact delegation guidance: a preferred sub-agent model and effort (`injectionModel` / `injectionEffort`), the featured-model roster with the effort ladder each supports, and the `fork_turns` rules that let cross-model `spawn_agent` calls apply their overrides. Known limitation: when a native parent spawns a routed child, the task body can currently arrive backend-encrypted and be lost ([#92](https://github.com/lidge-jun/opencodex/issues/92)) — use the v1 surface for reliable cross-provider delegation. Want your own wording? Set `injectionPrompt` with `{{model}}` / `{{effort}}` / `{{roster}}` placeholders.
+- **Prepare for preview-gated OpenAI rollouts.** GPT-5.6 Sol/Terra/Luna entries preserve the upstream effort ladders. Direct/Multi use the 372k Codex contract; OpenAI API and OpenRouter use 1.05M metadata when upstream access is available.
 - **Give any model superpowers.** Non-OpenAI models get real web search and image understanding via a `gpt-5.4-mini` sidecar over your ChatGPT login.
 - **Generate images natively.** Codex's standalone `image_gen` tool uses `POST /v1/images/generations` for generation and `POST /v1/images/edits` for edits; it is separate from the hosted Responses `image_generation` tool.
 - **See what's happening.** The web dashboard shows providers, OAuth status, model selection, and a live request log, including cached/cache-write token counts when upstream reports them — no more guessing why a request failed.
@@ -302,8 +348,8 @@ Provider entries can also annotate routed catalog metadata. Use `contextWindow` 
 Codex-visible context cap, `modelContextWindows` for model-specific caps, and
 `modelInputModalities` for model-specific catalog input hints such as `["text"]` or
 `["text", "image"]`. Context values cap live `/models` metadata; they never raise a smaller live
-context window. The bundled GPT-5.6 Sol/Terra/Luna fallback metadata uses a 372,000-token usable
-context window for OpenAI API key and OpenRouter catalog entries; it does not bypass upstream preview
+context window. The bundled GPT-5.6 Sol/Terra/Luna fallback metadata uses a 1,050,000-token context
+window for OpenAI API key and OpenRouter catalog entries; it does not bypass upstream preview
 access. See the configuration reference for the full field list.
 
 > **GLM-5.2 1M context via Z.AI:** through the `openai-chat` adapter, both `glm-5.2`

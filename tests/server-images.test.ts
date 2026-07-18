@@ -16,6 +16,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-images-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
@@ -29,9 +30,11 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
+  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -52,7 +55,7 @@ interface CapturedRequest {
 }
 
 function fakeImagesUpstream(captured: CapturedRequest[], status = 200, payload?: unknown) {
-  return Bun.serve({
+  const upstream = Bun.serve({
     port: 0,
     async fetch(req) {
       captured.push({
@@ -66,38 +69,53 @@ function fakeImagesUpstream(captured: CapturedRequest[], status = 200, payload?:
       );
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    let path: string | undefined;
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      path = url.pathname.slice("/backend-api/codex".length);
+    } else if (url.hostname === "api.openai.com" && url.pathname.startsWith("/v1")) {
+      path = url.pathname;
+    }
+    if (path) return originalFetch(new URL(`${path}${url.search}`, upstream.url), init);
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  return upstream;
 }
 
-// Named "chatgpt" so startServer's auto-upsert of the real ChatGPT provider does not add a
-// second forward candidate pointing at the live chatgpt.com backend.
-function forwardConfig(baseUrl: string): OcxConfig {
+function forwardConfig(_baseUrl = ""): OcxConfig {
   return {
     port: 0,
-    defaultProvider: "chatgpt",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: { adapter: "openai-responses", baseUrl, authMode: "forward", allowPrivateNetwork: true },
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
     },
   } as OcxConfig;
 }
 
-/** Keeps startServer from upserting a live chatgpt.com forward provider into the test config. */
-const disabledChatgptProvider = {
+const disabledOpenAiProvider = {
   adapter: "openai-responses",
-  baseUrl: "https://chatgpt.example/backend-api/codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward",
   disabled: true,
 } as const;
 
-/** An ENABLED forward provider whose relay would fail loudly if it were (wrongly) used. */
-const unreachableChatgptProvider = {
+const canonicalOpenAiProvider = {
   adapter: "openai-responses",
-  baseUrl: "http://127.0.0.1:1/backend-api/codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward",
-  allowPrivateNetwork: true,
+  codexAccountMode: "direct",
 } as const;
 
-function keyedProvider(baseUrl: string) {
-  return { adapter: "openai-responses", baseUrl, allowPrivateNetwork: true, apiKey: "sk-platform-key" };
+function keyedProvider(_baseUrl = "") {
+  return { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-platform-key" };
 }
 
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
@@ -161,6 +179,10 @@ test("a routed pool account's token overrides the caller bearer on the forward r
   const upstream = fakeImagesUpstream(captured);
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
+    defaultProvider: "openai",
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+    },
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
       { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
@@ -225,8 +247,9 @@ test("falls back to a keyed openai-responses provider when no forward provider e
   saveConfig({
     port: 0,
     defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: disabledChatgptProvider,
+      openai: disabledOpenAiProvider,
       "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
     },
   } as OcxConfig);
@@ -259,8 +282,9 @@ test("keyed baseUrl with a /v1 suffix is normalized (no double /v1)", async () =
   saveConfig({
     port: 0,
     defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: disabledChatgptProvider,
+      openai: disabledOpenAiProvider,
       "openai-apikey": keyedProvider(`${upstream.url.toString().replace(/\/$/, "")}/v1`),
     },
   } as OcxConfig);
@@ -286,10 +310,11 @@ test("an unauthenticated request skips the forward provider when a keyed provide
   const upstream = fakeImagesUpstream(captured);
   saveConfig({
     port: 0,
-    defaultProvider: "chatgpt",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
     providers: {
       // ENABLED forward provider: an accidental forward relay would fail loudly (port 1).
-      chatgpt: unreachableChatgptProvider,
+      openai: canonicalOpenAiProvider,
       "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
     },
   } as OcxConfig);
@@ -313,8 +338,9 @@ test("an unauthenticated request skips the forward provider when a keyed provide
 test("an unauthenticated request gets 401 when only the forward provider exists", async () => {
   saveConfig({
     port: 0,
-    defaultProvider: "chatgpt",
-    providers: { chatgpt: unreachableChatgptProvider },
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: { openai: canonicalOpenAiProvider },
   } as OcxConfig);
 
   const server = startServer(0);
@@ -332,14 +358,15 @@ test("an unauthenticated request gets 401 when only the forward provider exists"
   }
 });
 
-test("forward-auth failure falls back to the keyed provider instead of surfacing 401", async () => {
+test("pool auth failure is not hidden by the keyed API provider", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
   saveConfig({
     port: 0,
-    defaultProvider: "chatgpt",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: unreachableChatgptProvider,
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
       "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
     },
     codexAccounts: [
@@ -357,9 +384,10 @@ test("forward-auth failure falls back to the keyed provider instead of surfacing
       headers: { "content-type": "application/json", authorization: "Bearer caller-token" },
       body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
     });
-    expect(response.status).toBe(200);
-    expect(captured).toHaveLength(1);
-    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-platform-key");
+    expect(response.status).toBe(401);
+    expect(captured).toHaveLength(0);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("reauthentication");
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -369,8 +397,11 @@ test("forward-auth failure falls back to the keyed provider instead of surfacing
 test("forward-auth failure surfaces its own error when no keyed provider exists", async () => {
   saveConfig({
     port: 0,
-    defaultProvider: "chatgpt",
-    providers: { chatgpt: unreachableChatgptProvider },
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+    },
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
       { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
@@ -397,8 +428,9 @@ test("returns an honest 400 when no OpenAI-family upstream is configured", async
   saveConfig({
     port: 0,
     defaultProvider: "groq",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: disabledChatgptProvider,
+      openai: disabledOpenAiProvider,
       groq: { adapter: "openai-chat", baseUrl: "https://api.groq.example/v1", apiKey: "gsk-x" },
     },
   } as OcxConfig);
@@ -454,6 +486,14 @@ test("a hung upstream times out with 504 after config.images.timeoutMs", async (
       });
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(url.pathname.slice("/backend-api/codex".length), upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
     images: { timeoutMs: 100 },
@@ -527,9 +567,10 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
   saveConfig({
     port: 0,
     hostname: "0.0.0.0",
-    defaultProvider: "chatgpt",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: unreachableChatgptProvider,
+      openai: canonicalOpenAiProvider,
       "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
     },
   } as OcxConfig);
@@ -543,9 +584,8 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
       headers: { "content-type": "application/json", authorization: "Bearer local-secret" },
       body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
     });
-    expect(response.status).toBe(200);
-    expect(captured).toHaveLength(1);
-    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-platform-key");
+    expect(response.status).toBe(401);
+    expect(captured).toHaveLength(0);
   } finally {
     await server.stop(true);
     await upstream.stop(true);

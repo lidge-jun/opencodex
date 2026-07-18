@@ -1,0 +1,141 @@
+/* WP091 — provider workspace settings / auth / JSON editor */
+
+/* ── ProviderAuthPanel ─────────────────────────────────────── */
+
+.pwi-auth-section { display: flex; flex-direction: column; gap: 12px; }
+.pwi-auth-body { display: flex; flex-direction: column; gap: 10px; }
+
+.pwi-auth-status-row { display: flex; align-items: center; gap: 8px; }
+.pwi-auth-dot {
+  width: 8px; height: 8px; border-radius: var(--radius-round); flex-shrink: 0;
+  background: var(--muted);
+}
+.pwi-auth-dot--ok   { background: var(--green); }
+.pwi-auth-dot--off  { background: var(--muted); }
+.pwi-auth-dot--warn { background: var(--amber); }
+.pwi-auth-status-text { font-size: var(--text-control); color: var(--text); }
+
+.pwi-auth-state {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 36px; padding: 8px 10px;
+  font-size: var(--text-label); color: var(--muted);
+  background: var(--raised); border-radius: var(--radius-xs);
+}
+.pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
+.pwi-auth-state--empty { justify-content: center; }
+
+.pwi-auth-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.pwi-auth-wait { display: flex; flex-direction: column; gap: 6px; }
+.pwi-auth-wait-title { font-size: var(--text-control); font-weight: 600; color: var(--text); }
+.pwi-auth-wait-copy  { font-size: var(--text-label); color: var(--muted); line-height: 1.45; }
+.pwi-auth-open-link  { font-size: var(--text-label); color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+.pwi-auth-list { display: flex; flex-direction: column; gap: 4px; }
+.pwi-auth-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: var(--radius-xs);
+  transition: background var(--motion-fast);
+}
+.pwi-auth-row:hover { background: var(--hover); }
+.pwi-auth-row--active { background: var(--accent-soft); }
+.pwi-auth-row-main  {
+  appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;
+  cursor: pointer; border-radius: var(--radius-2xs);
+}
+.pwi-auth-row-main:disabled { cursor: default; opacity: 0.72; }
+.pwi-auth-row-main:focus-visible,
+.pwi-auth-row-remove:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.pwi-auth-row-label  { font-size: var(--text-control); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwi-auth-row-remove {
+  background: none; border: none; cursor: pointer; padding: 2px;
+  color: var(--muted); border-radius: var(--radius-2xs);
+  transition: color var(--motion-fast), background var(--motion-fast);
+}
+.pwi-auth-row-remove:hover { color: var(--red); background: var(--red-soft); }
+
+.pwi-auth-add-key {
+  font-size: var(--text-label); color: var(--accent); background: none; border: none;
+  cursor: pointer; padding: 4px 0; text-align: left;
+}
+.pwi-auth-add-key:hover { text-decoration: underline; }
+
+@keyframes pwi-spin { to { transform: rotate(360deg); } }
+.pwi-spin-inline {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: var(--radius-round);
+  animation: pwi-spin 0.7s linear infinite;
+}
+
+/* ── ProviderSettings ──────────────────────────────────────── */
+
+.pwi-settings-form { display: flex; flex-direction: column; gap: 14px; position: relative; }
+
+.pwi-settings-field { display: flex; flex-direction: column; gap: 4px; }
+.pwi-settings-label {
+  font-size: var(--text-label); font-weight: 500; color: var(--muted);
+  letter-spacing: 0.01em;
+}
+.pwi-settings-textarea {
+  width: 100%; min-height: 60px; padding: 8px 10px;
+  font: inherit; font-size: var(--text-control); color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  resize: vertical; transition: border-color var(--motion-fast);
+}
+.pwi-settings-textarea:focus { border-color: var(--accent-ring); outline: none; }
+.pwi-settings-hint { font-size: var(--text-caption); color: var(--muted); line-height: 1.4; }
+
+.pwi-settings-sticky-bar {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0; background: var(--bg);
+  border-top: 1px solid var(--border-soft);
+}
+.pwi-settings-sticky-bar-actions { display: flex; gap: 8px; margin-left: auto; }
+
+.pwi-settings-msg {
+  font-size: var(--text-label); padding: 6px 10px; border-radius: var(--radius-xs);
+  line-height: 1.4;
+}
+.pwi-settings-msg--ok  { background: var(--green-soft); color: var(--green); }
+.pwi-settings-msg--err { background: var(--red-soft); color: var(--red); }
+
+.pwi-settings-dirty { font-size: var(--text-caption); color: var(--amber); }
+
+/* ── ProviderJsonEditor ────────────────────────────────────── */
+
+.pwi-json-panel { display: flex; flex-direction: column; gap: 8px; }
+.pwi-json-panel-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.pwi-json-panel-title {
+  font-size: var(--text-control); font-weight: 600; color: var(--text);
+}
+.pwi-json-panel-actions { display: flex; gap: 6px; }
+.pwi-json-panel-desc {
+  font-size: var(--text-caption); color: var(--muted); line-height: 1.4;
+}
+.pwi-json-textarea {
+  width: 100%; min-height: 180px; padding: 10px 12px;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, monospace;
+  font-size: var(--text-label); line-height: 1.5; tab-size: 2;
+  color: var(--text); background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--radius-xs); resize: vertical;
+  transition: border-color var(--motion-fast);
+}
+.pwi-json-textarea:focus { border-color: var(--accent-ring); outline: none; }
+
+/* ── ProviderDialogs (only if absent globally) ─────────────── */
+
+.dialog-backdrop {
+  position: fixed; inset: 0; z-index: 900;
+  background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center;
+}
+.dialog {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px; width: 90%; max-width: 420px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 16px;
+}
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -1,0 +1,71 @@
+/* Quota rows: stacked overview layout + warn/exhausted states (WP070). */
+
+.bar-warn {
+  background: linear-gradient(90deg, var(--green), var(--amber));
+}
+
+.quota-row--warn .quota-label {
+  color: var(--amber);
+}
+
+.quota-val--warn {
+  color: var(--amber);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.quota-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.quota-stacked-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quota-stacked-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.quota-stacked-limit {
+  font-weight: 600;
+}
+
+.quota-stacked-reset {
+  font-size: 12px;
+}
+
+.quota-stacked-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quota-stacked-bar {
+  flex: 1;
+}
+
+.quota-stacked-used {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.quota-stacked-used--warn {
+  color: var(--amber);
+}
+
+.quota-stacked-limit-reached {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--amber);
+  font-size: 12px;
+}

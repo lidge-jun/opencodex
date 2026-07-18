@@ -7,6 +7,7 @@ export type UsageSurface = "all" | "codex" | "claude";
 
 export interface UsageSummaryTotals {
   requests: number;
+  attemptCount: number;
   measuredRequests: number;
   reportedRequests: number;
   unreportedRequests: number;
@@ -35,6 +36,7 @@ export interface UsageDayModel {
   model: string;
   provider: string;
   requests: number;
+  attemptCount: number;
   totalTokens: number;
 }
 
@@ -43,6 +45,7 @@ export interface UsageModel {
   model: string;
   resolvedModel?: string;
   requests: number;
+  attemptCount: number;
   measuredRequests: number;
   reportedRequests: number;
   estimatedRequests: number;
@@ -55,6 +58,7 @@ export interface UsageModel {
 export interface UsageProvider {
   provider: string;
   requests: number;
+  attemptCount: number;
   measuredRequests: number;
   reportedRequests: number;
   estimatedRequests: number;
@@ -109,6 +113,7 @@ function dayCountForAllRange(entries: PersistedUsageEntry[], now: number): numbe
 function blankTotals(): UsageSummaryTotals {
   return {
     requests: 0,
+    attemptCount: 0,
     measuredRequests: 0,
     reportedRequests: 0,
     unreportedRequests: 0,
@@ -129,6 +134,49 @@ function isMeasuredStatus(status: UsageStatus): boolean {
   return status === "reported" || status === "estimated";
 }
 
+interface UsageAttribution {
+  requestId: string;
+  provider: string;
+  model: string;
+  resolvedModel?: string;
+  usageStatus: UsageStatus;
+  usage?: PersistedUsageEntry["usage"];
+  totalTokens?: number;
+}
+
+function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
+  if (!entry.attempts?.length) {
+    return [{
+      requestId: entry.requestId,
+      provider: entry.provider,
+      model: entry.model,
+      ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+      usageStatus: entry.usageStatus,
+      ...(entry.usage ? { usage: entry.usage } : {}),
+      ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+    }];
+  }
+  return entry.attempts.map(attempt => ({
+    requestId: entry.requestId,
+    provider: attempt.provider,
+    model: attempt.model,
+    usageStatus: attempt.usageStatus,
+    ...(attempt.usage ? { usage: attempt.usage } : {}),
+    ...(attempt.totalTokens !== undefined ? { totalTokens: attempt.totalTokens } : {}),
+  }));
+}
+
+function foldAttributionStatuses(statuses: readonly UsageStatus[]): UsageStatus {
+  if (statuses.length > 0 && statuses.every(status => status === "unsupported")) {
+    return "unsupported";
+  }
+  if (statuses.some(status => status === "unreported" || status === "unsupported")) {
+    return "unreported";
+  }
+  if (statuses.some(status => status === "estimated")) return "estimated";
+  return statuses.length > 0 ? "reported" : "unreported";
+}
+
 function bumpStatus(totals: UsageSummaryTotals, status: UsageStatus): void {
   totals.requests += 1;
   if (isMeasuredStatus(status)) totals.measuredRequests += 1;
@@ -138,7 +186,10 @@ function bumpStatus(totals: UsageSummaryTotals, status: UsageStatus): void {
   else if (status === "estimated") totals.estimatedRequests += 1;
 }
 
-function addTokens(totals: UsageSummaryTotals, entry: PersistedUsageEntry): void {
+function addTokens(
+  totals: UsageSummaryTotals,
+  entry: Pick<PersistedUsageEntry, "usage" | "totalTokens">,
+): void {
   if (!entry.usage) return;
   totals.inputTokens += entry.usage.inputTokens;
   totals.outputTokens += entry.usage.outputTokens;
@@ -171,15 +222,24 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
   // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
   const dayModels = new Map<string, Map<string, UsageDayModel>>();
-  const bumpDayModel = (dayKey: string, entry: PersistedUsageEntry): void => {
+  const dayModelRequests = new Map<string, Set<string>>();
+  const bumpDayModel = (dayKey: string, attribution: UsageAttribution): void => {
     let models = dayModels.get(dayKey);
     if (!models) { models = new Map(); dayModels.set(dayKey, models); }
-    const providerKey = baseProviderLabel(entry.provider);
-    const mKey = `${providerKey}/${entry.model}`;
+    const providerKey = baseProviderLabel(attribution.provider);
+    const mKey = `${providerKey}/${attribution.model}`;
     let m = models.get(mKey);
-    if (!m) { m = { model: entry.model, provider: providerKey, requests: 0, totalTokens: 0 }; models.set(mKey, m); }
-    m.requests += 1;
-    m.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
+    if (!m) {
+      m = { model: attribution.model, provider: providerKey, requests: 0, attemptCount: 0, totalTokens: 0 };
+      models.set(mKey, m);
+    }
+    const requestKey = `${dayKey}\0${mKey}`;
+    let requests = dayModelRequests.get(requestKey);
+    if (!requests) { requests = new Set(); dayModelRequests.set(requestKey, requests); }
+    requests.add(attribution.requestId);
+    m.requests = requests.size;
+    m.attemptCount += 1;
+    m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
   for (let i = days - 1; i >= 0; i--) {
     const key = localDateKey(now - i * DAY_MS);
@@ -196,7 +256,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     if (isMeasuredStatus(entry.usageStatus)) day.measuredRequests += 1;
     if (entry.usageStatus === "reported") day.reportedRequests += 1;
     day.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
-    bumpDayModel(key, entry);
+    for (const attribution of usageAttributions(entry)) bumpDayModel(key, attribution);
   }
   void since;
   const out = [...grid.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -209,37 +269,51 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
 
 function buildModels(entries: PersistedUsageEntry[], totalTokens: number): UsageModel[] {
   const byKey = new Map<string, UsageModel>();
+  const statusesByKey = new Map<string, Map<string, UsageStatus[]>>();
   for (const entry of entries) {
-    const providerKey = baseProviderLabel(entry.provider);
-    // resolvedModel is a routing detail (passthrough vs alias), not a row identity. Entries with
-    // the same provider+model but differing resolvedModel (common when unreported rows carry no
-    // resolvedModel) must collapse into one row.
-    const key = `${providerKey}${entry.model}`;
-    let model = byKey.get(key);
-    if (!model) {
-      model = {
-        provider: providerKey,
-        model: entry.model,
-        ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-        requests: 0,
-        measuredRequests: 0,
-        reportedRequests: 0,
-        estimatedRequests: 0,
-        totalTokens: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        shareRatio: 0,
-      };
-      byKey.set(key, model);
+    for (const attribution of usageAttributions(entry)) {
+      const providerKey = baseProviderLabel(attribution.provider);
+      // resolvedModel is a routing detail, not a row identity.
+      const key = `${providerKey}${attribution.model}`;
+      let model = byKey.get(key);
+      if (!model) {
+        model = {
+          provider: providerKey,
+          model: attribution.model,
+          ...(attribution.resolvedModel ? { resolvedModel: attribution.resolvedModel } : {}),
+          requests: 0,
+          attemptCount: 0,
+          measuredRequests: 0,
+          reportedRequests: 0,
+          estimatedRequests: 0,
+          totalTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          shareRatio: 0,
+        };
+        byKey.set(key, model);
+      }
+      model.attemptCount += 1;
+      let requests = statusesByKey.get(key);
+      if (!requests) { requests = new Map(); statusesByKey.set(key, requests); }
+      const statuses = requests.get(attribution.requestId) ?? [];
+      statuses.push(attribution.usageStatus);
+      requests.set(attribution.requestId, statuses);
+      if (attribution.usage) {
+        model.inputTokens += attribution.usage.inputTokens;
+        model.outputTokens += attribution.usage.outputTokens;
+        model.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
+      }
     }
-    model.requests += 1;
-    if (isMeasuredStatus(entry.usageStatus)) model.measuredRequests += 1;
-    if (entry.usageStatus === "reported") model.reportedRequests += 1;
-    else if (entry.usageStatus === "estimated") model.estimatedRequests += 1;
-    if (entry.usage) {
-      model.inputTokens += entry.usage.inputTokens;
-      model.outputTokens += entry.usage.outputTokens;
-      model.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
+  }
+  for (const [key, model] of byKey) {
+    const groups = statusesByKey.get(key) ?? new Map();
+    model.requests = groups.size;
+    for (const statuses of groups.values()) {
+      const status = foldAttributionStatuses(statuses);
+      if (isMeasuredStatus(status)) model.measuredRequests += 1;
+      if (status === "reported") model.reportedRequests += 1;
+      else if (status === "estimated") model.estimatedRequests += 1;
     }
   }
   const models = [...byKey.values()];
@@ -249,27 +323,43 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
 
 function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): UsageProvider[] {
   const byKey = new Map<string, UsageProvider>();
+  const statusesByKey = new Map<string, Map<string, UsageStatus[]>>();
   for (const entry of entries) {
-    const providerKey = baseProviderLabel(entry.provider);
-    let provider = byKey.get(providerKey);
-    if (!provider) {
-      provider = {
-        provider: providerKey,
-        requests: 0,
-        measuredRequests: 0,
-        reportedRequests: 0,
-        estimatedRequests: 0,
-        totalTokens: 0,
-        shareRatio: 0,
-      };
-      byKey.set(providerKey, provider);
+    for (const attribution of usageAttributions(entry)) {
+      const providerKey = baseProviderLabel(attribution.provider);
+      let provider = byKey.get(providerKey);
+      if (!provider) {
+        provider = {
+          provider: providerKey,
+          requests: 0,
+          attemptCount: 0,
+          measuredRequests: 0,
+          reportedRequests: 0,
+          estimatedRequests: 0,
+          totalTokens: 0,
+          shareRatio: 0,
+        };
+        byKey.set(providerKey, provider);
+      }
+      provider.attemptCount += 1;
+      let requests = statusesByKey.get(providerKey);
+      if (!requests) { requests = new Map(); statusesByKey.set(providerKey, requests); }
+      const statuses = requests.get(attribution.requestId) ?? [];
+      statuses.push(attribution.usageStatus);
+      requests.set(attribution.requestId, statuses);
+      if (attribution.usage) {
+        provider.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
+      }
     }
-    provider.requests += 1;
-    if (isMeasuredStatus(entry.usageStatus)) provider.measuredRequests += 1;
-    if (entry.usageStatus === "reported") provider.reportedRequests += 1;
-    else if (entry.usageStatus === "estimated") provider.estimatedRequests += 1;
-    if (entry.usage) {
-      provider.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
+  }
+  for (const [key, provider] of byKey) {
+    const groups = statusesByKey.get(key) ?? new Map();
+    provider.requests = groups.size;
+    for (const statuses of groups.values()) {
+      const status = foldAttributionStatuses(statuses);
+      if (isMeasuredStatus(status)) provider.measuredRequests += 1;
+      if (status === "reported") provider.reportedRequests += 1;
+      else if (status === "estimated") provider.estimatedRequests += 1;
     }
   }
   const providers = [...byKey.values()];
@@ -293,6 +383,7 @@ export function summarizeUsage(
   const totals = blankTotals();
   for (const entry of filteredEntries) {
     bumpStatus(totals, entry.usageStatus);
+    totals.attemptCount += entry.attempts?.length ?? 1;
     addTokens(totals, entry);
   }
   finalizeCoverage(totals);

@@ -35,8 +35,3 @@ export function modelLabel(slug: string): ReactNode {
     slug,
   );
 }
-
-/** True when this slug has a visual icon. */
-export function hasModelIcon(slug: string): boolean {
-  return resolveIcon(slug) !== null;
-}

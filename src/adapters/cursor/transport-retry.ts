@@ -74,6 +74,21 @@ export async function runCursorTurnWithRetry(
     if (signal?.aborted) throw abortError(signal);
     const transport = makeTransport(input);
     let emittedAny = false;
+    let closed = false;
+    // Best-effort close: a cleanup failure must never replace the run outcome (or kill
+    // a viable retry) — the caller needs the run error / success, not the close error.
+    const closeOnce = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      try {
+        await transport.close?.();
+      } catch (err) {
+        debugProviderDiagnostic("cursor", "close-error", {
+          attempt,
+          reason: safeCursorErrorMessage(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    };
     try {
       for await (const message of transport.run(request, signal)) {
         emittedAny = true;
@@ -103,9 +118,13 @@ export async function runCursorTurnWithRetry(
         reason: safeCursorErrorMessage(err instanceof Error ? err.message : String(err)),
         backoffMs,
       });
+      // End the failed attempt BEFORE the backoff: holding the dead transport open
+      // through the sleep wastes its connection, and the next attempt must never
+      // start before this one's close settles.
+      await closeOnce();
       await sleepWithAbort(backoffMs, signal);
     } finally {
-      await transport.close?.();
+      await closeOnce();
     }
   }
 }

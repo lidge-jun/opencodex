@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
@@ -10,6 +10,7 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
+const origCodexHome = process.env.CODEX_HOME;
 const origFetch = globalThis.fetch;
 const WARMUP_INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
 let tmp: string;
@@ -32,13 +33,16 @@ beforeEach(() => {
   mkdirSync(tmp, { recursive: true });
   process.env.HOME = tmp;
   process.env.OPENCODEX_HOME = join(tmp, "ocx");
+  process.env.CODEX_HOME = join(tmp, "codex");
   mkdirSync(join(tmp, "ocx"), { recursive: true });
+  mkdirSync(join(tmp, "codex"), { recursive: true });
   __resetGuardianState();
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
+  if (origCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = origCodexHome;
   globalThis.fetch = origFetch;
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -133,11 +137,11 @@ describe("token guardian", () => {
     expect(mock.count()).toBe(0);
   });
 
-  test("codex pool refreshed only when chatgpt policy is proactive", async () => {
+  test("codex pool refreshed only when canonical openai policy is proactive", async () => {
     const mock = mockFetchOk(OK_TOKEN);
     writeConfig({
       tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
-      providers: { chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", refreshPolicy: "proactive" } },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
     });
     saveCodexAccountCredential("acct-1", {
       accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
@@ -151,7 +155,7 @@ describe("token guardian", () => {
     const mock = mockWarmupFetch();
     writeConfig({
       tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
-      providers: { chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", refreshPolicy: "proactive" } },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
     });
     saveCodexAccountCredential("acct-stale", {
       accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-1",
@@ -171,7 +175,7 @@ describe("token guardian", () => {
         codexWarmupEnabled: true,
         codexWarmupMaxAgeSeconds: 60,
       },
-      providers: { chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", refreshPolicy: "proactive" } },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
     });
     saveCodexAccountCredential("acct-warm", {
       accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-1",
@@ -185,5 +189,29 @@ describe("token guardian", () => {
     expect(mock.body()).toMatchObject({ model: "gpt-5.4-mini", input: WARMUP_INPUT, stream: true, store: false });
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidationStatus).toBe("ok");
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidatedAt).toBeGreaterThan(Date.now() - 30_000);
+  });
+
+  test("direct mode warms main only and never enumerates the added-account store", async () => {
+    const accountStore = join(tmp, "ocx", "codex-accounts.json");
+    writeFileSync(accountStore, "invalid-added-store");
+    writeFileSync(join(tmp, "codex", "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const mock = mockWarmupFetch();
+    writeConfig({
+      tokenGuardian: {
+        enabled: true,
+        tickSeconds: 60,
+        leadSeconds: 60,
+        codexWarmupEnabled: true,
+      },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct", refreshPolicy: "proactive" } },
+    });
+
+    const res = await guardianSweep(Date.now());
+
+    expect(res.warmed).toEqual(["codex:__main__"]);
+    expect(mock.calls()).toBe(1);
+    expect(readFileSync(accountStore, "utf8")).toBe("invalid-added-store");
   });
 });

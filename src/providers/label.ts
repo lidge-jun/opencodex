@@ -1,10 +1,12 @@
 import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
 function canonicalUsageProviderLabel(provider: string): string {
-  return provider === "chatgpt" ? "openai" : provider;
+  return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
 }
 
 export function baseProviderLabel(provider: string): string {
+  const canonical = canonicalUsageProviderLabel(provider);
+  if (canonical !== provider) return canonical;
   const cut = provider.lastIndexOf("-");
   if (cut <= 0) return canonicalUsageProviderLabel(provider);
   const suffix = provider.slice(cut + 1);

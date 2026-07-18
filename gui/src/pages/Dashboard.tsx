@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { formatUptime } from "../formatUptime";
 import { IconAlert, IconExternal, IconInfo, IconRefresh, IconX } from "../icons";
-import { useI18n, Trans } from "../i18n";
+import { Trans } from "../i18n/provider";
+import { useI18n, type TKey } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { EmptyState, Select } from "../ui";
 
@@ -77,13 +78,68 @@ function defaultUpdateChannel(version: string | undefined): UpdateChannel {
   return version?.includes("-preview.") ? "preview" : "latest";
 }
 
-function updateReasonLabel(reason: string | undefined, t: (key: import("../i18n").TKey) => string): string {
+function updateReasonLabel(reason: string | undefined, t: (key: TKey) => string): string {
   switch (reason) {
     case "source_checkout": return t("dash.updateReason.source_checkout");
     case "latest_unavailable": return t("dash.updateReason.latest_unavailable");
     case "already_latest": return t("dash.updateReason.already_latest");
     default: return t("dash.updateReason.unknown");
   }
+}
+
+function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string): string {
+  switch (status) {
+    case "running": return t("dash.updateStatus.running");
+    case "restarting": return t("dash.updateStatus.restarting");
+    case "succeeded": return t("dash.updateStatus.succeeded");
+    case "failed": return t("dash.updateStatus.failed");
+  }
+}
+
+function mergeSidecarSetting(
+  current: SidecarSetting,
+  update?: { backend?: SidecarBackend | null; model?: string },
+): SidecarSetting {
+  const merged = { ...current };
+  if (update?.model !== undefined) merged.model = update.model;
+  if (update?.backend === null) delete merged.backend;
+  else if (update?.backend !== undefined) merged.backend = update.backend;
+  return merged;
+}
+
+function sidecarModelOptions(models: ModelInfo[]) {
+  return models
+    .filter(model => model.provider === "openai" || model.provider === "anthropic")
+    .map(model => ({ value: model.id, label: `${model.provider}/${model.id}` }));
+}
+
+function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
+  return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+}
+
+function useModalDialog(open: boolean, triggerRef: RefObject<HTMLButtonElement | null>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (open) {
+      if (!dialog.open) dialog.showModal();
+      return;
+    }
+
+    if (dialog.open) dialog.close();
+    triggerRef.current?.focus();
+  }, [open, triggerRef]);
+
+  useEffect(() => () => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) dialog.close();
+    triggerRef.current?.focus();
+  }, [triggerRef]);
+
+  return dialogRef;
 }
 
 export default function Dashboard({ apiBase }: { apiBase: string }) {
@@ -127,6 +183,12 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState(false);
+  const effortCapHelpTriggerRef = useRef<HTMLButtonElement>(null);
+  const updateTriggerRef = useRef<HTMLButtonElement>(null);
+  const maHelpTriggerRef = useRef<HTMLButtonElement>(null);
+  const effortCapHelpDialogRef = useModalDialog(effortCapHelpOpen, effortCapHelpTriggerRef);
+  const updateDialogRef = useModalDialog(updateOpen, updateTriggerRef);
+  const maHelpDialogRef = useModalDialog(maHelpOpen, maHelpTriggerRef);
 
   useEffect(() => () => {
     updateRequestEpochRef.current += 1;
@@ -272,6 +334,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
     for (const m of models) (g[m.provider] ??= []).push(m);
     return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
   }, [models]);
+  const sidecarModels = useMemo(() => sidecarModelOptions(models), [models]);
 
   if (error) {
     return (
@@ -286,16 +349,9 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
 
   const saveSidecar = async (patch: SidecarPatch) => {
     if (!sidecar || sidecarSaving) return;
-    const mergeSetting = (current: SidecarSetting, update?: { backend?: SidecarBackend | null; model?: string }): SidecarSetting => {
-      const merged = { ...current };
-      if (update?.model !== undefined) merged.model = update.model;
-      if (update?.backend === null) delete merged.backend;
-      else if (update?.backend !== undefined) merged.backend = update.backend;
-      return merged;
-    };
     const next = {
-      webSearch: mergeSetting(sidecar.webSearch, patch.webSearch),
-      vision: mergeSetting(sidecar.vision, patch.vision),
+      webSearch: mergeSidecarSetting(sidecar.webSearch, patch.webSearch),
+      vision: mergeSidecarSetting(sidecar.vision, patch.vision),
     };
     setSidecarSaving(true);
     setSidecar(next);
@@ -468,15 +524,6 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const updateJobLabel = (status: UpdateJobStatus): string => {
-    switch (status) {
-      case "running": return t("dash.updateStatus.running");
-      case "restarting": return t("dash.updateStatus.restarting");
-      case "succeeded": return t("dash.updateStatus.succeeded");
-      case "failed": return t("dash.updateStatus.failed");
-    }
-  };
-
   return (
     <>
       <div className="page-head"><h2>{t("nav.dashboard")}</h2></div>
@@ -487,12 +534,15 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {t("dash.multiAgent")}
             <button
+              ref={maHelpTriggerRef}
               type="button"
               className="btn btn-ghost btn-sm"
               style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
               onClick={() => setMaHelpOpen(true)}
               aria-label={t("dash.multiAgent")}
               aria-haspopup="dialog"
+              aria-controls="multi-agent-help-dialog"
+              aria-expanded={maHelpOpen}
             >
               <IconInfo width={14} height={14} aria-hidden="true" />
             </button>
@@ -559,6 +609,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               {t("dash.effortCapLabel")}
               <span style={{ position: "relative", display: "inline-flex" }}>
                 <button
+                  ref={effortCapHelpTriggerRef}
                   type="button"
                   className="btn btn-ghost btn-sm"
                   style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
@@ -566,27 +617,29 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                   aria-label={t("dash.effortCapLabel")}
                   aria-expanded={effortCapHelpOpen}
                   aria-haspopup="dialog"
+                  aria-controls="effort-cap-help-dialog"
                 >
                   <IconInfo width={13} height={13} aria-hidden="true" />
                 </button>
-                {effortCapHelpOpen && (
-                  <div
-                    role="dialog"
-                    className="help-popup text-control font-regular leading-body"
-                    style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, width: "min(360px, calc(100vw - 48px))", padding: "12px 16px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)", boxShadow: "0 8px 24px rgba(0, 0, 0, 0.14)", color: "var(--text)", zIndex: 10 }}
+                <dialog
+                  ref={effortCapHelpDialogRef}
+                  id="effort-cap-help-dialog"
+                  className="help-popup text-control font-regular leading-body"
+                  style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, width: "min(360px, calc(100vw - 48px))", margin: 0, padding: "12px 16px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)", boxShadow: "0 8px 24px rgba(0, 0, 0, 0.14)", color: "var(--text)", zIndex: 10 }}
+                  aria-labelledby="effort-cap-help-text"
+                  onCancel={event => { event.preventDefault(); setEffortCapHelpOpen(false); }}
+                >
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon"
+                    style={{ position: "absolute", top: 4, right: 4, width: 24, height: 24, minWidth: 24 }}
+                    onClick={() => setEffortCapHelpOpen(false)}
+                    aria-label={t("common.close")}
                   >
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon"
-                      style={{ position: "absolute", top: 4, right: 4, width: 24, height: 24, minWidth: 24 }}
-                      onClick={() => setEffortCapHelpOpen(false)}
-                      aria-label={t("common.close")}
-                    >
-                      <IconX width={14} height={14} />
-                    </button>
-                    <div style={{ paddingRight: 16 }}>{t("dash.effortCapHelp")}</div>
-                  </div>
-                )}
+                    <IconX width={14} height={14} />
+                  </button>
+                  <div id="effort-cap-help-text" style={{ paddingRight: 16 }}>{t("dash.effortCapHelp")}</div>
+                </dialog>
               </span>
             </span>
           <Select
@@ -717,7 +770,16 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <button type="button" className="btn btn-ghost" onClick={runSync} disabled={syncing}>
               <IconRefresh /> {syncing ? t("dash.syncing") : t("dash.syncModels")}
             </button>
-            <button type="button" className="btn btn-primary" onClick={openUpdateDialog} disabled={updateLoading}>
+            <button
+              ref={updateTriggerRef}
+              type="button"
+              className="btn btn-primary"
+              onClick={openUpdateDialog}
+              disabled={updateLoading}
+              aria-haspopup="dialog"
+              aria-controls="dashboard-update-dialog"
+              aria-expanded={updateOpen}
+            >
               <IconExternal /> {t("dash.checkUpdate")}
             </button>
           </div>
@@ -741,7 +803,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className={`notice ${updateJob.status === "failed" ? "notice-err" : "notice-ok"} maintenance-notice`} role="status">
             {updateJob.status === "failed" ? <IconAlert /> : <IconRefresh />}
             <span>
-              {updateJobLabel(updateJob.status)}
+              {updateJobLabel(updateJob.status, t)}
               {updateJob.latestVersion ? ` ${updateJob.currentVersion} -> ${updateJob.latestVersion}.` : ""}
               {reconnecting ? ` ${t("dash.updateReconnecting")}` : ""}
               {updateJob.error ? ` ${updateJob.error}` : ""}
@@ -757,6 +819,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <div className="muted setting-hint">{t("dash.codexAutoStartHint")}</div>
           </div>
           <button
+            type="button"
             className={`switch ${settings?.codexAutoStart ?? true ? "on" : ""}`}
             onClick={toggleCodexAutoStart}
             disabled={!settings || settingsSaving}
@@ -777,8 +840,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="setting-controls">
             <Select
               value={sidecar?.webSearch.model ?? "gpt-5.6-luna"}
-              options={models.filter(m => m.provider === "openai" || m.provider === "anthropic").map(m => ({ value: m.id, label: `${m.provider}/${m.id}` }))}
-              onChange={v => { const backend = models.find(m => m.id === v)?.provider === "anthropic" ? "anthropic" : "openai"; saveSidecar({ webSearch: { model: v, backend: backend as SidecarBackend } }); }}
+              options={sidecarModels}
+              onChange={model => { void saveSidecar({ webSearch: { model, backend: sidecarBackendForModel(models, model) } }); }}
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}
             />
@@ -795,8 +858,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           <div className="setting-controls">
             <Select
               value={sidecar?.vision.model ?? "gpt-5.6-luna"}
-              options={models.filter(m => m.provider === "openai" || m.provider === "anthropic").map(m => ({ value: m.id, label: `${m.provider}/${m.id}` }))}
-              onChange={v => { const backend = models.find(m => m.id === v)?.provider === "anthropic" ? "anthropic" : "openai"; saveSidecar({ vision: { model: v, backend: backend as SidecarBackend } }); }}
+              options={sidecarModels}
+              onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}
             />
@@ -813,6 +876,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           </div>
           <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
+              type="button"
               className={`switch ${shadowCall?.enabled ? "on" : ""}`}
               onClick={() => saveShadowCall({ enabled: !shadowCall?.enabled })}
               disabled={!shadowCall || shadowCallSaving}
@@ -876,8 +940,14 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         </div>
       )}
 
-      {updateOpen && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="update-title">
+      <dialog
+        ref={updateDialogRef}
+        id="dashboard-update-dialog"
+        className="modal-overlay"
+        style={{ display: updateOpen ? "flex" : "none", border: "none", margin: 0, maxWidth: "none", maxHeight: "none", width: "100%", height: "100%" }}
+        aria-labelledby="update-title"
+        onCancel={event => { event.preventDefault(); closeUpdateDialog(); }}
+      >
           <div className="modal-card">
             <div className="modal-head">
               <h3 id="update-title">{t("dash.updateTitle")}</h3>
@@ -979,14 +1049,20 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </dialog>
 
-      {maHelpOpen && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("dash.multiAgent")} onClick={() => setMaHelpOpen(false)} onKeyDown={e => { if (e.key === "Escape") setMaHelpOpen(false); }}>
+      <dialog
+        ref={maHelpDialogRef}
+        id="multi-agent-help-dialog"
+        className="modal-overlay"
+        style={{ display: maHelpOpen ? "flex" : "none", border: "none", margin: 0, maxWidth: "none", maxHeight: "none", width: "100%", height: "100%" }}
+        aria-labelledby="multi-agent-help-title"
+        onCancel={event => { event.preventDefault(); setMaHelpOpen(false); }}
+        onClick={event => { if (event.target === event.currentTarget) setMaHelpOpen(false); }}
+      >
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>{t("dash.multiAgent")}</h3>
+              <h3 id="multi-agent-help-title">{t("dash.multiAgent")}</h3>
               <button type="button" className="btn btn-ghost btn-icon" onClick={() => setMaHelpOpen(false)} aria-label={t("common.close")}><IconX /></button>
             </div>
             <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
@@ -1001,8 +1077,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               <button type="button" className="btn btn-primary" onClick={() => setMaHelpOpen(false)}>{t("common.ok")}</button>
             </div>
           </div>
-        </div>
-      )}
+      </dialog>
     </>
   );
 }

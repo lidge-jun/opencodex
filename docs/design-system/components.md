@@ -76,6 +76,17 @@
 - 데이터 표와 heatmap은 정보 손실보다 가로 스크롤을 우선한다.
 - 모바일에서 제목/본문 크기를 임의 축소하지 않는다. 같은 역할은 같은 type token을 유지한다.
 
+## Provider workspace
+
+- 넓은 화면의 workspace는 일반 페이지의 읽기 폭보다 넓게 쓸 수 있지만, rail은 240–280px 범위로 고정하고 detail은 `minmax(0, 1fr)`로 확장한다. viewport가 아니라 workspace container 폭을 기준으로 overview를 한 열로 바꾸고, rail + detail 최소 폭을 확보할 수 없으면 세로로 쌓는다.
+- rail 행 문법은 `원본 브랜드 아이콘 | 두 줄 copy | 상태 trail`이다. 첫 줄에는 표시 이름과 Free/Local 예외 badge만, 둘째 줄에는 모델 수와 충돌 시에만 config id를 둔다. 이름과 메타는 한 줄 ellipsis를 사용하며 전체 값은 title과 접근 가능한 이름으로 보존한다.
+- provider SVG는 catalog의 원본 색을 가진 `<img>` 경로를 유지한다. workspace 색으로 mask/recolor하지 않는다. asset이 없는 fallback 아이콘만 현재 text token을 따른다.
+- Ready/설정 필요/비활성 텍스트는 그룹 heading과 option의 접근 가능한 이름이 소유한다. 상태 점은 비어 있는 `aria-hidden` 보조 표시이며 내부에 텍스트를 넣지 않는다.
+- listbox 자체와 native option button을 동시에 Tab stop으로 만들지 않는다. option button이 focus를 소유하고 ArrowUp/ArrowDown/Home/End 이동은 listbox의 bubbled key event로 처리한다.
+- detail tab은 `tablist`/`tab`/`tabpanel`, `aria-controls`/`aria-labelledby`, roving `tabIndex`를 연결하고 ArrowLeft/ArrowRight/Home/End로 선택과 focus를 함께 이동한다. 좁은 폭에서는 tab을 숨기거나 세로 글자로 깨지 말고 가로 스크롤한다.
+- 인증 가능한 provider는 Accounts 또는 API keys를 독립 detail tab으로 노출한다. active account는 focus 가능한 상태로 유지하고 text + `aria-current`로 선택을 알린다. loading/error/empty/reauth/switching은 색만으로 표현하지 않는다.
+- 계정 행, title, aria-label, 확인창, toast에는 masked email 또는 번역된 순번만 사용한다. 저장소의 opaque account id와 token 원문은 사용자 표면에 노출하지 않는다.
+
 ## 분할 필터 (Segmented filters)
 
 - 서로 배타적인 선택지는 네이티브 `button`을 인접한 pill 형태로 묶고, 컨테이너에는 `role="group"`과 번역된 이름을 제공한다.

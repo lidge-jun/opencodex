@@ -30,6 +30,7 @@ function configWithStaticModels(claudeCode?: OcxConfig["claudeCode"]): OcxConfig
   return {
     port: 0,
     defaultProvider: "mock",
+    openaiProviderTierVersion: 2,
     providers: {
       mock: {
         adapter: "openai-chat",

@@ -17,8 +17,10 @@ import type { OcxConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { resolveAutoContext, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
-import { DEFAULT_SUBAGENT_MODELS } from "../config";
+import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
+import { knownModelIdsForProvider } from "../router";
+import { decodeRoutedModelId } from "../providers/slug-codec";
 
 export interface ClaudeAgentDef {
   file: string;
@@ -52,12 +54,17 @@ function pickerDefaultModel(configDir: string): string | null {
   }
 }
 
-/** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id". */
-function entryParts(entry: string): { alias: string; id: string; provider: string } {
+/** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
+ * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
+ * so the alias joins the raw-native context-window map (context-windows.ts). */
+function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
   const slash = entry.indexOf("/");
   if (slash > 0) {
     const provider = entry.slice(0, slash);
-    const id = entry.slice(slash + 1);
+    const prov = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
+    const id = prov
+      ? decodeRoutedModelId(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov))
+      : entry.slice(slash + 1);
     return { alias: claudeCodeAlias(provider, id), id, provider };
   }
   return { alias: claudeCodeNativeAlias(entry), id: entry, provider: "native" };
@@ -101,7 +108,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   const roster = config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels;
   for (const entry of roster.slice(0, 5)) {
     if (typeof entry !== "string" || entry.trim() === "") continue;
-    const { alias, id, provider } = entryParts(entry.trim());
+    const { alias, id, provider } = entryParts(entry.trim(), config);
     push(sanitizeName(id), alias, `Delegate work to ${id} (${provider}) via opencodex routing. General-purpose worker/explorer on that model. ${NO_MODEL_ARG}`);
   }
 

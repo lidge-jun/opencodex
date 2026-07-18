@@ -1,8 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { createAdapterEventQueue } from "../src/adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents } from "../src/adapters/run-turn-queue";
 import type { AdapterEvent } from "../src/types";
 
 const text = (value: string): AdapterEvent => ({ type: "text_delta", text: value });
+const heartbeat: AdapterEvent = { type: "heartbeat" };
+const done: AdapterEvent = { type: "done" };
+
+async function* events(values: readonly AdapterEvent[]): AsyncGenerator<AdapterEvent> {
+  for (const event of values) yield event;
+}
+
+async function collect(source: AsyncIterable<AdapterEvent>): Promise<AdapterEvent[]> {
+  const result: AdapterEvent[] = [];
+  for await (const event of source) result.push(event);
+  return result;
+}
 
 describe("run-turn adapter event queue", () => {
   test("collect preserves push order after close", async () => {
@@ -45,5 +57,63 @@ describe("run-turn adapter event queue", () => {
     queue.push(text("ignored"));
 
     expect(await queue.collect()).toEqual([]);
+  });
+});
+
+describe("run-turn adapter event preflight", () => {
+  test("heartbeat then error reports pre-commit failure without duplicate replay", async () => {
+    const error: AdapterEvent = { type: "error", message: "missing credential" };
+    const preflight = await preflightAdapterEvents(events([heartbeat, error]));
+    expect(preflight.error).toEqual(error);
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([heartbeat, error]);
+  });
+
+  test("heartbeat text done commits and replays the full order once", async () => {
+    const values = [heartbeat, text("once"), done];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
+  test("heartbeat text error stays committed and replays each event once", async () => {
+    const error: AdapterEvent = { type: "error", message: "late failure" };
+    const values = [heartbeat, text("once"), error];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
+  test("immediate done is a commit", async () => {
+    const preflight = await preflightAdapterEvents(events([done]));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([done]);
+  });
+
+  test("empty close is an empty pre-commit failure", async () => {
+    const preflight = await preflightAdapterEvents(events([]));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(true);
+    expect(await collect(preflight.stream)).toEqual([]);
+  });
+
+  test("leading error cancels the source iterator", async () => {
+    let cancelled = 0;
+    async function* source(): AsyncGenerator<AdapterEvent> {
+      try {
+        yield { type: "error", message: "stop" };
+        yield text("must not run");
+      } finally {
+        cancelled += 1;
+      }
+    }
+    const preflight = await preflightAdapterEvents(source());
+    expect(preflight.error?.message).toBe("stop");
+    expect(cancelled).toBe(1);
+    expect(await collect(preflight.stream)).toEqual([{ type: "error", message: "stop" }]);
+    expect(cancelled).toBe(1);
   });
 });

@@ -5,6 +5,7 @@ import { describeImage, type DescribeOutcome, type VisionSettings } from "./desc
 import { describeImageAnthropic } from "./anthropic-describe";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { getAccountSet } from "../oauth/store";
+import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export { describeImage } from "./describe";
@@ -93,15 +94,6 @@ function clamp(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max)}\n…[description truncated]`;
 }
 
-/** First configured forward (ChatGPT passthrough) provider — the OpenAI path with native image input. */
-function findForwardProvider(config: OcxConfig): OcxProviderConfig | undefined {
-  for (const prov of Object.values(config.providers)) {
-    if (prov.disabled === true) continue;
-    if (prov.authMode === "forward") return prov;
-  }
-  return undefined;
-}
-
 export interface AnthropicVisionProvider {
   providerName: string;
   provider: OcxProviderConfig;
@@ -136,9 +128,21 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
     carriesImages(m.role) && Array.isArray(m.content) && (m.content as OcxContentPart[]).some(p => p.type === "image"));
 }
 
+export function shouldResolveOpenAiVisionSidecar(
+  config: OcxConfig,
+  provider: OcxProviderConfig,
+  modelId: string,
+  parsed: OcxParsedRequest,
+): boolean {
+  if (!modelInList(provider.noVisionModels, modelId) || !messagesHaveImage(parsed)) return false;
+  const cfg = config.visionSidecar ?? {};
+  if (cfg.enabled === false) return false;
+  return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
+}
+
 export interface VisionPlan {
   backend: "openai" | "anthropic";
-  forwardProvider?: OcxProviderConfig;
+  forwardSidecar?: ResolvedOpenAiForwardSidecar;
   anthropicSidecar?: AnthropicVisionProvider;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
@@ -155,8 +159,7 @@ export function planVisionSidecar(
   provider: OcxProviderConfig,
   modelId: string,
   parsed: OcxParsedRequest,
-  incomingHeaders: Headers,
-  authContext: CodexAuthContext = { kind: "main", accountId: null },
+  openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): VisionPlan | undefined {
   if (!modelInList(provider.noVisionModels, modelId)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
@@ -176,12 +179,10 @@ export function planVisionSidecar(
     };
   }
 
-  if (authContext.kind === "main" && !incomingHeaders.get("authorization")) return undefined;
-  const forwardProvider = findForwardProvider(config);
-  if (!forwardProvider) return undefined;
+  if (!openAiSidecar) return undefined;
   return {
     backend,
-    forwardProvider,
+    forwardSidecar: openAiSidecar,
     settings: { model: cfg.model ?? DEFAULT_VISION_MODEL, timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
     maxDescriptionsPerTurn,
   };
@@ -253,13 +254,13 @@ async function executeDescription(
       abortSignal,
     );
   }
-  if (!plan.forwardProvider) return { text: "", error: "OpenAI vision sidecar is unavailable" };
+  if (!plan.forwardSidecar) return { text: "", error: "OpenAI vision sidecar is unavailable" };
   return describeImage(
     job.imageUrl,
     job.detail,
     job.contextText,
-    plan.forwardProvider,
-    selectedForwardHeaders,
+    plan.forwardSidecar.provider,
+    plan.forwardSidecar.headers,
     plan.settings,
     abortSignal,
     recordSidecarOutcome,

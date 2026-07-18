@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "verdict": "PASS",
+  "selectedModel": "openai-apikey/gpt-5.6-sol-pro",
+  "modelProvider": "openai",
+  "resolvedModel": "gpt-5.6-sol",
+  "reasoningMode": "pro",
+  "rolloutCount": 1,
+  "attempts": 1
+}

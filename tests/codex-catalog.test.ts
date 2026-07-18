@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, buildCatalogEntries, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -13,13 +13,257 @@ import {
 } from "../src/adapters/cursor/discovery";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
 import { clearModelCache, getStaleCached, setCached } from "../src/codex/model-cache";
+import type { OcxConfig } from "../src/types";
+import type { NormalizedComboConfig } from "../src/combos/types";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearModelCache();
+  resetOpenAiApiCatalogWarningStateForTests();
 });
+
+function normalizedCombo(
+  overrides: Partial<NormalizedComboConfig> = {},
+): NormalizedComboConfig {
+  return {
+    strategy: "failover",
+    stickyLimit: 1,
+    defaultEffort: "medium",
+    targets: [
+      { provider: "a", model: "m1", weight: 1 },
+      { provider: "b", model: "m2", weight: 1 },
+    ],
+    ...overrides,
+  };
+}
+
+describe("combo catalog capability intersection", () => {
+  const memberA = {
+    provider: "a",
+    id: "m1",
+    contextWindow: 200_000,
+    maxInputTokens: 180_000,
+    inputModalities: ["text", "image"],
+    reasoningEfforts: ["low", "medium", "high"],
+    parallelToolCalls: true,
+  };
+  const memberB = {
+    provider: "b",
+    id: "m2",
+    contextWindow: 128_000,
+    maxInputTokens: 100_000,
+    inputModalities: ["text"],
+    reasoningEfforts: ["low", "medium"],
+    parallelToolCalls: false,
+  };
+
+  test("derives only capabilities common to every member", () => {
+    const derived = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ defaultEffort: "high" }),
+      [memberA, memberB],
+    );
+
+    expect(derived).toEqual({
+      provider: "combo",
+      id: "mixed",
+      owned_by: "combo",
+      contextWindow: 128_000,
+      maxInputTokens: 100_000,
+      inputModalities: ["text"],
+      reasoningEfforts: ["low", "medium"],
+      defaultReasoningEffort: "medium",
+    });
+  });
+
+  test("handles vision, missing modalities, reasoning defaults, and parallel tools conservatively", () => {
+    expect(deriveComboCatalogModel("vision", normalizedCombo({ defaultEffort: "low" }), [
+      memberA,
+      { ...memberB, inputModalities: ["image", "text"], reasoningEfforts: ["xhigh"], parallelToolCalls: true },
+    ])).toEqual(expect.objectContaining({
+      inputModalities: ["text", "image"],
+      reasoningEfforts: [],
+      parallelToolCalls: true,
+    }));
+    expect(deriveComboCatalogModel("unknown", normalizedCombo(), [
+      memberA,
+      { ...memberB, inputModalities: undefined },
+    ])?.inputModalities).toEqual(["text"]);
+    expect(deriveComboCatalogModel("high", normalizedCombo({ defaultEffort: "low" }), [
+      { ...memberA, reasoningEfforts: ["high"] },
+      { ...memberB, reasoningEfforts: ["high"] },
+    ])?.defaultReasoningEffort).toBe("high");
+    expect(deriveComboCatalogModel("common", normalizedCombo({ defaultEffort: "medium" }), [
+      memberA,
+      { ...memberB, reasoningEfforts: ["medium", "high"] },
+    ])?.defaultReasoningEffort).toBe("medium");
+  });
+
+  test("fails closed for missing members, unknown context, duplicate targets, and empty modalities", () => {
+    expect(deriveComboCatalogModel("missing", normalizedCombo(), [memberA])).toBeNull();
+    expect(deriveComboCatalogModel("context", normalizedCombo(), [
+      memberA,
+      { ...memberB, contextWindow: undefined },
+    ])).toBeNull();
+    expect(deriveComboCatalogModel("modalities", normalizedCombo(), [
+      { ...memberA, inputModalities: ["image"] },
+      { ...memberB, inputModalities: ["text"] },
+    ])).toBeNull();
+    expect(deriveComboCatalogModel("duplicate", normalizedCombo({
+      targets: [
+        { provider: "a", model: "m1", weight: 1 },
+        { provider: "a", model: "m1", weight: 1 },
+      ],
+    }), [memberA, memberA])).toBeNull();
+  });
+
+  test("requires member identity to follow target order", () => {
+    const reversed = normalizedCombo({ targets: [...normalizedCombo().targets].reverse() });
+    expect(deriveComboCatalogModel("ordered", reversed, [memberB, memberA]))
+      .toEqual(expect.objectContaining({ contextWindow: 128_000 }));
+    expect(deriveComboCatalogModel("mismatch", reversed, [memberA, memberB])).toBeNull();
+  });
+
+  test("preserves exact combo ladders and modalities through template, fallback, and sync", () => {
+    const model = deriveComboCatalogModel("mixed", normalizedCombo(), [memberA, memberB])!;
+    const exact = new Set(["combo/mixed"]);
+    for (const template of [nativeTemplate(), null]) {
+      const row = buildCatalogEntries(template, [], [model], undefined, false, "default", exact)
+        .find(entry => entry.slug === "combo/mixed");
+      expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+        .toEqual(["low", "medium"]);
+      expect(row?.default_reasoning_level).toBe("medium");
+      expect(row?.input_modalities).toEqual(["text"]);
+    }
+
+    const built = buildCatalogEntries(nativeTemplate(), [], [model], undefined, false, "default", exact);
+    const merged = mergeCatalogEntriesForSync(
+      [], built, new Map(), [], false, new Set(), nativeTemplate(), new Set(),
+      new Set(["combo"]), "default", exact, false,
+    );
+    const row = merged.find(entry => entry.slug === "combo/mixed");
+    expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium"]);
+    expect(row?.input_modalities).toEqual(["text"]);
+  });
+
+  test("never repairs an exact combo with an empty modality intersection", () => {
+    const exact = new Set(["combo/hidden"]);
+    const derived = deriveComboCatalogModel("hidden", normalizedCombo(), [
+      { ...memberA, inputModalities: ["image"] },
+      { ...memberB, inputModalities: ["text"] },
+    ]);
+    expect(derived).toBeNull();
+    const productionBuild = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      derived ? [derived] : [],
+      undefined,
+      false,
+      "default",
+      exact,
+    );
+    expect(productionBuild.some(entry => entry.slug === "combo/hidden")).toBe(false);
+
+    const malformed = {
+      provider: "combo",
+      id: "hidden",
+      contextWindow: 128_000,
+      inputModalities: [],
+      reasoningEfforts: ["low"],
+    };
+    const built = buildCatalogEntries(null, [], [malformed], undefined, false, "default", exact);
+    const merged = mergeCatalogEntriesForSync(
+      [], built, new Map(), [], false, new Set(), null, new Set(), new Set(["combo"]),
+      "default", exact, false,
+    );
+    expect(merged.some(entry => entry.slug === "combo/hidden")).toBe(false);
+  });
+
+  test("uses config identity for physical preservation and stale virtual cleanup", () => {
+    const physical = {
+      slug: "combo/model",
+      supported_reasoning_levels: [{ effort: "low" }],
+      input_modalities: ["text"],
+    };
+    const preserved = mergeCatalogEntriesForSync(
+      [physical], [], new Map(), [], false, new Set(), null, new Set(), new Set(["combo"]),
+      "default", new Set(), true,
+    ).find(entry => entry.slug === "combo/model");
+    expect(preserved).toBeDefined();
+    expect((preserved?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "max"]);
+
+    const stale = { ...physical, slug: "combo/deleted" };
+    expect(mergeCatalogEntriesForSync(
+      [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(), false,
+    ).some(entry => entry.slug === "combo/deleted")).toBe(false);
+    expect(mergeCatalogEntriesForSync(
+      [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(["combo/deleted"]), false,
+    ).some(entry => entry.slug === "combo/deleted")).toBe(false);
+  });
+
+  test("gathers sorted rows, filters disabled combos, and deduplicates redacted warnings until reset", async () => {
+    const warningSentinel = ["sk", "warning-secret-123456"].join("-");
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "a",
+      providers: {
+        a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", liveModels: false, models: ["m1"], modelContextWindows: { m1: 200_000 } },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", liveModels: false, models: ["m2"], modelContextWindows: { m2: 128_000 } },
+      },
+      combos: {
+        mixed: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+        hidden: { targets: [{ provider: "a", model: warningSentinel }] },
+      },
+      disabledModels: ["combo/mixed"],
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const first = await gatherRoutedModels(config);
+      const second = await gatherRoutedModels(config);
+      expect(first.map(model => `${model.provider}/${model.id}`)).toEqual([
+        "a/m1", "b/m2", "combo/mixed",
+      ]);
+      expect(filterCatalogVisibleModels(first, config).some(model => model.id === "mixed")).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("[REDACTED]");
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain(warningSentinel);
+      expect(second).toEqual(first);
+
+      resetCatalogRuntimeStateForTests();
+      await gatherRoutedModels(config);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("exact combo slugs come only from current config", () => {
+    expect(exactComboCatalogSlugs({ combos: { free: { targets: [{ provider: "a", model: "m1" }] } } }))
+      .toEqual(new Set(["combo/free"]));
+    expect(exactComboCatalogSlugs({})).toEqual(new Set());
+  });
+});
+
+function openAiApiCatalogConfig(overrides: Record<string, unknown> = {}): OcxConfig {
+  return {
+    port: 10100,
+    defaultProvider: "openai-apikey",
+    providers: {
+      "openai-apikey": {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test",
+        ...overrides,
+      },
+    },
+  };
+}
 
 function nativeTemplate(): Record<string, unknown> {
   return {
@@ -52,6 +296,23 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 describe("Codex catalog routed normalization", () => {
+  test("canonical OpenAI forward mode stays native-only with no routed duplicate", async () => {
+    globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
+    const rows = await gatherRoutedModels({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    });
+    expect(rows).toEqual([]);
+    expect(rows.some(row => row.provider === "openai-multi")).toBe(false);
+  });
+
   test("loads bundled Codex catalog from debug models output", () => {
     const catalog = loadBundledCodexCatalog({
       commandCandidates: () => ["codex"],
@@ -608,6 +869,85 @@ describe("Codex catalog routed normalization", () => {
       warning.mockRestore();
       globalThis.fetch = originalFetch;
       clearModelCache("static-toggle");
+    }
+  });
+
+  test("managed Kimi and xAI catalogs preserve callable compatibility ids without omission warnings", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async input => new Response(JSON.stringify({
+      data: String(input).includes("kimi.example.test")
+        ? [{ id: "k3" }, { id: "kimi-for-coding" }, { id: "kimi-for-coding-highspeed" }]
+        : [{ id: "grok-4.5" }],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          kimi: {
+            adapter: "openai-chat",
+            baseUrl: "https://kimi.example.test/v1",
+            authMode: "key",
+            apiKey: "sk-test",
+            liveModels: true,
+            models: [
+              "k3",
+              "k3[1m]",
+              "kimi-k2.7-code",
+              "kimi-k2.7-code-highspeed",
+              "kimi-k2.6",
+              "kimi-k2.5",
+              "configured-ghost",
+            ],
+            modelSuffixBracketStrip: true,
+            modelContextWindows: { "k3[1m]": 1_048_576 },
+          },
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://xai.example.test/v1",
+            authMode: "key",
+            apiKey: "sk-test",
+            liveModels: true,
+            models: [
+              "grok-4.5",
+              "grok-4.3",
+              "grok-4.20-0309-reasoning",
+              "grok-4.20-0309-non-reasoning",
+              "grok-build-0.1",
+              "grok-composer-2.5-fast",
+              "grok-4.20-multi-agent-0309",
+              "configured-ghost",
+            ],
+          },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        "kimi/k3",
+        "kimi/k3[1m]",
+        "kimi/kimi-for-coding",
+        "kimi/kimi-for-coding-highspeed",
+        "kimi/kimi-k2.5",
+        "kimi/kimi-k2.6",
+        "kimi/kimi-k2.7-code",
+        "kimi/kimi-k2.7-code-highspeed",
+        "xai/grok-4.20-0309-non-reasoning",
+        "xai/grok-4.20-0309-reasoning",
+        "xai/grok-4.3",
+        "xai/grok-4.5",
+        "xai/grok-build-0.1",
+        "xai/grok-composer-2.5-fast",
+      ]);
+      expect(models.find(model => model.provider === "kimi" && model.id === "k3[1m]")?.contextWindow).toBe(1_048_576);
+      expect(models.some(model => model.id === "grok-4.20-multi-agent-0309")).toBe(false);
+      expect(models.some(model => model.id === "configured-ghost")).toBe(false);
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("omitted configured model ids");
+    } finally {
+      warning.mockRestore();
+      clearModelCache("kimi");
+      clearModelCache("xai");
     }
   });
 
@@ -1174,6 +1514,122 @@ describe("Codex catalog routed normalization", () => {
       contextCap: 350_000,
       contextCapped: true,
     });
+  });
+});
+
+describe("OpenAI API trusted catalog augmentation", () => {
+  const exactIds = [
+    "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
+  ];
+
+  test("rebuilds the exact eight rows after partial/conflicting successful discovery", () => {
+    const rows = augmentRoutedModelsWithRegistryOpenAiApiRows([
+      { provider: "openai-apikey", id: "gpt-5.6-sol", contextWindow: 1, maxInputTokens: 1, inputModalities: ["text"], reasoningEfforts: ["low"], owned_by: "live" },
+      { provider: "openai-apikey", id: "unrelated-live-model", contextWindow: 999 },
+      { provider: "openai", id: "gpt-5.6-sol", contextWindow: 372_000 },
+    ], openAiApiCatalogConfig());
+
+    expect(rows.filter(row => row.provider === "openai-apikey").map(row => row.id)).toEqual(exactIds);
+    expect(rows.find(row => row.provider === "openai-apikey" && row.id === "gpt-5.6-sol")).toMatchObject({
+      contextWindow: 1_050_000,
+      maxInputTokens: 922_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    });
+    expect(rows.find(row => row.provider === "openai" && row.id === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+  });
+
+  test("actual live discovery path reconnects omitted rows and removes unrelated models", async () => {
+    const calls: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = async input => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push(url);
+      if (url !== "https://api.openai.com/v1/models") throw new Error(`unexpected URL: ${url}`);
+      return Response.json({
+        data: [
+          { id: "gpt-5.6-sol", owned_by: "live-openai", context_length: 123 },
+          { id: "unrelated-live-model", owned_by: "live-openai", context_length: 999 },
+        ],
+      });
+    };
+    try {
+      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true }));
+      const apiRows = rows.filter(row => row.provider === "openai-apikey");
+      expect(calls).toEqual(["https://api.openai.com/v1/models"]);
+      expect(apiRows.map(row => row.id)).toEqual([...exactIds].sort());
+      expect(apiRows.some(row => row.id === "unrelated-live-model")).toBe(false);
+      for (const row of apiRows.filter(row => row.id.startsWith("gpt-5.6"))) {
+        expect(row).toMatchObject({
+          contextWindow: 1_050_000,
+          maxInputTokens: 922_000,
+          inputModalities: ["text", "image"],
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        });
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("actual gathering exposes no API rows when the API tier is absent or disabled", async () => {
+    globalThis.fetch = async input => { throw new Error(`unexpected fetch: ${String(input)}`); };
+    const absent: OcxConfig = {
+      port: 10100,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", liveModels: false, models: ["model"] } },
+    };
+    const disabled = openAiApiCatalogConfig({ disabled: true });
+    expect((await gatherRoutedModels(absent)).some(row => row.provider === "openai-apikey")).toBe(false);
+    expect((await gatherRoutedModels(disabled)).some(row => row.provider === "openai-apikey")).toBe(false);
+  });
+
+  test("user values only lower trusted context and max-input baselines", () => {
+    const lowered = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig({
+      modelContextWindows: { "gpt-5.6-sol": 350_000, "gpt-5.6-terra": 2_000_000 },
+      modelMaxInputTokens: { "gpt-5.6-sol": 300_000, "gpt-5.6-terra": 945_000 },
+    }));
+    expect(lowered.find(row => row.id === "gpt-5.6-sol")).toMatchObject({ contextWindow: 350_000, maxInputTokens: 300_000 });
+    expect(lowered.find(row => row.id === "gpt-5.6-terra")).toMatchObject({ contextWindow: 1_050_000, maxInputTokens: 922_000 });
+  });
+
+  test("routed auto-compaction is bounded by max-input after effective context caps", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "openai-apikey", id: "gpt-5.6-sol", contextWindow: 1_050_000, maxInputTokens: 922_000 },
+      { provider: "openai-apikey", id: "gpt-5.6-terra", contextWindow: 350_000, maxInputTokens: 922_000 },
+    ]);
+    expect(entries.find(row => row.slug === "openai-apikey/gpt-5.6-sol")?.auto_compact_token_limit).toBe(922_000);
+    expect(entries.find(row => row.slug === "openai-apikey/gpt-5.6-terra")?.auto_compact_token_limit).toBe(315_000);
+  });
+
+  test("is a no-op when API tier is absent or disabled", () => {
+    const source = [{ provider: "other", id: "model" }];
+    const absent: OcxConfig = { port: 10100, defaultProvider: "other", providers: { other: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } };
+    expect(augmentRoutedModelsWithRegistryOpenAiApiRows(source, absent)).toBe(source);
+    expect(augmentRoutedModelsWithRegistryOpenAiApiRows(source, openAiApiCatalogConfig({ disabled: true }))).toBe(source);
+  });
+
+  test("dedupes semantic collision warnings process-wide and warns again on changed mismatch", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const equalDifferentOrder = {
+        provider: "openai-apikey", id: "gpt-5.6-sol", contextWindow: 1_050_000, maxInputTokens: 922_000,
+        inputModalities: ["image", "text", "image"], reasoningEfforts: ["max", "low", "xhigh", "medium", "high", "low"], owned_by: "openai-apikey",
+      };
+      augmentRoutedModelsWithRegistryOpenAiApiRows([equalDifferentOrder], openAiApiCatalogConfig());
+      expect(warn).not.toHaveBeenCalled();
+
+      const mismatch = { ...equalDifferentOrder, contextWindow: 1 };
+      augmentRoutedModelsWithRegistryOpenAiApiRows([mismatch], openAiApiCatalogConfig());
+      augmentRoutedModelsWithRegistryOpenAiApiRows([{ ...mismatch, inputModalities: ["text", "image"] }], openAiApiCatalogConfig());
+      expect(warn).toHaveBeenCalledTimes(1);
+      augmentRoutedModelsWithRegistryOpenAiApiRows([{ ...mismatch, contextWindow: 2 }], openAiApiCatalogConfig());
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

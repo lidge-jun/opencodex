@@ -81,6 +81,16 @@ describe("Umans provider", () => {
     expect(provider.modelInputModalities?.["umans-kimi-k2.7"]).toEqual(["text", "image"]);
   });
 
+  test("OpenAI API key-login clones max-input metadata and never persists virtual maps", () => {
+    const source = KEY_LOGIN_PROVIDERS["openai-apikey"];
+    const provider = providerConfigFromKeyLoginProvider(source, "sk-openai");
+    expect(provider.modelMaxInputTokens?.["gpt-5.6-sol"]).toBe(922_000);
+    expect(provider.modelMaxInputTokens).not.toBe(source.modelMaxInputTokens);
+    expect((provider as unknown as { virtualModels?: unknown }).virtualModels).toBeUndefined();
+    provider.modelMaxInputTokens!["gpt-5.6-sol"] = 1;
+    expect(source.modelMaxInputTokens?.["gpt-5.6-sol"]).toBe(922_000);
+  });
+
   test("Anthropic adapter posts Umans requests to /v1/messages with x-api-key", async () => {
     const req = await createAnthropicAdapter(umansProvider()).buildRequest(parsedWithWebSearchTool());
     const body = JSON.parse(req.body as string) as {

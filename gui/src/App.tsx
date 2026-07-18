@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
+import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Debug from "./pages/Debug";
@@ -9,7 +10,7 @@ import Usage from "./pages/Usage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconChart, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconChart, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -18,14 +19,20 @@ const Frontier = lazy(() => import("./pages/Frontier"));
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "providers" | "models" | "subagents" | "logs" | "debug" | "usage" | "frontier" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "providers" | "models" | "combos" | "subagents" | "logs" | "debug" | "usage" | "frontier" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "subagents", "logs", "debug", "usage", "frontier", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "combos", "subagents", "logs", "debug", "usage", "frontier", "codex-auth", "api", "claude"]);
 
 function readPageFromHash(): Page {
   const raw = location.hash.replace(/^#\/?/, "");
-  return VALID_PAGES.has(raw as Page) ? (raw as Page) : "dashboard";
+  // Sub-views use a "/" suffix (e.g. #providers/workspace); the first segment is the page id.
+  const pageId = raw.split("/")[0] as Page;
+  return VALID_PAGES.has(pageId) ? pageId : "dashboard";
+}
+
+function hashBelongsToPage(rawHash: string, page: Page): boolean {
+  return rawHash === page || (page === "providers" && rawHash === "providers/workspace");
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -35,6 +42,7 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
+  { id: "combos", tkey: "nav.combos", Icon: IconShuffle },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "debug", tkey: "nav.debug", Icon: IconTerminal },
@@ -74,14 +82,23 @@ export default function App() {
 
   useEffect(() => {
     // External navigation (hash edit, back/forward) also dismisses the mobile drawer.
-    const onHash = () => { setPageState(readPageFromHash()); setNavOpen(false); };
+    const onHash = () => {
+      const nextPage = readPageFromHash();
+      const rawHash = window.location.hash.replace(/^#\/?/, "");
+      setNavOpen(false);
+      if (!hashBelongsToPage(rawHash, nextPage)) {
+        window.location.hash = nextPage;
+        return;
+      }
+      setPageState(nextPage);
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   useEffect(() => {
-    const nextHash = `#${page}`;
-    if (window.location.hash !== nextHash) {
+    const rawHash = window.location.hash.replace(/^#\/?/, "");
+    if (!hashBelongsToPage(rawHash, page)) {
       window.location.hash = page;
     }
   }, [page]);
@@ -250,10 +267,11 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "frontier" ? " main-inner--providers" : ""}`}>
+        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "frontier" ? " main-inner--providers" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}
+          {page === "combos" && <Combos apiBase={API_BASE} />}
           {page === "subagents" && <Subagents apiBase={API_BASE} />}
           {page === "logs" && <Logs apiBase={API_BASE} />}
           {page === "debug" && <Debug apiBase={API_BASE} />}

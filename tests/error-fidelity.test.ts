@@ -46,6 +46,35 @@ describe("error fidelity", () => {
       type: "invalid_request_error",
       code: "origin_rejected",
     });
+    const subscription = "this model requires a subscription, upgrade for access: https://ollama.com/upgrade";
+    expect(classifyError(403, "upstream_error", "Provider error 403")).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
+    expect(classifyError(403, "upstream_error", "Access denied")).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
+    expect(classifyError(403, "upstream_error", subscription)).toMatchObject({
+      type: "permission_error",
+      code: "subscription_required",
+    });
+    expect(classifyError(401, "upstream_error", subscription)).toMatchObject({
+      type: "authentication_error",
+      code: "invalid_api_key",
+    });
+    expect(classifyError(403, "authentication_error", subscription)).toMatchObject({
+      type: "authentication_error",
+      code: "invalid_api_key",
+    });
+    expect(classifyError(400, "permission_error", subscription)).toMatchObject({
+      type: "permission_error",
+      code: "subscription_required",
+    });
+    expect(classifyError(400, "upstream_error", subscription)).toMatchObject({
+      type: "invalid_request_error",
+      code: "invalid_request_error",
+    });
     expect(classifyError(502, "upstream_error", "Kiro rate limit exceeded: ThrottlingException: rate limited")).toMatchObject({
       type: "rate_limit_error",
       code: "rate_limit_exceeded",

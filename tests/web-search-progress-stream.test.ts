@@ -87,13 +87,14 @@ describe("web-search streamed-body progress collector", () => {
   });
 
   test("raw response bytes keep a generation alive beyond its initial total elapsed time", async () => {
-    const response = new Response(chunkStream([
-      { after: 15, value: "a" },
-      { after: 15, value: "b" },
-      { after: 15, value: "c" },
-      { after: 15, value: "d" },
-    ]));
-    const events = await collect(parseStreamWithProgress(response, drainThenDone, { inactivityTimeoutMs: 30 }));
+    // Timing contract: total elapsed (20 chunks x 10ms nominal = 200ms) far exceeds the
+    // 120ms inactivity timeout, proving raw bytes reset the timer — while any SINGLE
+    // inter-chunk gap stays far below 120ms even under Windows CI timer granularity
+    // (a nominal 10ms sleep can stretch to 30ms+ there; the old 15ms-vs-30ms margin flaked).
+    const response = new Response(chunkStream(
+      Array.from({ length: 20 }, (_, i) => ({ after: 10, value: String.fromCharCode(97 + (i % 26)) })),
+    ));
+    const events = await collect(parseStreamWithProgress(response, drainThenDone, { inactivityTimeoutMs: 120 }));
     expect(events.at(-1)).toEqual({ type: "done" });
     expect(events.some(event => event.type === "heartbeat")).toBe(true);
   });

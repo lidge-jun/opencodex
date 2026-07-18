@@ -1,5 +1,5 @@
 import type { OcxProviderConfig } from "../types";
-import { deriveKeyLoginMap, enrichProviderFromRegistry } from "../providers/derive";
+import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
 
 /**
  * API-key "login" providers: not OAuth — the flow opens the provider's dashboard so the user can
@@ -7,37 +7,7 @@ import { deriveKeyLoginMap, enrichProviderFromRegistry } from "../providers/deri
  * Most use the OpenAI-compatible chat API (`openai-chat` adapter, `Authorization: Bearer <key>`); a
  * few expose only an Anthropic-compatible endpoint and set `adapter: "anthropic"` (`x-api-key`).
  */
-export interface KeyLoginProvider {
-  label: string;
-  baseUrl: string;
-  adapter: string;
-  /** Where the user creates/copies the API key. */
-  dashboardUrl: string;
-  models?: string[];
-  liveModels?: boolean;
-  defaultModel?: string;
-  contextWindow?: number;
-  modelContextWindows?: Record<string, number>;
-  modelInputModalities?: Record<string, string[]>;
-  /**
-   * Model ids that do NOT accept image input (the vision sidecar describes images for them) / do NOT
-   * accept a reasoning param. Copied into the created provider config by `enrichProviderFromCatalog`,
-   * so the classification actually gates the sidecars (matching is tolerant of an Ollama ":size" tag).
-   */
-  reasoningEfforts?: string[];
-  modelReasoningEfforts?: Record<string, string[]>;
-  reasoningEffortMap?: Record<string, string>;
-  modelReasoningEffortMap?: Record<string, Record<string, string>>;
-  noVisionModels?: string[];
-  noReasoningModels?: string[];
-  noTemperatureModels?: string[];
-  noTopPModels?: string[];
-  noPenaltyModels?: string[];
-  autoToolChoiceOnlyModels?: string[];
-  preserveReasoningContentModels?: string[];
-  escapeBuiltinToolNames?: boolean;
-  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
-}
+export interface KeyLoginProvider extends DerivedKeyLoginProvider {}
 
 export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = deriveKeyLoginMap();
 

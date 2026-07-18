@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
+const doctorGuiIfChangedScript = fileURLToPath(new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url));
 
 async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
@@ -134,5 +136,76 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("withastro/action@e84f40bd8d2caa9e768ec82ad30dd81f0b280853");
     expect(workflow).toContain("actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+  });
+
+  test("React Doctor workflow is SHA-pinned, engine-pinned, advisory, and read-only", async () => {
+    const workflow = await readText(".github/workflows/react-doctor.yml");
+
+    expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
+    expect(workflow).toContain("millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5");
+    expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // Engine pin: the action wrapper would fetch react-doctor@latest without it.
+    expect(workflow).toContain('version: "0.7.8"');
+
+    // Advisory + least privilege: read-only token, all write-scoped outputs off.
+    expect(workflow).toContain("permissions:\n  contents: read");
+    expect(workflow).not.toContain(": write");
+    expect(workflow).toContain("blocking: none");
+    expect(workflow).toContain("comment: false");
+    expect(workflow).toContain("review-comments: false");
+    expect(workflow).toContain("commit-status: false");
+    expect(workflow).toContain("timeout-minutes: 10");
+  });
+
+  test("React Doctor package scripts pin the exact engine version with no @latest anywhere", async () => {
+    const guiPkg = await readText("gui/package.json");
+    const rootPkg = await readText("package.json");
+
+    expect(guiPkg).toContain("react-doctor@0.7.8");
+    expect(guiPkg).not.toContain("react-doctor@latest");
+    expect(rootPkg).not.toContain("react-doctor@latest");
+    expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
+    // The prepush chain runs the doctor last, after the gating steps.
+    expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
+  });
+});
+
+describe("doctor-gui-if-changed", () => {
+  test("guiPathsChanged is a slash-guarded gui/ prefix predicate", async () => {
+    const { guiPathsChanged } = await import("../scripts/doctor-gui-if-changed");
+
+    expect(guiPathsChanged(["gui/src/App.tsx"])).toBe(true);
+    expect(guiPathsChanged(["gui"])).toBe(true);
+    expect(guiPathsChanged(["scripts/foo.ts", "gui/package.json"])).toBe(true);
+    expect(guiPathsChanged(["scripts/foo.ts"])).toBe(false);
+    expect(guiPathsChanged(["guitools/x.ts"])).toBe(false);
+    expect(guiPathsChanged([])).toBe(false);
+  });
+
+  test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "gui/src/App.tsx\nscripts/x.ts" },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString()).toContain("doctor:run");
+
+    const skip = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "scripts/x.ts\nREADME.md" },
+    });
+    expect(skip.exitCode).toBe(0);
+    expect(skip.stdout.toString()).toContain("doctor:skip");
+  });
+
+  test("degrades gracefully when the doctor engine is unavailable (offline prepush)", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "definitely-not-a-real-command-xyz",
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stderr.toString()).toContain("skipping advisory scan");
   });
 });

@@ -9,6 +9,46 @@ export interface AdapterEventQueue {
   collect(): Promise<AdapterEvent[]>;
 }
 
+export interface AdapterEventPreflight {
+  stream: AsyncIterable<AdapterEvent>;
+  error?: Extract<AdapterEvent, { type: "error" }>;
+  empty: boolean;
+}
+
+async function* replay(
+  buffered: readonly AdapterEvent[],
+  iterator: AsyncIterator<AdapterEvent>,
+): AsyncGenerator<AdapterEvent> {
+  try {
+    for (const event of buffered) yield event;
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    await iterator.return?.();
+  }
+}
+
+export async function preflightAdapterEvents(
+  source: AsyncIterable<AdapterEvent>,
+): Promise<AdapterEventPreflight> {
+  const iterator = source[Symbol.asyncIterator]();
+  const buffered: AdapterEvent[] = [];
+  while (true) {
+    const next = await iterator.next();
+    if (next.done) return { stream: replay(buffered, iterator), empty: true };
+    buffered.push(next.value);
+    if (next.value.type === "heartbeat") continue;
+    if (next.value.type === "error") {
+      await iterator.return?.();
+      return { stream: replay(buffered, iterator), error: next.value, empty: false };
+    }
+    return { stream: replay(buffered, iterator), empty: false };
+  }
+}
+
 export function createAdapterEventQueue(): AdapterEventQueue {
   const queued: AdapterEvent[] = [];
   const readers: QueueReader[] = [];

@@ -13,7 +13,7 @@ import {
 import {
   clearLoginState,
   getLoginStatus,
-  isOAuthProvider,
+  isPublicOAuthProvider,
   listOAuthProviders,
   startLoginFlow,
   submitManualLoginCode,
@@ -23,7 +23,12 @@ import { removeCredential } from "../oauth/store";
 import { providerDestinationResolvedError } from "../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../oauth/key-providers";
 import { deriveProviderPresets } from "../providers/derive";
-import { fetchProviderQuotaReports } from "../providers/quota";
+import { providerCodexAccountMode } from "../providers/registry";
+import { routedSlug, slugEquals } from "../providers/slug-codec";
+import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../providers/quota";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { clearThreadAccountMap } from "../codex/routing";
+import { primeCodexPoolQuotas } from "../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../providers/context-cap";
 import { readUsageEntries } from "../usage/log";
 import { getUsageDebugLogEntries } from "../usage/debug";
@@ -58,6 +63,9 @@ export const VERSION = (() => {
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   refreshCodexCatalog?: () => Promise<void>;
+  clearThreadAccountMap?: () => void;
+  clearProviderQuotaCache?: () => void;
+  primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -80,7 +88,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.
-  if (req.method === "POST" || req.method === "PUT") {
+  if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
     const contentLength = Number(req.headers.get("content-length") ?? "0");
     if (Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024) {
       return jsonResponse({ error: "request body too large" }, 413, req, config);
@@ -403,6 +411,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       hasApiKey: !!p.apiKey,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       disabled: p.disabled === true,
+      codexAccountMode: providerCodexAccountMode(name, p),
     })));
   }
 
@@ -410,18 +419,18 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   // persists — existing providers' real keys are never round-tripped (unlike PUT /api/config,
   // which would re-save the masked keys from GET). Live routing picks it up immediately.
   if (url.pathname === "/api/providers" && req.method === "POST") {
-    let body: { name?: string; provider?: OcxProviderConfig; setDefault?: boolean };
+    let body: { name?: unknown; provider?: unknown; setDefault?: boolean };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const name = body.name?.trim();
-    const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider) : undefined;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const providerError = providerManagementConfigError(name, body.provider);
+    if (providerError) return jsonResponse({ error: providerError }, 400);
+    const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
     if (!isValidProviderName(name)) {
       return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
     }
-    const providerError = providerManagementConfigError(name, prov);
-    if (providerError) return jsonResponse({ error: providerError }, 400);
     // Hostname destinations additionally get a DNS-resolved SSRF check at write time —
     // the sync check above only classifies literal IPs (review finding, PR #96).
     const resolvedError = await providerDestinationResolvedError(name, prov);
@@ -450,23 +459,202 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/providers" && req.method === "PATCH") {
     const name = url.searchParams.get("name")?.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
-    let body: { disabled?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (typeof body.disabled !== "boolean") return jsonResponse({ error: "disabled boolean is required" }, 400);
-    if (body.disabled && name === config.defaultProvider) {
-      return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
+    let rawBody: unknown;
+    try { rawBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider patch body must be a plain object" }, 400);
+    const keys = Object.keys(rawBody);
+    const hasMode = Object.hasOwn(rawBody, "codexAccountMode");
+
+    // codexAccountMode keeps its dedicated side-effect path (quota cache clear, thread map
+    // clear, pool prime) and is mutually exclusive with every other patch field.
+    if (hasMode) {
+      if (keys.length !== 1) {
+        return jsonResponse({ error: "codexAccountMode cannot be combined with other patch fields" }, 400);
+      }
+      if (name !== "openai") return jsonResponse({ error: "codexAccountMode is valid only for provider openai" }, 400);
+      const mode = rawBody.codexAccountMode;
+      if (mode !== "pool" && mode !== "direct") {
+        return jsonResponse({ error: "codexAccountMode must be pool or direct" }, 400);
+      }
+      const provider = config.providers.openai;
+      if (!provider || !isCanonicalOpenAiForwardProvider(provider)) {
+        return jsonResponse({ error: "provider openai must be the canonical built-in provider" }, 400);
+      }
+      const { saveConfig: save } = await import("../config");
+      config.providers.openai = { ...provider, codexAccountMode: mode };
+      save(config);
+      (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
+      (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
+      if (mode === "pool") {
+        try {
+          const prime = deps.primeCodexPoolQuotas ?? primeCodexPoolQuotas;
+          void Promise.resolve(prime(config, "mode-change")).catch(() => undefined);
+        } catch {
+          // Quota priming is best-effort; the persisted live mode is already authoritative.
+        }
+      }
+      return jsonResponse({ success: true, name: "openai", codexAccountMode: mode });
     }
+
+    // Field-mask editor: apply recognized fields onto a copy, then validate the MERGED
+    // provider (canonical-seed guard covers openai; local-guard covers registry key providers).
+    // API keys are never writable here — the api-keys endpoints own pool-integrated key writes.
+    if (Object.hasOwn(rawBody, "apiKey")) {
+      return jsonResponse({ error: "apiKey cannot be patched here; use the provider API-key endpoints" }, 400);
+    }
+    const next: OcxProviderConfig = { ...config.providers[name]! };
+    let touched = false;
+
+    if (Object.hasOwn(rawBody, "disabled")) {
+      if (typeof rawBody.disabled !== "boolean") return jsonResponse({ error: "disabled must be a boolean" }, 400);
+      if (rawBody.disabled && name === config.defaultProvider) {
+        return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
+      }
+      next.disabled = rawBody.disabled;
+      touched = true;
+    }
+    if (Object.hasOwn(rawBody, "adapter")) {
+      if (typeof rawBody.adapter !== "string" || !rawBody.adapter.trim()) return jsonResponse({ error: "adapter must be a non-empty string" }, 400);
+      next.adapter = rawBody.adapter.trim();
+      touched = true;
+    }
+    if (Object.hasOwn(rawBody, "baseUrl")) {
+      if (typeof rawBody.baseUrl !== "string" || !rawBody.baseUrl.trim()) return jsonResponse({ error: "baseUrl must be a non-empty string" }, 400);
+      next.baseUrl = rawBody.baseUrl.trim();
+      touched = true;
+    }
+    if (Object.hasOwn(rawBody, "defaultModel")) {
+      if (typeof rawBody.defaultModel !== "string") return jsonResponse({ error: "defaultModel must be a string" }, 400);
+      const dm = rawBody.defaultModel.trim();
+      if (dm) next.defaultModel = dm;
+      else delete next.defaultModel;
+      touched = true;
+    }
+    if (Object.hasOwn(rawBody, "authMode")) {
+      if (typeof rawBody.authMode !== "string") return jsonResponse({ error: "authMode must be a string" }, 400);
+      const mode = rawBody.authMode.trim();
+      if (mode === "key" || mode === "forward" || mode === "oauth" || mode === "local") {
+        next.authMode = mode;
+        touched = true;
+      } else if (mode === "") {
+        delete next.authMode;
+        touched = true;
+      } else {
+        return jsonResponse({ error: "authMode must be key, forward, oauth, or local" }, 400);
+      }
+    }
+    if (Object.hasOwn(rawBody, "note")) {
+      if (typeof rawBody.note !== "string") return jsonResponse({ error: "note must be a string" }, 400);
+      const note = rawBody.note.trim();
+      if (note) next.note = note;
+      else delete next.note;
+      touched = true;
+    }
+
+    if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
+
+    // A disabled-only toggle preserves the v2 fast lane: it changes routing eligibility,
+    // not the provider shape, so the merged-shape validators (canonical-seed guard for
+    // openai, destination/local checks) do not apply.
+    const editorTouched = keys.some(key => key !== "disabled");
+    if (editorTouched) {
+      const providerError = providerManagementConfigError(name, next);
+      if (providerError) return jsonResponse({ error: providerError }, 400);
+      const resolvedError = await providerDestinationResolvedError(name, next);
+      if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
+    }
+
     const { saveConfig: save } = await import("../config");
-    config.providers[name] = { ...config.providers[name], disabled: body.disabled };
+    config.providers[name] = stripRegistryOnlyStaticHeaders(name, next);
     save(config);
+    if (editorTouched) {
+      const { clearModelCache } = await import("../codex/model-cache");
+      clearModelCache(name);
+    }
     await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, name, disabled: body.disabled });
+    return jsonResponse({
+      success: true,
+      name,
+      disabled: config.providers[name]!.disabled === true,
+      hasApiKey: !!config.providers[name]!.apiKey,
+    });
+  }
+
+  // Lightweight connectivity probe: perform the provider's live /models fetch DIRECTLY and
+  // report only real upstream evidence. The catalog aggregate (fetchAllModels) deliberately
+  // hides fetch failures behind stale/static fallbacks, so a catalog-presence check would
+  // let a static-catalog provider with a fake key "pass" — this endpoint never uses it.
+  if (url.pathname === "/api/providers/test" && req.method === "POST") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    const prov = config.providers[name]!;
+    if (prov.disabled) {
+      return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 });
+    }
+    if (prov.authMode === "forward") {
+      return jsonResponse({
+        ok: true,
+        latencyMs: 0,
+        message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
+      });
+    }
+    if (prov.liveModels === false) {
+      return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified" });
+    }
+    const { resolveModelsAuthToken, buildModelsRequest } = await import("../oauth");
+    const apiKey = await resolveModelsAuthToken(name, prov);
+    if (prov.authMode === "oauth" && !apiKey) {
+      return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
+    }
+    const { url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    const started = Date.now();
+    try {
+      const res = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) });
+      const latencyMs = Date.now() - started;
+      if (!res.ok) {
+        return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
+      }
+      const json = await res.json().catch(() => null) as { data?: unknown; models?: unknown } | null;
+      // OpenAI-style lists use { data: [...] }; Google's /v1beta/models (the other shape
+      // buildModelsRequest can produce) returns { models: [...] }.
+      const list = json && typeof json === "object" && !Array.isArray(json)
+        ? (Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : undefined)
+        : undefined;
+      if (!Array.isArray(list)) {
+        return jsonResponse({ ok: false, latencyMs, error: "upstream /models returned an unexpected shape" });
+      }
+      const models = list.length;
+      return jsonResponse({
+        ok: true,
+        latencyMs,
+        models,
+        message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
+      });
+    } catch (err) {
+      return jsonResponse({
+        ok: false,
+        latencyMs: Date.now() - started,
+        error: err instanceof Error ? err.message : "Connection test failed",
+      });
+    }
   }
 
   if (url.pathname === "/api/providers" && req.method === "DELETE") {
     const name = url.searchParams.get("name")?.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     if (name === config.defaultProvider) return jsonResponse({ error: "cannot delete the default provider; set another default first" }, 400);
+    const dependentCombos = Object.entries(config.combos ?? {})
+      .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
+    if (dependentCombos.length > 0) {
+      return jsonResponse({
+        error: `cannot delete provider "${name}" while combos depend on it`,
+        combos: dependentCombos,
+      }, 409);
+    }
     const { saveConfig: save } = await import("../config");
     delete config.providers[name];
     setProviderContextCap(config, name, false);
@@ -491,12 +679,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     }));
     return jsonResponse([...native, ...models.map(m => {
-      const namespaced = `${m.provider}/${m.id}`;
+      // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
+      const namespaced = routedSlug(m.provider, m.id);
       const contextCap = providerContextCap(config, m.provider);
       return {
         ...m,
         namespaced,
-        disabled: disabled.has(namespaced),
+        disabled: [...disabled].some(stored => slugEquals(stored, m.provider, m.id)),
         ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
       };
     })]);
@@ -674,8 +863,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       .filter(slug => !disabled.has(slug))
       .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
     const routedModels = models
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: `${m.provider}/${m.id}` }))
-      .filter(m => !disabled.has(m.namespaced));
+      .map(m => ({ provider: m.provider, model: m.id, namespaced: routedSlug(m.provider, m.id) }))
+      .filter(m => ![...disabled].some(stored => slugEquals(stored, m.provider, m.model)));
     return jsonResponse({
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
@@ -751,10 +940,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../codex/catalog");
+    const visibleRouted = models
+      .filter(m => ![...disabled].some(stored => slugEquals(stored, m.provider, m.id)))
+      .map(m => routedSlug(m.provider, m.id));
     const available = [
-      ...listCatalogNativeSlugs(),
-      ...models.map(m => `${m.provider}/${m.id}`),
-    ].filter(ns => !disabled.has(ns));
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      ...visibleRouted,
+    ];
     return jsonResponse({ chosen: config.subagentModels ?? [], available });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
@@ -777,10 +969,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const { buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
     const { visibleNativeSlugs } = await import("../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
+    const isDisabled = (provider: string, id: string) =>
+      [...disabled].some(stored => slugEquals(stored, provider, id));
     const available = [
-      ...listCatalogNativeSlugs(),
-      ...models.map(m => `${m.provider}/${m.id}`),
-    ].filter(ns => !disabled.has(ns));
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
+      // which accepts the raw full-slash form); only the disabled check goes tolerant.
+      ...models.filter(m => !isDisabled(m.provider, m.id)).map(m => `${m.provider}/${m.id}`),
+    ];
     const aliases: { id: string; display_name: string }[] = [];
     for (const slug of listCatalogNativeSlugs()) {
       // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
@@ -788,7 +984,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
     }
     for (const m of models) {
-      if (disabled.has(`${m.provider}/${m.id}`)) continue;
+      if (isDisabled(m.provider, m.id)) continue;
       aliases.push({ id: claudeCodeAlias(m.provider, m.id), display_name: `${m.id} (${m.provider})` });
     }
     const contextWindows = buildClaudeContextWindows([...visibleNativeSlugs(config)], models);
@@ -1030,7 +1226,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
     const body = await req.json().catch(() => ({})) as { provider?: string; addAccount?: boolean };
     const provider = (body.provider ?? "").trim().toLowerCase();
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     try {
       // addAccount forces a fresh browser identity (skips local-CLI token import) so a
       // SECOND account can be added instead of re-importing the first one.
@@ -1048,12 +1244,23 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     }
   }
 
+  // Cancel an in-progress browser/device OAuth login (GUI "Cancel" / modal close). Guarded by
+  // the same public predicate as /api/oauth/login — only publicly startable flows are cancellable.
+  if (url.pathname === "/api/oauth/login/cancel" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as { provider?: string };
+    const provider = (body.provider ?? "").trim().toLowerCase();
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const { cancelLoginFlow } = await import("../oauth");
+    const cancelled = cancelLoginFlow(provider);
+    return jsonResponse({ ok: true, cancelled });
+  }
+
   // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
   // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
   if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
     const body = await req.json().catch(() => ({})) as { provider?: string; input?: string; code?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
@@ -1065,14 +1272,18 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     return jsonResponse(getLoginStatus(provider));
   }
 
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
     clearLoginState(provider);
+    // Drop cached/last-good quota rows tied to the removed credential.
+    const { clearProviderQuotaCache } = await import("../providers/quota");
+    clearProviderQuotaCache();
     return jsonResponse({ success: true });
   }
 
@@ -1080,14 +1291,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   // one, or remove one. Emails are masked; tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const status = getLoginStatus(provider);
     return jsonResponse({ activeAccountId: status.activeAccountId ?? null, accounts: status.accounts ?? [] });
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { provider?: string; accountId?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../oauth/store");
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
@@ -1098,7 +1309,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     const id = url.searchParams.get("id") ?? "";
-    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeAccount, getAccountSet } = await import("../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
@@ -1193,6 +1404,56 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     saveConfig(config);
     return jsonResponse({ success: true }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/combos" && req.method === "GET") {
+    const { comboModelId, getCombo, listComboIds } = await import("../combos");
+    return jsonResponse({ combos: listComboIds(config).map(id => ({
+      id,
+      model: comboModelId(id),
+      ...getCombo(config, id)!,
+    })) });
+  }
+
+  if (url.pathname === "/api/combos" && req.method === "PUT") {
+    let rawBody: unknown;
+    try { rawBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(rawBody)) {
+      return jsonResponse({ error: "request body must be an object" }, 400);
+    }
+    const body = rawBody;
+    if (typeof body.id !== "string" || !body.id.trim()) {
+      return jsonResponse({ error: "id is required and must be a string" }, 400);
+    }
+    const id = body.id.trim();
+    const { comboConfigError, normalizeComboConfig, comboModelId, clearComboSelectionState, clearComboTargetCooldowns } = await import("../combos");
+    const error = comboConfigError(id, body.combo, config.providers, {
+      requireEnabledTarget: true,
+    });
+    if (error) return jsonResponse({ error }, 400);
+    const normalized = normalizeComboConfig(body.combo as import("../types").OcxComboConfig);
+    config.combos = { ...(config.combos ?? {}), [id]: normalized };
+    saveConfig(config);
+    clearComboSelectionState(id);
+    clearComboTargetCooldowns(id);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ success: true, id, model: comboModelId(id), combo: normalized });
+  }
+
+  if (url.pathname === "/api/combos" && req.method === "DELETE") {
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) return jsonResponse({ error: "id query param is required" }, 400);
+    if (!Object.hasOwn(config.combos ?? {}, id)) {
+      return jsonResponse({ error: "unknown combo" }, 404);
+    }
+    const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../combos");
+    delete config.combos![id];
+    if (Object.keys(config.combos!).length === 0) delete config.combos;
+    saveConfig(config);
+    clearComboSelectionState(id);
+    clearComboTargetCooldowns(id);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ success: true, id });
   }
 
   if (url.pathname === "/api/stop" && req.method === "POST") {

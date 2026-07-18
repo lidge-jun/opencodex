@@ -1,0 +1,54 @@
+# React Doctor — finds security, performance, correctness, accessibility,
+# bundle-size, and architecture issues in React codebases.
+#
+# Advisory-only and least-privilege: findings appear in the step log and the
+# Actions run summary. All write-scoped outputs (sticky PR comments, inline
+# review comments, commit statuses) are explicitly disabled so the workflow
+# needs no write permissions. Do not re-add write scopes without revisiting
+# tests/ci-workflows.test.ts, which pins this contract.
+#
+# Docs: https://www.react.doctor/ci
+# Source: https://github.com/millionco/react-doctor
+
+name: React Doctor
+
+on:
+  # Scans the PR's changed files relative to the merge base of the target branch.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Scans `main` on every push to track the health-score trend.
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+# Cancels any in-flight scan for the same PR (or branch, on push) the moment a
+# new commit arrives, so only the latest run remains.
+concurrency:
+  group: react-doctor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  react-doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 gives React Doctor the full git history it needs to find
+      # the merge base with the target branch; a shallow checkout would make PR
+      # runs report every pre-existing issue instead of only new ones.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5 # v2.1.0
+        with:
+          directory: gui
+          # Pin the npm engine — the action wrapper would otherwise fetch
+          # react-doctor@latest, silently skewing CI from the local pinned runs.
+          version: "0.7.8"
+          # Advisory contract: report to the step log only; never gate, never write.
+          blocking: none
+          comment: false
+          review-comments: false
+          commit-status: false

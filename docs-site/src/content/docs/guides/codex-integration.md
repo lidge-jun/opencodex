@@ -7,6 +7,11 @@ opencodex makes Codex route through the proxy by editing two things Codex reads:
 (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) and its model catalog. Every edit is
 idempotent and reversible.
 
+The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
+plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
+Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
+configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
+
 ## Config injection
 
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps
@@ -33,10 +38,10 @@ POSTs `{base_url}/images/generations` (or `/images/edits` when reference images 
 directly, with the same ChatGPT bearer auth it uses for chat. Because the injected `base_url`
 points at opencodex, the proxy relays those calls to the OpenAI upstream:
 
-- **ChatGPT login (default):** the request is forwarded to `chatgpt.com/backend-api/codex` with
-  the caller's OAuth token (or the routed multi-account pool token). No API key is needed.
-- **OpenAI API-key provider:** if no ChatGPT auth is available on the request, the relay falls
-  back to a configured `openai-responses` API-key provider (e.g. `api.openai.com`).
+- **One mode-aware forward candidate:** Pool selects an eligible main/added account; Direct uses the
+  caller OAuth bearer. The configured mode applies consistently to the image request.
+- **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
+  failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
   (Cursor, Gemini, Kiro, …) cannot serve image generation; if you don't want the tool offered at
   all, disable it in Codex with `codex features disable image_generation`

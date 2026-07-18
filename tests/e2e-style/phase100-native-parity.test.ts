@@ -105,12 +105,18 @@ describe("Phase 100 Codex-native parity smoke", () => {
       config,
       parsed,
       false,
-      new Headers({ authorization: "Bearer forwarded-chatgpt" }),
       routedProvider,
       "deepseek-v4-pro",
+      {
+        providerName: "openai",
+        provider: forwardProvider,
+        accountMode: "direct",
+        authContext: { kind: "main", accountId: null },
+        headers: new Headers({ authorization: "Bearer forwarded-chatgpt" }),
+      },
     );
     expect(searchPlan).toMatchObject({
-      forwardProvider,
+      forwardSidecar: { provider: forwardProvider },
       settings: {
         model: "gpt-5.6-luna",
         describeImages: true,

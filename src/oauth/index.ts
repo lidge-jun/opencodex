@@ -112,6 +112,10 @@ export function isOAuthProvider(name: string): boolean {
   return name in OAUTH_PROVIDERS;
 }
 
+export function isPublicOAuthProvider(name: string): boolean {
+  return name !== "chatgpt" && isOAuthProvider(name);
+}
+
 function isRefreshPolicy(value: unknown): value is RefreshPolicy {
   return value === "proactive" || value === "lazy-only" || value === "disabled";
 }
@@ -135,7 +139,7 @@ export function getOAuthCredentialProjectId(provider: string): string | undefine
 
 /** Provider ids that support real OAuth login (drives the GUI's "Log in with …" buttons). */
 export function listOAuthProviders(): string[] {
-  return Object.keys(OAUTH_PROVIDERS);
+  return Object.keys(OAUTH_PROVIDERS).filter(isPublicOAuthProvider);
 }
 
 export class UnsupportedOAuthProviderError extends Error {
@@ -399,6 +403,7 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
 
 /** Add/refresh an OAuth provider's config entry on a config object (does not persist). */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
+  if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
   config.providers[provider] = { ...def.providerConfig };
@@ -411,6 +416,7 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
   const rawCred = await def.login(ctrl, opts);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   await saveCredential(provider, cred);
+  if (provider === "chatgpt") return cred;
   const config = loadConfig();
   upsertOAuthProvider(config, provider);
   saveConfig(config);

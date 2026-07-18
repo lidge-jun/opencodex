@@ -349,6 +349,8 @@ export interface OcxConfig {
   port: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
+  /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
+  openaiProviderTierVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
   /**
@@ -467,10 +469,32 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
+  combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+}
+
+export type OcxComboStrategy = "failover" | "round-robin";
+export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export interface OcxComboTarget {
+  provider: string;
+  model: string;
+  /** Relative SWRR batch weight. Default 1; valid range 1..10000. */
+  weight?: number;
+}
+
+export interface OcxComboConfig {
+  targets: OcxComboTarget[];
+  /** Ordered failover (default) or deterministic smooth weighted round-robin. */
+  strategy?: OcxComboStrategy;
+  /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
+  stickyLimit?: number;
+  /** Used when the client omits reasoning.effort. Default medium. */
+  defaultEffort?: OcxComboDefaultEffort;
 }
 
 /**
@@ -566,6 +590,12 @@ export interface OcxProviderConfig {
   allowPrivateNetwork?: boolean;
   /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
   disabled?: boolean;
+  /**
+   * Codex account-selection mode. Valid ONLY on the canonical built-in `openai` forward provider.
+   * "pool" (default) rotates main + added Codex accounts through the affinity/quota/cooldown/
+   * failover engine; "direct" pins the caller's main Codex login and never touches pool state.
+   */
+  codexAccountMode?: CodexAccountMode;
   apiKey?: string;
   /**
    * Multi-key pool (API-key twin of OAuth multiauth). `apiKey` always mirrors the ACTIVE
@@ -595,16 +625,27 @@ export interface OcxProviderConfig {
   modelContextWindows?: Record<string, number>;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;
+  /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
+  modelMaxInputTokens?: Record<string, number>;
   headers?: Record<string, string>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).
    * "oauth": resolve a stored OAuth access token (auto-refreshed) and use it as the Bearer key.
    * Only the openai-responses adapter implements "forward"; openai-chat uses its own key/token.
+   * "local": local runtime (Ollama etc.) — no remote key required. Valid only for
+   * providers whose registry entry declares authKind "local" (management API enforces).
    */
-  authMode?: "key" | "forward" | "oauth";
+  authMode?: "key" | "forward" | "oauth" | "local";
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
+  /**
+   * Free-tier pricing flag for UI/catalog (Free badge, Free filter). Not the same as
+   * `keyOptional` — free tiers may still require an API key (e.g. NVIDIA NIM free credits).
+   */
+  freeTier?: boolean;
+  /** Optional human note shown in the providers UI (not used for routing). */
+  note?: string;
   /** Strip one trailing bracketed suffix from model ids before sending them upstream. */
   modelSuffixBracketStrip?: boolean;
   /**
@@ -621,6 +662,8 @@ export interface OcxProviderConfig {
   reasoningEfforts?: string[];
   /** Model-specific Codex-visible reasoning tiers. An empty array means “do not expose effort”. */
   modelReasoningEfforts?: Record<string, string[]>;
+  /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
+  modelDefaultReasoningEfforts?: Record<string, string>;
   /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */
@@ -711,6 +754,11 @@ export interface OcxProviderConfig {
    */
   nativeLocalExec?: "off" | "codex-sandbox" | "on";
 }
+
+/** Trusted runtime ownership for Codex-account credentials. Never persisted per provider. */
+export type CodexAccountMode = "direct" | "pool";
+
+export const OPENAI_PROVIDER_TIER_VERSION = 2 as const;
 
 export interface CodexAccount {
   id: string;

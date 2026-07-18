@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS } from "./antigravity-models";
 import {
@@ -18,10 +18,16 @@ export interface ProviderRegistryEntry {
   adapter: string;
   baseUrl: string;
   authKind: ProviderAuthKind;
+  codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
   allowPrivateNetworkByDefault?: boolean;
   keyOptional?: boolean;
+  /**
+   * Free-tier pricing (no paid subscription required). Distinct from `keyOptional`:
+   * free tiers may still require an API key (e.g. NVIDIA NIM free credits).
+   */
+  freeTier?: boolean;
   allowBaseUrlOverride?: boolean;
   /** Static headers merged into every upstream request for this provider. */
   staticHeaders?: Record<string, string>;
@@ -38,6 +44,7 @@ export interface ProviderRegistryEntry {
   modelInputModalities?: Record<string, string[]>;
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
+  modelDefaultReasoningEfforts?: Record<string, string>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   noVisionModels?: string[];
@@ -53,6 +60,8 @@ export interface ProviderRegistryEntry {
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
   oauthId?: string;
+  virtualModels?: Record<string, { wireModelId: string; reasoningMode: "pro" }>;
+  modelMaxInputTokens?: Record<string, number>;
   jawcodeBundle?: string;
   extraMetadataAliases?: string[];
   metadataModelIdNormalize?: MetadataModelIdNormalize;
@@ -63,9 +72,10 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "authMode" | "keyOptional" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
-  | "reasoningEfforts" | "modelReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
+  | "modelMaxInputTokens"
+  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
@@ -92,13 +102,29 @@ const MINIMAX_MODELS = [
 const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" ? 1_000_000 : 204_800]),
 );
-const OPENAI_GPT56_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
-const OPENAI_GPT56_CONTEXT_WINDOW = 372_000;
+const OPENAI_GPT56_MODELS = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const OPENAI_GPT56_PRO_MODELS = ["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"];
+const OPENAI_API_GPT56_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_CODEX_GPT56_CONTEXT_WINDOW = 372_000;
 const OPENAI_GPT56_CONTEXT_WINDOWS = {
-  "gpt-5.6-sol": OPENAI_GPT56_CONTEXT_WINDOW,
-  "gpt-5.6-terra": OPENAI_GPT56_CONTEXT_WINDOW,
-  "gpt-5.6-luna": OPENAI_GPT56_CONTEXT_WINDOW,
+  "gpt-5.6-sol": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
+  "gpt-5.6-terra": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
+  "gpt-5.6-luna": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
 };
+const OPENAI_API_GPT56_CONTEXT_WINDOWS: Record<string, number> = {
+  ...Object.fromEntries([...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, OPENAI_API_GPT56_CONTEXT_WINDOW])),
+  "gpt-5.5": OPENAI_API_GPT56_CONTEXT_WINDOW,
+};
+const OPENAI_API_GPT56_MAX_INPUT_TOKENS: Record<string, number> = {
+  ...Object.fromEntries([...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, 922_000])),
+  "gpt-5.5": 922_000,
+};
+const OPENAI_API_GPT56_VIRTUAL_MODELS: Record<string, { wireModelId: string; reasoningMode: "pro" }> = {
+  "gpt-5.6-sol-pro": { wireModelId: "gpt-5.6-sol", reasoningMode: "pro" },
+  "gpt-5.6-terra-pro": { wireModelId: "gpt-5.6-terra", reasoningMode: "pro" },
+  "gpt-5.6-luna-pro": { wireModelId: "gpt-5.6-luna", reasoningMode: "pro" },
+};
+const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
 // OpenRouter's live /endpoints routes report 1,050,000; keep this separate from the
 // unverified OpenAI API-key seed. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
@@ -146,16 +172,48 @@ const DEEPSEEK_THINKING_REASONING_MAP: Record<string, string> = {
   xhigh: "max",
   max: "max",
 };
-// 260710 Kimi model aliases and context windows: Tier-2 evidence in
-// devlog/_plan/260710_provider_hardening/002_research_cn.md.
-const KIMI_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
-const KIMI_CODING_MODELS = [...KIMI_API_MODELS, "kimi-for-coding"];
+// 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
+// entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
+// alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
+// The separately billed Moonshot API uses `kimi-k3`.
+// Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
+//           https://www.kimi.com/code/docs/en/kimi-code/error-reference.html
+const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
+const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
+const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
+const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
+const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
 const KIMI_THINKING_MODELS = KIMI_CODING_MODELS;
+const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_MODELS.filter(id => !KIMI_CODING_K3_MODELS.includes(id));
+const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
+const KIMI_CODING_K3_REASONING_EFFORTS = ["low", "high", "max"];
+const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
+  none: "none",
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+};
+const KIMI_CODING_REASONING_EFFORTS = Object.fromEntries(
+  KIMI_CODING_MODELS.map(id => [id, KIMI_CODING_K3_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
+);
+const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
+  KIMI_CODING_K3_MODELS.map(id => [id, "max"]),
+);
+const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
+  KIMI_CODING_K3_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
+);
+const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
+  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
+);
 const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_MODELS;
 const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-for-coding"];
 const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_API_MODELS.map(id => [id, 262_144]),
+  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
+const KIMI_API_MODEL_INPUT_MODALITIES = { "kimi-k3": ["text", "image"] };
 
 // 260715 NVIDIA NIM kimi family (issue #126): documented served ids on integrate
 // chat/completions per docs.api.nvidia.com/nim/reference/llm-apis; live /v1/models
@@ -168,7 +226,10 @@ const NVIDIA_NIM_KIMI_MODELS = [
   "moonshotai/kimi-k2-instruct", "moonshotai/kimi-k2-instruct-0905",
 ];
 const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, 262_144]),
+  KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+);
+const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
+  KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),
 );
 const NEURALWATT_REASONING_HISTORY_MODELS = [
   "glm-5.2", "glm-5.2-short",
@@ -201,12 +262,13 @@ const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntrie
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "openai",
-    label: "OpenAI (ChatGPT login)",
+    label: "OpenAI (Codex login)",
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authKind: "forward",
+    codexAccountMode: "pool",
     featured: true,
-    note: "Uses your codex login — no API key",
+    note: "Codex login account pool (default) or Direct main-account mode via codexAccountMode",
   },
   {
     id: "cursor",
@@ -250,20 +312,21 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // 260709 refresh: lineup + metadata from official docs.x.ai (grok-4.5 announced 07-08);
     // grok-composer-2.5-fast kept as account-verified (absent from public docs). Evidence:
     // devlog/model_update/260709_model_refresh/001_xai_lineup.md.
-    models: ["grok-4.5", "grok-4.3", "grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
+    // grok-4.20-multi-agent-0309 is intentionally absent: the OAuth chat-completions
+    // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
+    models: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
     noReasoningModels: ["grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     // Replay assistant reasoning_content for grok reasoning models: xAI documents dropped
     // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
     // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13 — devlog/_plan/260713_grok_caching).
     // Models that never emit reasoning simply have no thinking parts to replay (no-op).
-    preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning"],
+    preserveReasoningContentModels: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high control (no off tier upstream).
     modelReasoningEfforts: { "grok-4.5": ["low", "medium", "high"] },
     modelContextWindows: {
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,
-      "grok-4.20-multi-agent-0309": 1_000_000,
       "grok-4.20-0309-reasoning": 1_000_000,
       "grok-4.20-0309-non-reasoning": 1_000_000,
       "grok-build-0.1": 256_000,
@@ -306,6 +369,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
+    modelSuffixBracketStrip: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
@@ -313,9 +377,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: KIMI_CODING_MODELS,
     defaultModel: "kimi-k2.7-code",
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
-    // Kimi thinking is controlled by Kimi's `thinking` extension, not OpenAI `reasoning_effort`.
-    noReasoningModels: KIMI_THINKING_MODELS,
-    modelReasoningEfforts: Object.fromEntries(KIMI_THINKING_MODELS.map(id => [id, []])),
+    modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
+    // K3 accepts low/high/max; Codex aliases are normalized by the model-scoped wire map.
+    noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
+    modelReasoningEfforts: KIMI_CODING_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: KIMI_CODING_DEFAULT_REASONING_EFFORTS,
+    modelReasoningEffortMap: KIMI_CODING_REASONING_EFFORT_MAPS,
     noTemperatureModels: KIMI_LOCKED_PARAMETER_MODELS,
     noTopPModels: KIMI_LOCKED_PARAMETER_MODELS,
     noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
@@ -332,11 +399,35 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Import-first: reuses your installed kiro-cli login (no browser). Experimental third-party harness — see Kiro ToS.",
     models: KIRO_MODELS,
     defaultModel: "kiro-auto",
+    // Kiro speaks CodeWhisperer wire, not OpenAI-style GET /models. Keep the static
+    // catalog authoritative so a spurious 2xx from runtime.../models cannot drop seeded ids
+    // (e.g. newly listed GPT-5.6 tiers) via live-discovery reconciliation.
+    liveModels: false,
     // Per-model context metadata is maintained next to the Kiro model list.
     modelContextWindows: KIRO_MODEL_CONTEXT_WINDOWS,
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
   },
-  { id: "openai-apikey", label: "OpenAI (API key)", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authKind: "key", featured: true, dashboardUrl: "https://platform.openai.com/api-keys", defaultModel: "gpt-5.5", models: ["gpt-5.5", ...OPENAI_GPT56_MODELS], liveModels: true, modelContextWindows: OPENAI_GPT56_CONTEXT_WINDOWS },
+  {
+    id: "openai-apikey",
+    label: "OpenAI API",
+    adapter: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://platform.openai.com/api-keys",
+    defaultModel: "gpt-5.5",
+    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS],
+    liveModels: true,
+    modelContextWindows: OPENAI_API_GPT56_CONTEXT_WINDOWS,
+    modelMaxInputTokens: OPENAI_API_GPT56_MAX_INPUT_TOKENS,
+    modelInputModalities: Object.fromEntries(
+      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, ["text", "image"]]),
+    ),
+    modelReasoningEfforts: Object.fromEntries(
+      [...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, OPENAI_API_GPT56_REASONING_EFFORTS]),
+    ),
+    virtualModels: OPENAI_API_GPT56_VIRTUAL_MODELS,
+  },
   {
     id: "umans",
     label: "Umans AI Coding Plan",
@@ -365,17 +456,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
+    modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
+    modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS])),
     },
+    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
     // the thinking-toggle map is a REAL wire alias (effort -> enabled/disabled) and stays.
     modelReasoningEffortMap: {
+      "kimi-k3": KIMI_CODING_K3_REASONING_EFFORT_MAP,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP])),
     },
@@ -392,12 +488,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ],
-    noTemperatureModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
-    noTopPModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
-    noPenaltyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+    noTemperatureModels: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+    noTopPModels: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+    noPenaltyModels: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Issue #78: DeepSeek V4 thinking mode requires reasoning_content replay on tool-call turns.
-    preserveReasoningContentModels: ["glm-5.2", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_THINKING_MODELS],
+    preserveReasoningContentModels: ["glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_THINKING_MODELS],
   },
   {
     id: "neuralwatt",
@@ -502,8 +598,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://platform.moonshot.ai/console/api-keys", defaultModel: "kimi-k2.7-code", jawcodeBundle: "moonshot",
     models: KIMI_API_MODELS,
     modelContextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
-    noReasoningModels: KIMI_API_MODELS,
-    modelReasoningEfforts: Object.fromEntries(KIMI_API_MODELS.map(id => [id, []])),
+    modelInputModalities: KIMI_API_MODEL_INPUT_MODALITIES,
+    noReasoningModels: KIMI_API_NO_REASONING_MODELS,
+    modelReasoningEfforts: KIMI_API_REASONING_EFFORTS,
     noTemperatureModels: KIMI_API_MODELS,
     noTopPModels: KIMI_API_MODELS,
     noPenaltyModels: KIMI_API_MODELS,
@@ -521,10 +618,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   //   its working reasoning_effort. Future kimi ids must be appended individually.
   {
     id: "nvidia", label: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://build.nvidia.com",
+    // Free pricing, but an API key is still required (free key from build.nvidia.com).
+    freeTier: true,
     parallelToolCalls: false,
     noReasoningModels: NVIDIA_NIM_KIMI_MODELS,
     modelReasoningEfforts: Object.fromEntries(NVIDIA_NIM_KIMI_MODELS.map(id => [id, []])),
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
+    note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
   { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
@@ -553,8 +653,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
   // Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "parallel", label: "Parallel", baseUrl: "https://platform.parallel.ai", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://platform.parallel.ai" },
-  // FREEZE 2026-07-10: model ids remain unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
-  { id: "zenmux", label: "ZenMux", baseUrl: "https://zenmux.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://zenmux.ai" },
+  // ZenMux native ids are vendor-namespaced (`<vendor>/<model>`), verified live against
+  // https://zenmux.ai/api/v1/models on 2026-07-18. The static seed doubles as the
+  // cold-cache decode source for the Codex slug codec (src/providers/slug-codec.ts);
+  // live discovery still owns the full catalog.
+  {
+    id: "zenmux", label: "ZenMux", baseUrl: "https://zenmux.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://zenmux.ai",
+    models: ["moonshotai/kimi-k3-free", "moonshotai/kimi-k3"],
+  },
   {
     id: "litellm", label: "LiteLLM (self-hosted)", baseUrl: "http://localhost:4000/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://docs.litellm.ai/docs/proxy/quick_start",
@@ -599,10 +705,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
+    modelSuffixBracketStrip: true,
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
-    noReasoningModels: KIMI_THINKING_MODELS,
-    modelReasoningEfforts: Object.fromEntries(KIMI_THINKING_MODELS.map(id => [id, []])),
+    modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
+    noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
+    modelReasoningEfforts: KIMI_CODING_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: KIMI_CODING_DEFAULT_REASONING_EFFORTS,
+    modelReasoningEffortMap: KIMI_CODING_REASONING_EFFORT_MAPS,
     noTemperatureModels: KIMI_LOCKED_PARAMETER_MODELS,
     noTopPModels: KIMI_LOCKED_PARAMETER_MODELS,
     noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
@@ -655,6 +765,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);
+}
+
+/**
+ * Effective Codex account mode for a provider. For canonical `openai`, a valid persisted
+ * `codexAccountMode` on the provider config wins and a missing/invalid value defaults to
+ * `"pool"`. Other providers keep registry-only metadata (there is no mode for `openai-apikey`).
+ */
+export function providerCodexAccountMode(id: string, provider?: OcxProviderConfig): CodexAccountMode | undefined {
+  const registryMode = getProviderRegistryEntry(id)?.codexAccountMode;
+  if (id !== "openai") return registryMode;
+  const persisted = provider?.codexAccountMode;
+  if (persisted === "pool" || persisted === "direct") return persisted;
+  return registryMode ?? "pool";
 }
 
 /**

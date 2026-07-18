@@ -26,6 +26,7 @@ devlog/_chase/
   10_jawcode.md        # gjc parity: provider/wire/model 1:1 대조 (tracked)
   20_cli-proxy-api.md  # cca parity: executor/auth/translator 교차검증 (tracked)
   30_litellm.md        # litellm parity: 카탈로그/커버리지 폭 참조 (tracked)
+  _model/              # 모델/provider 현재 구조·변경 절차·upstream delta (tracked docs)
   _gjc/                # (옵션) jawcode 로컬 클론/심볼릭: gitignored
   _cca/                # (옵션) CLIProxyAPI 로컬 클론: gitignored
   _litellm/            # (옵션) litellm 로컬 클론: gitignored
@@ -88,6 +89,7 @@ git -C /Users/jun/Developer/new/700_projects/jawcode fetch origin && \
 | API 변환 (Google/Antigravity) | `src/adapters/google.ts`, `google-antigravity-wire.ts`, `google-antigravity-replay.ts` | `packages/ai/src/providers/*.ts` | `internal/translator/antigravity/**`, `internal/runtime/executor/antigravity_executor.go` |
 | API 변환 (Kiro) | `src/adapters/kiro*.ts` | `packages/ai/src/providers/amazon-bedrock.ts` 등 | (없음) |
 | auth/refresh | `src/oauth/*`, `src/lib/gcp-adc.ts` | jawcode oauth utils | `internal/auth/**` |
-| 모델/카탈로그 | `src/providers/antigravity-models.ts`, `kiro-models.ts`, `src/codex-catalog.ts` | jawcode `models.json` + static lists | `cmd/fetch_antigravity_models/main.go` |
+| 모델/카탈로그 | `src/providers/antigravity-models.ts`, `kiro-models.ts`, `src/codex/catalog.ts` | jawcode `models.json` + static lists | `cmd/fetch_antigravity_models/main.go` |
 
-상세 file:line은 `00_jawcode.md`(gjc), `01_cli-proxy-api.md`(cca) 참고.
+모델/provider 변경 전에는 `_model/README.md`를 먼저 읽는다. upstream 비교의 상세
+file:line은 `10_jawcode.md`(gjc), `20_cli-proxy-api.md`(cca) 참고.

@@ -9,7 +9,7 @@ import { isCodexAccountUsable } from "./account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import { getCodexAccountCooldownUntil, resolveCodexAccountForThreadDetailed } from "./routing";
 import { getAccountQuota } from "./quota";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 
 export type CodexAuthContext =
@@ -45,6 +45,24 @@ export class CodexAuthContextError extends Error {
   }
 }
 
+export class CodexPoolAuthenticationError extends Error {
+  constructor() {
+    super("OpenAI account pool has no usable account credential");
+    this.name = "CodexPoolAuthenticationError";
+  }
+}
+
+export class CodexDirectAuthenticationError extends Error {
+  constructor() {
+    super("Codex Direct requires a caller Authorization bearer token");
+    this.name = "CodexDirectAuthenticationError";
+  }
+}
+
+export function hasCallerCodexBearer(headers: Headers): boolean {
+  return /^Bearer\s+\S+/i.test(headers.get("authorization")?.trim() ?? "");
+}
+
 export class CodexAccountCooldownError extends Error {
   accountId: string;
   cooldownUntil: number;
@@ -71,12 +89,20 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
   return !(cause instanceof CodexCredentialGenerationConflictError) && !(cause instanceof CodexCredentialRefreshLockTimeoutError);
 }
 
-export async function resolveCodexAuthContext(headers: Headers, config: OcxConfig): Promise<CodexAuthContext> {
+export async function resolveCodexAuthContext(
+  headers: Headers,
+  config: OcxConfig,
+  mode: CodexAccountMode,
+): Promise<CodexAuthContext> {
+  if (mode === "direct") {
+    if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
+    return { kind: "main", accountId: null };
+  }
   const threadId = headers.get("x-codex-parent-thread-id");
   const resolution = resolveCodexAccountForThreadDetailed(threadId, config);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   const accountId = resolution.status === "selected" ? resolution.accountId : null;
-  if (!accountId) return { kind: "main", accountId: null };
+  if (!accountId) throw new CodexPoolAuthenticationError();
   // Lazy prime: if the selected account has no quota yet, the pool is likely
   // unprimed (dashboard never opened, or startup prime was blocked). Kick a
   // best-effort prime so the NEXT routing decision has real scores. This never
@@ -91,10 +117,9 @@ export async function resolveCodexAuthContext(headers: Headers, config: OcxConfi
   if (cooldownUntil) throw new CodexAccountCooldownError(accountId, cooldownUntil);
 
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    // Main account in rotation: inject the read-only auth.json token. If the token vanished
-    // since selection, fall back to passthrough rather than failing the request.
+    // Main account in rotation: inject the read-only auth.json token and fail closed if it vanished.
     const token = getMainAccountToken();
-    if (!token) return { kind: "main", accountId: null };
+    if (!token) throw new CodexPoolAuthenticationError();
     return { kind: "main-pool", accountId, accessToken: token.accessToken, chatgptAccountId: token.chatgptAccountId };
   }
 
@@ -124,8 +149,9 @@ export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefine
 export function applyCodexAuthContextToProvider(
   provider: OcxProviderConfig,
   ctx: CodexAuthContext,
+  mode: CodexAccountMode | undefined,
 ): OcxRuntimeProviderConfig {
-  if ((ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
+  if (mode !== "pool" || (ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
   return {
     ...provider,
     _codexAccountOverride: {

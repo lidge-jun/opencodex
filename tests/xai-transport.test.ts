@@ -355,9 +355,10 @@ describe("xAI reasoning_content cache preservation", () => {
     expect(entry?.preserveReasoningContentModels).toEqual([
       "grok-4.5",
       "grok-4.3",
-      "grok-4.20-multi-agent-0309",
       "grok-4.20-0309-reasoning",
     ]);
+    expect(entry?.models).not.toContain("grok-4.20-multi-agent-0309");
+    expect(entry?.models).toContain("grok-build-0.1");
     for (const noReasoning of entry?.noReasoningModels ?? []) {
       expect(entry?.preserveReasoningContentModels).not.toContain(noReasoning);
     }

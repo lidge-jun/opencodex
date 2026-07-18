@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Notice, Select } from "../ui";
 import { IconPlus, IconX } from "../icons";
-import { useT, Trans } from "../i18n";
+import { Trans } from "../i18n/provider";
+import { useT } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 
 type SidecarBackend = "openai" | "anthropic";
@@ -27,6 +28,46 @@ interface ClaudeCodeState {
 }
 
 interface MapRow { from: string; to: string }
+
+const MODEL_ENV_NAMES = [
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+] as const;
+
+function formatCompactWindow(value: number): string {
+  return value >= 1_000_000 ? "1M" : `${Math.round(value / 1_000)}k`;
+}
+
+function buildManualEnv(state: ClaudeCodeState): string {
+  const baseUrl = `http://127.0.0.1:${state.port}`;
+  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
+  const modelEnvExports = MODEL_ENV_NAMES
+    .filter(name => state.effectiveModelEnv[name])
+    .map(name => `export ${name}=${state.effectiveModelEnv[name]}`);
+
+  return [
+    `export ANTHROPIC_BASE_URL=${baseUrl}`,
+    ...(state.authMode === "proxy"
+      ? ["export ANTHROPIC_AUTH_TOKEN=opencodex-proxy"]
+      : ["# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active"]),
+    "export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
+    ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? 350000}`] : []),
+    ...modelEnvExports,
+    "claude",
+  ].join("\n");
+}
+
+function SettingToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} aria-label={label} />
+      <span className="slider" aria-hidden="true" />
+    </label>
+  );
+}
 
 export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -56,7 +97,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   }, [load]);
 
   const modelOptions = useMemo(() => {
-    const options = (state?.available ?? []).map(m => ({ value: m, label: modelLabel(m) }));
+    const options = (state?.available ?? []).map(m => ({ value: m, label: String(modelLabel(m)) }));
     return [{ value: "", label: t("claude.slotUnset") }, ...options];
   }, [state?.available, t]);
 
@@ -65,12 +106,11 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const autoCompactOptions = useMemo(() => {
     const ladder = [100_000, 200_000, 250_000, 300_000, 350_000, 400_000, 500_000, 600_000, 750_000, 900_000, 1_000_000];
     // Compact SI-style units (1M / 350k) — technical number format, not prose.
-    const fmt = (v: number) => (v >= 1_000_000 ? "1M" : `${Math.round(v / 1_000)}k`);
     const current = state?.autoCompactWindow ?? null;
     const values = current !== null && !ladder.includes(current) ? [...ladder, current].sort((a, b) => a - b) : ladder;
     return [
       { value: "", label: t("claude.autoCompactDefault") },
-      ...values.map(v => ({ value: String(v), label: fmt(v) })),
+      ...values.map(value => ({ value: String(value), label: formatCompactWindow(value) })),
     ];
   }, [state?.autoCompactWindow, t]);
 
@@ -116,25 +156,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   if (loading) return <div className="muted" style={{ padding: 8 }}>{t("claude.loading")}</div>;
   if (!state) return <Notice tone="err">{status || t("claude.loadFail")}</Notice>;
 
-  const baseUrl = `http://127.0.0.1:${state.port}`;
-  // Effective values ([1m] auto-marking applied server-side) — audit R3#5/R4#4.
-  const env = state.effectiveModelEnv;
-  // Auto-context export (audit 021 #4): the manual path must carry the compact
-  // window, or picker [1m] variants would account 1M with no safety net.
-  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
-  // Shell snippet for advanced users — keep export lines + comments literal.
-  const manualEnv = [
-    `export ANTHROPIC_BASE_URL=${baseUrl}`,
-    ...(state.authMode === "proxy"
-      ? ["export ANTHROPIC_AUTH_TOKEN=opencodex-proxy"]
-      : ["# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active"]),
-    "export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
-    ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? 350000}`] : []),
-    ...(["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL"]
-      .filter(name => env[name])
-      .map(name => `export ${name}=${env[name]}`)),
-    "claude",
-  ].join("\n");
+  const manualEnv = buildManualEnv(state);
 
   return (
     <>
@@ -149,10 +171,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
             <span className="title">{t("claude.enabledLabel")}</span>
             <span className="desc">{t("claude.enabledHint")}</span>
           </div>
-          <label className="toggle">
-            <input type="checkbox" checked={state.enabled} onChange={e => setState({ ...state, enabled: e.target.checked })} />
-            <span className="slider" />
-          </label>
+          <SettingToggle label={t("claude.enabledLabel")} checked={state.enabled} onChange={enabled => setState({ ...state, enabled })} />
         </div>
 
         <div className="setting-row">
@@ -178,10 +197,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
             <span className="desc">{t("claude.systemEnvDesc")}</span>
             {state.systemEnv && <span className="desc" style={{ color: "var(--red)" }}>{t("claude.systemEnvWarn")}</span>}
           </div>
-          <label className="toggle">
-            <input type="checkbox" checked={state.systemEnv} onChange={e => setState({ ...state, systemEnv: e.target.checked })} />
-            <span className="slider" />
-          </label>
+          <SettingToggle label={t("claude.systemEnv")} checked={state.systemEnv} onChange={systemEnv => setState({ ...state, systemEnv })} />
         </div>
 
         <div className="setting-row">
@@ -196,6 +212,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
               setState({ ...state, fastMode: v === "auto" ? null : v === "on" });
             }}
             className="text-label font-medium"
+            aria-label={t("claude.fastMode")}
             style={{ padding: "5px 10px", borderRadius: "var(--radius-xs)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
           >
             <option value="auto">{t("claude.fastAuto")}</option>
@@ -210,10 +227,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
             <span className="desc">{t("claude.autoContextDesc")}</span>
             {state.maxContextTokens !== null && <span className="desc" style={{ color: "var(--muted)" }}>{t("claude.autoContextInert")}</span>}
           </div>
-          <label className="toggle">
-            <input type="checkbox" checked={state.autoContext} onChange={e => setState({ ...state, autoContext: e.target.checked })} />
-            <span className="slider" />
-          </label>
+          <SettingToggle label={t("claude.autoContext")} checked={state.autoContext} onChange={autoContext => setState({ ...state, autoContext })} />
         </div>
 
         {state.autoContext && (
@@ -238,10 +252,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
             <span className="title">{t("claude.injectAgents")}</span>
             <span className="desc">{t("claude.injectAgentsDesc")}</span>
           </div>
-          <label className="toggle">
-            <input type="checkbox" checked={state.injectAgents} onChange={e => setState({ ...state, injectAgents: e.target.checked })} />
-            <span className="slider" />
-          </label>
+          <SettingToggle label={t("claude.injectAgents")} checked={state.injectAgents} onChange={injectAgents => setState({ ...state, injectAgents })} />
         </div>
 
         {(["webSearchSidecar", "visionSidecar"] as const).map(key => {
@@ -314,6 +325,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
               className="input mono"
               value={row.from}
               placeholder={t("claude.mapFrom")}
+              aria-label={t("claude.mapFrom")}
               onChange={e => setRows(prev => prev.map((r, j) => j === i ? { ...r, from: e.target.value } : r))}
               style={{ flex: 1 }}
             />
@@ -322,10 +334,11 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
               className="input mono"
               value={row.to}
               placeholder={t("claude.mapTo")}
+              aria-label={t("claude.mapTo")}
               onChange={e => setRows(prev => prev.map((r, j) => j === i ? { ...r, to: e.target.value } : r))}
               style={{ flex: 1 }}
             />
-            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setRows(prev => prev.filter((_, j) => j !== i))}
+            <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setRows(prev => prev.filter((_, j) => j !== i))}
               aria-label={t("claude.removeMapping")} style={{ color: "var(--red)" }}>
               <IconX />
             </button>
@@ -333,13 +346,13 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         ))}
       </div>
       <div style={{ marginTop: 8 }}>
-        <button className="btn btn-ghost btn-sm" onClick={() => setRows(prev => [...prev, { from: "", to: "" }])}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRows(prev => [...prev, { from: "", to: "" }])}>
           <IconPlus /> {t("claude.addMapping")}
         </button>
       </div>
 
       <div style={{ marginTop: 14 }}>
-        <button className="btn btn-primary" onClick={save}>{t("common.save")}</button>
+        <button type="button" className="btn btn-primary" onClick={save}>{t("common.save")}</button>
       </div>
 
       <div className="h-section">{t("claude.aliases")} <span className="count">{state.aliases.length}</span></div>

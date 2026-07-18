@@ -65,14 +65,39 @@ describe("provider registry parity", () => {
       "qwen3.7-max",
     ]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"]).toMatchObject({
+      modelContextWindows: { "kimi-k3": 262_144 },
+      modelInputModalities: { "kimi-k3": ["text", "image"] },
+      modelReasoningEfforts: { "kimi-k3": ["low", "high", "max"] },
+      modelDefaultReasoningEfforts: { "kimi-k3": "max" },
+      modelReasoningEffortMap: {
+        "kimi-k3": { none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" },
+      },
+    });
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noTemperatureModels).toContain("kimi-k3");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noTopPModels).toContain("kimi-k3");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-sol"]).toBe(372_000);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-terra"]).toBe(372_000);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-luna"]).toBe(372_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"]);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-sol"]).toBe(1_050_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-terra"]).toBe(1_050_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-luna"]).toBe(1_050_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-5.6-sol-pro"]).toBe(1_050_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxInputTokens?.["gpt-5.6-sol"]).toBe(922_000);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelInputModalities?.["gpt-5.5"]).toEqual(["text", "image"]);
+    expect((KEY_LOGIN_PROVIDERS["openai-apikey"] as unknown as { virtualModels?: unknown }).virtualModels).toBeUndefined();
+    const apiRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "openai-apikey")!;
+    expect(apiRegistry.models).toHaveLength(8);
+    expect(Object.keys(apiRegistry.virtualModels ?? {}).sort()).toEqual([
+      "gpt-5.6-luna-pro", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro",
+    ]);
+    expect(apiRegistry.models).not.toContain("gpt-5.6-pro");
+    const derived = deriveKeyLoginMap()["openai-apikey"];
+    expect(derived.modelMaxInputTokens).not.toBe(apiRegistry.modelMaxInputTokens);
     expect(KEY_LOGIN_PROVIDERS.openrouter.models).toContain("anthropic/claude-sonnet-5");
     expect(KEY_LOGIN_PROVIDERS.openrouter.models).toContain("openai/gpt-5.6-sol");
     expect(KEY_LOGIN_PROVIDERS.openrouter.models).toContain("openai/gpt-5.6-terra");
@@ -90,6 +115,57 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
       "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash",
     ]);
+  });
+
+  test("OpenAI API route max-input metadata is trusted and user values only lower it", () => {
+    const makeConfig = (value: number, context = 2_000_000): OcxConfig => ({
+      port: 10100,
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-test",
+          modelMaxInputTokens: { "gpt-5.6-sol": value },
+          modelContextWindows: { "gpt-5.6-sol": context },
+        },
+      },
+    });
+    expect(routeModel(makeConfig(1_000_000), "openai-apikey/gpt-5.6-sol").provider.modelMaxInputTokens?.["gpt-5.6-sol"]).toBe(922_000);
+    expect(routeModel(makeConfig(300_000), "openai-apikey/gpt-5.6-sol").provider.modelMaxInputTokens?.["gpt-5.6-sol"]).toBe(300_000);
+    expect(routeModel(makeConfig(922_000), "openai-apikey/gpt-5.6-sol").provider.modelContextWindows?.["gpt-5.6-sol"]).toBe(1_050_000);
+    expect(routeModel(makeConfig(922_000, 350_000), "openai-apikey/gpt-5.6-sol").provider.modelContextWindows?.["gpt-5.6-sol"]).toBe(350_000);
+    expect((routeModel(makeConfig(300_000), "openai-apikey/gpt-5.6-sol").provider as unknown as { virtualModels?: unknown }).virtualModels).toBeUndefined();
+  });
+
+  test("non-API route max-input metadata keeps user overrides and fills registry defaults", () => {
+    const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === "zai")!;
+    const originalMaxInputTokens = registryEntry.modelMaxInputTokens;
+    try {
+      registryEntry.modelMaxInputTokens = {
+        "glm-5.2": 100_000,
+        "glm-5.2[1m]": 800_000,
+      };
+      const config: OcxConfig = {
+        port: 10100,
+        defaultProvider: "zai",
+        providers: {
+          zai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.z.ai/api/coding/paas/v4",
+            modelMaxInputTokens: { "glm-5.2": 200_000 },
+          },
+        },
+      };
+
+      expect(routeModel(config, "zai/glm-5.2").provider.modelMaxInputTokens).toEqual({
+        "glm-5.2": 200_000,
+        "glm-5.2[1m]": 800_000,
+      });
+    } finally {
+      if (originalMaxInputTokens === undefined) delete registryEntry.modelMaxInputTokens;
+      else registryEntry.modelMaxInputTokens = originalMaxInputTokens;
+    }
   });
 
   test("CN provider defaults and context windows match the audited registry refresh", () => {
@@ -151,14 +227,14 @@ describe("provider registry parity", () => {
     expect(neuralwatt?.preserveReasoningContentModels).not.toContain("moonshotai/Kimi-K2.5");
   });
 
-  test("Z.AI alone seeds and routes bracket-suffix stripping", () => {
+  test("Z.AI and Kimi context aliases route with bracket-suffix stripping", () => {
     const zai = PROVIDER_REGISTRY.find(entry => entry.id === "zai");
     const optedInProviders = PROVIDER_REGISTRY
       .filter(entry => entry.modelSuffixBracketStrip)
       .map(entry => entry.id);
     expect(zai?.modelContextWindows).toEqual({ "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
     expect(providerConfigSeed(zai!).modelSuffixBracketStrip).toBe(true);
-    expect(optedInProviders).toEqual(["zai"]);
+    expect(optedInProviders).toEqual(["kimi", "zai", "kimi-code"]);
 
     const config: OcxConfig = {
       port: 10100,
@@ -189,6 +265,8 @@ describe("provider registry parity", () => {
 
   test("Kimi coding aliases preserve model context and capability parity", () => {
     const codingModels = [
+      "k3",
+      "k3[1m]",
       "kimi-k2.7-code",
       "kimi-k2.7-code-highspeed",
       "kimi-k2.6",
@@ -208,23 +286,60 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
       for (const modelId of codingModels) {
-        expect(entry?.modelContextWindows?.[modelId]).toBe(262_144);
+        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
         expect(entry?.[field]).toContain("kimi-k2.7-code");
         expect(entry?.[field]).toContain("kimi-for-coding");
       }
+      expect(entry?.modelSuffixBracketStrip).toBe(true);
+      expect(entry?.noReasoningModels).not.toContain("k3");
+      expect(entry?.noReasoningModels).not.toContain("k3[1m]");
+      expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
+      expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
+      for (const modelId of ["k3", "k3[1m]"]) {
+        expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+        expect(entry?.modelReasoningEffortMap?.[modelId]).toEqual({
+          none: "none",
+          low: "low",
+          medium: "high",
+          high: "high",
+          xhigh: "max",
+          max: "max",
+        });
+      }
+      expect(entry?.modelInputModalities?.k3).toEqual(["text", "image"]);
+      expect(entry?.modelInputModalities?.["k3[1m]"]).toEqual(["text", "image"]);
+      expect(entry?.noTemperatureModels).toContain("k3");
+      expect(entry?.noTemperatureModels).toContain("k3[1m]");
+      expect(entry?.noTopPModels).toContain("k3");
+      expect(entry?.noPenaltyModels).toContain("k3");
+      expect(entry?.preserveReasoningContentModels).toContain("k3");
+      expect(entry?.preserveReasoningContentModels).toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual([]);
     }
 
+    const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;
+    const kimiModel = applyProviderConfigHints("kimi", providerConfigSeed(kimi), { provider: "kimi", id: "k3" });
+    const kimiEntry = buildCatalogEntries(nativeTemplate(), [], [kimiModel]).find(entry => entry.slug === "kimi/k3");
+    expect(kimiEntry?.default_reasoning_level).toBe("max");
+
     const moonshot = PROVIDER_REGISTRY.find(provider => provider.id === "moonshot");
+    expect(moonshot?.models).toContain("kimi-k3");
+    expect(moonshot?.models).not.toContain("k3");
     expect(moonshot?.models).not.toContain("kimi-for-coding");
     expect(moonshot?.modelContextWindows).toEqual({
+      "kimi-k3": 1_048_576,
       "kimi-k2.7-code": 262_144,
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
       "kimi-k2.5": 262_144,
     });
+    expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
+    expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
+    expect(moonshot?.modelReasoningEfforts?.["kimi-k3"]).toEqual(["max"]);
+    expect(moonshot?.modelReasoningEffortMap).toBeUndefined();
+    expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
   });
 
   test("LiteLLM is the only registry seed with optional key authentication", () => {
@@ -234,6 +349,43 @@ describe("provider registry parity", () => {
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free"]);
+  });
+
+  test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
+    const nvidia = PROVIDER_REGISTRY.find(entry => entry.id === "nvidia");
+    const freeTierProviders = PROVIDER_REGISTRY.filter(entry => entry.freeTier).map(entry => entry.id);
+
+    expect(nvidia?.freeTier).toBe(true);
+    expect(nvidia?.authKind).toBe("key");
+    expect(nvidia?.keyOptional).toBeUndefined();
+    expect(freeTierProviders).toEqual(["nvidia"]);
+  });
+
+  test("freeTier propagates through config seed, enrich backfill, and presets without overwriting user config", async () => {
+    const { enrichProviderFromRegistry } = await import("../src/providers/derive");
+    const nvidia = PROVIDER_REGISTRY.find(entry => entry.id === "nvidia")!;
+
+    // Seed propagation.
+    expect(providerConfigSeed(nvidia).freeTier).toBe(true);
+
+    // Enrich backfills only when the user config leaves freeTier unset.
+    const unset: OcxProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl };
+    enrichProviderFromRegistry("nvidia", unset);
+    expect(unset.freeTier).toBe(true);
+
+    // A user-set explicit false is preserved.
+    const optedOut: OcxProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl, freeTier: false };
+    enrichProviderFromRegistry("nvidia", optedOut);
+    expect(optedOut.freeTier).toBe(false);
+
+    // Preset propagation.
+    const preset = deriveProviderPresets().find(p => p.id === "nvidia");
+    expect(preset?.freeTier).toBe(true);
+
+    // Providers without the registry flag stay unset.
+    const venice = PROVIDER_REGISTRY.find(entry => entry.id === "venice")!;
+    expect(providerConfigSeed(venice)).not.toHaveProperty("freeTier");
+    expect(deriveProviderPresets().find(p => p.id === "venice")).not.toHaveProperty("freeTier");
   });
 
   test("base URL override permission is registry-only and limited to local/self-hosted providers", () => {
@@ -383,6 +535,11 @@ describe("provider registry parity", () => {
     ]);
 
     const presets = deriveProviderPresets();
+    expect(presets.filter(p => p.id === "chatgpt" || p.id === "openai" || p.id.startsWith("openai-")).map(p => p.id))
+      .toEqual(["openai", "openai-apikey"]);
+    expect(presets.find(p => p.id === "openai")).toMatchObject({ label: "OpenAI (Codex login)", codexAccountMode: "pool" });
+    expect(presets.find(p => p.id === "openai-multi")).toBeUndefined();
+    expect(presets.find(p => p.id === "openai-apikey")?.label).toBe("OpenAI API");
     expect(presets.at(-1)?.id).toBe("custom");
     expect(presets.find(p => p.id === "cursor")).toMatchObject({
       adapter: "cursor",
@@ -398,6 +555,14 @@ describe("provider registry parity", () => {
       defaultModel: "umans-coder",
     });
     expect(presets.find(p => p.id === "azure-openai")?.adapter).toBe("azure-openai");
+
+    const nextPresets = deriveProviderPresets();
+    const directSeed = presets.find(p => p.id === "openai")!.provider!;
+    directSeed.baseUrl = "https://mutated.example.test";
+    expect(nextPresets.find(p => p.id === "openai")!.provider).toEqual(
+      providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "openai")!),
+    );
+    expect(presets.find(p => p.id === "openai-apikey")?.provider).toBeUndefined();
   });
 
   test("Umans registry metadata reaches routed Codex catalog entries", () => {

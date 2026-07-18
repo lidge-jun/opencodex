@@ -27,9 +27,13 @@ display name use `provider/model`.
 
 ## Native passthrough
 
-Native OpenAI entries remain available for ChatGPT passthrough. Routed non-OpenAI models must not
+Native bare OpenAI entries form one `openai` group. The provider's Pool(default)/Direct option
+changes account selection without changing those ids; `openai-apikey/<model>` creates the separate
+API-key identity. The API GPT-5.6 rows use 1,050,000 context / 922,000 max input; their `*-pro` virtual rows
+rewrite to the base upstream model with `reasoning.mode: "pro"` while public state keeps the virtual
+slug. Native OpenAI entries remain available for ChatGPT passthrough. Routed non-OpenAI models must not
 inherit native-only service tier or WebSocket metadata unless the user explicitly enables that
-capability.
+capability. Detailed invariants live in [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
 
 ## Multi-agent surface mode (3-state)
 

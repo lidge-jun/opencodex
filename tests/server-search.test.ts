@@ -16,6 +16,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-search-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
@@ -29,9 +30,11 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
+  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -52,7 +55,7 @@ interface CapturedRequest {
 }
 
 function fakeSearchUpstream(captured: CapturedRequest[], status = 200, payload?: unknown) {
-  return Bun.serve({
+  const upstream = Bun.serve({
     port: 0,
     async fetch(req) {
       captured.push({
@@ -66,31 +69,34 @@ function fakeSearchUpstream(captured: CapturedRequest[], status = 200, payload?:
       );
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const prefix = "/backend-api/codex";
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, upstream.url);
+      return originalFetch(target, init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  return upstream;
 }
 
-function forwardConfig(baseUrl: string): OcxConfig {
+function forwardConfig(_baseUrl = ""): OcxConfig {
   return {
     port: 0,
-    defaultProvider: "chatgpt",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: { adapter: "openai-responses", baseUrl, authMode: "forward", allowPrivateNetwork: true },
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
     },
   } as OcxConfig;
 }
-
-const disabledChatgptProvider = {
-  adapter: "openai-responses",
-  baseUrl: "https://chatgpt.example/backend-api/codex",
-  authMode: "forward",
-  disabled: true,
-} as const;
-
-const unreachableChatgptProvider = {
-  adapter: "openai-responses",
-  baseUrl: "http://127.0.0.1:1/backend-api/codex",
-  authMode: "forward",
-  allowPrivateNetwork: true,
-} as const;
 
 test("POST /v1/alpha/search relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
@@ -131,6 +137,10 @@ test("a routed pool account's token overrides the caller bearer on the search re
   const upstream = fakeSearchUpstream(captured);
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
+    defaultProvider: "openai",
+    providers: {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" },
+    },
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
       { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
@@ -210,8 +220,8 @@ test("returns an honest 400 when no ChatGPT forward provider is configured", asy
   saveConfig({
     port: 0,
     defaultProvider: "groq",
+    openaiProviderTierVersion: 2,
     providers: {
-      chatgpt: disabledChatgptProvider,
       groq: { adapter: "openai-chat", baseUrl: "https://api.groq.example/v1", apiKey: "gsk-x" },
     },
   } as OcxConfig);
@@ -264,6 +274,14 @@ test("a hung search upstream times out with 504 after config.search.timeoutMs", 
       });
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(url.pathname.slice("/backend-api/codex".length), upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
     search: { timeoutMs: 100 },
@@ -296,6 +314,14 @@ test("a short connectTimeoutMs does NOT cut a slow search (total deadline is sea
       return Response.json({ output: "slow but fine" });
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(url.pathname.slice("/backend-api/codex".length), upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
   saveConfig({
     ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
     connectTimeoutMs: 50,
@@ -363,12 +389,9 @@ test("search routes require API auth and local Origin on non-loopback bindings",
 
 test("the proxy admission secret is never relayed to the search upstream", async () => {
   process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-  saveConfig({
-    port: 0,
-    hostname: "0.0.0.0",
-    defaultProvider: "chatgpt",
-    providers: { chatgpt: unreachableChatgptProvider },
-  } as OcxConfig);
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured);
+  saveConfig({ ...forwardConfig(), hostname: "0.0.0.0" });
 
   const server = startServer(0);
   try {
@@ -379,8 +402,10 @@ test("the proxy admission secret is never relayed to the search upstream", async
     });
     expect(response.status).toBe(401);
     const json = await response.json() as { error: { message: string } };
-    expect(json.error.message).toContain("ChatGPT auth");
+    expect(json.error.message).toContain("admission credentials");
+    expect(captured).toHaveLength(0);
   } finally {
     await server.stop(true);
+    await upstream.stop(true);
   }
 });

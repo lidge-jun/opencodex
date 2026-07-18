@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/shared";
 import { IconRefresh } from "../icons";
 import { Switch } from "../ui";
 
@@ -41,8 +41,21 @@ type LogStream = "provider" | "usage" | "injection";
 
 const STREAMS = ["provider", "usage", "injection"] as const;
 
-const formatLogTime = (at: number): string =>
-  at > 0 ? `[${new Date(at).toLocaleTimeString()}] ` : "";
+function formatLogTime(at: number): string {
+  return at > 0 ? `[${new Date(at).toLocaleTimeString()}] ` : "";
+}
+
+function formatClaudeInboundTime(at: number): string {
+  return new Date(at).toLocaleTimeString();
+}
+
+function isStreamEnabled(debug: DebugSettings | null, stream: LogStream): boolean {
+  return stream === "provider" ? !!debug?.enabled : stream === "usage" ? !!debug?.usage : !!debug?.injection;
+}
+
+function isDebugFlagEnabled(debug: DebugSettings, flag: keyof DebugSettings["env"]): boolean {
+  return flag === "debug" ? debug.enabled : flag === "usage" ? debug.usage : flag === "injection" ? debug.injection : debug.claude;
+}
 
 export default function Debug({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
@@ -81,8 +94,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
   }, [apiBase]);
 
   const streamIsOn = useCallback(
-    (s: LogStream): boolean =>
-      s === "provider" ? !!debug?.enabled : s === "usage" ? !!debug?.usage : !!debug?.injection,
+    (candidate: LogStream): boolean => isStreamEnabled(debug, candidate),
     [debug],
   );
 
@@ -219,7 +231,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
               {(["debug", "usage", "injection", "claude"] as const).map(flag => {
-                const checked = flag === "debug" ? debug.enabled : flag === "usage" ? debug.usage : flag === "injection" ? debug.injection : debug.claude;
+                const checked = isDebugFlagEnabled(debug, flag);
                 return (
                   <div key={flag} style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 220 }}>
                     <Switch
@@ -297,7 +309,7 @@ export default function Debug({ apiBase }: { apiBase: string }) {
                 <tbody>
                   {claudeEntries.map((entry, i) => (
                     <tr key={`${entry.at}-${i}`}>
-                      <td className="muted mono">{new Date(entry.at).toLocaleTimeString()}</td>
+                      <td className="muted mono">{formatClaudeInboundTime(entry.at)}</td>
                       <td className="mono">{entry.endpoint}</td>
                       <td className="mono" title={entry.resolvedModel}>
                         {entry.model}

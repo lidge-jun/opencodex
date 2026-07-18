@@ -9,6 +9,19 @@ truncated or invalid JSON), opencodex backs it up to `config.json.invalid-<times
 console warning, and starts with defaults. Missing files also fall back to a default (a single
 `openai` forward provider).
 
+## Reserved OpenAI providers
+
+`openai` and `openai-apikey` are fixed reserved ids. `openai.codexAccountMode` is `"pool"` by
+default and selects across main plus added accounts; `"direct"` uses only the current caller/main
+login. API uses only its configured API key/key pool. Use a bare model or
+`openai-apikey/<model>`; there is no cross-route credential fallback. API GPT-5.6 rows carry
+1,050,000 context / 922,000 max input metadata and Pro
+virtual ids rewrite to the base wire model with `reasoning.mode: "pro"`.
+
+`openaiProviderTierVersion: 2` marks the current single-provider projection. Before migrating a
+shipped v1 config, opencodex creates `config.json.pre-openai-tiers-v2.bak` without replacing a
+differing backup and rewrites known legacy namespaced selected ids to bare ids.
+
 ## Top level (`OcxConfig`)
 
 | Field | Type | Default | Meaning |
@@ -17,6 +30,7 @@ console warning, and starts with defaults. Missing files also fall back to a def
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. Set `"0.0.0.0"` to expose on the LAN (requires `OPENCODEX_API_AUTH_TOKEN`; see [Remote access](#remote-access) below). |
 | `proxy?` | `string` | — | Outbound HTTP(S) proxy URL or `${ENV_VAR}` reference. Applied to `HTTP_PROXY` / `HTTPS_PROXY` when those env vars are unset; loopback stays in `NO_PROXY`. |
 | `providers` | `Record<string, OcxProviderConfig>` | — | Map of provider name → config. |
+| `openaiProviderTierVersion?` | `2` | set by migration | Marks the single option-aware OpenAI projection as complete. |
 | `defaultProvider` | `string` | `"openai"` | Provider used when routing finds no better match. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, GPT-5.6 trio, `gpt-5.4-mini` | Up to 5 native slugs or `provider/model` ids featured first in Codex's subagent picker. Also injected into v2 delegation guidance as the available-model roster, annotated with the effort ladder each entry advertises in the catalog. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed model named in the injected multi-agent guidance (v2 surface); delegation is told to pass this exact model to `spawn_agent` with `fork_turns: "none"`. |
@@ -143,6 +157,7 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `modelInputModalities?` | `Record<string,string[]>` | Model-specific catalog input hints such as `["text"]` or `["text", "image"]`. |
 | `headers?` | `Record<string,string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid header names are rejected. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | How to authenticate (default `key`). See [Providers](/opencodex/guides/providers/#auth-modes). |
+| `codexAccountMode?` | `"pool" \| "direct"` | Only for canonical `openai`; defaults to Pool when omitted. Direct short-circuits pool state. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Model-specific reasoning labels. An empty list hides the effort control for that model. |
@@ -228,10 +243,10 @@ Use `selectedModels` for a different purpose: discovery still runs, but only the
 published to Codex's catalog and `/v1/models`. The dashboard's full model list remains available so
 the allowlist can be changed later.
 
-Preview GPT-5.6 fallback entries use the same mechanism. The OpenAI API-key preset seeds
-`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; the OpenRouter preset seeds the same models as
-`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna`. Both presets attach
-model-specific `modelContextWindows` values of `372000`, and the synced Codex catalog advertises
+Preview GPT-5.6 fallback entries use the same mechanism. The OpenAI API-key preset seeds base and
+Pro ids with context `1050000` and max input `922000`; the OpenRouter preset seeds
+`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` with context `1050000`.
+The Pool/Direct Codex catalog contract is `372000`, and the synced Codex catalog advertises
 `max` reasoning while keeping `xhigh` distinct. Leave `liveModels` on to merge live provider results
 with those explicit additions, or set it to `false` to expose only `models`.
 

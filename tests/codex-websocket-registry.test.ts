@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import {
   clearCodexWebSocketRegistry,
@@ -6,6 +6,7 @@ import {
   invalidateCodexWebSocketsForAccount,
   registerCodexWebSocket,
   unregisterCodexWebSocket,
+  updateCodexWebSocketAuthContext,
 } from "../src/codex/websocket-registry";
 import type { WsData } from "../src/server/ws-bridge";
 
@@ -25,6 +26,9 @@ function mockWs(data: WsData): {
 
 describe("codex websocket registry", () => {
   beforeEach(() => {
+    clearCodexWebSocketRegistry();
+  });
+  afterEach(() => {
     clearCodexWebSocketRegistry();
   });
 
@@ -81,6 +85,25 @@ describe("codex websocket registry", () => {
     registerCodexWebSocket(pool.ws);
     unregisterCodexWebSocket(pool.ws);
 
+    expect(getTrackedCodexWebSocketCountForAccount("pool-a")).toBe(0);
+  });
+
+  test("clearing before a failed Multi frame removes stale account ownership", () => {
+    const pool = mockWs({
+      authContext: {
+        kind: "pool",
+        accountId: "pool-a",
+        generation: 1,
+        accessToken: "token",
+        chatgptAccountId: "acc",
+      },
+    });
+    registerCodexWebSocket(pool.ws);
+    expect(getTrackedCodexWebSocketCountForAccount("pool-a")).toBe(1);
+
+    updateCodexWebSocketAuthContext(pool.ws, undefined);
+
+    expect(pool.ws.data.authContext).toBeUndefined();
     expect(getTrackedCodexWebSocketCountForAccount("pool-a")).toBe(0);
   });
 

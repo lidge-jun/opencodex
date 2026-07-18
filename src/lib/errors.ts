@@ -4,6 +4,59 @@ export interface OcxErrorPayload {
   code: string | null;
 }
 
+function isSubscriptionGateMessage(text: string): boolean {
+  return (
+    text.includes("requires a subscription") ||
+    text.includes("requires subscription") ||
+    text.includes("subscription required") ||
+    text.includes("upgrade for access") ||
+    text.includes("upgrade to pro") ||
+    text.includes("pro subscription") ||
+    text.includes("ollama.com/upgrade") ||
+    (text.includes("upgrade") && text.includes("subscription"))
+  );
+}
+
+function isAuthenticationMessage(text: string): boolean {
+  const accessDeniedWithCredentialCue = (
+    text.includes("access denied") ||
+    text.includes("accessdeniedexception")
+  ) && (
+    text.includes("authentication") ||
+    text.includes("credential") ||
+    text.includes("api key") ||
+    text.includes("token") ||
+    text.includes("signature")
+  );
+  return (
+    text.includes("authentication failed") ||
+    text.includes("authentication") ||
+    text.includes("invalid_api_key") ||
+    text.includes("invalid api key") ||
+    text.includes("invalid token") ||
+    text.includes("unauthorizedexception") ||
+    text.includes("unrecognizedclientexception") ||
+    text.includes("unrecognizedclient") ||
+    text.includes("expired token") ||
+    text.includes("expiredtoken") ||
+    text.includes("unauthenticated") ||
+    text.includes("unauthorized") ||
+    accessDeniedWithCredentialCue
+  );
+}
+
+function isPermissionMessage(text: string): boolean {
+  return (
+    text.includes("permission_denied") ||
+    text.includes("permission denied") ||
+    text.includes("forbidden") ||
+    text.includes("access denied") ||
+    text.includes("accessdeniedexception") ||
+    text.includes("not allowed to use") ||
+    text.includes("model access")
+  );
+}
+
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
   if (
@@ -40,19 +93,28 @@ export function classifyError(status: number, type: string, message: string): Oc
   if (type === "origin_rejected") {
     return { message, type: "invalid_request_error", code: "origin_rejected" };
   }
+  // HTTP 401 and explicit auth failures are authoritative even when provider text
+  // also advertises an upgrade or subscription.
   if (
     status === 401 ||
-    status === 403 ||
     type === "authentication_error" ||
-    text.includes("authentication failed") ||
-    text.includes("access denied") ||
-    text.includes("unauthorizedexception") ||
-    text.includes("unrecognizedclientexception") ||
-    text.includes("unrecognizedclient") ||
-    text.includes("expired token") ||
-    text.includes("expiredtoken")
+    isAuthenticationMessage(text)
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
+  }
+  // Subscription labels are valid only in a known permission context.
+  if (
+    (status === 403 || type === "permission_error") &&
+    isSubscriptionGateMessage(text)
+  ) {
+    return { message, type: "permission_error", code: "subscription_required" };
+  }
+  if (
+    status === 403 ||
+    type === "permission_error" ||
+    isPermissionMessage(text)
+  ) {
+    return { message, type: "permission_error", code: "permission_denied" };
   }
   if (
     status === 503 ||
@@ -111,17 +173,10 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
     lower.includes("too many requests") ||
     lower.includes("throttling")
   ) return 429;
-  if (
-    lower.includes("unauthenticated") ||
-    lower.includes("unauthorized") ||
-    lower.includes("permission_denied") ||
-    lower.includes("permission denied") ||
-    lower.includes("forbidden") ||
-    lower.includes("invalid token") ||
-    lower.includes("expired token") ||
-    lower.includes("authentication") ||
-    lower.includes("access denied")
-  ) return 401;
+  // Strong authentication signals win when a message contains mixed auth and
+  // subscription/permission wording.
+  if (isAuthenticationMessage(lower)) return 401;
+  if (isSubscriptionGateMessage(lower) || isPermissionMessage(lower)) return 403;
   if (
     lower.includes("unavailable") ||
     lower.includes("overloaded") ||
@@ -156,11 +211,13 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
     ? "rate_limit_error"
     : httpStatus === 401
       ? "authentication_error"
-      : httpStatus === 503 || httpStatus === 504
-        ? "server_error"
-        : httpStatus === 400
-          ? "invalid_request_error"
-          : "upstream_error";
+      : httpStatus === 403
+        ? "permission_error"
+        : httpStatus === 503 || httpStatus === 504
+          ? "server_error"
+          : httpStatus === 400
+            ? "invalid_request_error"
+            : "upstream_error";
   return {
     httpStatus,
     error: classifyError(httpStatus, errorType, finalMessage),
@@ -176,6 +233,11 @@ export function httpStatusFromTerminalError(error: {
   if (!error) return 502;
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
+  if (
+    error.type === "permission_error" ||
+    error.code === "permission_denied" ||
+    error.code === "subscription_required"
+  ) return 403;
   if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
   if (error.type === "invalid_request_error") return 400;

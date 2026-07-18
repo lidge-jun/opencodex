@@ -7,6 +7,32 @@ opencodex does not patch Codex App. It writes the same Codex configuration and m
 Codex CLI/TUI already use. Because Codex App reads that shared state, routed models can appear in the
 App's model picker as normal Codex catalog entries.
 
+OpenAI entries have two stable identities: one bare native `openai` group whose Pool(default) or
+Direct account selection is controlled by `codexAccountMode`, and namespaced
+`openai-apikey/<model>` API-key transport. Changing the account mode does not change picker ids.
+API GPT-5.6 entries use
+1,050,000 context / 922,000 max input, and `*-pro` picker ids resolve to the base wire model with
+`reasoning.mode: "pro"` while logs, usage, and picker state keep the virtual id.
+The API catalog is fixed to exactly eight ids: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and their
+three Pro virtual ids; there is no generic `gpt-5.6-pro` alias.
+Compact requests keep the selected tier but send the base model without a reasoning object.
+
+Select a credential route explicitly; change Pool/Direct on the Providers page:
+
+```text
+gpt-5.6-sol                         # openai (Pool or Direct option)
+openai-apikey/gpt-5.6-sol           # API key
+```
+
+Fresh installs and configs with no saved mode default to Pool. Current configs use marker 2 and
+retain the shipped v1 source at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with:
+
+```sh
+cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
+```
+
+Earlier v1 three-provider configurations migrate automatically into the single option-aware row.
+
 ## Integration path
 
 `ocx init`, `ocx start`, and `ocx sync` keep these Codex files aligned under the resolved
@@ -69,9 +95,9 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| ChatGPT passthrough | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (372,000-token catalog window) |
-| OpenAI (API key) | `openai-apikey/gpt-5.6-sol`, `openai-apikey/gpt-5.6-terra`, `openai-apikey/gpt-5.6-luna` (372,000) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (372,000) |
+| Codex login (Pool or Direct) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (372,000-token catalog window) |
+| OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus `cursor/grok-4.5` and `cursor/grok-4.5-fast` (500,000); live account discovery decides which remain visible. |
 | xAI | Live discovery is authoritative; the fallback catalog defaults to `xai/grok-4.5` with a 500,000-token window and `low` / `medium` / `high` reasoning controls. |
 

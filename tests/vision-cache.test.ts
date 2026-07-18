@@ -4,12 +4,13 @@ import * as oauthModule from "../src/oauth";
 mock.module("../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
 
 import { parseRequest } from "../src/responses/parser";
-import type { OcxContentPart, OcxProviderConfig } from "../src/types";
+import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../src/types";
 import {
   describeImagesInPlace,
   resetVisionDescriptionCache,
   resolveMaxDescriptionsPerTurn,
   setVisionDescriptionCache,
+  shouldResolveOpenAiVisionSidecar,
   type VisionPlan,
 } from "../src/vision";
 
@@ -27,15 +28,45 @@ const anthropicProvider: OcxProviderConfig = {
   baseUrl: "https://anthropic-vision.test",
 };
 
+const textOnlyProvider: OcxProviderConfig = {
+  adapter: "openai-chat",
+  baseUrl: "https://routed.test/v1",
+  apiKey: "routed",
+  noVisionModels: ["text-model"],
+};
+
 function plan(overrides: Partial<VisionPlan> = {}): VisionPlan {
   return {
     backend: "openai",
-    forwardProvider: openaiProvider,
+    forwardSidecar: {
+      providerName: "openai",
+      provider: openaiProvider,
+      accountMode: "direct",
+      authContext: { kind: "main", accountId: null },
+      headers: new Headers({ Authorization: "Bearer test" }),
+    },
     settings: { model: "vision-model-a", timeoutMs: 5000 },
     maxDescriptionsPerTurn: 8,
     ...overrides,
   };
 }
+
+test("vision sidecar auth stays lazy for no-image and disabled branches", () => {
+  const cfg: OcxConfig = { port: 10100, defaultProvider: "routed", providers: { routed: textOnlyProvider } };
+  const noImage = parseRequest({ model: "routed/text-model", input: "text only" });
+  const withImage = parseRequest({
+    model: "routed/text-model",
+    input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_A }] }],
+  });
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", noImage)).toBe(false);
+  expect(shouldResolveOpenAiVisionSidecar(
+    { ...cfg, visionSidecar: { enabled: false } },
+    textOnlyProvider,
+    "text-model",
+    withImage,
+  )).toBe(false);
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", withImage)).toBe(true);
+});
 
 function parsed(parts: Array<Record<string, unknown>>) {
   return parseRequest({

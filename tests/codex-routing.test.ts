@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_FAILURE_WINDOW_MS,
@@ -31,6 +31,8 @@ import {
   updateAccountQuota,
 } from "../src/codex/auth-api";
 import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
+import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-routing-test");
@@ -116,6 +118,32 @@ describe("codex routing", () => {
     updateAccountQuota("a", 85);
     updateAccountQuota("b", 20);
     expect(resolveCodexAccountForThread("new-thread", config)).toBe("b");
+  });
+
+  test("missing OpenAI mode defaults to pool and rotates from hot main to a cool added account", () => {
+    writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 95);
+    updateAccountQuota("a", 5);
+
+    expect(routeModel(config, "gpt-5.6-sol").codexAccountMode).toBe("pool");
+    expect(resolveCodexAccountForThread("main-pressure", config)).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 200);
+    expect(resolveCodexAccountForThread("after-success", config)).toBe("a");
   });
 
   test("go plan pool switching ignores the weekly window", () => {

@@ -94,6 +94,11 @@ describe("kiro adapter — buildRequest", () => {
       ["claude-4.5-sonnet-high", "claude-sonnet-4.5"],
       ["claude-4-5-opus-max", "claude-opus-4.5"],
       ["minimax-m2-1", "minimax-m2.1"],
+      // GPT-5.6 tiers (Kiro 2026-07-13): keep dotted minor + tier suffix intact
+      ["gpt-5.6-sol", "gpt-5.6-sol"],
+      ["kiro/gpt-5.6-terra", "gpt-5.6-terra"],
+      ["gpt-5-6-luna", "gpt-5.6-luna"],
+      ["gpt-5.6-sol-high", "gpt-5.6-sol"],
     ]) {
       expect(normalizeKiroModelId(input)).toBe(expected);
       const { body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }], undefined, input));
@@ -560,7 +565,14 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
   const cw = kiro.modelContextWindows ?? {};
 
   test("registry includes the currently documented Kiro models", () => {
-    for (const id of ["claude-opus-4.5", "claude-sonnet-4.0", "minimax-m2.1"]) {
+    for (const id of [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "claude-opus-4.5",
+      "claude-sonnet-4.0",
+      "minimax-m2.1",
+    ]) {
       expect(kiro.models ?? []).toContain(id);
     }
   });
@@ -573,6 +585,9 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
   });
 
   test("smaller-context models match Kiro's published limits", () => {
+    expect(cw["gpt-5.6-sol"]).toBe(272_000);
+    expect(cw["gpt-5.6-terra"]).toBe(272_000);
+    expect(cw["gpt-5.6-luna"]).toBe(272_000);
     expect(cw["claude-opus-4.5"]).toBe(200_000);
     expect(cw["claude-sonnet-4.5"]).toBe(200_000);
     expect(cw["claude-sonnet-4.0"]).toBe(200_000);
@@ -582,6 +597,10 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
     expect(cw["glm-5"]).toBe(200_000);
     expect(cw["deepseek-3.2"]).toBe(128_000);
     expect(cw["qwen3-coder-next"]).toBe(256_000);
+  });
+
+  test("kiro catalog is static (no OpenAI-style live /models)", () => {
+    expect(kiro.liveModels).toBe(false);
   });
 
   test("Auto router has no fixed window (omitted)", () => {

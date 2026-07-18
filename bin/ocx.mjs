@@ -191,9 +191,11 @@ function fail(msg) {
   console.error(
     `opencodex: ${msg}\n` +
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
-      "install skipped lifecycle scripts or optional dependencies. Reinstall with:\n" +
-      "  npm install -g @bitkyc08/opencodex\n" +
-      "(without --ignore-scripts and without --omit=optional / optional=false)"
+      "install skipped lifecycle scripts (e.g. npm blocked bun's postinstall\n" +
+      "under allowScripts) or optional dependencies. Reinstall with:\n" +
+      "  npm install -g --allow-scripts=bun @bitkyc08/opencodex\n" +
+      "(use sudo if the original install used sudo; without --ignore-scripts\n" +
+      "and without --omit=optional / optional=false)"
   );
   process.exit(1);
 }

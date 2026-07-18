@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mapReasoningEffort } from "../src/reasoning-effort";
-import { routeModel } from "../src/router";
+import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 describe("routeModel registry effort defaults", () => {
@@ -65,6 +65,39 @@ describe("routeModel registry effort defaults", () => {
       providerName: "cursor",
       modelId: "gpt-5.5",
     });
+  });
+
+  test("routes bare OpenAI models only through canonical openai and stops terminally", () => {
+    const forward = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const };
+    const api = { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-test", defaultModel: "gpt-5.5" };
+    const base: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-proxy": { adapter: "openai-chat", baseUrl: "https://proxy.example/v1", models: ["gpt-5.5"] },
+        "openai-apikey": api,
+        openai: forward,
+      },
+    };
+    expect(routeModel(base, "gpt-5.5")).toMatchObject({ providerName: "openai", codexAccountMode: "pool" });
+    expect(routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, codexAccountMode: "direct" } } }, "gpt-5.5"))
+      .toMatchObject({ providerName: "openai", codexAccountMode: "direct" });
+    expect(() => routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, disabled: true } } }, "gpt-5.5"))
+      .toThrow(NoEnabledOpenAiProviderError);
+    const unavailable = { ...base, providers: { "openai-proxy": base.providers["openai-proxy"] } };
+    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(NoEnabledOpenAiProviderError);
+  });
+
+  test("rejects legacy chatgpt namespaces even when configured", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "chatgpt",
+      providers: { chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    expect(() => routeModel(config, "chatgpt/gpt-5.5")).toThrow("No provider configured");
+    expect(() => routeModel(config, "unknown-model")).toThrow("No provider configured");
+    const legacyMulti = { ...config, providers: { "openai-multi": config.providers.chatgpt }, defaultProvider: "openai-multi" };
+    expect(() => routeModel(legacyMulti, "openai-multi/gpt-5.5")).toThrow("No provider configured");
   });
 
   test("does not hydrate legacy xhigh to max maps for stale persisted ollama-cloud configs", () => {

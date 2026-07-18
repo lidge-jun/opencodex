@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
-import { httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError } from "../lib/errors";
+import {
+  classifyError,
+  httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
+} from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { OcxUsage } from "../types";
@@ -10,6 +13,8 @@ import {
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
+  type AttemptRecoveryKind,
+  type PersistedUsageAttempt,
   type UsageStatus,
 } from "../usage/log";
 import {
@@ -35,6 +40,11 @@ export interface RequestLogContext {
   resolvedModel?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
+  attempts?: PersistedUsageAttempt[];
+  /** Internal mutable final attempt; omitted from RequestLogEntry/JSONL. */
+  activeAttempt?: PersistedUsageAttempt;
+  /** Internal wall-clock origin for the committed final attempt; never persisted. */
+  activeAttemptStartedAt?: number;
   usageDebugBodyKind?: UsageDebugBodyKind;
   usageDebugBodySample?: string;
   usageDebugContentType?: string;
@@ -74,6 +84,7 @@ export interface RequestLogEntry {
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
+  attempts?: PersistedUsageAttempt[];
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -102,11 +113,13 @@ export function addRequestLog(entry: RequestLogEntry) {
       model: entry.model,
       ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+      ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+      ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
       ...failureDiagnostics,
     });
   } catch {
@@ -119,10 +132,19 @@ export function nextRequestLogId(timestamp = Date.now()): string {
   return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
 }
 
-export function requestLogErrorCode(status: number): string | undefined {
+export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   if (status === 400 || status === 409) return "invalid_request_error";
-  if (status === 401 || status === 403) return "invalid_api_key";
+  if (status === 401) return "invalid_api_key";
+  if (status === 403) {
+    // Prefer message-aware codes (e.g. Ollama Cloud subscription gates) over a blunt
+    // invalid_api_key — 403 usually means authenticated but not allowed.
+    if (upstreamError?.trim()) {
+      const code = classifyError(403, "upstream_error", upstreamError).code;
+      if (code) return code;
+    }
+    return "permission_denied";
+  }
   if (status === 429) return "rate_limit_exceeded";
   if (status === 499) return "client_closed_request";
   if (status === 503) return "server_is_overloaded";
@@ -179,7 +201,10 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) logCtx.responseServiceTier = serviceTier;
   const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
-  if (usage) logCtx.usage = usage;
+  if (usage) {
+    logCtx.usage = usage;
+    if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+  }
 }
 
 export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined {
@@ -375,24 +400,36 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  const errorCode = requestLogErrorCode(status);
-  // Estimated-usage detection prefers the route ADAPTER: configured provider names
-  // ("cursor-mykey") broke the old exact-name match and cursor rows logged as
-  // accurately "reported" (devlog 130 B2).
-  const finalUsage = usageForFinalLog(logCtx.providerAdapter ?? logCtx.provider, logCtx.usage);
-  const usageFallback = !finalUsage && typeof logCtx.usageLogInputTokens === "number"
-    ? { inputTokens: logCtx.usageLogInputTokens, outputTokens: 0, estimated: true }
-    : undefined;
-  const loggedUsage = finalUsage && typeof logCtx.usageLogInputTokens === "number"
-    ? { ...finalUsage, inputTokens: Math.max(finalUsage.inputTokens, logCtx.usageLogInputTokens), estimated: true }
-    : (finalUsage ?? usageFallback);
-  const usageStatus = usageStatusForFinalLog(loggedUsage);
-  const totalTokens = usageTotalTokens(loggedUsage);
+  const errorCode = requestLogErrorCode(status, logCtx.upstreamError);
+  if (logCtx.activeAttempt) {
+    finishRequestAttempt(
+      logCtx.activeAttempt,
+      status,
+      Date.now() - (logCtx.activeAttemptStartedAt ?? start),
+      logCtx.usage,
+    );
+  }
+  const existing = finalizedUsage(
+    logCtx.providerAdapter ?? logCtx.provider,
+    logCtx.usage,
+    logCtx.usageLogInputTokens,
+  );
+  const attempts = logCtx.attempts?.map(attempt => ({
+    ...attempt,
+    recoveryKinds: [...attempt.recoveryKinds],
+    ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
+  }));
+  const isCombo = (logCtx.requestedModel ?? "").startsWith("combo/")
+    && (attempts?.length ?? 0) > 0;
+  const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
+  const loggedUsage = aggregate?.usage ?? existing.usage;
+  const usageStatus = aggregate?.status ?? existing.status;
+  const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;
   addLog({
     requestId,
     timestamp: start,
-    model: logCtx.model,
-    provider: logCtx.provider,
+    model: isCombo ? logCtx.requestedModel! : logCtx.model,
+    provider: isCombo ? "combo" : logCtx.provider,
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
@@ -412,6 +449,7 @@ export function addFinalRequestLog(
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
+    ...(attempts?.length ? { attempts } : {}),
   });
   if (isUsageDebugEnabled()) {
     appendUsageDebug({
@@ -431,7 +469,10 @@ export function addFinalRequestLog(
 export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchParams): RequestLogEntry[] {
   let filtered = logs;
   const provider = params.get("provider")?.trim();
-  if (provider) filtered = filtered.filter(entry => entry.provider === provider);
+  if (provider) {
+    filtered = filtered.filter(entry => entry.provider === provider
+      || entry.attempts?.some(attempt => attempt.provider === provider));
+  }
   const status = params.get("status")?.trim().toLowerCase();
   if (status) {
     filtered = /^[1-5]xx$/.test(status)
@@ -446,4 +487,164 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
   return filtered;
 }
 
+interface FinalizedUsageResult {
+  usage?: OcxUsage;
+  status: UsageStatus;
+  totalTokens?: number;
+}
+
+function finalizedUsage(
+  adapter: string,
+  usage: OcxUsage | undefined,
+  inputTokenEstimate: number | undefined,
+): FinalizedUsageResult {
+  const estimate = typeof inputTokenEstimate === "number"
+    && Number.isFinite(inputTokenEstimate)
+    && inputTokenEstimate >= 0
+    ? inputTokenEstimate
+    : undefined;
+  const finalUsage = usageForFinalLog(adapter, usage);
+  const usageFallback = !finalUsage && estimate !== undefined
+    ? { inputTokens: estimate, outputTokens: 0, estimated: true }
+    : undefined;
+  const loggedUsage = finalUsage && estimate !== undefined
+    ? {
+        ...finalUsage,
+        inputTokens: Math.max(finalUsage.inputTokens, estimate),
+        estimated: true,
+      }
+    : (finalUsage ?? usageFallback);
+  const totalTokens = usageTotalTokens(loggedUsage);
+  return {
+    status: usageStatusForFinalLog(loggedUsage),
+    ...(loggedUsage ? { usage: loggedUsage } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
+export function beginRequestAttempt(
+  ordinal: number,
+  provider: string,
+  model: string,
+  adapter: string,
+): PersistedUsageAttempt {
+  return {
+    ordinal,
+    provider,
+    model,
+    adapter,
+    status: 0,
+    durationMs: 0,
+    sendCount: 0,
+    recoveryKinds: [],
+    usageStatus: "unreported",
+  };
+}
+
+export function sealRequestAttemptIdentity(
+  attempt: PersistedUsageAttempt | undefined,
+  provider: string,
+  adapter: string,
+): void {
+  if (!attempt) return;
+  attempt.provider = provider;
+  attempt.adapter = adapter;
+}
+
+export function noteAttemptSend(
+  attempt: PersistedUsageAttempt | undefined,
+  inputTokenEstimate: number | undefined,
+  recovery?: AttemptRecoveryKind,
+): void {
+  if (!attempt) return;
+  attempt.sendCount += 1;
+  if (typeof inputTokenEstimate === "number"
+    && Number.isFinite(inputTokenEstimate)
+    && inputTokenEstimate >= 0) {
+    attempt.inputTokenEstimate = inputTokenEstimate;
+  }
+  if (recovery && !attempt.recoveryKinds.includes(recovery)) {
+    attempt.recoveryKinds.push(recovery);
+  }
+}
+
+export function finishRequestAttempt(
+  attempt: PersistedUsageAttempt,
+  status: number,
+  durationMs: number,
+  usage?: OcxUsage,
+): PersistedUsageAttempt {
+  const finalized = finalizedUsage(
+    attempt.adapter,
+    usage ?? attempt.usage,
+    attempt.inputTokenEstimate,
+  );
+  attempt.status = status;
+  attempt.durationMs = Math.max(0, durationMs);
+  attempt.usageStatus = finalized.status;
+  if (finalized.usage) attempt.usage = finalized.usage;
+  else delete attempt.usage;
+  if (finalized.totalTokens !== undefined) attempt.totalTokens = finalized.totalTokens;
+  else delete attempt.totalTokens;
+  const errorCode = requestLogErrorCode(status);
+  if (errorCode) attempt.errorCode = errorCode;
+  else delete attempt.errorCode;
+  return attempt;
+}
+
+export function aggregateAttemptUsage(
+  attempts: readonly PersistedUsageAttempt[],
+): FinalizedUsageResult {
+  const status: UsageStatus = attempts.length > 0
+    && attempts.every(attempt => attempt.usageStatus === "unsupported")
+    ? "unsupported"
+    : attempts.some(attempt => (
+        attempt.usageStatus === "unreported" || attempt.usageStatus === "unsupported"
+      ))
+      ? "unreported"
+      : attempts.some(attempt => attempt.usageStatus === "estimated")
+        ? "estimated"
+        : attempts.length > 0
+          ? "reported"
+          : "unreported";
+
+  const usages = attempts.flatMap(attempt => attempt.usage ? [attempt.usage] : []);
+  if (usages.length === 0) return { status };
+
+  const sumOptional = (
+    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
+      | "reasoningOutputTokens",
+  ): number | undefined => {
+    const present = usages.flatMap(usage => (
+      typeof usage[key] === "number" ? [usage[key] as number] : []
+    ));
+    return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : undefined;
+  };
+  const cachedInputTokens = sumOptional("cachedInputTokens");
+  const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
+  const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
+  const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
+  const totalTokens = usages.reduce(
+    (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
+    0,
+  );
+  const aggregate: OcxUsage = {
+    inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
+    outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
+    totalTokens,
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
+    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(status === "estimated" ? { estimated: true } : {}),
+  };
+  return { usage: aggregate, status, totalTokens };
+}
+
 export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
+
+/** Test-only process-state reset for isolated integration harnesses. */
+export function clearRequestLogsForTests(): void {
+  requestLog.length = 0;
+  requestLogSeq = 0;
+}

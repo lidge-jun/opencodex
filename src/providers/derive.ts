@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { PROVIDER_REGISTRY, type ProviderRegistryEntry } from "./registry";
 
 export interface DerivedKeyLoginProvider {
@@ -12,8 +12,10 @@ export interface DerivedKeyLoginProvider {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  modelMaxInputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
+  modelDefaultReasoningEfforts?: Record<string, string>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   noVisionModels?: string[];
@@ -26,6 +28,9 @@ export interface DerivedKeyLoginProvider {
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  project?: string;
+  location?: string;
 }
 
 export interface DerivedInitProvider {
@@ -34,6 +39,7 @@ export interface DerivedInitProvider {
   adapter: string;
   baseUrl: string;
   kind: "forward" | "oauth" | "key" | "local";
+  codexAccountMode?: CodexAccountMode;
   dashboardUrl?: string;
   defaultModel?: string;
 }
@@ -45,10 +51,15 @@ export interface DerivedProviderPreset {
   baseUrl: string;
   defaultModel?: string;
   auth: "oauth" | "forward" | "key" | "local";
+  codexAccountMode?: CodexAccountMode;
   oauthProvider?: string;
   dashboardUrl?: string;
   note?: string;
   keyOptional?: boolean;
+  /** Free pricing (may still require a key). */
+  freeTier?: boolean;
+  /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
+  provider?: OcxProviderConfig;
 }
 
 export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
@@ -68,7 +79,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
+    ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
+    ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),
     ...(entry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: entry.modelSuffixBracketStrip } : {}),
     ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
@@ -77,8 +90,10 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
     ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
+    ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
     ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
+    ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
     ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
     ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
     ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
@@ -114,8 +129,10 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
       ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
+      ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
+      ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
       ...(entry.noVisionModels ? { noVisionModels: [...entry.noVisionModels] } : {}),
@@ -143,6 +160,7 @@ export function deriveInitProviders(): DerivedInitProvider[] {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     kind: entry.authKind,
+    ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
   }));
@@ -173,6 +191,8 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!entry) return;
   const seed = providerConfigSeed(entry);
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
+  // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
+  if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
@@ -180,6 +200,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.modelInputModalities && seed.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(seed.modelInputModalities);
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
   if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
+  if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
   if (!prov.noVisionModels && seed.noVisionModels) prov.noVisionModels = [...seed.noVisionModels];
@@ -194,6 +215,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.thinkingBudgetModels && seed.thinkingBudgetModels) prov.thinkingBudgetModels = [...seed.thinkingBudgetModels];
   if (prov.escapeBuiltinToolNames === undefined && seed.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = seed.escapeBuiltinToolNames;
   if (prov.keyOptional === undefined && seed.keyOptional !== undefined) prov.keyOptional = seed.keyOptional;
+  if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
 }
@@ -226,11 +248,14 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
+    ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
+    ...(entry.codexAccountMode ? { provider: providerConfigSeed(entry) } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.authKind === "oauth" ? { oauthProvider: entry.oauthId ?? entry.id } : {}),
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
+    ...(entry.freeTier ? { freeTier: true } : {}),
   };
 }
 
@@ -250,7 +275,7 @@ function customPreset(): DerivedProviderPreset {
 }
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {
-  if (entry.authKind === "forward") return "OpenAI — ChatGPT login (no key)";
+  if (entry.authKind === "forward") return "OpenAI — ChatGPT login (no key; account pool default, Direct selectable)";
   if (entry.authKind === "oauth") {
     if (entry.id === "xai") return "xAI (Grok) — account login";
     if (entry.id === "anthropic") return "Anthropic (Claude) — account login";

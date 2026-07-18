@@ -1,12 +1,18 @@
-import type { OcxConfig, OcxProviderConfig } from "./types";
+import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
+import { COMBO_NAMESPACE, tryPickComboModel, type ComboPick } from "./combos";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
-import { PROVIDER_REGISTRY } from "./providers/registry";
+import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
+import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
+import { getStaleCached } from "./codex/model-cache";
 
-interface RouteResult {
+export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  codexAccountMode?: CodexAccountMode;
+  combo?: ComboPick;
 }
 
 const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string[] }> = [
@@ -17,18 +23,38 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
     ],
   },
   {
-    providerNames: ["openai", "chatgpt", "openai-apikey"],
-    prefixes: [
-    "gpt-", "o1-", "o3-", "o4-",
-    ],
-  },
-  {
     providerNames: ["groq"],
     prefixes: [
     "llama-", "mixtral-", "gemma-",
     ],
   },
 ];
+
+/**
+ * Known native model ids for a provider — the decode source for the Codex slug codec
+ * (src/providers/slug-codec.ts). Union of static config ids, registry seeds, and the
+ * last-known-good live /models cache (may be empty on a cold start; decode then passes
+ * unknown ids through unchanged for an honest upstream error).
+ */
+export function knownModelIdsForProvider(provName: string, prov: OcxProviderConfig): string[] {
+  const ids = new Set<string>();
+  for (const id of prov.models ?? []) ids.add(id);
+  const registry = PROVIDER_REGISTRY.find(entry => entry.id === provName);
+  for (const id of registry?.models ?? []) ids.add(id);
+  // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
+  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps).
+  for (const map of [
+    registry?.modelContextWindows,
+    registry?.modelInputModalities,
+    registry?.modelReasoningEfforts,
+    registry?.modelDefaultReasoningEfforts,
+    registry?.modelReasoningEffortMap,
+  ]) {
+    for (const id of Object.keys(map ?? {})) ids.add(id);
+  }
+  for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
+  return [...ids];
+}
 
 // Merge registry-default effort maps under user values so built-in provider configs can
 // carry real upstream aliases without a disk migration. User overrides win per-key.
@@ -67,6 +93,18 @@ function mergeRecordFill<T>(
   return { ...(seed ?? {}), ...(user ?? {}) };
 }
 
+function mergePositiveNumberCaps(
+  seed: Record<string, number> | undefined,
+  user: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  if (!seed && !user) return undefined;
+  const out = { ...(seed ?? {}) };
+  for (const [key, value] of Object.entries(user ?? {})) {
+    out[key] = typeof out[key] === "number" ? Math.min(out[key]!, value) : value;
+  }
+  return out;
+}
+
 function mergeStringArrayRecord(
   seed: Record<string, string[]> | undefined,
   user: Record<string, string[]> | undefined,
@@ -95,8 +133,14 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const reasoningEffortMap = mergeRecord(registryEntry.reasoningEffortMap, provider.reasoningEffortMap);
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
-  const modelContextWindows = mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
+  const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
+    ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
+    : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
   const modelInputModalities = mergeRecordFill(registryEntry.modelInputModalities, provider.modelInputModalities);
+  const modelMaxInputTokens = providerName === OPENAI_API_PROVIDER_ID
+    ? mergePositiveNumberCaps(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens)
+    : mergeRecordFill(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens);
   const noVisionModels = mergeStringArray(registryEntry.noVisionModels, provider.noVisionModels);
   const noReasoningModels = mergeStringArray(registryEntry.noReasoningModels, provider.noReasoningModels);
   const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
@@ -140,7 +184,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.parallelToolCalls === undefined && registryEntry.parallelToolCalls !== undefined ? { parallelToolCalls: registryEntry.parallelToolCalls } : {}),
     ...(modelContextWindows ? { modelContextWindows } : {}),
     ...(modelInputModalities ? { modelInputModalities } : {}),
+    ...(modelMaxInputTokens ? { modelMaxInputTokens } : {}),
     ...(modelReasoningEfforts ? { modelReasoningEfforts } : {}),
+    ...(modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts } : {}),
     ...(reasoningEffortMap ? { reasoningEffortMap } : {}),
     ...(modelReasoningEffortMap ? { modelReasoningEffortMap } : {}),
     ...(noVisionModels ? { noVisionModels } : {}),
@@ -156,10 +202,44 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
 }
 
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
-  return Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
+  return Object.entries(config.providers)
+    .filter(([name, provider]) => name !== LEGACY_CHATGPT_PROVIDER_ID && provider.disabled !== true);
+}
+
+export class NoEnabledOpenAiProviderError extends Error {
+  constructor(modelId: string) {
+    super(`No enabled canonical OpenAI provider for model: ${modelId}`);
+    this.name = "NoEnabledOpenAiProviderError";
+  }
+}
+
+function isBareOpenAiFamilyModel(modelId: string): boolean {
+  return !modelId.includes("/") && /^(?:gpt-|o1-|o3-|o4-)/.test(modelId);
+}
+
+function routeResult(providerName: string, provider: OcxProviderConfig, modelId: string): RouteResult {
+  const codexAccountMode = providerCodexAccountMode(providerName, provider);
+  return {
+    providerName,
+    provider: routedProviderConfig(providerName, provider),
+    modelId,
+    ...(codexAccountMode ? { codexAccountMode } : {}),
+  };
 }
 
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
+  const preservePhysicalComboProvider =
+    hasOwnProvider(config.providers, COMBO_NAMESPACE)
+    && Object.keys(config.combos ?? {}).length === 0;
+  if (!preservePhysicalComboProvider) {
+    const combo = tryPickComboModel(config, modelId);
+    if (combo) {
+      const concrete = `${combo.target.provider}/${combo.target.model}`;
+      const routed = routeModel(config, concrete);
+      return { ...routed, combo };
+    }
+  }
+
   // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
@@ -167,24 +247,28 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   const slash = modelId.indexOf("/");
   if (slash > 0) {
     const provName = modelId.slice(0, slash);
+    if (provName === LEGACY_CHATGPT_PROVIDER_ID || provName === LEGACY_OPENAI_MULTI_PROVIDER_ID) {
+      throw new Error(`No provider configured for model: ${modelId}`);
+    }
     if (hasOwnProvider(config.providers, provName)) {
       const prov = config.providers[provName];
       if (prov.disabled === true) throw new Error(`Provider is disabled: ${provName}`);
-      return {
-        providerName: provName,
-        provider: routedProviderConfig(provName, prov),
-        modelId: modelId.slice(slash + 1),
-      };
+      // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
+      // slash id via an exact known-id lookup; raw full-slash selectors keep working.
+      return routeResult(provName, prov, decodeRoutedModelId(modelId.slice(slash + 1), knownModelIdsForProvider(provName, prov)));
     }
   }
 
+  if (isBareOpenAiFamilyModel(modelId)) {
+    const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+    if (provider && provider.disabled !== true) return routeResult(OPENAI_CODEX_PROVIDER_ID, provider, modelId);
+    throw new NoEnabledOpenAiProviderError(modelId);
+  }
+
   for (const [provName, prov] of activeProviderEntries(config)) {
-    if (prov.defaultModel === modelId) {
-      return {
-        providerName: provName,
-        provider: routedProviderConfig(provName, prov),
-        modelId,
-      };
+    if (prov.defaultModel === modelId
+      || (typeof prov.defaultModel === "string" && encodeRoutedModelId(prov.defaultModel) === modelId)) {
+      return routeResult(provName, prov, prov.defaultModel as string);
     }
   }
 
@@ -192,23 +276,19 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   if (patternRoute) return patternRoute;
 
   for (const [provName, prov] of activeProviderEntries(config)) {
-    if (prov.models && Array.isArray(prov.models) && (prov.models as string[]).includes(modelId)) {
-      return {
-        providerName: provName,
-        provider: routedProviderConfig(provName, prov),
-        modelId,
-      };
+    if (prov.models && Array.isArray(prov.models)) {
+      const hit = (prov.models as string[]).find(id => id === modelId || encodeRoutedModelId(id) === modelId);
+      if (hit !== undefined) return routeResult(provName, prov, hit);
     }
   }
 
+  if (config.defaultProvider === LEGACY_CHATGPT_PROVIDER_ID) {
+    throw new Error(`No provider configured for model: ${modelId}`);
+  }
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
     if (defaultProv.disabled === true) throw new Error(`Default provider is disabled: ${config.defaultProvider}`);
-    return {
-      providerName: config.defaultProvider,
-      provider: routedProviderConfig(config.defaultProvider, defaultProv),
-      modelId,
-    };
+    return routeResult(config.defaultProvider, defaultProv, modelId);
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
@@ -222,11 +302,7 @@ function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResu
       );
       if (matchingProvider) {
         const [provName, prov] = matchingProvider;
-        return {
-          providerName: provName,
-          provider: routedProviderConfig(provName, prov),
-          modelId,
-        };
+        return routeResult(provName, prov, modelId);
       }
     }
   }

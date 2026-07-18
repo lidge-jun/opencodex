@@ -21,6 +21,20 @@ vision 和网络搜索 sidecar 也可以使用你的 ChatGPT 登录凭据。
 npm install -g @bitkyc08/opencodex
 ```
 
+:::note[npm 拦截了 bun postinstall？]
+较新的 npm 可能会拦截 bun 的 postinstall 脚本（`npm warn install-scripts ...
+blocked because they are not covered by allowScripts`），导致捆绑的 Bun
+运行时未能就绪。请允许 bun 脚本后重新安装。注意 npm 警告给出的缩写命令
+缺少包名，会把当前目录重新安装进去，请始终显式写上包名：
+
+```bash
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
+
+# 如果最初是用 sudo 安装的，请继续使用 sudo：
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+:::
+
 确认两个命令都已加入 `PATH`：
 
 ```bash

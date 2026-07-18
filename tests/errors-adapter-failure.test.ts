@@ -25,4 +25,44 @@ describe("adapterFailureFromMessage", () => {
       error: { type: "authentication_error" },
     });
   });
+
+  test("maps forbidden and subscription gates to 403 permission errors", () => {
+    expect(adapterFailureFromMessage("Provider stream error: forbidden")).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "permission_denied" },
+    });
+    expect(adapterFailureFromMessage(
+      "this model requires a subscription, upgrade for access: https://ollama.com/upgrade",
+    )).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "subscription_required" },
+    });
+  });
+
+  test("generic access denied is permission, while credential-qualified access denied is auth", () => {
+    expect(adapterFailureFromMessage("Access denied")).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "permission_denied" },
+    });
+    expect(adapterFailureFromMessage("AccessDeniedException: security token expired")).toMatchObject({
+      httpStatus: 401,
+      error: { type: "authentication_error", code: "invalid_api_key" },
+    });
+  });
+
+  test("authentication cues win over subscription wording", () => {
+    expect(adapterFailureFromMessage(
+      "authentication failed: invalid token; upgrade subscription for access",
+    )).toMatchObject({
+      httpStatus: 401,
+      error: { type: "authentication_error", code: "invalid_api_key" },
+    });
+  });
+
+  test("standalone authentication cues remain authentication errors", () => {
+    expect(adapterFailureFromMessage("Authentication required")).toMatchObject({
+      httpStatus: 401,
+      error: { type: "authentication_error", code: "invalid_api_key" },
+    });
+  });
 });

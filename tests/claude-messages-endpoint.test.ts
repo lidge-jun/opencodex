@@ -19,12 +19,14 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-endpoint-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-endpoint-"));
   process.env.OPENCODEX_HOME = testDir;
+  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
@@ -32,6 +34,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
+  globalThis.fetch = originalFetch;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -596,12 +599,13 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   const config = {
     port: 0,
     defaultProvider: "routed",
+    openaiProviderTierVersion: 2,
     providers: {
-      forward: {
+      openai: {
         adapter: "openai-responses",
         authMode: "forward",
-        baseUrl: `${forward.url.toString().replace(/\/$/, "")}/v1`,
-        allowPrivateNetwork: true,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        codexAccountMode: "pool",
       },
       routed: {
         adapter: "openai-chat",
@@ -614,6 +618,15 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
     webSearchSidecar: { backend: "openai" },
     visionSidecar: { backend: "openai" },
   } as OcxConfig;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const prefix = "/backend-api/codex";
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+      return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, forward.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
   saveConfig(config);
   writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
     tokens: { access_token: mainAccessToken, account_id: mainAccountId },

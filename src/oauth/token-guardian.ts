@@ -24,6 +24,9 @@ import {
   TokenRefreshError,
 } from "../codex/account-store";
 import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
+import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { providerCodexAccountMode } from "../providers/registry";
 
 export interface TokenGuardianHandle {
   stop(): void;
@@ -147,9 +150,41 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
     }
   }
 
-  // B) multi-account Codex pool (gated on the chatgpt provider's policy)
-  if (resolveRefreshPolicy("chatgpt", config) === "proactive") {
-    for (const id of listCodexAccountIds()) {
+  // B) canonical OpenAI Codex login. Direct warms main only; pool additionally maintains every
+  // added account. The direct branch returns before the managed account store is enumerated.
+  const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (
+    openai
+    && openai.disabled !== true
+    && isCanonicalOpenAiForwardProvider(openai)
+    && resolveRefreshPolicy(OPENAI_CODEX_PROVIDER_ID, config) === "proactive"
+  ) {
+    const mode = providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) ?? "pool";
+    if (opts.codexWarmupEnabled) {
+      const mainToken = getMainAccountToken();
+      const key = `codex:${MAIN_CODEX_ACCOUNT_ID}`;
+      if (mainToken && !inBackoff(key, nowMs)) {
+        tasks.push(async () => {
+          try {
+            await warmCodexAccount({
+              accessToken: mainToken.accessToken,
+              chatgptAccountId: mainToken.chatgptAccountId,
+              model: opts.codexWarmupModel,
+            });
+            backoff.delete(key);
+            result.warmed.push(key);
+          } catch (err) {
+            recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, false);
+            result.failed.push(key);
+          }
+        });
+      } else if (mainToken) {
+        result.skippedBackoff.push(key);
+      }
+    }
+
+    const addedAccountIds = mode === "pool" ? listCodexAccountIds() : [];
+    for (const id of addedAccountIds) {
       const record = readCodexAccountRecord(id);
       if (!record || record.deletedAt != null) continue;
       const cred = record.credential;

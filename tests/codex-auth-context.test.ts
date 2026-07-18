@@ -7,6 +7,7 @@ import {
   assertCodexAuthContextNotCooled,
   CodexAccountCooldownError,
   CodexAuthContextError,
+  CodexDirectAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
@@ -81,6 +82,17 @@ const forwardProvider: OcxProviderConfig = {
 };
 
 describe("Codex auth context", () => {
+  test("direct mode returns caller-owned main context without touching pool selection", async () => {
+    const cfg = { ...config(), activeCodexAccountId: "missing-pool-account" };
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer caller" }), cfg, "direct"))
+      .resolves.toEqual({ kind: "main", accountId: null });
+  });
+  test("direct mode fails locally without a caller bearer", async () => {
+    await expect(resolveCodexAuthContext(new Headers(), config(), "direct"))
+      .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer   " }), config(), "direct"))
+      .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
+  });
   test("selects pool auth independently of the routed provider", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",
@@ -89,7 +101,7 @@ describe("Codex auth context", () => {
       chatgptAccountId: "pool_acc",
     });
 
-    const ctx = await resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config());
+    const ctx = await resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool");
 
     expect(ctx).toMatchObject({
       kind: "pool",
@@ -112,14 +124,14 @@ describe("Codex auth context", () => {
   });
 
   test("pool token failure marks reauth and throws before fallback", async () => {
-    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config()))
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
       .rejects.toBeInstanceOf(CodexAuthContextError);
     expect(isAccountNeedsReauth("pool-a")).toBe(true);
   });
 
   test("pool token failure error message does not expose local account id", async () => {
     try {
-      await resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config());
+      await resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool");
       throw new Error("expected auth context failure");
     } catch (err) {
       expect(err).toBeInstanceOf(CodexAuthContextError);
@@ -137,7 +149,7 @@ describe("Codex auth context", () => {
     const now = 1_800_000_000_000;
     recordCodexUpstreamOutcome(config(), "pool-a", 429, { retryAfter: "60", now });
 
-    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config()))
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
       .rejects.toBeInstanceOf(CodexAccountCooldownError);
   });
 
@@ -156,13 +168,13 @@ describe("Codex auth context", () => {
     });
     try {
       Date.now = () => now;
-      await expect(resolveCodexAuthContext(headers, config())).resolves.toMatchObject({
+      await expect(resolveCodexAuthContext(headers, config(), "pool")).resolves.toMatchObject({
         kind: "pool",
         accountId: "pool-a",
       });
 
       Date.now = () => now + CODEX_THREAD_AFFINITY_IDLE_TTL_MS + 1;
-      await expect(resolveCodexAuthContext(headers, config()))
+      await expect(resolveCodexAuthContext(headers, config(), "pool"))
         .rejects.toBeInstanceOf(CodexThreadAffinityExpiredError);
     } finally {
       Date.now = originalNow;
@@ -206,7 +218,7 @@ describe("Codex auth context", () => {
     }) as typeof fetch;
 
     try {
-      await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config()))
+      await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
         .rejects.toBeInstanceOf(CodexAuthContextError);
       expect(isAccountNeedsReauth("pool-a")).toBe(false);
       expect(getCodexAccountCredential("pool-a")).toEqual(replacement);
@@ -223,7 +235,7 @@ describe("Codex auth context", () => {
 
   test("runtime provider metadata is applied only to forward provider copies", () => {
     const ctx = { kind: "pool" as const, accountId: "pool-a", generation: 1, accessToken: "pool_token", chatgptAccountId: "pool_acc" };
-    const runtimeForward = applyCodexAuthContextToProvider(forwardProvider, ctx);
+    const runtimeForward = applyCodexAuthContextToProvider(forwardProvider, ctx, "pool");
     expect(runtimeForward).toMatchObject({
       _codexAccountRequired: true,
       _codexAccountOverride: { accessToken: "pool_token", chatgptAccountId: "pool_acc" },
@@ -231,7 +243,7 @@ describe("Codex auth context", () => {
     expect(forwardProvider).not.toHaveProperty("_codexAccountOverride");
 
     const routed = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
-    expect(applyCodexAuthContextToProvider(routed, ctx)).toBe(routed);
+    expect(applyCodexAuthContextToProvider(routed, ctx, "pool")).toBe(routed);
   });
 
   test("runtime provider metadata is stripped before persistence", () => {

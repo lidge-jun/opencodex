@@ -9,10 +9,24 @@ import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractC
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
+import {
+  advanceComboAfterFailure,
+  comboDefaultEffort,
+  comboFailureDecision,
+  comboIdFromRawBody,
+  concreteComboRequestBody,
+  getCombo,
+  isComboTargetInCooldown,
+  NoAvailableComboTargetsError,
+  noteComboSuccess,
+  parseRetryAfterMs,
+  pickComboTarget,
+  targetKey,
+} from "../combos";
 import { isInjectionDebugEnabled } from "../lib/debug-settings";
 import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialProjectId,
@@ -20,13 +34,15 @@ import {
   type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../oauth";
-import { buildWebSearchTool, planWebSearch, runWithWebSearch } from "../web-search";
-import { describeImagesInPlace, planVisionSidecar, stripImagesInPlace } from "../vision";
-import { createAdapterEventQueue } from "../adapters/run-turn-queue";
+import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../web-search";
+import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../vision";
+import { createAdapterEventQueue, preflightAdapterEvents } from "../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCooldownError,
   CodexAuthContextError,
+  CodexDirectAuthenticationError,
+  CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
@@ -39,6 +55,9 @@ import {
   type CodexUpstreamOutcome,
 } from "../codex/routing";
 import { fetchWithResetRetry, fetchWithTransientRetry } from "../lib/upstream-retry";
+import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
+import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "./request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "./adapter-resolve";
@@ -48,13 +67,20 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 import type { WsData } from "./ws-bridge";
 import { registerTurn, trackStreamLifetime, unregisterTurn } from "./lifecycle";
 import { redactSecretString } from "../lib/redact";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import {
+  beginRequestAttempt,
   catalogModelSupportsServiceTier,
+  finishRequestAttempt,
   inspectResponseLogJson,
+  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
+  sealRequestAttemptIdentity,
+  usageFromResponsesPayload,
   type RequestLogContext,
 } from "./request-log";
+import type { AttemptRecoveryKind } from "../usage/log";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -414,26 +440,315 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
   return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
 }
 
+function comboUnavailableResponse(message: string): Response {
+  return new Response(
+    JSON.stringify({
+      error: { message, type: "server_error", code: "combo_unavailable" },
+    }),
+    { status: 503, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+interface ConsumedComboFailure {
+  response: Response;
+  classificationText: string;
+  /** Valid numeric/date value used only for cooldown calculation. */
+  retryAfter?: string;
+  /** Reserved for 040 usage attribution without adding another body read. */
+  usage?: OcxUsage;
+}
+
+interface HandleResponsesOptions {
+  forceEmptyResponseId?: boolean;
+  abortSignal?: AbortSignal;
+  onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
+  recordTerminalOutcomes?: boolean;
+  setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus) => void) | undefined) => void;
+  onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
+  onNativePassthroughCancel?: () => void;
+  /** Internal recursion guard; callers outside this module must not set it. */
+  comboAttempt?: boolean;
+  /** 030-owned handoff when a child consumed the original failure under bounds. */
+  onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+}
+
+function clientCancelledResponse(): Response {
+  return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
+}
+
+function sanitizedRetryAfter(value: string | null, now: number): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.length > 128) return undefined;
+  return parseRetryAfterMs(trimmed, now) !== undefined ? trimmed : undefined;
+}
+
+async function consumeComboFailure(
+  response: Response,
+  signal?: AbortSignal,
+  now = Date.now(),
+): Promise<ConsumedComboFailure> {
+  const fallback = `Provider error ${response.status}`;
+  let classificationText = fallback;
+  let usage: OcxUsage | undefined;
+  try {
+    const body = await readBoundedResponseBody(response, { signal });
+    usage = usageFromComboFailureText(body.text);
+    if (body.displaySafe) {
+      const safeText = redactSecretString(body.text).slice(0, 500);
+      if (safeText) classificationText = safeText;
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    classificationText = fallback;
+  }
+  const message = classificationText === fallback
+    ? fallback
+    : `${fallback}: ${classificationText}`;
+  const retryAfter = sanitizedRetryAfter(response.headers.get("retry-after"), now);
+  return {
+    response: formatErrorResponse(response.status, "upstream_error", message),
+    classificationText,
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
+function usageFromComboFailureText(text: string): OcxUsage | undefined {
+  try {
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    const nested = payload.response;
+    const source = nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested as Record<string, unknown>
+      : payload;
+    return usageFromResponsesPayload(source.usage);
+  } catch {
+    return undefined;
+  }
+}
+
+function createChildPassthroughCallbackGate(options: HandleResponsesOptions) {
+  type Pending =
+    | { kind: "terminal"; status: ResponsesTerminalStatus }
+    | { kind: "cancel" };
+  let state: "pending" | "committed" | "discarded" = "pending";
+  let pending: Pending | undefined;
+  let accepted = false;
+  const publish = (value: Pending): void => {
+    if (value.kind === "terminal") options.onNativePassthroughTerminal?.(value.status);
+    else options.onNativePassthroughCancel?.();
+  };
+  const receive = (value: Pending): void => {
+    if (state === "discarded" || accepted) return;
+    accepted = true;
+    if (state === "committed") return publish(value);
+    pending ??= value;
+  };
+  return {
+    onTerminal: (status: ResponsesTerminalStatus) => receive({ kind: "terminal", status }),
+    onCancel: () => receive({ kind: "cancel" }),
+    commit: () => {
+      if (state !== "pending") return;
+      state = "committed";
+      if (pending) publish(pending);
+      pending = undefined;
+    },
+    discard: () => {
+      state = "discarded";
+      pending = undefined;
+    },
+  };
+}
+
+async function handleComboResponses(
+  req: Request,
+  rawBody: unknown,
+  comboId: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  options: HandleResponsesOptions,
+): Promise<Response> {
+  Object.assign(logCtx, {
+    requestedModel: `combo/${comboId}`,
+    model: `combo/${comboId}`,
+    provider: "combo",
+  });
+  const combo = getCombo(config, comboId);
+  if (!combo) {
+    return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
+  }
+
+  const initialNow = Date.now();
+  let pick = pickComboTarget(config, comboId, {
+    eligible: target => !isComboTargetInCooldown(comboId, target, initialNow),
+  });
+  if (!pick) {
+    return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
+  }
+
+  let lastFailure: Response | null = null;
+  while (pick) {
+    if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const childLog: RequestLogContext = {
+      model: pick.target.model,
+      provider: pick.target.provider,
+    };
+    const childBody = concreteComboRequestBody(
+      rawBody,
+      pick.target,
+      comboDefaultEffort(config, comboId),
+    );
+    const childHeaders = new Headers(req.headers);
+    childHeaders.delete("content-length");
+    const childRequest = new Request(req.url, {
+      method: req.method,
+      headers: childHeaders,
+      body: JSON.stringify(childBody),
+    });
+    let resolvedAuth: CodexAuthContext | undefined;
+    let terminalRecorder: ((status: ResponsesTerminalStatus) => void) | undefined;
+    const started = Date.now();
+    const attempt = beginRequestAttempt(
+      (logCtx.attempts?.length ?? 0) + 1,
+      pick.target.provider,
+      pick.target.model,
+      config.providers[pick.target.provider]!.adapter,
+    );
+    childLog.activeAttempt = attempt;
+    let attemptRetained = false;
+    const retainCancelledAttempt = (): void => {
+      if (attemptRetained) return;
+      sealRequestAttemptIdentity(
+        attempt,
+        childLog.provider,
+        childLog.providerAdapter ?? attempt.adapter,
+      );
+      finishRequestAttempt(attempt, 499, Date.now() - started, childLog.usage);
+      (logCtx.attempts ??= []).push(attempt);
+      attemptRetained = true;
+    };
+    let consumedChildFailure: ConsumedComboFailure | undefined;
+    const callbackGate = createChildPassthroughCallbackGate(options);
+    let response: Response;
+    try {
+      response = await handleResponses(childRequest, config, childLog, {
+        ...options,
+        comboAttempt: true,
+        onCodexAuthContextResolved: value => { resolvedAuth = value; },
+        setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
+        onConsumedComboFailure: value => { consumedChildFailure = value; },
+        onNativePassthroughTerminal: callbackGate.onTerminal,
+        onNativePassthroughCancel: callbackGate.onCancel,
+      });
+    } catch (error) {
+      callbackGate.discard();
+      if (options.abortSignal?.aborted) {
+        retainCancelledAttempt();
+        return clientCancelledResponse();
+      }
+      throw error;
+    }
+
+    if (options.abortSignal?.aborted) {
+      callbackGate.discard();
+      retainCancelledAttempt();
+      return clientCancelledResponse();
+    }
+
+    if (response.ok) {
+      sealRequestAttemptIdentity(
+        attempt,
+        childLog.provider,
+        childLog.providerAdapter ?? attempt.adapter,
+      );
+      (logCtx.attempts ??= []).push(attempt);
+      attemptRetained = true;
+      noteComboSuccess(comboId, combo, pick.target);
+      Object.assign(logCtx, childLog, {
+        requestedModel: `combo/${comboId}`,
+        model: `combo/${comboId}`,
+        provider: "combo",
+        attempts: logCtx.attempts,
+        activeAttempt: attempt,
+        activeAttemptStartedAt: started,
+        resolvedModel: childLog.resolvedModel ?? childLog.model,
+      });
+      options.onCodexAuthContextResolved?.(resolvedAuth);
+      options.setTerminalOutcomeRecorder?.(terminalRecorder);
+      callbackGate.commit();
+      return response;
+    }
+
+    callbackGate.discard();
+    if (response.status === 499) {
+      retainCancelledAttempt();
+      return clientCancelledResponse();
+    }
+    let failure: ConsumedComboFailure;
+    try {
+      failure = consumedChildFailure
+        ?? await consumeComboFailure(response, options.abortSignal);
+    } catch (error) {
+      if (options.abortSignal?.aborted) {
+        retainCancelledAttempt();
+        return clientCancelledResponse();
+      }
+      throw error;
+    }
+    if (options.abortSignal?.aborted) {
+      retainCancelledAttempt();
+      return clientCancelledResponse();
+    }
+    sealRequestAttemptIdentity(
+      attempt,
+      childLog.provider,
+      childLog.providerAdapter ?? attempt.adapter,
+    );
+    finishRequestAttempt(
+      attempt,
+      response.status,
+      Date.now() - started,
+      failure.usage,
+    );
+    (logCtx.attempts ??= []).push(attempt);
+    attemptRetained = true;
+    lastFailure = failure.response;
+    if (comboFailureDecision(response.status, failure.classificationText) === "stop") {
+      Object.assign(logCtx, childLog, {
+        requestedModel: `combo/${comboId}`,
+        model: `combo/${comboId}`,
+        provider: "combo",
+        attempts: logCtx.attempts,
+        activeAttempt: undefined,
+        activeAttemptStartedAt: undefined,
+      });
+      return lastFailure;
+    }
+    console.warn(
+      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
+    );
+    pick = advanceComboAfterFailure(config, pick, {
+      retryAfter: failure.retryAfter,
+      now: Date.now(),
+    });
+  }
+  return lastFailure!;
+}
+
 export async function handleResponses(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  options: {
-    forceEmptyResponseId?: boolean;
-    abortSignal?: AbortSignal;
-    authContext?: CodexAuthContext;
-    selectedForwardHeaders?: Headers;
-    recordTerminalOutcomes?: boolean;
-    setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus) => void) | undefined) => void;
-    onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
-    onNativePassthroughCancel?: () => void;
-  } = {},
+  options: HandleResponsesOptions = {},
 ): Promise<Response> {
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
+  }
+  const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
+  if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
+    return handleComboResponses(req, body, comboId, config, logCtx, options);
   }
   const originalBody = body;
   body = expandPreviousResponseInput(body);
@@ -489,6 +804,9 @@ export async function handleResponses(
   try {
     route = routeModel(config, parsed.modelId);
   } catch (err) {
+    if (err instanceof NoAvailableComboTargetsError) {
+      return comboUnavailableResponse(err.message);
+    }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
 
@@ -504,6 +822,10 @@ export async function handleResponses(
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
+
+  // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
+  // Must run before effort caps/native clamps so the base model gets correct limits.
+  applyOpenAiVirtualModel(parsed, route, logCtx);
 
   // Fast mode override: when config.fastMode is explicitly set, inject or strip
   // service_tier for OpenAI-routed models. Undefined = passthrough (client decides).
@@ -586,11 +908,17 @@ export async function handleResponses(
     logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
   );
 
-  let authCtx: CodexAuthContext;
+  let authCtx: CodexAuthContext = { kind: "main", accountId: null };
   let selectedForwardHeaders: Headers;
   try {
-    authCtx = options.authContext ?? await resolveCodexAuthContext(req.headers, config);
-    selectedForwardHeaders = options.selectedForwardHeaders ?? headersForCodexAuthContext(req.headers, authCtx);
+    if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
+    if (route.codexAccountMode) {
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+      options.onCodexAuthContextResolved?.(authCtx);
+    } else {
+      options.onCodexAuthContextResolved?.(undefined);
+    }
+    selectedForwardHeaders = headersForCodexAuthContext(req.headers, authCtx);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
       return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
@@ -603,12 +931,21 @@ export async function handleResponses(
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
     }
+    if (err instanceof CodexPoolAuthenticationError) {
+      return formatErrorResponse(401, "authentication_error", err.message);
+    }
+    if (err instanceof CodexDirectAuthenticationError) {
+      return formatErrorResponse(401, "authentication_error", err.message);
+    }
+    if (err instanceof ForwardAdmissionCredentialError) {
+      return formatErrorResponse(401, "authentication_error", err.message);
+    }
     throw err;
   }
   if (!isCodexAuthContextUsable(authCtx, config)) {
     return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
   }
-  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx);
+  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
@@ -638,22 +975,48 @@ export async function handleResponses(
     }
   }
   route.provider = resolveProviderTransport(route.providerName, route.provider, parsed.options.promptCacheKey);
+  const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
+  const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  logCtx.providerAdapter = adapter.name;
+  sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
+  const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+
+  let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
+  const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+  const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
+  if (needsOpenAiVision || needsOpenAiSearch) {
+    try {
+      openAiSidecar = await resolveFirstUsableOpenAiSidecar(
+        listOpenAiForwardSidecarCandidates(config),
+        req.headers,
+        config,
+      );
+    } catch (err) {
+      // Sidecars are optional helpers for an otherwise independent routed turn.
+      // An unavailable/cooling/expired Multi credential disables the helper; it
+      // must not turn a valid routed-provider request into a Codex-auth failure.
+      if (
+        !(err instanceof CodexPoolAuthenticationError)
+        && !(err instanceof CodexAuthContextError)
+        && !(err instanceof CodexAccountCooldownError)
+        && !(err instanceof CodexThreadAffinityExpiredError)
+      ) throw err;
+    }
+  }
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
   // call, so the text-only model can reason about it.
-  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, selectedForwardHeaders, authCtx);
-  const recordSidecarOutcome = sidecarOutcomeRecorder(config, authCtx);
+  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
+  const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
-    await describeImagesInPlace(parsed, visionPlan, selectedForwardHeaders, options.abortSignal, recordSidecarOutcome);
+    await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, options.abortSignal, recordSidecarOutcome);
   } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
     stripImagesInPlace(parsed);
   }
 
-  const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
-  const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   // Remote compaction v2 on a ROUTED model: Codex sent `compaction_trigger` and requires exactly
@@ -692,6 +1055,12 @@ export async function handleResponses(
       );
     }
     const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+    const passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
+      ? request.usageLog.inputTokens
+      : undefined;
+    if (passthroughEstimate !== undefined) {
+      logCtx.usageLogInputTokens = passthroughEstimate;
+    }
     // Abort the upstream if the client disconnects. A directly-relayed body does not propagate the
     // consumer's cancel to a signalled fetch, so we pass the signal and relay through relayWithAbort,
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
@@ -704,15 +1073,19 @@ export async function handleResponses(
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
-        () => fetchWithHeaderTimeout(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
+        recovery => {
+          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+          return fetchWithHeaderTimeout(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+        },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
     } catch (err) {
       upstream.abort();
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) recordCodexUpstreamOutcome(config, authCtx.accountId, outcome);
       const msg = outcome === "timeout"
@@ -774,7 +1147,7 @@ export async function handleResponses(
     // async-pull segfault on Windows. Branch[0] goes directly to the Response (Bun
     // native relay, never enters JS Sink.write); branch[1] is consumed in the
     // background for terminal-outcome/quota inspection only.
-    if (isEventStream && upstreamResponse.body) {
+    if (upstreamResponse.ok && isEventStream && upstreamResponse.body) {
       const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const turnAc = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
@@ -813,6 +1186,11 @@ export async function handleResponses(
       }));
     }
     if (headers.get("content-type")?.toLowerCase().includes("application/json")) {
+      if (!upstreamResponse.ok && options.comboAttempt) {
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        options.onConsumedComboFailure?.(failure);
+        return failure.response;
+      }
       const text = await upstreamResponse.text();
       inspectResponseLogJson(logCtx, text);
       if (upstreamResponse.ok && rememberPassthroughResponse) {
@@ -841,6 +1219,7 @@ export async function handleResponses(
     const queue = createAdapterEventQueue();
     const runTurn = async (): Promise<void> => {
       try {
+        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
         await adapter.runTurn?.(
           parsed,
           { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal },
@@ -859,8 +1238,19 @@ export async function handleResponses(
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
     if (parsed.stream) {
       void runTurn();
+      let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
+      if (options.comboAttempt) {
+        const preflight = await preflightAdapterEvents(eventSource);
+        if (preflight.error || preflight.empty) {
+          runTurnAbort.abort();
+          queue.close();
+          const message = preflight.error?.message ?? "Adapter ended before producing a response";
+          return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+        }
+        eventSource = preflight.stream;
+      }
       const sseStream = bridgeToResponsesSSE(
-        queue.stream(), parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        eventSource, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           runTurnAbort.abort();
           queue.close();
@@ -882,6 +1272,15 @@ export async function handleResponses(
 
     await runTurn();
     const events = await queue.collect();
+    if (options.comboAttempt) {
+      const firstMeaningful = events.find(event => event.type !== "heartbeat");
+      if (!firstMeaningful || firstMeaningful.type === "error") {
+        const message = firstMeaningful?.type === "error"
+          ? firstMeaningful.message
+          : "Adapter ended before producing a response";
+        return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+      }
+    }
     const json = buildResponseJSON(events, parsed.modelId, {
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
@@ -896,21 +1295,22 @@ export async function handleResponses(
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
   // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
   // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
-  const wsPlan = planWebSearch(config, parsed, false, selectedForwardHeaders, route.provider, route.modelId, authCtx);
+  const wsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
   if (wsPlan) {
     parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
+    noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       backend: wsPlan.backend,
-      forwardProvider: wsPlan.forwardProvider,
+      forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
       hostedTool: wsPlan.hostedTool,
-      selectedForwardHeaders,
+      selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
       settings: wsPlan.settings,
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
-      recordSidecarOutcome,
+      recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
@@ -946,22 +1346,34 @@ export async function handleResponses(
   const connectMs = config.connectTimeoutMs ?? 200_000;
 
   const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
-  if (typeof request.usageLog?.inputTokens === "number") {
-    logCtx.usageLogInputTokens = request.usageLog.inputTokens;
-  }
+  const inputTokenEstimate = typeof request.usageLog?.inputTokens === "number"
+    ? request.usageLog.inputTokens
+    : undefined;
+  if (inputTokenEstimate !== undefined) logCtx.usageLogInputTokens = inputTokenEstimate;
   let upstreamResponse: Response;
   try {
-    upstreamResponse = adapter.fetchResponse
-      ? await adapter.fetchResponse(request, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
-      : await fetchWithResetRetry(
-          () => fetchWithHeaderTimeout(request.url, {
+    if (adapter.fetchResponse) {
+      noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
+      upstreamResponse = await adapter.fetchResponse(request, {
+        abortSignal: upstream.signal,
+        timeoutMs: connectMs,
+        stream: parsed.stream,
+      });
+    } else {
+      upstreamResponse = await fetchWithResetRetry(
+        recovery => {
+          noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
+          return fetchWithHeaderTimeout(request.url, {
             method: request.method, headers: request.headers, body: request.body,
-          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider)),
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
-        );
+          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+        },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+      );
+    }
   } catch (err) {
     cleanupUpstreamAbort();
     upstream.abort();
+    if (options.abortSignal?.aborted) return clientCancelledResponse();
     const msg = err instanceof Error && err.name === "TimeoutError"
       ? `Provider connect timeout after ${connectMs}ms`
       : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
@@ -978,11 +1390,20 @@ export async function handleResponses(
     let imageTierBias = 0;
     let imageRetryAttempted = false;
     let oauth401ReplayAttempted = false;
-    const rebuildAndRefetch = async (): Promise<Response | { failed: Response }> => {
+    const rebuildAndRefetch = async (
+      recovery: AttemptRecoveryKind,
+    ): Promise<Response | { failed: Response }> => {
       const retryRequest = await activeAdapter.buildRequest(parsed, {
         headers: selectedForwardHeaders,
         ...(imageTierBias > 0 ? { imageTierBias } : {}),
       });
+      const retryEstimate = typeof retryRequest.usageLog?.inputTokens === "number"
+        ? retryRequest.usageLog.inputTokens
+        : undefined;
+      if (retryEstimate !== undefined) logCtx.usageLogInputTokens = retryEstimate;
+      logCtx.providerAdapter = activeAdapter.name;
+      sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
+      noteAttemptSend(logCtx.activeAttempt, retryEstimate, recovery);
       try {
         return activeAdapter.fetchResponse
           ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
@@ -992,6 +1413,9 @@ export async function handleResponses(
       } catch (err) {
         cleanupUpstreamAbort();
         upstream.abort();
+        if (options.abortSignal?.aborted) {
+          return { failed: clientCancelledResponse() };
+        }
         const msg = err instanceof Error && err.name === "TimeoutError"
           ? `Provider connect timeout after ${connectMs}ms`
           : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
@@ -1025,7 +1449,7 @@ export async function handleResponses(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider),
           config.cacheRetention,
         );
-        const result = await rebuildAndRefetch();
+        const result = await rebuildAndRefetch("oauth-401");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
@@ -1050,7 +1474,7 @@ export async function handleResponses(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
           config.cacheRetention,
         );
-        const result = await rebuildAndRefetch();
+        const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
       }
@@ -1065,7 +1489,7 @@ export async function handleResponses(
         imageRetryAttempted = true;
         imageTierBias = 1;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch();
+        const result = await rebuildAndRefetch("image-413");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
@@ -1073,6 +1497,12 @@ export async function handleResponses(
       break;
     }
     if (!upstreamResponse.ok) {
+      if (options.comboAttempt) {
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
+          .finally(cleanupUpstreamAbort);
+        options.onConsumedComboFailure?.(failure);
+        return failure.response;
+      }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       cleanupUpstreamAbort();
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
@@ -1146,7 +1576,62 @@ export function linkAbortSignal(upstream: AbortController, signal?: AbortSignal)
  * REPLACEMENT history (compact_remote.rs). Passthrough forwards to the real ChatGPT backend;
  * routed models run the same summarizer used for v2 and convert the summary to v1 history items.
  */
-export async function handleResponsesCompact(req: Request, config: OcxConfig): Promise<Response> {
+export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+
+function compactResponseTooLargeError(): Response {
+  return new Response(JSON.stringify({
+    error: {
+      message: "Compact response exceeded 32 MiB",
+      type: "compact_response_too_large",
+      code: "compact_response_too_large",
+    },
+  }), { status: 502, headers: { "Content-Type": "application/json" } });
+}
+
+async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
+  const reader = upstream.body?.getReader();
+  const contentType = upstream.headers.get("content-type") ?? "application/json";
+  if (!reader) return new Response(null, { status: upstream.status, headers: { "Content-Type": contentType } });
+  const declaredLength = Number(upstream.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
+    await reader.cancel("compact_response_too_large").catch(() => undefined);
+    return compactResponseTooLargeError();
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      if (signal.aborted) {
+        await reader.cancel(signal.reason).catch(() => undefined);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > COMPACT_RESPONSE_MAX_BYTES) {
+        await reader.cancel("compact_response_too_large").catch(() => undefined);
+        return compactResponseTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } catch {
+    if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Response(body, { status: upstream.status, headers: { "Content-Type": contentType } });
+}
+
+export async function handleResponsesCompact(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+): Promise<Response> {
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
@@ -1167,6 +1652,27 @@ export async function handleResponsesCompact(req: Request, config: OcxConfig): P
   } catch (err) {
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  const selectedModelId = route.modelId;
+  logCtx.requestedModel = raw.model;
+  logCtx.model = selectedModelId;
+  logCtx.provider = route.providerName;
+  logCtx.providerAdapter = route.provider.adapter;
+  const virtual = resolveOpenAiCompactModel(route.providerName, selectedModelId);
+  if (virtual) {
+    route.modelId = virtual.wireModelId;
+    logCtx.model = virtual.selectedModelId;
+    logCtx.resolvedModel = virtual.wireModelId;
+  } else {
+    logCtx.resolvedModel = route.modelId;
+  }
+
+  if (route.codexAccountMode === "direct") {
+    try { validateForwardAdmissionCredential(req.headers, config); }
+    catch (err) {
+      if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
+      throw err;
+    }
+  }
 
   if (route.provider.adapter === "openai-responses") {
     // Native ChatGPT/OpenAI model: forward the compact request verbatim to the real backend.
@@ -1176,37 +1682,51 @@ export async function handleResponsesCompact(req: Request, config: OcxConfig): P
     let compactProvider = route.provider;
     const headers = new Headers({ "content-type": "application/json" });
     try {
-      const authCtx = await resolveCodexAuthContext(req.headers, config);
-      const selected = headersForCodexAuthContext(req.headers, authCtx);
-      compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx);
-      for (const name of FORWARD_HEADERS) {
-        const value = selected.get(name);
-        if (value) headers.set(name, value);
+      if (route.codexAccountMode) {
+        const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        const selected = headersForCodexAuthContext(req.headers, authCtx);
+        compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+        for (const name of FORWARD_HEADERS) {
+          const value = selected.get(name);
+          if (value) headers.set(name, value);
+        }
+        const override = (compactProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
+        if (override) {
+          headers.set("authorization", `Bearer ${override.accessToken}`);
+          headers.set("chatgpt-account-id", override.chatgptAccountId);
+        }
       }
-      const override = (compactProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
-      if (override) {
-        headers.set("authorization", `Bearer ${override.accessToken}`);
-        headers.set("chatgpt-account-id", override.chatgptAccountId);
+    } catch (err) {
+      if (err instanceof CodexAccountCooldownError) {
+        return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
       }
-    } catch {
-      // Auth-context failures degrade to raw forwarded headers (pre-existing behavior) rather
-      // than failing the compact turn outright — codex-rs treats compact errors as session-fatal.
-      for (const name of FORWARD_HEADERS) {
-        const value = req.headers.get(name);
-        if (value) headers.set(name, value);
+      if (err instanceof CodexThreadAffinityExpiredError) {
+        return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       }
+      if (err instanceof CodexAuthContextError) {
+        return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+      }
+      if (err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError) {
+        return formatErrorResponse(401, "authentication_error", err.message);
+      }
+      throw err;
     }
     const base = (compactProvider.baseUrl ?? "").replace(/\/$/, "");
     if (compactProvider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
-    const upstream = await fetch(`${base}/responses/compact`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ ...raw, model: route.modelId }),
-    });
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json" },
-    });
+    const { reasoning: _reasoning, ...compactBody } = raw as typeof raw & { reasoning?: unknown };
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${base}/responses/compact`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...compactBody, model: route.modelId }),
+        signal: req.signal,
+      });
+    } catch {
+      if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+    }
+    return bufferCompactResponse(upstream, req.signal);
   }
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
@@ -1227,7 +1747,6 @@ export async function handleResponsesCompact(req: Request, config: OcxConfig): P
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
-  const logCtx: RequestLogContext = { model: route.modelId, provider: route.providerName };
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal });
   if (!response.ok) return response;
   let json: { output?: unknown[] };

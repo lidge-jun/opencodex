@@ -39,9 +39,15 @@ function plan(input: OcxConfig) {
     input,
     parsed,
     false,
-    new Headers({ authorization: "Bearer chatgpt" }),
     routedProvider,
     "model",
+    {
+      providerName: "openai",
+      provider: forwardProvider,
+      accountMode: "direct",
+      authContext: { kind: "main", accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    },
   );
 }
 

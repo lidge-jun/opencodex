@@ -13,6 +13,13 @@ describe("baseProviderLabel", () => {
     expect(baseProviderLabel("chatgpt-p104398")).toBe("openai");
   });
 
+  test("normalizes historical Multi rows while keeping API-key usage distinct", () => {
+    expect(baseProviderLabel("openai-multi")).toBe("openai");
+    expect(baseProviderLabel("openai-multi-p104398")).toBe("openai");
+    expect(baseProviderLabel("openai-multi-main")).toBe("openai");
+    expect(baseProviderLabel("openai-apikey")).toBe("openai-apikey");
+  });
+
   test("strips a lowercase-hex pool suffix matching CODEX_ACCOUNT_LOG_LABEL_RE", () => {
     expect(baseProviderLabel("openai-p104398")).toBe("openai");
     expect(baseProviderLabel("anthropic-pabc123")).toBe("anthropic");

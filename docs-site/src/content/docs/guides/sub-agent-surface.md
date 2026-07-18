@@ -6,7 +6,7 @@ description: Control how Codex spawns and manages sub-agents across all models.
 opencodex lets you choose the multi-agent collaboration surface for every model in the catalog. The **Sub-agent** toggle in the dashboard and Models page controls this globally.
 
 :::note
-On the v2 surface (`multi_agent_v2`), a spawned sub-agent inherits the parent model **by default**: `fork_turns` defaults to `all`, and full-history forks reject overrides. Since v2.7.2 opencodex injects guidance that teaches the model how to break inheritance — a `spawn_agent` call that sets `fork_turns` to `"none"` (or a partial fork such as `"3"`) can pass `model` / `reasoning_effort` arguments, which the Codex runtime parses and applies even though the published tool schema hides them.
+On the v2 surface (`multi_agent_v2`), a spawned sub-agent inherits the parent model **by default**: `fork_turns` defaults to `all`, and full-history forks reject overrides. Since v2.7.2 opencodex injects guidance that teaches the model how to break inheritance — a `spawn_agent` call that sets `fork_turns` to `"none"` (or a partial fork such as `"3"`) can pass `model` / `reasoning_effort` arguments, which the Codex runtime parses and applies even though the published tool schema hides them. Known limitation: when a **native** parent spawns a child routed to a **non-native** provider, the Codex client may send the `NEW_TASK` payload only as backend-encrypted `encrypted_content`, so the routed child receives an empty task body ([#92](https://github.com/lidge-jun/opencodex/issues/92)). The model override still applies, but the task text can be lost — the v1 surface remains the reliable choice for heterogeneous-provider delegation.
 :::
 
 ## Modes
@@ -15,7 +15,7 @@ On the v2 surface (`multi_agent_v2`), a spawned sub-agent inherits the parent mo
 | --- | --- | --- |
 | **v1** | `multi_agent_v1` | Classic namespaced agent tools with `send_input` / `close_agent` / `resume_agent`. A `spawn_agent` model override can start a sub-agent on a different model. |
 | **base** (default) | Upstream pins | Restores upstream model pins: gpt-5.6-sol and gpt-5.6-terra use v2, gpt-5.6-luna uses v1, and unpinned models follow the Codex `multi_agent_v2` feature flag. Spawn behavior follows the surface that resolves for that model. |
-| **v2** | `multi_agent_v2` | Flat `spawn_agent` tools with concurrent sessions and `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`. Children inherit the parent model on full-history forks; `fork_turns: "none"` (or a partial fork) accepts `model` / `reasoning_effort` overrides. |
+| **v2** | `multi_agent_v2` | Flat `spawn_agent` tools with concurrent sessions and `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`. Children inherit the parent model on full-history forks; `fork_turns: "none"` (or a partial fork) accepts `model` / `reasoning_effort` overrides. Task body may arrive encrypted for native→routed children ([#92](https://github.com/lidge-jun/opencodex/issues/92)). |
 
 ## How it works
 
@@ -46,7 +46,7 @@ To replace the built-in v2 guidance, set `injectionPrompt` (config key, or `PUT 
 - **Dashboard** → first stat cell: click **v1**, **base**, or **v2**.
 - **Models** page → top-row segmented control.
 - Both pages have a **?** button that opens a help modal with a link back here.
-- **Dashboard** → **Sub-agent delegation**: choose a preferred model and optional reasoning effort. On v2 the injected guidance instructs the agent to spawn with `fork_turns: "none"` so the choice actually takes effect.
+- **Dashboard** → **Sub-agent delegation**: choose a preferred model and optional reasoning effort. On v2 the injected guidance instructs the agent to spawn with `fork_turns: "none"` so the model override applies — though for native→routed children the task body can currently arrive encrypted ([#92](https://github.com/lidge-jun/opencodex/issues/92)).
 
 ### CLI
 

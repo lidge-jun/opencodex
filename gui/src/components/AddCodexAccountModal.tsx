@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconGlobe, IconLink } from "../icons";
 import { useT } from "../i18n";
 
@@ -26,12 +26,14 @@ export default function AddCodexAccountModal({
   const [authUrl, setAuthUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const stopPolling = () => {
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const stopPolling = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
-  };
+  }, []);
 
-  const cancelLogin = async () => {
+  const cancelLogin = useCallback(async () => {
     const flowId = flowRef.current;
     flowRef.current = null;
     setAuthUrl("");
@@ -42,12 +44,12 @@ export default function AddCodexAccountModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ flowId }),
     }).catch(() => {});
-  };
+  }, [apiBase, stopPolling]);
 
-  const closeModal = () => {
+  const closeModal = useCallback(() => {
     if (step === "oauth-waiting") void cancelLogin();
     onClose();
-  };
+  }, [step, onClose, cancelLogin]);
 
   const copyLoginLink = async () => {
     if (!authUrl) return;
@@ -71,15 +73,30 @@ export default function AddCodexAccountModal({
     }
   };
 
+  // Focus-trap: focus first interactive element on mount, restore on unmount.
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog) {
+      const focusable = dialog.querySelector<HTMLElement>(
+        "input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+      );
+      if (focusable) focusable.focus();
+    }
+    return () => {
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [closeModal]);
 
   return (
-    <div className="modal-overlay" onClick={closeModal}>
-      <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+    <div role="dialog" aria-modal="true" aria-label={t("codexAuth.addTitle")} className="modal-overlay" onClick={closeModal}>
+      <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
         {step === "pick" && (
           <>
             <h3 style={{ marginBottom: 4 }}>{t("codexAuth.addTitle")}</h3>

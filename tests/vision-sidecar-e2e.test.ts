@@ -17,12 +17,14 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 let sidecar: ReturnType<typeof Bun.serve> | null = null;
+const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-vision-e2e-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-vision-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
+  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
@@ -30,6 +32,7 @@ afterEach(() => {
   upstream = null;
   sidecar?.stop(true);
   sidecar = null;
+  globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -91,9 +94,18 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     let sidecarHits = 0;
     upstream = serveUpstream(b => { upstreamBody = b; });
     sidecar = serveSidecar((req, b) => { sidecarHits += 1; sidecarBody = b; sidecarAuth = req.headers.get("authorization"); });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
 
     const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly",
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly", openaiProviderTierVersion: 2,
       providers: {
         textonly: {
           adapter: "openai-chat",
@@ -102,7 +114,12 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           apiKey: "key-alpha-000111222333",
           noVisionModels: ["blind-model"],
         },
-        chatgpt: { adapter: "openai-responses", authMode: "forward", baseUrl: `http://127.0.0.1:${sidecar.port}`, allowPrivateNetwork: true },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
       },
     } as OcxConfig;
     saveConfig(config);
@@ -137,7 +154,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     sidecar = serveSidecar(() => { sidecarHits += 1; });
 
     const config: OcxConfig = {
-      port: 0, hostname: "127.0.0.1", defaultProvider: "seeing",
+      port: 0, hostname: "127.0.0.1", defaultProvider: "seeing", openaiProviderTierVersion: 2,
       providers: {
         seeing: {
           adapter: "openai-chat",
@@ -146,7 +163,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           apiKey: "key-alpha-000111222333",
           noVisionModels: ["blind-model"],
         },
-        chatgpt: { adapter: "openai-responses", authMode: "forward", baseUrl: `http://127.0.0.1:${sidecar.port}`, allowPrivateNetwork: true },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
     } as OcxConfig;
     saveConfig(config);

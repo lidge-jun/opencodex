@@ -10,10 +10,20 @@ describe("update stops the running proxy before replacing files", () => {
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
     expect(updateSource).toContain('spawnSync(process.execPath, [process.argv[1], "stop"]');
     const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
-    const updateAt = updateSource.indexOf("const { bin, args: cmdArgs } = updateCommand(installer, tag);");
+    const updateAt = updateSource.indexOf("const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);");
     expect(stopAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(updateAt);
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
+  });
+
+  test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
+    const gateAt = updateSource.indexOf("const integrity = checkUpdatePackageIntegrity(latest);");
+    const abortAt = updateSource.indexOf("aborting the update before stopping the proxy");
+    const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(abortAt).toBeGreaterThan(-1);
+    expect(gateAt).toBeLessThan(stopAt);
+    expect(abortAt).toBeLessThan(stopAt);
   });
 
   test("npm launcher update path stops via its own launcher path before npm install", () => {

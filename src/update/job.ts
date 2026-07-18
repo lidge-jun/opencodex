@@ -8,6 +8,8 @@ import { isServiceInstalled } from "../service";
 import {
   type Channel,
   type Installer,
+  PKG,
+  checkUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
   detectInstall,
@@ -136,15 +138,18 @@ export function updateExecutionCommand(
   installer: Installer,
   channel: Channel,
   launcher = packageLauncherPath(),
+  resolvedVersion?: string | null,
 ): { bin: string; args: string[]; display: string } {
   if (installer === "npm") {
     const bin = nodeBin();
     const args = [launcher, "update", "--tag", channel];
+    // The Node launcher self-update re-resolves the tag at its own time — a residual
+    // divergence window this path cannot close (documented, not claimed immutable).
     return { bin, args, display: formatCommand(bin, args) };
   }
   if (installer === "bun") {
-    const { bin, args } = updateCommand(installer, channel);
-    return { bin, args, display: updateCommandStr(installer, channel) };
+    const { bin, args } = updateCommand(installer, channel, resolvedVersion);
+    return { bin, args, display: updateCommandStr(installer, channel, resolvedVersion) };
   }
   return { bin: "sh", args: ["-lc", manualSourceCommand()], display: manualSourceCommand() };
 }
@@ -319,13 +324,25 @@ export function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boo
       throw new Error(check.reason ?? "No update is available");
     }
 
-    const cmd = updateExecutionCommand(check.installer, channel);
+    // Pre-flight integrity metadata check (same lanes as the CLI): anomalous registry
+    // metadata for a resolved version fails the job BEFORE anything is spawned or the
+    // proxy is stopped; transient registry failure degrades to a logged skip.
+    const integrity = checkUpdatePackageIntegrity(check.latestVersion);
+    if (integrity.ok === false) {
+      updateJob(job, { status: "failed", error: integrity.reason });
+      return;
+    }
+    const integrityLine = integrity.ok === "skipped"
+      ? `Integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`
+      : `Verified ${PKG}@${check.latestVersion} integrity metadata ${integrity.integrity.slice(0, 24)}…`;
+
+    const cmd = updateExecutionCommand(check.installer, channel, undefined, check.latestVersion);
     job = updateJob(job, {
       currentVersion: check.currentVersion,
       latestVersion: check.latestVersion,
       installer: check.installer,
       command: cmd.display,
-    });
+    }, integrityLine);
 
     /* [Decision Log]
     - 목적: GUI 요청 처리 프로세스가 자신이 실행 중인 패키지를 직접 덮어쓰지 않도록 업데이트를 별도 worker에서 수행한다.

@@ -63,7 +63,50 @@ function extractErrorDetail(parsed: unknown): string | undefined {
 function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
-  let pendingToolCallIds = new Set<string>();
+
+  // 260718 dangling tool_calls hardening (devlog/_plan/260718_dangling_toolcall_hardening):
+  // strict chat providers (Kimi/Moonshot) 400 when an assistant tool_call is not answered
+  // immediately by role:"tool" messages. Repair order: (1) reattach a real result to its
+  // original call (barrier messages are DEFERRED until the open tool round closes),
+  // (2) synthesize an explicit unavailable-result only when no real result exists,
+  // (3) manufacture an orphan assistant call only when no call occurrence matches at all.
+  // Occurrences are kept as an ordered list (never a Map) so duplicated ids survive.
+  interface PendingToolCall { id: string; name: string }
+  let pendingToolCalls: PendingToolCall[] = [];
+  let deferredBarrierMessages: unknown[] = [];
+  let mintedIdSeq = 0;
+  const seenWireCallIds = new Set<string>();
+
+  const mintCallId = (): string => {
+    let id = "";
+    do {
+      id = `call_ocx_minted_${++mintedIdSeq}`;
+    } while (seenWireCallIds.has(id));
+    seenWireCallIds.add(id);
+    return id;
+  };
+
+  const releaseDeferredBarriers = (): void => {
+    if (deferredBarrierMessages.length === 0) return;
+    out.push(...deferredBarrierMessages);
+    deferredBarrierMessages = [];
+  };
+
+  // Close an unresolved tool round with explicit unavailable-result messages. The wording
+  // must not claim interruption, success, failure, or user intent: execution status is
+  // UNKNOWN, and for user-input tools this must not read as an answer.
+  const flushPendingToolCalls = (): void => {
+    if (pendingToolCalls.length === 0) return;
+    for (const call of pendingToolCalls) {
+      out.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: `[ocx] no tool result was recorded for "${call.name}"; execution status unknown — do not treat this as success, failure, or user-provided input.`,
+      });
+    }
+    pendingToolCalls = [];
+    releaseDeferredBarriers();
+  };
 
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
     ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
@@ -83,22 +126,26 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
       case "user":
       case "developer": {
         const role = msg.role === "developer" ? "system" : "user";
+        let chatMsg: Record<string, unknown>;
         if (typeof msg.content === "string") {
-          out.push({ role, content: msg.content });
+          chatMsg = { role, content: msg.content };
         } else {
           const parts = msg.content as OcxContentPart[];
           if (!parts.some(p => p.type === "image")) {
-            out.push({ role, content: parts.map(p => (p as OcxTextContent).text).join("") });
+            chatMsg = { role, content: parts.map(p => (p as OcxTextContent).text).join("") };
           } else {
             // Vision: chat-completions content-parts array. Images are only valid on the user role,
             // and the data URL goes straight into image_url.url (never the token-exploding text path).
             const chatParts = parts.map(p => p.type === "image"
               ? { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } }
               : { type: "text", text: (p as OcxTextContent).text });
-            out.push({ role: "user", content: chatParts });
+            chatMsg = { role: "user", content: chatParts };
           }
         }
-        pendingToolCallIds = new Set();
+        // A barrier must not split an open tool round: defer it until the round closes
+        // (real result arrives) or the round is synthesized shut.
+        if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);
+        else out.push(chatMsg);
         break;
       }
       case "assistant": {
@@ -114,9 +161,21 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
           chatMsg.reasoning_content = reasoningContent;
         }
-        if (toolCalls.length > 0) {
-          chatMsg.tool_calls = toolCalls.map(tc => ({
-            id: tc.id,
+        // Skip empty assistant messages: chat APIs like DeepSeek reject an assistant message
+        // with neither content, tool calls, nor a provider-supported reasoning_content field.
+        if (chatMsg.content === undefined && toolCalls.length === 0 && chatMsg.reasoning_content === undefined) break;
+        // A new assistant starts while a previous round is still open: close the previous
+        // round synthetically first so its tool_calls are never left dangling.
+        flushPendingToolCalls();
+        const wireToolCalls = toolCalls.map(tc => {
+          let id = tc.id;
+          if (!id) id = mintCallId();
+          else seenWireCallIds.add(id);
+          return { tc, id };
+        });
+        if (wireToolCalls.length > 0) {
+          chatMsg.tool_calls = wireToolCalls.map(({ tc, id }) => ({
+            id,
             type: "function",
             function: { name: namespacedToolName(tc.namespace, tc.name), arguments: JSON.stringify(tc.arguments) },
           }));
@@ -127,19 +186,30 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         if (chatMsg.reasoning_content !== undefined && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
           chatMsg.content = "";
         }
-        // Skip empty assistant messages: chat APIs like DeepSeek reject an assistant message
-        // with neither content, tool calls, nor a provider-supported reasoning_content field.
-        if (chatMsg.content === undefined && chatMsg.tool_calls === undefined && chatMsg.reasoning_content === undefined) break;
         out.push(chatMsg);
-        pendingToolCallIds = new Set(toolCalls.map(tc => tc.id).filter(Boolean));
+        pendingToolCalls = wireToolCalls.map(({ tc, id }) => ({ id, name: namespacedToolName(tc.namespace, tc.name) }));
         break;
       }
       case "toolResult": {
         let toolCallId = msg.toolCallId;
-        if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
-        if (!pendingToolCallIds.has(toolCallId)) {
+        const matchIdx = toolCallId ? pendingToolCalls.findIndex(c => c.id === toolCallId) : -1;
+        if (matchIdx >= 0 && toolCallId) {
+          // Real result reattached to its original call. Barriers were deferred, so the
+          // tool message lands immediately inside the open round.
+          out.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: contentPartsToText(msg.content),
+          });
+          pendingToolCalls.splice(matchIdx, 1);
+          if (pendingToolCalls.length === 0) releaseDeferredBarriers();
+        } else {
+          if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
+          // No matching call in the open round. Close any unresolved round first so the
+          // synthesized orphan pair never splits it, then keep the historical repair:
           // WS turns can arrive with only tool outputs; chat-completions providers reject a bare
           // role:"tool" message unless an assistant tool_call with the same id immediately precedes it.
+          flushPendingToolCalls();
           const name = safeToolName(msg.toolName);
           out.push({
             role: "assistant",
@@ -150,19 +220,22 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
               function: { name, arguments: "{}" },
             }],
           });
-          pendingToolCallIds = new Set([toolCallId]);
+          seenWireCallIds.add(toolCallId);
+          out.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: contentPartsToText(msg.content),
+          });
         }
-        out.push({
-          role: "tool",
-          tool_call_id: toolCallId,
-          content: contentPartsToText(msg.content),
-        });
-        pendingToolCallIds.delete(toolCallId);
         break;
       }
     }
   }
 
+  // Trailing dangle: a turn interrupted after the assistant requested tools leaves the
+  // round open; close it synthetically (then release any deferred barriers in order).
+  flushPendingToolCalls();
+  releaseDeferredBarriers();
   return out;
 }
 

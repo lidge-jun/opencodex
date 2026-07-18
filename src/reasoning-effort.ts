@@ -58,23 +58,24 @@ export function sanitizeCodexReasoningEfforts(efforts: readonly string[] | undef
 export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId: string): string[] | undefined {
   if (modelInList(provider.noReasoningModels, modelId)) return [];
   const modelEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId);
-  if (modelEfforts !== undefined) return healMaxTier(provider, modelId, sanitizeCodexReasoningEfforts(modelEfforts) ?? []);
-  if (provider.reasoningEfforts !== undefined) return healMaxTier(provider, modelId, sanitizeCodexReasoningEfforts(provider.reasoningEfforts) ?? []);
+  if (modelEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(modelEfforts) ?? []);
+  if (provider.reasoningEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(provider.reasoningEfforts) ?? []);
   return undefined;
 }
 
 /**
- * Stale-ladder self-heal: saved configs seeded before `max` became a native Codex level can
- * advertise a ladder that stops at `xhigh` while the wire map already routes xhigh -> max
- * (e.g. opencode-go glm-5.2, deepseek thinking models). When the map proves the provider
- * accepts wire `max`, append `max` so the picker actually shows the top tier. Thinking-toggle
- * maps (xhigh -> "enabled") never match, so binary-toggle models stay two-step.
+ * Stale-ladder self-heal: a registry wire map is authoritative evidence of the upstream tiers
+ * it can emit. Merge Codex-native map values into an older persisted ladder so newly documented
+ * tiers appear without rewriting the user's config. Non-Codex values such as enabled/disabled
+ * and Kimi's none sentinel are ignored here; they remain request-only wire aliases.
  */
-function healMaxTier(provider: OcxProviderConfig, modelId: string, efforts: string[]): string[] {
-  if (efforts.includes("max") || !efforts.includes("xhigh")) return efforts;
+function healMappedTiers(provider: OcxProviderConfig, modelId: string, efforts: string[]): string[] {
+  if (efforts.length === 0) return efforts;
   const wireMap = reasoningEffortMapFor(provider, modelId);
-  if (wireMap?.xhigh !== "max" && wireMap?.max !== "max") return efforts;
-  return sanitizeCodexReasoningEfforts([...efforts, "max"]) ?? efforts;
+  if (!wireMap) return efforts;
+  const mappedTiers = Object.values(wireMap).filter(isCodexReasoningEffort);
+  if (mappedTiers.length === 0) return efforts;
+  return sanitizeCodexReasoningEfforts([...efforts, ...mappedTiers]) ?? efforts;
 }
 
 function requestToCodexEffort(requested: string): string | undefined {

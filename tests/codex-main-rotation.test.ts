@@ -11,6 +11,7 @@ import {
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import {
+  CodexPoolAuthenticationError,
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
@@ -133,7 +134,7 @@ describe("main account rotation (Option A)", () => {
 
   test("active __main__ resolves to an injected main-pool auth context", async () => {
     const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID, autoSwitchThreshold: 0, codexAccounts: [] });
-    const ctx = await resolveCodexAuthContext(new Headers(), config);
+    const ctx = await resolveCodexAuthContext(new Headers(), config, "pool");
     expect(ctx).toEqual({
       kind: "main-pool",
       accountId: MAIN_CODEX_ACCOUNT_ID,
@@ -146,11 +147,59 @@ describe("main account rotation (Option A)", () => {
     expect(headers.get("chatgpt-account-id")).toBe("main_acct");
   });
 
-  test("active __main__ falls back to passthrough when the token vanishes", async () => {
+  test("no active id selects from main plus added accounts and binds main affinity", async () => {
+    const config = makeConfig({ activeCodexAccountId: undefined, autoSwitchThreshold: 0 });
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+    updateAccountQuota("a", 20, 0);
+    updateAccountQuota("b", 30, 0);
+    const headers = new Headers({ "x-codex-parent-thread-id": "main-affinity" });
+
+    const first = await resolveCodexAuthContext(headers, config, "pool");
+    expect(first).toMatchObject({ kind: "main-pool", accountId: MAIN_CODEX_ACCOUNT_ID });
+    expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    // A later active-id mutation must not steal an already-bound thread.
+    config.activeCodexAccountId = "a";
+    const second = await resolveCodexAuthContext(headers, config, "pool");
+    expect(second).toMatchObject({ kind: "main-pool", accountId: MAIN_CODEX_ACCOUNT_ID });
+  });
+
+  test("no active id selects an added account when the main token is unavailable", async () => {
+    rmSync(join(CODEX_DIR, "auth.json"));
+    const config = makeConfig({ activeCodexAccountId: undefined, autoSwitchThreshold: 0 });
+    updateAccountQuota("a", 10, 0);
+    updateAccountQuota("b", 20, 0);
+    const ctx = await resolveCodexAuthContext(new Headers(), config, "pool");
+    expect(ctx).toMatchObject({ kind: "pool", accountId: "a", accessToken: "access-a" });
+    expect(config.activeCodexAccountId).toBe("a");
+  });
+
+  test("no active id fails closed for expired, reauth-marked, or cooled main-only credentials", async () => {
+    const mainOnly = () => makeConfig({ activeCodexAccountId: undefined, autoSwitchThreshold: 0, codexAccounts: [] });
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 60 })).toString("base64url");
+    writeFileSync(join(CODEX_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: `header.${payload}.signature`, account_id: "main_acct" },
+    }));
+    await expect(resolveCodexAuthContext(new Headers(), mainOnly(), "pool"))
+      .rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+
+    writeMainAuth();
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    await expect(resolveCodexAuthContext(new Headers(), mainOnly(), "pool"))
+      .rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+
+    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    recordCodexUpstreamOutcome(mainOnly(), MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "60" });
+    await expect(resolveCodexAuthContext(new Headers(), mainOnly(), "pool"))
+      .rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+  });
+
+  test("active __main__ fails closed when the pool token vanishes", async () => {
     const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID, autoSwitchThreshold: 0, codexAccounts: [] });
     rmSync(join(CODEX_DIR, "auth.json"));
-    const ctx = await resolveCodexAuthContext(new Headers(), config);
-    expect(ctx).toEqual({ kind: "main", accountId: null });
+    await expect(resolveCodexAuthContext(new Headers(), config, "pool")).rejects.toThrow(
+      "no usable account credential",
+    );
   });
 
   test("provider log label unifies the main account with the passthrough provider", () => {

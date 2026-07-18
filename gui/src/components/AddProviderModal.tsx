@@ -1,51 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconX, IconLock, IconKey, IconExternal } from "../icons";
 import { useT } from "../i18n";
-import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
+import {
+  buildProviderPostBody,
+  codexPresetDescriptionKey,
+  isReservedCodexForwardPreset,
+  type ProviderPayload,
+  type ProviderPayloadForm,
+} from "../provider-payload";
+import ProviderCatalog from "./provider-catalog/ProviderCatalog";
+import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
 export type ProviderConfig = ProviderPayload;
 
-interface Preset {
-  id: string;
-  label: string;
-  adapter: string;
-  baseUrl: string;
-  defaultModel?: string;
-  /** "oauth": account login · "forward": ChatGPT passthrough · "key": API key · "local": local scaffold. */
-  auth: "oauth" | "forward" | "key" | "local";
-  /** OAuth registry id (for auth === "oauth"). */
-  oauthProvider?: string;
-  /** Where to create/copy the API key (for auth === "key" catalog providers). */
-  dashboardUrl?: string;
-  note?: string;
-  /** API key is optional — provider works without one (free public tier). */
-  keyOptional?: boolean;
-}
+/** Local alias — the DTO type is owned by provider-catalog/provider-presets.ts. */
+type Preset = CatalogPreset;
 
-interface FormState {
-  name: string;
-  adapter: string;
-  baseUrl: string;
-  authMode: "key" | "forward" | "oauth" | "local";
-  apiKey: string;
-  defaultModel: string;
-}
+type FormState = ProviderPayloadForm;
 
 export default function AddProviderModal({
-  apiBase, existingNames, onClose, onAdded,
+  apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
 }: {
   apiBase: string;
   existingNames: string[];
   onClose: () => void;
   onAdded: (name: string) => void;
+  /** Opening catalog tab (workspace empty-state tiles deep-link here). */
+  initialTier?: "accounts" | "free" | "paid";
+  /** Skip the catalog and open the custom-provider form immediately. */
+  initialCustom?: boolean;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
     { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" },
   ], [t]);
-  const [query, setQuery] = useState("");
-  const [preset, setPreset] = useState<Preset | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const [preset, setPreset] = useState<Preset | null>(
+    initialCustom ? { id: "custom", label: t("modal.customProvider"), adapter: "openai-chat", baseUrl: "", auth: "key" } : null,
+  );
+  const [form, setForm] = useState<FormState | null>(
+    initialCustom
+      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "" }
+      : null,
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [oauthSupported, setOauthSupported] = useState<string[]>([]);
@@ -57,12 +53,29 @@ export default function AddProviderModal({
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { searchRef.current?.focus(); }, []);
-  useEffect(() => () => { aliveRef.current = false; }, []); // stop the OAuth poll if the modal unmounts
+  // Cleanup + focus-trap: save previous focus on mount, restore on unmount.
+  useEffect(() => {
+    aliveRef.current = true;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog) {
+      const focusable = dialog.querySelector<HTMLElement>(
+        "input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+      );
+      if (focusable) focusable.focus();
+    }
+    return () => {
+      aliveRef.current = false;
+      previousFocusRef.current?.focus();
+    };
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -77,6 +90,16 @@ export default function AddProviderModal({
         loadedPresetsRef.current = true;
         setPresets(d.providers);
       }
+    }).catch(() => {}).finally(() => setPresetsLoading(false));
+  }, [apiBase]);
+  // Usage rank drives the catalog's default row order (most-used first).
+  useEffect(() => {
+    fetch(`${apiBase}/api/usage?range=30d`).then(r => r.json()).then((d: {
+      providers?: Array<{ provider: string; requests: number }>;
+    }) => {
+      const rank: Record<string, number> = {};
+      for (const row of d.providers ?? []) rank[row.provider] = row.requests;
+      setUsageRank(rank);
     }).catch(() => {});
   }, [apiBase]);
   // Keep the custom fallback label in sync when language changes and API presets never loaded.
@@ -84,12 +107,10 @@ export default function AddProviderModal({
     if (!loadedPresetsRef.current) setPresets(fallbackPresets);
   }, [fallbackPresets]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return presets;
-    // Match by provider name/id — not adapter, since most share "openai-chat" and would all match.
-    return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
-  }, [query, presets]);
+  const presetDescription = (candidate: Preset): string | undefined => {
+    const key = codexPresetDescriptionKey(candidate);
+    return key ? t(key) : candidate.note;
+  };
 
   const choosePreset = (p: Preset) => {
     setPreset(p);
@@ -122,10 +143,16 @@ export default function AddProviderModal({
 
   const submit = async () => {
     if (!form) return;
-    const name = form.name.trim();
-    if (!name) { setError(t("modal.nameRequired")); return; }
-    if (!form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
-    const provider = buildProviderPayload(form);
+    const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
+    if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
+    if (!reserved && !form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
+    let postBody: { name: string; provider: ProviderPayload };
+    try {
+      postBody = buildProviderPostBody(preset ?? { id: "custom" }, form);
+    } catch {
+      setError(t("modal.invalidPreset"));
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -133,14 +160,14 @@ export default function AddProviderModal({
       const res = await fetch(`${apiBase}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, provider }),
+        body: JSON.stringify(postBody),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || t("modal.failedStatus", { status: res.status }));
         return;
       }
-      onAdded(name);
+      onAdded(postBody.name);
     } catch {
       setError(t("modal.networkError"));
     } finally {
@@ -234,48 +261,25 @@ export default function AddProviderModal({
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
   const isCustom = preset?.id === "custom";
   const isLocal = form?.authMode === "local";
+  const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
 
   return (
     <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
           <button className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
         </div>
 
         {!preset ? (
-          <>
-            <input
-              ref={searchRef}
-              className="input"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder={t("modal.search")}
-            />
-            <div style={{ marginTop: 12, maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-              {filtered.map(p => (
-                <button key={p.id} className="list-row" onClick={() => choosePreset(p)}>
-                  <div>
-                    <div className="title">{p.label}</div>
-                    <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                    {p.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
-                    {p.auth === "oauth"
-                      ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
-                      : p.auth === "forward"
-                        ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
-                        : p.auth === "local"
-                          ? <span className="badge badge-amber">{t("modal.badge.local")}</span>
-                          : !p.keyOptional
-                            ? <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>
-                            : null}
-                  </div>
-                </button>
-              ))}
-              {filtered.length === 0 && <div className="muted text-control" style={{ padding: 8 }}>{t("modal.noMatch")}</div>}
-            </div>
-          </>
+          <ProviderCatalog
+            presets={presets}
+            usageRank={usageRank}
+            presetsLoading={presetsLoading}
+            initialTier={initialTier}
+            onSelectPreset={p => choosePreset(p)}
+            onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
+          />
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane
@@ -356,7 +360,7 @@ export default function AddProviderModal({
           ) : (
             // API key / Codex-forward / free-tier form
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {!isCustom && !isLocal && !preset.keyOptional && preset.note && (
+              {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
                 <details className="setup-guide">
                   <summary>{t("modal.setupGuide")}</summary>
                   <ol className="text-label leading-relaxed" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--muted)" }}>
@@ -374,22 +378,22 @@ export default function AddProviderModal({
                 </details>
               )}
               <Field label={t("modal.providerName")}>
-                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
+                <input className="input" value={form.name} readOnly={isReservedForward} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
               </Field>
               {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
-              <Field label={t("modal.adapter")}>
-                <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
-                  {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </Field>
-              <Field label={t("modal.baseUrl")}>
-                <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
-              </Field>
+              {!isReservedForward && <>
+                <Field label={t("modal.adapter")}>
+                  <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
+                    {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </Field>
+                <Field label={t("modal.baseUrl")}>
+                  <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+                </Field>
+              </>}
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
-                  {t("modal.forwardHintPrefix")}{" "}
-                  <code className="chip">{t("modal.forwardCredentials")}</code>{" "}
-                  {t("modal.forwardHintSuffix")}
+                  {presetDescription(preset)}
                 </div>
               ) : form.authMode === "local" ? (
                 <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
@@ -411,9 +415,9 @@ export default function AddProviderModal({
                   </Field>
                 </>
               )}
-              <Field label={t("modal.defaultModel")}>
+              {!isReservedForward && <Field label={t("modal.defaultModel")}>
                 <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
-              </Field>
+              </Field>}
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
                 <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>

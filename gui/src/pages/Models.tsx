@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select } from "../ui";
 import { IconChevron, IconBoxes, IconInfo } from "../icons";
-import { useT } from "../i18n";
+import { useT } from "../i18n/shared";
+import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 
 interface ModelRow {
@@ -34,8 +35,10 @@ interface ShadowCallData {
 }
 
 const CAP_OPTIONS = Array.from({ length: 18 }, (_, i) => 100_000 + i * 50_000); // 100k … 950k
+const CAP_OPTION_SET = new Set(CAP_OPTIONS);
 const CUSTOM_OPTION = "custom";
 const THREAD_OPTIONS = [4, 8, 16, 32, 64, 128, 256, 500, 1000];
+const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
 const PAGE = 60; // rows rendered per provider before a "show more" (keeps 1000s-of-models providers usable)
 
 /** Compact token display (350k) — unit is technical, not prose. */
@@ -44,8 +47,26 @@ function fmtK(n: number): string {
   return n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString();
 }
 
+function collectDisabledNamespaced(rows: ModelRow[]): Set<string> {
+  const next = new Set<string>();
+  for (const m of rows) {
+    if (m.disabled) next.add(m.namespaced);
+  }
+  return next;
+}
+
+function activeModelOptions(models: ModelRow[], disabled: Set<string>): { value: string; label: string }[] {
+  const options: { value: string; label: string }[] = [];
+  for (const m of models) {
+    if (!disabled.has(m.id) && !disabled.has(m.namespaced)) {
+      options.push({ value: m.namespaced, label: m.namespaced });
+    }
+  }
+  return options;
+}
+
 export default function Models({ apiBase }: { apiBase: string }) {
-  const t = useT();
+  const t: TFn = useT();
   const [models, setModels] = useState<ModelRow[]>([]);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState<Record<string, string>>({});
@@ -75,6 +96,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+
+  const shadowModelOptions = useMemo(
+    () => activeModelOptions(models, disabled),
+    [models, disabled],
+  );
 
   const loadShadowCall = useCallback(async () => {
     try {
@@ -112,7 +138,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       void loadV2(); // best-effort, independent of the models fetch
       void loadShadowCall();
       setModels(data);
-      setDisabled(new Set(data.filter(m => m.disabled).map(m => m.namespaced)));
+      setDisabled(collectDisabledNamespaced(data));
       const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
         ? capsData.value
         : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
@@ -145,7 +171,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const groups = useMemo(() => {
     const g: Record<string, ModelRow[]> = {};
     for (const m of models) (g[m.provider] ??= []).push(m);
-    // Native GPT passthrough group ("openai") pins first; routed providers stay alphabetical.
+    // The single native `openai` group pins first. Its credential policy comes from
+    // the Providers-page Pool/Direct option and never changes model identity here.
     return Object.entries(g).sort(([a, rowsA], [b, rowsB]) => {
       const nativeA = rowsA.every(r => r.native);
       const nativeB = rowsB.every(r => r.native);
@@ -267,7 +294,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const allCapped = useMemo(
     () => {
-      // Cap aggregate counts routed providers only — the native group has no cap switch.
+      // Cap aggregate counts routed providers only; the single native group has no cap switch.
       const routed = groups.filter(([, rows]) => !rows.every(r => r.native));
       return routed.length > 0 && routed.every(([provider]) => contextCaps[provider] === contextCapValue);
     },
@@ -383,7 +410,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         <span title={t("models.shadowCallInterceptHint")} style={{ cursor: "help" }}>{t("models.shadowCallIntercept")} ⓘ</span>
         <code className="text-caption" style={{ opacity: 0.6 }}>⚠ 5.4-mini →</code>
         <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-        <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...models.filter(m => !disabled.has(m.id) && !disabled.has(m.namespaced)).map(m => ({ value: m.namespaced, label: m.namespaced }))]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+        <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
       </div>
 
       {v2 && (
@@ -401,7 +428,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 disabled={v2Busy}
                 onClick={() => void setMultiAgentMode(mode)}
               >
-                {t(`models.v2Mode_${mode}` as keyof typeof import("../i18n/en").en)}
+                {t(`models.v2Mode_${mode}` as TKey)}
               </button>
             ))}
           </div>
@@ -422,13 +449,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 value={showThreadsCustom
                   ? CUSTOM_OPTION
                   : (v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
-                    ? (THREAD_OPTIONS.includes(v2.maxConcurrentThreadsPerSession) ? String(v2.maxConcurrentThreadsPerSession) : CUSTOM_OPTION)
+                    ? (THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) ? String(v2.maxConcurrentThreadsPerSession) : CUSTOM_OPTION)
                     : "")}
                 options={[
                   ...(v2.maxConcurrentThreadsPerSession === null || v2.maxConcurrentThreadsPerSession === undefined
                     ? [{ value: "", label: t("models.v2ThreadsDefault") }] : []),
                   ...(v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
-                    && !THREAD_OPTIONS.includes(v2.maxConcurrentThreadsPerSession) && !showThreadsCustom
+                    && !THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) && !showThreadsCustom
                     ? [{ value: CUSTOM_OPTION, label: String(v2.maxConcurrentThreadsPerSession) }] : []),
                   ...THREAD_OPTIONS.map(v => ({ value: String(v), label: String(v) })),
                   { value: CUSTOM_OPTION, label: t("models.custom") },
@@ -447,6 +474,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                     onChange={e => setThreadsCustom(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter") void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}
                     disabled={v2Busy}
+                    aria-label={t("models.v2ThreadsLabel")}
                   />
                   <button type="button" className="btn btn-sm" disabled={v2Busy}
                     onClick={() => { void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}>
@@ -466,9 +494,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
       <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <span className="muted text-control">{t("models.contextCapLabel")}</span>
         <Select
-          value={showCustom ? CUSTOM_OPTION : (CAP_OPTIONS.includes(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
+          value={showCustom ? CUSTOM_OPTION : (CAP_OPTION_SET.has(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
           options={[
-            ...(!CAP_OPTIONS.includes(contextCapValue) && !showCustom
+            ...(!CAP_OPTION_SET.has(contextCapValue) && !showCustom
               ? [{ value: String(contextCapValue), label: fmtK(contextCapValue) }] : []),
             ...CAP_OPTIONS.map(v => ({ value: String(v), label: fmtK(v) })),
             { value: CUSTOM_OPTION, label: t("models.custom") },
@@ -488,8 +516,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
               onChange={e => setCustomCap(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") applyCustomCap(); }}
               disabled={busy}
+              aria-label={t("models.customPlaceholder")}
             />
-            <button onClick={applyCustomCap} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
+            <button type="button" onClick={applyCustomCap} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
           </>
         )}
         <div style={{ flex: 1 }} />
@@ -529,8 +558,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
              <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
              <div style={{ flex: 1 }} />
               <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
-                <button className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
-                <button className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
+                <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
+                <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
                 {!isNative && <>
                   <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
                   <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
@@ -547,20 +576,22 @@ export default function Models({ apiBase }: { apiBase: string }) {
                    placeholder={t("models.search")}
                    value={search[provider] ?? ""}
                    onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
+                   aria-label={t("models.search")}
                  />
                )}
                 {visible.map(m => {
                   const off = disabled.has(m.namespaced);
                   return (
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
-                      <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.id} />
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{modelLabel(m.id)}</code>
+                      <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
                       {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </div>
                   );
                 })}
                 {remaining > 0 && (
                   <button
+                    type="button"
                     onClick={() => setLimit(prev => ({ ...prev, [provider]: shown + PAGE }))}
                     className="btn btn-ghost btn-sm"
                     style={{ marginTop: 4 }}

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
-import { planWebSearch, webSearchStallTimeoutSec } from "../src/web-search";
+import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../src/web-search";
 import { runWithWebSearch } from "../src/web-search/loop";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
+import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
 import type { OcxMessage, OcxParsedRequest } from "../src/types";
@@ -44,6 +45,37 @@ function parsedWithWebSearch() {
 }
 
 describe("web-search sidecar planning", () => {
+  test("central Direct sidecar selection never treats a proxy admission bearer as Codex auth", async () => {
+    const cfg: OcxConfig = {
+      port: 10100,
+      defaultProvider: "routed",
+      providers: {
+        routed: routedProvider,
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
+      apiKeys: [{ id: "admission", name: "Admission", key: "proxy-secret", createdAt: "2026-07-17" }],
+    };
+    const resolved = await resolveFirstUsableOpenAiSidecar(
+      listOpenAiForwardSidecarCandidates(cfg),
+      new Headers({ authorization: "Bearer proxy-secret", "x-opencodex-api-key": "proxy-secret" }),
+      cfg,
+    );
+    expect(resolved).toBeUndefined();
+  });
+
+  test("sidecar auth stays lazy when search is absent, disabled, or native-passthrough", () => {
+    const parsed = parsedWithWebSearch();
+    expect(shouldResolveOpenAiWebSearchSidecar(config(), { ...parsed, _webSearch: undefined }, false)).toBe(false);
+    expect(shouldResolveOpenAiWebSearchSidecar(config({ webSearchSidecar: { enabled: false } }), parsed, false)).toBe(false);
+    expect(shouldResolveOpenAiWebSearchSidecar(config(), parsed, true)).toBe(false);
+    expect(shouldResolveOpenAiWebSearchSidecar(config(), parsed, false)).toBe(true);
+  });
+
   test("parseRequest stashes hosted web_search while keeping normal tools", () => {
     const parsed = parsedWithWebSearch();
 
@@ -53,17 +85,24 @@ describe("web-search sidecar planning", () => {
 
   test("planWebSearch activates only for routed requests with forward auth and incoming authorization", () => {
     const parsed = parsedWithWebSearch();
+    const sidecar = {
+      providerName: "openai" as const,
+      provider: forwardProvider,
+      accountMode: "direct" as const,
+      authContext: { kind: "main" as const, accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    };
     const plan = planWebSearch(
       config(),
       parsed,
       false,
-      new Headers({ authorization: "Bearer chatgpt" }),
       routedProvider,
       "model",
+      sidecar,
     );
 
     expect(plan).toBeDefined();
-    expect(plan?.forwardProvider).toBe(forwardProvider);
+    expect(plan?.forwardSidecar).toBe(sidecar);
     expect(plan?.hostedTool).toEqual(parsed._webSearch);
     expect(plan?.settings.model).toBe("gpt-5.6-luna");
   });
@@ -78,10 +117,15 @@ describe("web-search sidecar planning", () => {
       config(),
       parsed,
       false,
-      selectedHeaders,
       routedProvider,
       "model",
-      { kind: "pool", accountId: "pool-a", generation: 1, accessToken: "pool-token", chatgptAccountId: "pool_acc" },
+      {
+        providerName: "openai",
+        provider: forwardProvider,
+        accountMode: "pool",
+        authContext: { kind: "pool", accountId: "pool-a", generation: 1, accessToken: "pool-token", chatgptAccountId: "pool_acc" },
+        headers: selectedHeaders,
+      },
     );
 
     expect(plan).toBeDefined();
@@ -92,11 +136,10 @@ describe("web-search sidecar planning", () => {
   test("planWebSearch suppresses sidecar predictably when prerequisites are absent", () => {
     const parsed = parsedWithWebSearch();
 
-    expect(planWebSearch(config(), parsed, true, new Headers({ authorization: "Bearer x" }), routedProvider, "model")).toBeUndefined();
-    expect(planWebSearch(config(), parsed, false, new Headers(), routedProvider, "model")).toBeUndefined();
-    expect(planWebSearch(config({ providers: { routed: routedProvider } }), parsed, false, new Headers({ authorization: "Bearer x" }), routedProvider, "model")).toBeUndefined();
-    expect(planWebSearch(config({ webSearchSidecar: { enabled: false } }), parsed, false, new Headers({ authorization: "Bearer x" }), routedProvider, "model")).toBeUndefined();
-    expect(planWebSearch(config(), { ...parsed, _webSearch: undefined }, false, new Headers({ authorization: "Bearer x" }), routedProvider, "model")).toBeUndefined();
+    expect(planWebSearch(config(), parsed, true, routedProvider, "model")).toBeUndefined();
+    expect(planWebSearch(config(), parsed, false, routedProvider, "model")).toBeUndefined();
+    expect(planWebSearch(config({ webSearchSidecar: { enabled: false } }), parsed, false, routedProvider, "model")).toBeUndefined();
+    expect(planWebSearch(config(), { ...parsed, _webSearch: undefined }, false, routedProvider, "model")).toBeUndefined();
   });
 });
 

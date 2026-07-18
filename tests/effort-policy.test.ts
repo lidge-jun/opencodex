@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { applyEffortCap, effortCapAppliesTo, effortCapFor, isThreadSpawnRequest, resolveCappedEffort, supportedLadderFor } from "../src/server/effort-policy";
 import { collabSurface } from "../src/server/responses";
 import { handleManagementAPI } from "../src/server/management-api";
-import { routeModel } from "../src/router";
+import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
 import { mapReasoningEffort } from "../src/reasoning-effort";
 import { nativeEffortClamp } from "../src/codex/catalog";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
@@ -251,7 +251,7 @@ describe("supportedLadderFor (real routeModel routes)", () => {
     expect(supportedLadderFor(routeModel(config, "toggle/t-model"))).toBeUndefined();
   });
 
-  test("collision: custom key-mode openai-responses provider with native-looking id -> undefined", () => {
+  test("custom key-mode providers cannot capture a bare native-looking OpenAI id", () => {
     tempCodexHome = mkdtempSync(join(tmpdir(), "ocx-effort-catalog-"));
     process.env.CODEX_HOME = tempCodexHome;
     writeFileSync(join(tempCodexHome, "opencodex-catalog.json"), JSON.stringify({
@@ -268,9 +268,10 @@ describe("supportedLadderFor (real routeModel routes)", () => {
       },
       defaultProvider: "selfhosted",
     } as Partial<OcxConfig>);
-    const route = routeModel(config, "gpt-5.4");
-    expect(route.providerName).toBe("selfhosted");
-    expect(supportedLadderFor(route)).toBeUndefined();
+    expect(() => routeModel(config, "gpt-5.4")).toThrow(NoEnabledOpenAiProviderError);
+    const namespaced = routeModel(config, "selfhosted/gpt-5.4");
+    expect(namespaced.providerName).toBe("selfhosted");
+    expect(supportedLadderFor(namespaced)).toBeUndefined();
   });
 
   test("native forward-mode passthrough reads the injected catalog ladder", () => {

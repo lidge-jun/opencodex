@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useI18n, LOCALES, type TFn } from "../i18n";
+import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
@@ -87,6 +87,20 @@ function speedLabel(log: LogEntry): string | undefined {
   return undefined;
 }
 
+function statusColor(status: number): string {
+  if (status >= 200 && status < 300) return "var(--green)";
+  if (status >= 400) return "var(--red)";
+  return "var(--amber)";
+}
+
+function formatLogTimestamp(ts: number, localeTag?: string): string {
+  return new Date(ts).toLocaleTimeString(localeTag);
+}
+
+function formatLogDateTime(ts: number, localeTag?: string): string {
+  return new Date(ts).toLocaleString(localeTag);
+}
+
 function modelTitle(log: LogEntry): string {
   const details = [
     `model=${log.model}`,
@@ -120,8 +134,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     const interval = setInterval(fetchLogs, 2000);
     return () => clearInterval(interval);
   }, [apiBase, autoRefresh]);
-
-  const statusColor = (s: number) => s >= 200 && s < 300 ? "var(--green)" : s >= 400 ? "var(--red)" : "var(--amber)";
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
   const filteredLogs = logs.filter(log => (
@@ -204,7 +216,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
-                 <td className="muted mono">{new Date(log.timestamp).toLocaleTimeString(localeTag)}</td>
+                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
                       const tokenTotal = displayTokenTotal(log);
@@ -268,30 +280,61 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       )}
 
       {detail && (
-        <div role="dialog" aria-modal="true" aria-label={t("logs.detailTitle")} className="modal-overlay" onClick={() => setDetail(null)}>
-          <div className="modal-card" onClick={e => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3>
-                <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
-                {detailInfo && <span style={{ marginLeft: 8 }}>{detailInfo.label}</span>}
-              </h3>
-              <button className="btn btn-ghost btn-sm" onClick={() => setDetail(null)} aria-label={t("common.cancel")}><IconX /></button>
-            </div>
-            {detailInfo && <p className="modal-desc">{detailInfo.description}</p>}
-            <div className="log-detail-grid">
-              <span className="muted">{t("logs.col.time")}</span><span className="mono">{new Date(detail.timestamp).toLocaleString(localeTag)}</span>
-              <span className="muted">{t("logs.col.request")}</span><span className="mono log-detail-break">{detail.requestId ?? "-"}</span>
-              <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
-              <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
-              {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
-              {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
-              <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
-            </div>
-            <div className="muted text-label" style={{ margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>
-            <pre className="log-detail-json">{JSON.stringify(detail, null, 2)}</pre>
-          </div>
-        </div>
+        <LogDetailDialog detail={detail} detailInfo={detailInfo} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
       )}
     </>
+  );
+}
+
+function useModalDialog(open: boolean) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (open && !el.open) el.showModal();
+    else if (!open && el.open) el.close();
+  }, [open]);
+  return ref;
+}
+
+function LogDetailDialog({
+  detail, detailInfo, localeTag, t, onClose,
+}: {
+  detail: LogEntry;
+  detailInfo: ReturnType<typeof statusCodeInfo> | null;
+  localeTag?: string;
+  t: TFn;
+  onClose: () => void;
+}) {
+  const dialogRef = useModalDialog(true);
+  return (
+    <dialog
+      ref={dialogRef}
+      className="modal-overlay"
+      aria-labelledby="log-detail-title"
+      onCancel={e => { e.preventDefault(); onClose(); }}
+    >
+      <div className="modal-card">
+        <div className="modal-head">
+          <h3 id="log-detail-title">
+            <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
+            {detailInfo && <span style={{ marginLeft: 8 }}>{detailInfo.label}</span>}
+          </h3>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
+        </div>
+        {detailInfo && <p className="modal-desc">{detailInfo.description}</p>}
+        <div className="log-detail-grid">
+          <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
+          <span className="muted">{t("logs.col.request")}</span><span className="mono log-detail-break">{detail.requestId ?? "-"}</span>
+          <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
+          <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+          {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
+          {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
+          <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
+        </div>
+        <div className="muted text-label" style={{ margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>
+        <pre className="log-detail-json">{JSON.stringify(detail, null, 2)}</pre>
+      </div>
+    </dialog>
   );
 }

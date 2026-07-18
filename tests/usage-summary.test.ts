@@ -18,6 +18,7 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
     ...(rest.resolvedModel !== undefined ? { resolvedModel: rest.resolvedModel } : {}),
     ...(rest.usage ? { usage: rest.usage } : {}),
     ...(rest.totalTokens !== undefined ? { totalTokens: rest.totalTokens } : {}),
+    ...(rest.attempts ? { attempts: rest.attempts } : {}),
   };
 }
 
@@ -110,6 +111,23 @@ describe("summarizeUsage", () => {
     expect(sum.summary.totalTokens).toBe(15);
     expect(sum.summary.inputTokens).toBe(10);
     expect(sum.summary.outputTokens).toBe(5);
+  });
+
+  test("three OpenAI API Pro selections stay separate from their resolved base models", () => {
+    const entries = ["sol", "terra", "luna"].map((family, index) => entry({
+      ts: FIXED_NOW - index * 1000,
+      provider: "openai-apikey",
+      model: `gpt-5.6-${family}-pro`,
+      resolvedModel: `gpt-5.6-${family}`,
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      totalTokens: 2,
+    }));
+    const sum = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(sum.models.map(row => row.model).sort()).toEqual([
+      "gpt-5.6-luna-pro", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro",
+    ]);
+    expect(sum.models).toHaveLength(3);
   });
 
   test("estimated usage is counted separately while still contributing tokens", () => {
@@ -317,8 +335,138 @@ describe("summarizeUsage", () => {
     expect(sum.models).toHaveLength(1);
     expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 });
     expect(sum.days.find(day => day.requests === 4)?.models).toEqual([
-      { provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 },
+      { provider: "openai", model: "gpt-5.5", requests: 4, attemptCount: 4, totalTokens: 14 },
     ]);
+  });
+
+  test("keeps one logical combo request while attributing both physical attempts", () => {
+    const combo = entry({
+      ts: FIXED_NOW - 1,
+      requestId: "combo-parent",
+      provider: "combo",
+      model: "combo/free",
+      usageStatus: "estimated",
+      usage: { inputTokens: 110, outputTokens: 2, totalTokens: 112, estimated: true },
+      totalTokens: 112,
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "a",
+          model: "model-a",
+          adapter: "openai-chat",
+          status: 503,
+          durationMs: 4,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "estimated",
+          inputTokenEstimate: 100,
+          usage: { inputTokens: 100, outputTokens: 0, estimated: true },
+          totalTokens: 100,
+        },
+        {
+          ordinal: 2,
+          provider: "b",
+          model: "model-b",
+          adapter: "openai-chat",
+          status: 200,
+          durationMs: 3,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 10, outputTokens: 2 },
+          totalTokens: 12,
+        },
+      ],
+    });
+    const sum = summarizeUsage([combo], "30d", FIXED_NOW);
+    expect(sum.summary).toMatchObject({
+      requests: 1,
+      attemptCount: 2,
+      measuredRequests: 1,
+      estimatedRequests: 1,
+      totalTokens: 112,
+    });
+    expect(sum.providers).toEqual([
+      expect.objectContaining({ provider: "a", requests: 1, attemptCount: 1, totalTokens: 100 }),
+      expect.objectContaining({ provider: "b", requests: 1, attemptCount: 1, totalTokens: 12 }),
+    ]);
+    expect(sum.providers.some(provider => provider.provider === "combo")).toBe(false);
+    expect(sum.days.find(day => day.requests === 1)?.models).toEqual([
+      { provider: "a", model: "model-a", requests: 1, attemptCount: 1, totalTokens: 100 },
+      { provider: "b", model: "model-b", requests: 1, attemptCount: 1, totalTokens: 12 },
+    ]);
+  });
+
+  test("counts same-provider attempts once per parent request", () => {
+    const pair = (requestId: string, allReported: boolean): PersistedUsageEntry => entry({
+      ts: FIXED_NOW - (allReported ? 2 : 1),
+      requestId,
+      provider: "combo",
+      model: "combo/free",
+      usageStatus: allReported ? "reported" : "estimated",
+      usage: { inputTokens: 12, outputTokens: 2, ...(allReported ? {} : { estimated: true }) },
+      totalTokens: 14,
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "a",
+          model: "m1",
+          adapter: "openai-chat",
+          status: 503,
+          durationMs: 1,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: allReported ? "reported" : "estimated",
+          usage: { inputTokens: 5, outputTokens: 0, ...(allReported ? {} : { estimated: true }) },
+          totalTokens: 5,
+        },
+        {
+          ordinal: 2,
+          provider: "a",
+          model: "m2",
+          adapter: "openai-chat",
+          status: 200,
+          durationMs: 1,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 7, outputTokens: 2 },
+          totalTokens: 9,
+        },
+      ],
+    });
+
+    const mixed = summarizeUsage([pair("mixed", false)], "30d", FIXED_NOW).providers[0]!;
+    expect(mixed).toMatchObject({
+      provider: "a",
+      requests: 1,
+      attemptCount: 2,
+      measuredRequests: 1,
+      reportedRequests: 0,
+      estimatedRequests: 1,
+    });
+    const reported = summarizeUsage([pair("reported", true)], "30d", FIXED_NOW).providers[0]!;
+    expect(reported).toMatchObject({
+      provider: "a",
+      requests: 1,
+      attemptCount: 2,
+      measuredRequests: 1,
+      reportedRequests: 1,
+      estimatedRequests: 0,
+    });
+  });
+
+  test("legacy entries gain exactly one attempt without changing logical totals", () => {
+    const legacy = entry({
+      ts: FIXED_NOW - 1,
+      usageStatus: "reported",
+      usage: { inputTokens: 2, outputTokens: 1 },
+      totalTokens: 3,
+    });
+    const sum = summarizeUsage([legacy], "30d", FIXED_NOW);
+    expect(sum.summary).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
+    expect(sum.models[0]).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
+    expect(sum.providers[0]).toMatchObject({ requests: 1, attemptCount: 1, totalTokens: 3 });
   });
 
   test("merges reported and unreported rows of the same model into one row", () => {

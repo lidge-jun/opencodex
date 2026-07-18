@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
 import type { SidecarSettings } from "./executor";
-import type { CodexAuthContext } from "../codex/auth-context";
+import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { getAccountSet } from "../oauth/store";
 
 export { runWithWebSearch } from "./loop";
@@ -65,15 +65,6 @@ export function webSearchStallTimeoutSec(
   return Math.min(Number.MAX_VALUE, Math.ceil(largestUnitSec) + STALL_MARGIN_SEC);
 }
 
-/** First configured forward (ChatGPT passthrough) provider — the only path with server-side web_search. */
-export function findForwardProvider(config: OcxConfig): OcxProviderConfig | undefined {
-  for (const prov of Object.values(config.providers)) {
-    if (prov.disabled === true) continue;
-    if (prov.authMode === "forward") return prov;
-  }
-  return undefined;
-}
-
 /** A configured anthropic-adapter OAuth provider whose ACTIVE stored account is usable (not needs-reauth). */
 export interface AnthropicSidecarProvider {
   providerName: string;
@@ -113,7 +104,7 @@ export interface SidecarPlan {
   /** Which executor runs the search. Anthropic does not require a forward provider. */
   backend: "openai" | "anthropic";
   /** Present for the openai backend (ChatGPT forward path); undefined for anthropic. */
-  forwardProvider?: OcxProviderConfig;
+  forwardSidecar?: ResolvedOpenAiForwardSidecar;
   /** Present for the anthropic backend (stored-OAuth /v1/messages path); undefined for openai. */
   anthropicSidecar?: AnthropicSidecarProvider;
   hostedTool: Record<string, unknown>;
@@ -123,6 +114,16 @@ export interface SidecarPlan {
   routedModelStallTimeoutMs: number;
   /** Effective bridge stall deadline for the sidecar turn (see webSearchStallTimeoutSec). */
   stallTimeoutSec: number;
+}
+
+export function shouldResolveOpenAiWebSearchSidecar(
+  config: OcxConfig,
+  parsed: OcxParsedRequest,
+  isPassthrough: boolean,
+): boolean {
+  if (!parsed._webSearch || isPassthrough) return false;
+  const cfg = config.webSearchSidecar ?? {};
+  return cfg.enabled !== false && resolveSidecarBackend(cfg.backend) === "openai";
 }
 
 /**
@@ -135,10 +136,9 @@ export function planWebSearch(
   config: OcxConfig,
   parsed: OcxParsedRequest,
   isPassthrough: boolean,
-  incomingHeaders: Headers,
   provider: OcxProviderConfig,
   modelId: string,
-  authContext: CodexAuthContext = { kind: "main", accountId: null },
+  openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): SidecarPlan | undefined {
   if (!parsed._webSearch || isPassthrough) return undefined;
   const cfg = config.webSearchSidecar ?? {};
@@ -178,12 +178,10 @@ export function planWebSearch(
   }
 
   // OpenAI backend: needs a ChatGPT login (main) and a forward provider to reach server-side web_search.
-  if (authContext.kind === "main" && !incomingHeaders.get("authorization")) return undefined;
-  const forwardProvider = findForwardProvider(config);
-  if (!forwardProvider) return undefined;
+  if (!openAiSidecar) return undefined;
   return {
     backend: "openai",
-    forwardProvider,
+    forwardSidecar: openAiSidecar,
     hostedTool: parsed._webSearch,
     settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
     maxSearches,

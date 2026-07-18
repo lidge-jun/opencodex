@@ -2,11 +2,13 @@ import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
   codexAutoStartEnabled,
+  positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
-import { getProviderRegistryEntry } from "../providers/registry";
+import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
+import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 let _corsOrigin = "http://localhost:10100";
@@ -139,6 +141,18 @@ export function isProxyAdmissionSecret(token: string, config: OcxConfig): boolea
   return false;
 }
 
+export class ForwardAdmissionCredentialError extends Error {
+  constructor() {
+    super("OpenCodex admission credentials cannot be forwarded upstream");
+    this.name = "ForwardAdmissionCredentialError";
+  }
+}
+
+export function validateForwardAdmissionCredential(headers: Headers, config: OcxConfig): void {
+  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
+}
+
 export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
   if (!isApiAuthRequired(config)) return true;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
@@ -155,18 +169,77 @@ export function requireApiAuth(req: Request, config: OcxConfig, kind: "managemen
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");
 }
 
-export function providerManagementConfigError(name: string, provider: OcxProviderConfig): string | null {
-  const baseUrlError = providerBaseUrlConfigError(provider.baseUrl);
+/**
+ * Admission for OpenAI Responses transports whose Authorization header belongs to
+ * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
+ * domains can never be confused.
+ */
+export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
+  if (!isApiAuthRequired(config)) return null;
+  const actual = req.headers.get("x-opencodex-api-key")?.trim();
+  if (actual && isProxyAdmissionSecret(actual, config)) return null;
+  return formatErrorResponse(401, "authentication_error", "opencodex API key required");
+}
+
+const FORBIDDEN_PROVIDER_RUNTIME_FIELDS = [
+  "virtualModels", "codexAuthContext", "selectedForwardHeaders",
+  "sidecarOutcomeRecorder", "_codexAccountOverride", "_codexAccountRequired",
+] as const;
+
+function sameCanonicalProviderSeed(actual: Record<string, unknown>, expected: OcxProviderConfig): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, i) => key !== expectedKeys[i])) return false;
+  return actualKeys.every(key => JSON.stringify(actual[key]) === JSON.stringify((expected as unknown as Record<string, unknown>)[key]));
+}
+
+export function providerManagementConfigError(name: unknown, provider: unknown): string | null {
+  if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
+    return "provider must be a plain object";
+  }
+  const raw = provider as Record<string, unknown>;
+  for (const field of FORBIDDEN_PROVIDER_RUNTIME_FIELDS) {
+    if (Object.hasOwn(raw, field)) return `provider ${name} must not include runtime field "${field}"`;
+  }
+  if (name === "chatgpt") return "provider chatgpt is reserved for internal credential compatibility";
+  if (name === "openai-multi") return "provider openai-multi is reserved for legacy config migration";
+  if (name === "openai") {
+    const entry = getProviderRegistryEntry(name);
+    const seed = entry ? providerConfigSeed(entry) : undefined;
+    if (!Object.hasOwn(raw, "codexAccountMode") || (raw.codexAccountMode !== "pool" && raw.codexAccountMode !== "direct")) {
+      return "provider openai codexAccountMode must be pool or direct";
+    }
+    if (seed) seed.codexAccountMode = raw.codexAccountMode;
+    const canonical = seed && sameCanonicalProviderSeed(raw, seed);
+    if (!canonical) {
+      return `provider ${name} must equal the canonical built-in provider seed`;
+    }
+  } else if (Object.hasOwn(raw, "codexAccountMode")) {
+    return `provider ${name} must not include codexAccountMode`;
+  }
+  const typed = provider as unknown as OcxProviderConfig;
+  const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
-  const destinationError = providerDestinationConfigError(name, provider);
+  const destinationError = providerDestinationConfigError(name, typed);
   if (destinationError) return `provider ${name} ${destinationError}`;
-  const headersError = providerHeadersConfigError(provider.headers);
+  const headersError = providerHeadersConfigError(typed.headers);
   if (headersError) return `provider ${name} ${headersError}`;
-  if (provider.authMode === "forward") {
+  const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
+  if (maxInputError) return `provider ${name} ${maxInputError}`;
+  if (typed.authMode === "local") {
+    // "local" bypasses key-requirement enforcement (api-keys/key-failover treat non-oauth/
+    // forward as key auth; openai-chat skips credential checks for local). Only providers
+    // whose registry entry is genuinely local (Ollama/vLLM/LM Studio) may claim it.
+    const entry = getProviderRegistryEntry(name);
+    if (entry && entry.authKind !== "local") {
+      return `provider ${name} cannot use authMode "local" — its registry entry requires ${entry.authKind} auth`;
+    }
+  }
+  if (typed.authMode === "forward") {
     const normalizedName = name.trim().toLowerCase();
-    const base = provider.baseUrl.replace(/\/+$/, "");
-    const isBuiltInChatGptForward = (normalizedName === "openai" || normalizedName === "chatgpt")
-      && provider.adapter === "openai-responses"
+    const base = typed.baseUrl.replace(/\/+$/, "");
+    const isBuiltInChatGptForward = normalizedName === "openai"
+      && typed.adapter === "openai-responses"
       && base === "https://chatgpt.com/backend-api/codex";
     if (isBuiltInChatGptForward) return null;
     return `provider ${name} uses reserved authMode "forward"; configure ChatGPT passthrough via the built-in provider`;
@@ -212,6 +285,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "allowPrivateNetwork",
       "authMode",
       "keyOptional",
+      "freeTier",
       "liveModels",
       "models",
       "contextWindow",
@@ -231,6 +305,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     }
     const registryNote = getProviderRegistryEntry(name)?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
+    const codexAccountMode = providerCodexAccountMode(name, provider);
+    if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
     providers[name] = dto;
   }
   return {

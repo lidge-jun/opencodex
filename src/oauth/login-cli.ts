@@ -2,7 +2,7 @@ import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
-import { OAUTH_PROVIDERS, runLogin } from "./index";
+import { isPublicOAuthProvider, listOAuthProviders, OAUTH_PROVIDERS, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxProviderConfig } from "../types";
 
@@ -32,11 +32,11 @@ async function notifyRunningProxy(name: string, provider: unknown): Promise<void
 
 export async function handleLogin(provider?: string): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
-  if (OAUTH_PROVIDERS[name]) return handleOAuthLogin(name);
+  if (isPublicOAuthProvider(name)) return handleOAuthLogin(name);
   if (isKeyLoginProvider(name)) return handleKeyLogin(name);
   console.error(
     `Usage: ocx login <provider>\n` +
-      `  OAuth login:   ${Object.keys(OAUTH_PROVIDERS).join(", ")}\n` +
+      `  OAuth login:   ${listOAuthProviders().join(", ")}\n` +
       `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`,
   );
   process.exit(1);
@@ -71,6 +71,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     ...(def.models ? { models: [...def.models] } : {}),
     ...(def.contextWindow !== undefined ? { contextWindow: def.contextWindow } : {}),
     ...(def.modelContextWindows ? { modelContextWindows: { ...def.modelContextWindows } } : {}),
+    ...(def.modelMaxInputTokens ? { modelMaxInputTokens: { ...def.modelMaxInputTokens } } : {}),
     ...(def.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(def.modelInputModalities) } : {}),
     ...(def.reasoningEfforts ? { reasoningEfforts: [...def.reasoningEfforts] } : {}),
     ...(def.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(def.modelReasoningEfforts) } : {}),

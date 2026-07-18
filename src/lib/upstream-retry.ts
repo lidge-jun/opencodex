@@ -145,21 +145,25 @@ export interface TransientRetryOptions extends ResetRetryOptions {
   slowAttemptMs?: number;
 }
 
+export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
+type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
+
 /**
  * Run `doFetch`, retrying only connection-reset-shaped rejections (see
  * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
  * (string body); every retry is logged so persistent resets stay visible.
  */
 export async function fetchWithResetRetry(
-  doFetch: () => Promise<Response>,
+  doFetch: ReplayableFetch,
   opts: ResetRetryOptions = {},
+  firstRecovery?: UpstreamSendRecovery,
 ): Promise<Response> {
   const attempts = Math.max(1, opts.attempts ?? RESET_RETRY_MAX_ATTEMPTS);
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
     try {
-      return await doFetch();
+      return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
     } catch (err) {
       if (opts.abortSignal?.aborted || !isConnectionResetError(err) || attempt === attempts - 1) throw err;
       lastError = err;
@@ -186,7 +190,7 @@ export async function fetchWithResetRetry(
  * note `opts.attempts` is shared with the inner reset layer (no caller passes it today).
  */
 export async function fetchWithTransientRetry(
-  doFetch: () => Promise<Response>,
+  doFetch: ReplayableFetch,
   opts: TransientRetryOptions = {},
 ): Promise<Response> {
   const attempts = Math.max(1, opts.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS);
@@ -208,7 +212,7 @@ export async function fetchWithTransientRetry(
     cancelResponseBodyBestEffort(res);
     await sleepWithAbort(delay, opts.abortSignal);
     attemptStart = Date.now();
-    res = await fetchWithResetRetry(doFetch, opts);
+    res = await fetchWithResetRetry(doFetch, opts, "transient-5xx");
   }
   return res;
 }

@@ -6,8 +6,12 @@
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
-Native OpenAI/ChatGPT passthrough uses `openai-responses` with `authMode: "forward"`, forwarding only
-the allowed Codex/OpenAI auth/session headers.
+The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
+resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
+the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
+state. `openai-apikey` uses its configured key and canonical API base URL. Missing credentials fail
+within their route; neither route falls through to the other. See
+[`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
 
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
@@ -82,6 +86,11 @@ with seam heartbeats between bounded units. None of these clocks is a total gene
 Native OpenAI passthrough sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
+It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
+by an intervening user/developer barrier or an interrupted turn — is closed by deferring barrier
+messages until the round completes, reattaching real results to their original call occurrence,
+and synthesizing explicit "no tool result was recorded" answers only when no real result exists
+(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_plan/260718_dangling_toolcall_hardening`).
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
@@ -155,8 +164,11 @@ policies; kiro imports the shared abort/sleep helpers from this module.
 
 ## Sidecars
 
-Web search and vision sidecars only run when a forward ChatGPT provider/login exists and the main
-request needs that capability.
+Web search and vision sidecars only run when the mode-aware `openai` forward ChatGPT authority
+exists and the main request needs that capability.
+
+There is one deterministic `openai` sidecar candidate; its current account mode owns credential
+selection. API-key OpenAI is not a ChatGPT forward sidecar candidate.
 
 | Sidecar | Default model | Activation |
 | --- | --- | --- |

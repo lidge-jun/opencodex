@@ -21,6 +21,21 @@ vision and web-search sidecars can also use your ChatGPT login when a routed mod
 npm install -g @bitkyc08/opencodex
 ```
 
+:::note[npm blocked the bun postinstall?]
+Recent npm versions may block bun's postinstall script (`npm warn
+install-scripts ... blocked because they are not covered by allowScripts`),
+which leaves the bundled Bun runtime unprepared. Reinstall allowing bun's
+script — and always include the package name (npm's abbreviated suggestion
+omits it, which would reinstall the current directory instead):
+
+```bash
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
+
+# if the original install used sudo, keep using sudo:
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+:::
+
 Verify both command aliases are on your `PATH`:
 
 ```bash

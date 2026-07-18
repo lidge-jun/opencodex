@@ -7,6 +7,13 @@
    `data-theme` (or the OS) picks the side.
    ============================================================================ */
 
+@import "./styles/provider-catalog.css";
+@import "./styles/provider-quota.css";
+@import "./styles/provider-workspace-shell.css";
+@import "./styles/provider-workspace-settings.css";
+@import "./styles/provider-overview-dashboard.css";
+@import "./styles-combos-workspace.css";
+
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
   color-scheme: light dark;
@@ -289,8 +296,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 .main { min-width: 0; }
 .main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; }
-/* Frontier (and Providers/Combos workspaces) need a full-height master-detail shell. */
-.main-inner.main-inner--providers {
+/* Full-bleed master-detail shells (Frontier / Combos / Providers workspaces). */
+.main-inner.main-inner--providers,
+.main-inner.main-inner--combos {
   max-width: none;
   margin: 0;
   padding: 0;
@@ -302,7 +310,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .main-inner.main-inner--providers > .frontier-workspace-shell,
 .main-inner.main-inner--providers > .combos-workspace-shell,
-.main-inner.main-inner--providers > .providers-workspace-shell {
+.main-inner.main-inner--providers > .providers-workspace-shell,
+.main-inner.main-inner--combos > .combos-workspace-shell {
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
@@ -719,6 +728,8 @@ select.input { appearance: none; }
 .prov-meta > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-quota { padding-left: 58px; }
 .provider-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.openai-mode-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.openai-mode-control .usage-segmented-btn { min-width: 76px; }
 .link-btn { background: none; border: none; color: var(--accent-hover); font: inherit; font-size: var(--text-control); cursor: pointer; padding: 6px 2px; text-decoration: underline; }
 .link-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
@@ -804,6 +815,8 @@ select.input { appearance: none; }
   .drawer-scrim { display: block; }
   .main-inner { padding: 22px 18px 48px; }
   .main-inner.main-inner--providers { padding: 0; min-height: 100dvh; height: 100dvh; overflow: hidden; }
+  /* The mobile app grid already reserves the top-bar row; fill only its remaining main row. */
+  .main-inner.main-inner--combos { padding: 0; min-height: 0; height: 100%; overflow: hidden; }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }
@@ -841,6 +854,9 @@ select.input { appearance: none; }
 
 @media (max-width: 760px) {
   .usage-segmented-btn { min-height: var(--control-touch); }
+  .openai-mode-row { align-items: stretch; flex-direction: column; gap: 6px; }
+  .openai-mode-control { width: 100%; }
+  .openai-mode-control .usage-segmented-btn { flex: 1 1 0; min-width: 0; }
 }
 
 @media (max-width: 640px) {

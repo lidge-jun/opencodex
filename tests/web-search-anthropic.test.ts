@@ -59,16 +59,23 @@ describe("web-search anthropic backend resolution", () => {
   });
 
   test("planWebSearch defaults to the openai backend when no anthropic credential exists", () => {
-    const plan = planWebSearch(config(), parsedWithWebSearch(), false, new Headers({ authorization: "Bearer chatgpt" }), routedProvider, "model");
+    const sidecar = {
+      providerName: "openai" as const,
+      provider: forwardProvider,
+      accountMode: "direct" as const,
+      authContext: { kind: "main" as const, accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    };
+    const plan = planWebSearch(config(), parsedWithWebSearch(), false, routedProvider, "model", sidecar);
     expect(plan?.backend).toBe("openai");
-    expect(plan?.forwardProvider).toBe(forwardProvider);
+    expect(plan?.forwardSidecar).toBe(sidecar);
     expect(plan?.anthropicSidecar).toBeUndefined();
   });
 
   test("planWebSearch FAILS CLOSED when anthropic is explicitly configured but no credential is usable", () => {
     const cfg = config({ webSearchSidecar: { backend: "anthropic" } });
     // No usable anthropic credential → must return no plan (never silently borrow ChatGPT creds).
-    expect(planWebSearch(cfg, parsedWithWebSearch(), false, new Headers({ authorization: "Bearer chatgpt" }), routedProvider, "model")).toBeUndefined();
+    expect(planWebSearch(cfg, parsedWithWebSearch(), false, routedProvider, "model")).toBeUndefined();
   });
 });
 

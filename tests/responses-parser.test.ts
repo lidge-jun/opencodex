@@ -233,4 +233,11 @@ describe("codex-rs compat surface (260707)", () => {
     const parsed = parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "banana" } });
     expect(parsed.options.reasoning).toBeUndefined();
   });
+
+  test("current parser ignores null empty and unknown string efforts", () => {
+    expect(parseRequest({ model: "p/m", input: "hi", reasoning: null }).options.reasoning).toBeUndefined();
+    expect(parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "" } }).options.reasoning).toBeUndefined();
+    expect(parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "banana" } }).options.reasoning).toBeUndefined();
+    expect(() => parseRequest({ model: "p/m", input: "hi", reasoning: { effort: null } })).toThrow();
+  });
 });

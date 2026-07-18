@@ -17,6 +17,13 @@ const forward: OcxProviderConfig = {
   authMode: "forward",
 };
 const headers = new Headers({ authorization: "Bearer chatgpt" });
+const openAiSidecar = {
+  providerName: "openai" as const,
+  provider: forward,
+  accountMode: "direct" as const,
+  authContext: { kind: "main" as const, accountId: null },
+  headers,
+};
 const request = parseRequest({
   model: "routed/text-model",
   input: [{
@@ -76,8 +83,8 @@ test("Claude replay overrides both sidecars while preserving global-only setting
     maxDescriptionsPerTurn: 4,
   });
 
-  const webPlan = planWebSearch(effective, request, false, headers, routed, "text-model");
-  const visionPlan = planVisionSidecar(effective, routed, "text-model", request, headers);
+  const webPlan = planWebSearch(effective, request, false, routed, "text-model", openAiSidecar);
+  const visionPlan = planVisionSidecar(effective, routed, "text-model", request, openAiSidecar);
   expect(webPlan).toMatchObject({
     backend: "openai",
     settings: { model: "claude-search", reasoning: "high", timeoutMs: 12_345 },
@@ -108,11 +115,11 @@ test("unset Claude overrides inherit the global sidecar backend and model", () =
   };
   const effective = buildClaudeReplayConfig(config);
 
-  expect(planWebSearch(effective, request, false, headers, routed, "text-model")).toMatchObject({
+  expect(planWebSearch(effective, request, false, routed, "text-model", openAiSidecar)).toMatchObject({
     backend: "openai",
     settings: { model: "global-search" },
   });
-  expect(planVisionSidecar(effective, routed, "text-model", request, headers)).toMatchObject({
+  expect(planVisionSidecar(effective, routed, "text-model", request, openAiSidecar)).toMatchObject({
     backend: "openai",
     settings: { model: "global-vision" },
   });

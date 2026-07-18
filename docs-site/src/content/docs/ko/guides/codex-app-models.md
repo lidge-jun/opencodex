@@ -7,6 +7,11 @@ opencodex는 Codex App을 패치하지 않습니다. Codex CLI/TUI가 이미 쓰
 같은 위치에 기록합니다. Codex App도 이 상태를 공유하므로 라우팅 모델이 일반 Codex 카탈로그
 항목처럼 App의 모델 선택기에 나타날 수 있습니다.
 
+OpenAI id는 두 가지로 고정됩니다. bare native id는 `codexAccountMode`로 Pool(기본)/Direct를
+선택하는 단일 `openai` 그룹이고, `openai-apikey/<model>`은 API key입니다. 모드를 바꿔도 모델
+id는 변하지 않습니다. API GPT-5.6은 context 1,050,000 / max input 922,000이고,
+`*-pro` picker id는 공개 상태를 유지하면서 wire에서 base 모델 + `reasoning.mode: "pro"`가 됩니다.
+
 ## 통합 경로
 
 `ocx init`, `ocx start`, `ocx sync`는 해석된 `CODEX_HOME` 아래의 파일을 맞춥니다.
@@ -69,9 +74,9 @@ Codex 카탈로그의 더 풍부한 실시간 항목을 보존하고, 빠진 항
 
 | 라우트 | 선택기 id와 카탈로그 메타데이터 |
 | --- | --- |
-| ChatGPT 패스스루 | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`(카탈로그 컨텍스트 372,000 토큰) |
-| OpenAI(API key) | `openai-apikey/gpt-5.6-sol`, `openai-apikey/gpt-5.6-terra`, `openai-apikey/gpt-5.6-luna`(372,000) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna`(372,000) |
+| Codex 로그인(Pool 또는 Direct) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`(372,000 토큰) |
+| OpenAI(API key) | `openai-apikey/gpt-5.6-*`와 `openai-apikey/gpt-5.6-*-pro`(1,050,000; max input 922,000) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna`(1,050,000) |
 | Cursor | 정적 폴백에 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna`(1,000,000)와 `cursor/grok-4.5`, `cursor/grok-4.5-fast`(500,000)가 들어갑니다. 실제 표시 목록은 계정별 실시간 탐색 결과로 거릅니다. |
 | xAI | 실시간 탐색 결과가 우선입니다. 폴백 카탈로그의 기본값은 컨텍스트 500,000과 `low` / `medium` / `high` reasoning을 갖는 `xai/grok-4.5`입니다. |
 

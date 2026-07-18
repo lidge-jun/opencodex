@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "lint:i18n": "eslint src/pages src/components src/App.tsx src/ui.tsx",
+    "doctor": "npx --yes react-doctor@0.7.8 --verbose --scope changed --base origin/main --no-telemetry",
+    "doctor:full": "npx --yes react-doctor@0.7.8 --verbose --scope full --no-telemetry",
     "preview": "vite preview"
   },
   "dependencies": {

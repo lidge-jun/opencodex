@@ -5,8 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import { I18N_DATA_FILES, I18N_UI_FILES } from './.eslint/i18n-file-groups.ts'
-
-const localI18nPlugin = (await import(new URL('./.eslint/local-i18n-plugin.ts', import.meta.url).href)).default
+import localI18nPlugin from './.eslint/local-i18n-plugin.ts'
 
 export default defineConfig([
   globalIgnores([

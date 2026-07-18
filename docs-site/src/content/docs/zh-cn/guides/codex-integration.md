@@ -5,6 +5,11 @@ description: opencodex 如何将自身注入 Codex、同步模型目录、驱动
 
 opencodex 通过编辑 Codex 读取的两样东西，让 Codex 经由 proxy 路由：它的配置（`$CODEX_HOME/config.toml`，默认 `~/.codex/config.toml`）和它的模型目录。每一次编辑都是幂等且可逆的。
 
+OpenAI 提供一条 bare `openai` Codex 登录路径和 `openai-apikey/<model>` API 路径。
+`openai` 可选 Pool（默认，主账户加添加账户）或 Direct（当前 caller/主登录 bearer），模型 id
+保持不变。路径之间不会 fallback。shipped v1 配置迁移到 marker 2，并保留
+`config.json.pre-openai-tiers-v2.bak` 供手动恢复。
+
 ## 配置注入
 
 `ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留 Codex
@@ -31,10 +36,10 @@ Codex 的内置 `image_gen` 工具不经过 `/v1/responses`——codex-rs 扩展
 ChatGPT bearer 认证。由于注入的 `base_url` 指向 opencodex，proxy 会把这些调用中继到
 OpenAI 上游：
 
-- **ChatGPT 登录（默认）：** 请求会携带调用方的 OAuth token（或多账户池选中账户的 token）
-  转发到 `chatgpt.com/backend-api/codex`，无需 API key。
-- **OpenAI API key 提供商：** 如果请求中没有可用的 ChatGPT 认证，中继会退回到已配置的
-  `openai-responses` API key 提供商（例如 `api.openai.com`）。
+- **单一、感知模式的 forward 候选：** Pool 选择合格的主账户或添加账户；Direct 使用 caller
+  OAuth bearer。图像请求遵循同一模式。
+- **OpenAI API key：** 仅当 forward 候选没有拥有认证失败时使用。不会用单独计费的 API 调用掩盖
+  损坏或过期的 Pool 凭证。
 - **两者都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、
   Kiro 等）无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
   `codex features disable image_generation`（即 `config.toml` 的

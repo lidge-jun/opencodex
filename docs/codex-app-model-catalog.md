@@ -68,6 +68,14 @@ priority = <picker priority>
 visibility = "list"
 ```
 
+Slash-containing native ids: some providers namespace their own model ids
+(zenmux `moonshotai/kimi-k3-free`, openrouter `anthropic/...`, nvidia `moonshotai/...`).
+Codex's models-manager metadata lookup tolerates exactly one "/", so opencodex aliases
+inner slashes to "-" in the Codex-facing slug (`zenmux/moonshotai-kimi-k3-free`) and
+decodes back to the native id in the proxy via an exact known-id lookup
+(`src/providers/slug-codec.ts`). Raw full-slash selectors keep working; upstream
+requests, logs, usage, and metadata always carry the native id.
+
 Cloning a native entry preserves fields Codex's strict parser expects, including:
 
 - `base_instructions`

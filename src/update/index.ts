@@ -66,18 +66,49 @@ export function latestVersion(tag: string): string | null {
 }
 
 /** The global-install command opencodex would run to update on this channel. */
-export function updateCommand(installer: Installer, tag: Channel): { bin: string; args: string[] } {
+export function updateCommand(installer: Installer, tag: Channel, resolvedVersion?: string | null): { bin: string; args: string[] } {
   const bin = installer === "bun" ? "bun" : "npm";
+  // Immutable target: when the registry resolved a concrete version, install exactly
+  // that version — the dist-tag can move between resolution and install (TOCTOU).
+  const target = resolvedVersion || tag;
   const args = installer === "bun"
-    ? ["add", "-g", `${PKG}@${tag}`]
-    : ["install", "-g", `${PKG}@${tag}`];
+    ? ["add", "-g", `${PKG}@${target}`]
+    : ["install", "-g", `${PKG}@${target}`];
   return { bin, args };
 }
 
 /** Human-readable form of {@link updateCommand}, used in the update prompt label. */
-export function updateCommandStr(installer: Installer, tag: Channel): string {
-  const { bin, args } = updateCommand(installer, tag);
+export function updateCommandStr(installer: Installer, tag: Channel, resolvedVersion?: string | null): string {
+  const { bin, args } = updateCommand(installer, tag, resolvedVersion);
   return `${bin} ${args.join(" ")}`;
+}
+
+/**
+ * Pre-flight integrity metadata check (NOT independent tamper-proofing — the installer
+ * verifies tarballs against the same registry metadata). Two failure lanes:
+ *  - transient registry failure (spawn error/timeout/nonzero exit) → `{ ok: "skipped" }`
+ *    so registry absence never turns into an unconditional update failure;
+ *  - successful query with missing/malformed SRI → `{ ok: false }` (anomalous
+ *    metadata — fail closed BEFORE the running proxy is stopped).
+ * `dist.integrity` may be a quoted, space-separated multi-hash list; any sha512 token passes.
+ */
+export function checkUpdatePackageIntegrity(
+  version: string | null,
+  spawn: typeof spawnSync = spawnSync,
+): { ok: true; integrity: string } | { ok: false; reason: string } | { ok: "skipped"; reason: string } {
+  if (!version) return { ok: "skipped", reason: "no resolved version (registry unavailable)" };
+  const npm = npmSpawnTarget("npm");
+  const r = spawn(
+    npm.bin,
+    ["view", `${PKG}@${version}`, "dist.integrity"],
+    { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell },
+  );
+  // status !== 0 covers nonzero exits AND timeouts (status === null).
+  if (r.status !== 0) return { ok: "skipped", reason: `registry integrity query failed (status ${r.status ?? "timeout"})` };
+  const tokens = (r.stdout ?? "").replace(/["']/g, "").trim().split(/\s+/).filter(Boolean);
+  const match = tokens.find(token => /^sha512-[A-Za-z0-9+/=]+$/.test(token));
+  if (!match) return { ok: false, reason: `registry returned no sha512 integrity for ${PKG}@${version}` };
+  return { ok: true, integrity: match };
 }
 
 /**
@@ -99,6 +130,19 @@ export async function runUpdate(): Promise<void> {
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
     return;
+  }
+
+  // Pre-flight integrity metadata check — runs BEFORE the proxy is stopped so an
+  // anomalous registry entry aborts without unloading the running service.
+  const integrity = checkUpdatePackageIntegrity(latest);
+  if (integrity.ok === false) {
+    console.error(`⚠️  ${integrity.reason} — aborting the update before stopping the proxy.`);
+    process.exit(1);
+  }
+  if (integrity.ok === "skipped") {
+    console.warn(`⚠️  Integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`);
+  } else {
+    console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
@@ -130,7 +174,7 @@ export async function runUpdate(): Promise<void> {
     }
   }
 
-  const { bin, args: cmdArgs } = updateCommand(installer, tag);
+  const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
   const target = npmSpawnTarget(bin);

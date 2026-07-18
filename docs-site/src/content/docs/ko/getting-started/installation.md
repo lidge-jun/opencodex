@@ -21,6 +21,21 @@ opencodex를 설치하면 같은 실행 파일을 가리키는 `ocx`와 `opencod
 npm install -g @bitkyc08/opencodex
 ```
 
+:::note[npm이 bun postinstall을 차단했다면?]
+최신 npm은 bun의 postinstall 스크립트를 차단할 수 있습니다(`npm warn
+install-scripts ... blocked because they are not covered by allowScripts`).
+이 경우 번들 Bun 런타임이 준비되지 않으므로 bun 스크립트를 허용해서
+재설치하세요. npm 경고의 축약 명령에는 패키지 이름이 빠져 있어 현재
+디렉터리를 재설치하게 되니, 항상 패키지 이름을 명시해야 합니다:
+
+```bash
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
+
+# 처음에 sudo로 설치했다면 sudo를 유지하세요:
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+:::
+
 두 명령이 모두 `PATH`에 잡히는지 확인합니다:
 
 ```bash

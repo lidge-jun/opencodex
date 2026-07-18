@@ -12,6 +12,7 @@ import {
   isOcxStartCommandLine,
   loadConfig,
   parsePidFile,
+  positiveIntegerRecordConfigError,
   readConfigDiagnostics,
   readRuntimePort,
   removePid,
@@ -104,6 +105,38 @@ describe("opencodex config defaults", () => {
       },
       codexAutoStart: false,
     });
+  });
+
+  test("accepts OpenAI account mode only on the canonical forward provider", () => {
+    for (const codexAccountMode of ["pool", "direct"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            codexAccountMode,
+          },
+        },
+        defaultProvider: "openai",
+        openaiProviderTierVersion: 2,
+      });
+      expect(readConfigDiagnostics().config.providers.openai.codexAccountMode).toBe(codexAccountMode);
+      expect(readConfigDiagnostics().error).toBeNull();
+    }
+  });
+
+  test("rejects invalid or noncanonical codexAccountMode placements", () => {
+    for (const [name, provider] of [
+      ["custom", { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexAccountMode: "pool" }],
+      ["openai", { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexAccountMode: "direct" }],
+      ["openai", { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "random" }],
+    ] as const) {
+      writeConfig({ port: 12345, providers: { [name]: provider }, defaultProvider: name });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("codexAccountMode");
+    }
   });
 
   test("reads valid config diagnostics without mutation", () => {
@@ -314,6 +347,41 @@ describe("opencodex config defaults", () => {
     expect(diagnostics.config).toEqual(getDefaultConfig());
     expect(diagnostics.source).toBe("fallback");
     expect(diagnostics.error).toContain("providerContextCaps");
+  });
+
+  test("modelMaxInputTokens accepts only plain positive finite integer records", () => {
+    expect(positiveIntegerRecordConfigError({ "gpt-5.6-sol": 922_000 }, "modelMaxInputTokens")).toBeNull();
+    expect(positiveIntegerRecordConfigError(Object.create({ inherited: 1 }), "modelMaxInputTokens")).toContain("own properties");
+    for (const invalid of [null, [], { model: 0 }, { model: -1 }, { model: 1.5 }, { model: "1" }, { model: Number.POSITIVE_INFINITY }]) {
+      expect(positiveIntegerRecordConfigError(invalid, "modelMaxInputTokens")).not.toBeNull();
+    }
+  });
+
+  test("disk config rejects malformed modelMaxInputTokens", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", modelMaxInputTokens: { model: 1.5 } },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxInputTokens");
+  });
+
+  test("disk config rejects forged registry-only virtual model maps", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          virtualModels: { "gpt-evil-pro": { wireModelId: "gpt-evil", reasoningMode: "pro" } },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics()).toMatchObject({ source: "fallback", error: expect.stringContaining("virtualModels") });
   });
 
   test("validates the global context cap value", () => {

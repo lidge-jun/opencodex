@@ -171,6 +171,7 @@ function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boole
 }
 
 function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
+  if (entry.accountId === MAIN_CODEX_ACCOUNT_ID) return entry.generation === 0;
   return isCodexAccountGenerationLive(entry.accountId, entry.generation);
 }
 
@@ -196,13 +197,13 @@ function pruneLruThreadAffinities(): void {
 }
 
 function bindThreadAffinity(threadId: string, accountId: string, now: number): void {
-  const record = readCodexAccountRecord(accountId);
-  if (!record?.credential || record.deletedAt != null) return;
+  const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return;
   pruneExpiredThreadAffinities(now);
   const previous = threadAccountMap.get(threadId);
   threadAccountMap.set(threadId, {
     accountId,
-    generation: record.generation,
+    generation: accountId === MAIN_CODEX_ACCOUNT_ID ? 0 : record!.generation,
     createdAt: previous?.createdAt ?? now,
     lastUsedAt: now,
     lastReevalAt: now,
@@ -380,7 +381,12 @@ export function resolveCodexAccountForThreadDetailed(
     threadAccountMap.delete(threadId);
   }
   let active = config.activeCodexAccountId;
-  if (!active) return { status: "none" };
+  if (!active) {
+    const selected = pickLowestUsageCodexAccount(config, undefined, now);
+    if (!selected) return { status: "none" };
+    setActiveCodexAccount(config, selected);
+    active = selected;
+  }
   if (!isCodexAccountSelectable(config, active, now)) {
     const fallback = pickLowestUsageCodexAccount(config, active, now);
     if (fallback) {
