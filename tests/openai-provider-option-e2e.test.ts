@@ -521,9 +521,10 @@ describe("OpenAI provider-option integration spine", () => {
         ]);
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout) as MigrationReceipt).toEqual({
+        const receipt = JSON.parse(stdout) as MigrationReceipt;
+        expect(receipt).toEqual({
           backupMatchesOriginal: true,
-          backupMode: 0o600,
+          backupMode: expect.any(Number),
           v1BackupUnchanged: true,
           firstProviderIds: ["openai", "openai-apikey", "custom"],
           firstDefaultProvider: "openai",
@@ -544,6 +545,9 @@ describe("OpenAI provider-option integration spine", () => {
           absencePreserved: true,
           collisionFailsBeforeSave: true,
         });
+        if (process.platform !== "win32") {
+          expect(receipt.backupMode).toBe(0o600);
+        }
       } finally {
         rmSync(migrationRoot, { recursive: true, force: true });
       }

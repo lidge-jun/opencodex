@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
+const doctorGuiIfChangedScript = fileURLToPath(new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url));
 
 async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
@@ -182,15 +184,13 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {
-    const script = new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url).pathname;
-
-    const run = Bun.spawnSync(["bun", script], {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
       env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "gui/src/App.tsx\nscripts/x.ts" },
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout.toString()).toContain("doctor:run");
 
-    const skip = Bun.spawnSync(["bun", script], {
+    const skip = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
       env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "scripts/x.ts\nREADME.md" },
     });
     expect(skip.exitCode).toBe(0);
@@ -198,9 +198,7 @@ describe("doctor-gui-if-changed", () => {
   });
 
   test("degrades gracefully when the doctor engine is unavailable (offline prepush)", () => {
-    const script = new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url).pathname;
-
-    const run = Bun.spawnSync(["bun", script], {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
