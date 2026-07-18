@@ -469,10 +469,31 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
+  combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+}
+
+export type OcxComboStrategy = "failover" | "round-robin";
+
+export interface OcxComboTarget {
+  provider: string;
+  model: string;
+  /** Relative round-robin weight. Default 1. */
+  weight?: number;
+}
+
+export interface OcxComboConfig {
+  targets: OcxComboTarget[];
+  /** Ordered failover (default) or weighted round-robin. */
+  strategy?: OcxComboStrategy;
+  /** Successful requests retained on one round-robin target. Default 1. */
+  stickyLimit?: number;
+  /** Used when the client omits reasoning.effort. Default medium. */
+  defaultEffort?: string;
 }
 
 /**
