@@ -17,7 +17,10 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
   });
   test("bun/source restart uses the runtime executable + launcher (a real .exe, no shell)", () => {
     // restartCommand's non-npm branch resolves to process.execPath + the package launcher.
-    expect(src).toMatch(/const bin = process\.execPath;\s*\n\s*const args = serviceInstalled \? \[launcher, "service", "install"\] : \[launcher, "start"\];/);
+    // Proxy mode may pin --port via startArgs; service mode stays install-only.
+    expect(src).toMatch(/const bin = process\.execPath;\s*\n\s*const args = serviceInstalled \? \[launcher, "service", "install"\] : startArgs;/);
+    expect(src).toContain('? [launcher, "start", "--port", String(Math.trunc(port))]');
+    expect(src).toContain(': [launcher, "start"]');
   });
 });
 
