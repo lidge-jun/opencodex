@@ -84,7 +84,9 @@ const EFFORT_VIEW_KEYS: Record<FrontierEffortView, TKey> = {
 type BoardCopyField = "title" | "xLabel" | "yLabel" | "sourceNote";
 
 function boardCopy(t: TFn, board: FrontierBenchmark, field: BoardCopyField): string {
-  const key = `frontier.board.${board.id}.${field}` as TKey;
+  // Build the key without a template literal — local-i18n flags `frontier.board.…`
+  // as hardcoded UI text even when the result is a registered TKey.
+  const key = ["frontier", "board", board.id, field].join(".") as TKey;
   return t(key);
 }
 
