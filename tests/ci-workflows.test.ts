@@ -142,19 +142,14 @@ describe("GitHub Actions hardening", () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
-    expect(workflow).toContain("millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784");
+    expect(workflow).toContain("millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
     expect(workflow).toContain('version: "0.7.8"');
 
-    // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.7.8).
-    // v2.1.0's ensure-json-report only knew schemas 1–2 and failed every PR scan.
     // Advisory + least privilege: read-only token, all write-scoped outputs off.
-    // pull-requests: read is required so the action can list PR files for
-    // --changed-files-from; without it, fork PRs fail with ENOENT on that file.
-    expect(workflow).toContain("contents: read");
-    expect(workflow).toContain("pull-requests: read");
+    expect(workflow).toContain("permissions:\n  contents: read");
     expect(workflow).not.toContain(": write");
     expect(workflow).toContain("blocking: none");
     expect(workflow).toContain("comment: false");
