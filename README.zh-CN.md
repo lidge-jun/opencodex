@@ -69,6 +69,7 @@ flowchart LR
 
 ```bash
 # 安装（自动打包 Bun 运行时 —— 只需 Node 18+）
+# 优先使用用户自有的 Node（nvm/fnm）—— 避免 `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 
 # 交互式初始化（写入配置 + 注入 Codex）
@@ -82,15 +83,27 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>遇到 "bundled Bun runtime is missing" 错误？</b></summary>
+<summary><b>遇到 "bundled Bun runtime is missing" / npm 拦截了 Bun 安装脚本？</b></summary>
 
 <br/>
 
-opencodex 把 Bun 运行时作为依赖打包，并通过 Node 启动器运行，所以你**不需要**自己安装 Bun。如果看到 "bundled Bun runtime is missing" 错误，说明安装时跳过了 lifecycle 脚本或 optional 依赖。请不带这些标志重新安装：
+opencodex 把 Bun 运行时作为依赖打包，并通过 Node 启动器运行，所以你**不需要**自己安装 Bun。如果看到 "bundled Bun runtime is missing" 错误，或 npm 警告 Bun 的 `postinstall` 被拦截（`install-scripts` / `allowScripts`），说明安装时跳过了 lifecycle 脚本或 optional 依赖。
+
+**不要用 `sudo npm install -g …` 安装。** 那样会装到 root 的全局目录，之后不加 sudo 的命令可能指向别处。请改用用户自有的 Node（nvm、fnm，或用户级 npm prefix）。
+
+请在允许脚本的情况下重新安装（与原安装同一上下文 —— **带上包名**；npm 提示的短命令 `npm install -g --allow-scripts=bun` **不会**单独重装 opencodex）：
 
 ```bash
-npm install -g @bitkyc08/opencodex   # 不要加 --ignore-scripts、--omit=optional
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+如果你已经用 `sudo` 装过，需要在同一个 root prefix 里放开 Bun（不推荐 —— 有机会请迁到用户自有 Node）：
+
+```bash
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+
+安装时也不要加 `--ignore-scripts`、`--omit=optional`。
 
 </details>
 

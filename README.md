@@ -70,6 +70,7 @@ Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled automaticall
 
 ```bash
 # Install (bundles the Bun runtime automatically — only Node 18+ required)
+# Prefer a user-owned Node (nvm/fnm) — avoid `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 
 # Interactive setup (writes config, injects into Codex, and offers autostart shim install)
@@ -86,18 +87,36 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>"bundled Bun runtime is missing" error?</b></summary>
+<summary><b>"bundled Bun runtime is missing" / npm blocked Bun install scripts?</b></summary>
 
 <br/>
 
 opencodex bundles the Bun runtime as a dependency and runs it via a Node
 launcher, so you do **not** need to install Bun yourself. If you see a
-"bundled Bun runtime is missing" error, the install skipped lifecycle scripts
-or optional dependencies. Reinstall without those flags:
+"bundled Bun runtime is missing" error, or npm warns that Bun's `postinstall`
+was blocked (`install-scripts` / `allowScripts`), the install skipped lifecycle
+scripts or optional dependencies.
+
+**Do not install with `sudo npm install -g …`.** That puts globals under a root
+prefix; later non-sudo commands can target a different directory. Use a
+user-owned Node install (nvm, fnm, or a user npm prefix) instead.
+
+Reinstall with scripts allowed (same context as the original install — include
+the package name; npm's short `npm install -g --allow-scripts=bun` hint alone
+does **not** reinstall opencodex):
 
 ```bash
-npm install -g @bitkyc08/opencodex   # no --ignore-scripts, no --omit=optional
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+If you already installed with `sudo` and need to unblock Bun in that same root
+prefix (not recommended — migrate to a user-owned Node when you can):
+
+```bash
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+
+Also avoid `--ignore-scripts` and `--omit=optional` on the install.
 
 </details>
 

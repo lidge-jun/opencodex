@@ -70,6 +70,7 @@ flowchart LR
 
 ```bash
 # 설치 (Bun 런타임이 자동으로 번들됩니다 — Node 18+ 만 있으면 됩니다)
+# 사용자 소유 Node(nvm/fnm)를 쓰세요 — `sudo npm install -g …` 는 피하세요
 npm install -g @bitkyc08/opencodex
 
 # 대화형 설정 (config 작성 + Codex 주입 + 자동 시작 shim 설치 선택)
@@ -86,15 +87,27 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>"bundled Bun runtime is missing" 오류가 나나요?</b></summary>
+<summary><b>"bundled Bun runtime is missing" / npm이 Bun install 스크립트를 막나요?</b></summary>
 
 <br/>
 
-opencodex는 Bun 런타임을 의존성으로 번들하고 Node 런처로 실행하므로 Bun을 직접 설치할 필요가 **없습니다**. "bundled Bun runtime is missing" 오류가 보이면 설치 과정에서 lifecycle 스크립트나 optional 의존성이 건너뛰어진 경우입니다. 해당 플래그 없이 다시 설치하세요:
+opencodex는 Bun 런타임을 의존성으로 번들하고 Node 런처로 실행하므로 Bun을 직접 설치할 필요가 **없습니다**. "bundled Bun runtime is missing" 오류가 보이거나, npm이 Bun `postinstall`을 차단했다는 경고(`install-scripts` / `allowScripts`)가 나오면 lifecycle 스크립트나 optional 의존성이 건너뛰어진 경우입니다.
+
+**`sudo npm install -g …` 로 설치하지 마세요.** root prefix에 깔리면 이후 sudo 없는 명령이 다른 디렉터리를 볼 수 있습니다. 사용자 소유 Node(nvm, fnm, 또는 user npm prefix)를 쓰세요.
+
+스크립트를 허용한 채로 다시 설치하세요 (원래 설치와 같은 컨텍스트 — **패키지 이름을 포함**하세요. npm이 짧게 보여주는 `npm install -g --allow-scripts=bun` 만으로는 opencodex가 재설치되지 **않습니다**):
 
 ```bash
-npm install -g @bitkyc08/opencodex   # --ignore-scripts, --omit=optional 없이
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+이미 `sudo`로 설치했고 같은 root prefix에서 Bun을 풀어야 한다면 (비권장 — 가능하면 user-owned Node로 옮기세요):
+
+```bash
+sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+```
+
+설치 시 `--ignore-scripts`, `--omit=optional` 도 쓰지 마세요.
 
 </details>
 
