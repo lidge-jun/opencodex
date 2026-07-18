@@ -2,8 +2,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWriteFile, getConfigDir, readPid } from "../config";
+import { atomicWriteFile, getConfigDir, loadConfig, readPid } from "../config";
 import { killProxy } from "../lib/process-control";
+import { waitForPortAvailable } from "../server/ports";
 import { isServiceInstalled } from "../service";
 import {
   type Channel,
@@ -158,18 +159,23 @@ export function restartCommand(
   serviceInstalled: boolean,
   installer: Installer,
   launcher = packageLauncherPath(),
+  port?: number,
 ): { mode: "service" | "proxy"; bin: string; args: string[]; display: string } {
   const mode = serviceInstalled ? "service" : "proxy";
+  const pinPort = !serviceInstalled && typeof port === "number" && Number.isFinite(port) && port > 0;
+  const startArgs = pinPort
+    ? [launcher, "start", "--port", String(Math.trunc(port))]
+    : [launcher, "start"];
   if (installer === "npm") {
     const bin = nodeBin();
-    const args = serviceInstalled ? [launcher, "service", "install"] : [launcher, "start"];
+    const args = serviceInstalled ? [launcher, "service", "install"] : startArgs;
     return { mode, bin, args, display: formatCommand(bin, args) };
   }
   // bun/source installs: restart via the current runtime executable + package launcher (both real
   // .exe files), NOT the `ocx.cmd` shim. Spawning a `.cmd` shell-less throws EINVAL on Windows
   // Node/Bun ≥18.20/20.12 (CVE-2024-27980 hardening) — the same class the npm path (nodeBin) avoids.
   const bin = process.execPath;
-  const args = serviceInstalled ? [launcher, "service", "install"] : [launcher, "start"];
+  const args = serviceInstalled ? [launcher, "service", "install"] : startArgs;
   return { mode, bin, args, display: formatCommand(bin, args) };
 }
 
@@ -264,8 +270,8 @@ function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], time
   return { status: result.status, signal: result.signal };
 }
 
-function spawnDetachedStart(job: UpdateJobState, installer: Installer): void {
-  const cmd = restartCommand(false, installer);
+function spawnDetachedStart(job: UpdateJobState, installer: Installer, port?: number): void {
+  const cmd = restartCommand(false, installer, packageLauncherPath(), port);
   const env = { ...process.env };
   delete env.OCX_SERVICE;
   updateJob(job, {}, `$ ${cmd.display}`);
@@ -278,9 +284,12 @@ function spawnDetachedStart(job: UpdateJobState, installer: Installer): void {
   child.unref();
 }
 
-function restartAfterUpdate(job: UpdateJobState): void {
+async function restartAfterUpdate(job: UpdateJobState): Promise<void> {
   const serviceInstalled = isServiceInstalled();
-  const cmd = restartCommand(serviceInstalled, job.installer);
+  const config = loadConfig();
+  const port = config.port ?? 10100;
+  const hostname = config.hostname ?? "127.0.0.1";
+  const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port);
   if (serviceInstalled) {
     const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
     if (result.status !== 0) {
@@ -293,11 +302,17 @@ function restartAfterUpdate(job: UpdateJobState): void {
   if (pid) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
     killProxy(pid);
+    // Windows taskkill can leave the listen socket busy briefly; wait only after a real
+    // kill so cold restarts are not charged a multi-second prefer-wait.
+    const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 2000, intervalMs: 25 });
+    if (!freed) {
+      updateJob(job, {}, `Port ${port} still busy after stop; starting with --port ${port} anyway.`);
+    }
   }
-  spawnDetachedStart(job, job.installer);
+  spawnDetachedStart(job, job.installer, port);
 }
 
-export function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boolean): void {
+export async function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boolean): Promise<void> {
   let job = readUpdateJob(jobId);
   const check = checkForUpdate(channel);
   const now = new Date().toISOString();
@@ -362,7 +377,7 @@ export function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boo
 
     if (restart) {
       job = updateJob(job, { status: "restarting" }, "Update installed. Restarting proxy...");
-      restartAfterUpdate(job);
+      await restartAfterUpdate(job);
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested.");
       return;
     }

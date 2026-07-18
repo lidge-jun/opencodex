@@ -825,26 +825,68 @@ export function isOcxStartCommandLine(commandLine: string): boolean {
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }
 
+/** Per-process memo: waitForProxy/findLiveProxy used to spawn powershell on every 150ms poll. */
+const ocxStartProcessCache = new Map<number, boolean>();
+
 function isLikelyOcxStartProcess(pid: number): boolean {
+  const cached = ocxStartProcessCache.get(pid);
+  if (cached !== undefined) return cached;
   const commandLine = readProcessCommandLine(pid);
   if (commandLine === undefined) return false;
-  return isOcxStartCommandLine(commandLine);
+  const ok = isOcxStartCommandLine(commandLine);
+  ocxStartProcessCache.set(pid, ok);
+  return ok;
+}
+
+/**
+ * Alive pid from the pid file without the expensive Windows command-line probe.
+ * Safe for liveness polls: callers still identity-check /healthz before trusting the proxy.
+ * Destructive stop/kill paths should keep using {@link readPid}, which verifies the cmdline.
+ */
+export function readAlivePid(): number | null {
+  const pid = readPidFileValue();
+  if (pid === null) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EPERM") return pid;
+    return null;
+  }
 }
 
 function readProcessCommandLine(pid: number): string | undefined {
   try {
     if (process.platform === "win32") {
+      // Prefer WMIC over PowerShell: much faster cold start, and windowsHide avoids console flash.
+      // Fall back to PowerShell when WMIC is absent (newer Windows images).
+      const wmic = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\wbem\\WMIC.exe`;
+      try {
+        const output = execFileSync(wmic, [
+          "process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/VALUE",
+        ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+        const match = /^CommandLine=(.*)$/m.exec(output.replace(/\r/g, ""));
+        const value = match?.[1]?.trim();
+        if (value) return value;
+      } catch {
+        /* WMIC missing or failed — fall through */
+      }
       const output = execFileSync("powershell.exe", [
         "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 });
+      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
       return output.trim() || undefined;
     }
     const output = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1000,
+      windowsHide: true,
     });
     return output.trim() || undefined;
   } catch {

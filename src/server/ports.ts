@@ -24,8 +24,50 @@ export async function isPortAvailable(port: number, hostname = "127.0.0.1"): Pro
   });
 }
 
-export async function findAvailablePort(preferredPort: number, hostname = "127.0.0.1"): Promise<number> {
-  if (await isPortAvailable(preferredPort, hostname)) return preferredPort;
+export type WaitForPortOptions = {
+  timeoutMs?: number;
+  intervalMs?: number;
+};
+
+/** Poll until `port` accepts a bind, or until the timeout elapses. */
+export async function waitForPortAvailable(
+  port: number,
+  hostname = "127.0.0.1",
+  opts: WaitForPortOptions = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 5000;
+  const intervalMs = opts.intervalMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await isPortAvailable(port, hostname)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+}
+
+export type FindAvailablePortOptions = {
+  /** How long to keep retrying the preferred port before falling back to an ephemeral port. */
+  preferRetryMs?: number;
+  preferRetryIntervalMs?: number;
+};
+
+export async function findAvailablePort(
+  preferredPort: number,
+  hostname = "127.0.0.1",
+  opts: FindAvailablePortOptions = {},
+): Promise<number> {
+  const preferRetryMs = opts.preferRetryMs ?? 0;
+  if (preferRetryMs > 0) {
+    if (await waitForPortAvailable(preferredPort, hostname, {
+      timeoutMs: preferRetryMs,
+      intervalMs: opts.preferRetryIntervalMs ?? 50,
+    })) {
+      return preferredPort;
+    }
+  } else if (await isPortAvailable(preferredPort, hostname)) {
+    return preferredPort;
+  }
+
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);

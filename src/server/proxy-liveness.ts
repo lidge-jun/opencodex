@@ -9,7 +9,7 @@
  *
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
-import { loadConfig, readPid, readRuntimePort } from "../config";
+import { loadConfig, readAlivePid, readRuntimePort } from "../config";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -86,7 +86,9 @@ export async function proxyIdentityAt(
  * found and a foreign listener on the configured port is rejected.
  */
 export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | null> {
-  const readPidFn = io.readPidFn ?? readPid;
+  // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
+  // expensive for waitForProxy's 150ms poll loop, and /healthz identity is the real trust gate.
+  const readPidFn = io.readPidFn ?? readAlivePid;
   const readRuntimeFn = io.readRuntimeFn ?? readRuntimePort;
   const configFn = io.configFn ?? loadConfig;
 

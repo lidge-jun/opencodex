@@ -100,7 +100,7 @@ export function killProxy(pid: number): void {
   if (process.platform === "win32") {
     const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
     try {
-      execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
+      execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], { stdio: "pipe", windowsHide: true });
     } catch (err) {
       if (isProcessAlive(pid)) throw err;
     }
