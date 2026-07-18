@@ -830,7 +830,60 @@ export const de = {
   "frontier.noMultiEffort": "Dieses Board hat keine Mehrfach-Effort-Zeilen zum Vergleich.",
   "frontier.boardNoMultiEffort": "Keine Mehrfach-Effort-Leiter auf diesem Board — öffne FrontierCode (oder ein anderes Multi-Effort-Board).",
 
-// Combos workspace
+  "frontier.col.harness": "Harness",
+  "frontier.filter.harness": "Harness",
+
+  "frontier.board.deepswe.title": "DeepSWE",
+  "frontier.board.deepswe.xLabel": "Ø Kosten pro Aufgabe (USD)",
+  "frontier.board.deepswe.yLabel": "Pass@1",
+  "frontier.board.deepswe.sourceNote": "Illustrativer Snapshot der öffentlichen DeepSWE-Rangliste (mini-swe-agent). Scores und Kosten sind kein Live-Metering von OpenCodex.",
+
+  "frontier.board.aa-coding-agent.title": "AA Coding Agent",
+  "frontier.board.aa-coding-agent.xLabel": "Kosten pro Aufgabe (USD)",
+  "frontier.board.aa-coding-agent.yLabel": "Coding Agent Index",
+  "frontier.board.aa-coding-agent.sourceNote": "Artificial Analysis Coding Agent Index Snapshot (nach GPT-5.6 GA, 2026-07-09). Siehe provenance.url. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.aa-intelligence-index.title": "AA Intelligence Index",
+  "frontier.board.aa-intelligence-index.xLabel": "Kosten pro Intelligence-Index-Aufgabe (USD)",
+  "frontier.board.aa-intelligence-index.yLabel": "Intelligence Index",
+  "frontier.board.aa-intelligence-index.sourceNote": "Artificial Analysis Intelligence Index Snapshot mit Answer-/Reasoning-/Cache-/Input-Kostenanteilen. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.frontiercode.title": "FrontierCode",
+  "frontier.board.frontiercode.xLabel": "Ø Kosten pro Rollout (USD)",
+  "frontier.board.frontiercode.yLabel": "Mergeability-Score",
+  "frontier.board.frontiercode.sourceNote": "Cognition FrontierCode Snapshot; vor Zitation auf cognition.com prüfen. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.frontierswe.title": "FrontierSWE",
+  "frontier.board.frontierswe.xLabel": "Relative API-Kosten (blended $/MTok)",
+  "frontier.board.frontierswe.yLabel": "Dominance",
+  "frontier.board.frontierswe.sourceNote": "Illustrativer Snapshot von frontierswe.com (Mean@5 Dominance). X-Achse: relative öffentliche API-$/MTok — nicht gemessenes $/task. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.terminal-bench-2.1.title": "Terminal Bench 2.1",
+  "frontier.board.terminal-bench-2.1.xLabel": "Geschätzte Kosten (USD, illustrativ)",
+  "frontier.board.terminal-bench-2.1.yLabel": "Genauigkeit",
+  "frontier.board.terminal-bench-2.1.sourceNote": "Illustrative Mischung Snorkel-verifizierter Terminal-Bench-2.1-Zeilen + veröffentlichter GPT-5.6-Werte. Kosten sind Näherungsproxies. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.program-bench.title": "Program Bench",
+  "frontier.board.program-bench.xLabel": "Ø Kosten pro Aufgabe (USD)",
+  "frontier.board.program-bench.yLabel": "Almost resolved",
+  "frontier.board.program-bench.sourceNote": "Snapshot der erweiterten programbench.com-Rangliste (mini-SWE-agent, 200 Tasks). Score = almost-resolved (≥95% Tests). Kosten = veröffentlichte Ø API-$/task. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.swe-marathon.title": "SWE Marathon",
+  "frontier.board.swe-marathon.xLabel": "Geschätzte relative Laufkosten (USD)",
+  "frontier.board.swe-marathon.yLabel": "Resolution rate",
+  "frontier.board.swe-marathon.sourceNote": "Illustrativer Snapshot von swe-marathon.org (pass@1 auf 20 Ultra-Long-Horizon-Tasks). Kostenachse = geschätzte relative Laufkosten; kein veröffentlichtes $/task. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.frontend-code-arena.title": "Frontend Code Arena",
+  "frontier.board.frontend-code-arena.xLabel": "Relative API-Kosten (blended $/MTok)",
+  "frontier.board.frontend-code-arena.yLabel": "Arena Elo",
+  "frontier.board.frontend-code-arena.sourceNote": "Illustrativer Code-Arena-Elo-Snapshot. Kosten sind relative API-Blends, kein gemessenes $/task. Kein Live-Metering von OpenCodex.",
+
+  "frontier.board.cybench.title": "Cybench",
+  "frontier.board.cybench.xLabel": "Geschätzte relative Laufkosten (USD)",
+  "frontier.board.cybench.yLabel": "Unguided % gelöst",
+  "frontier.board.cybench.sourceNote": "Illustrative Cybench-Unguided-Solve-Raten. Kosten sind relative Schätzungen. Bitte Cybench bei republishing zitieren. Kein Live-Metering von OpenCodex.",
+
+  // Combos workspace
   "cws.loading": "Combos werden geladen…",
   "cws.loadFailed": "Combos konnten nicht geladen werden.",
   "cws.saveFailed": "Combo konnte nicht gespeichert werden.",

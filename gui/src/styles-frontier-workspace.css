@@ -383,8 +383,9 @@
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+  /* Height comes from JS (capped on narrow viewports); avoid fighting the chart. */
   .frontier-chart-panel .echarts-for-react {
-    height: 360px !important;
+    max-height: min(320px, 50vh);
   }
   .frontier-workspace-detail-head,
   .frontier-workspace-detail-body {

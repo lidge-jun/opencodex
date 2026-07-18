@@ -850,7 +850,60 @@ export const ko: Record<TKey, string> = {
   "frontier.noMultiEffort": "이 보드에는 비교할 다중 추론 수준 행이 없습니다.",
   "frontier.boardNoMultiEffort": "이 보드에는 다중 추론 수준이 없습니다 — FrontierCode(또는 다른 다중 수준 보드)를 여세요.",
 
-// Combos workspace
+  "frontier.col.harness": "하네스",
+  "frontier.filter.harness": "하네스",
+
+  "frontier.board.deepswe.title": "DeepSWE",
+  "frontier.board.deepswe.xLabel": "작업당 평균 비용 (USD)",
+  "frontier.board.deepswe.yLabel": "Pass@1",
+  "frontier.board.deepswe.sourceNote": "공개 DeepSWE 리더보드(mini-swe-agent) 스냅샷입니다. 점수·비용은 OpenCodex 실시간 미터링이 아닙니다.",
+
+  "frontier.board.aa-coding-agent.title": "AA Coding Agent",
+  "frontier.board.aa-coding-agent.xLabel": "작업당 비용 (USD)",
+  "frontier.board.aa-coding-agent.yLabel": "Coding Agent Index",
+  "frontier.board.aa-coding-agent.sourceNote": "Artificial Analysis Coding Agent Index 스냅샷(GPT-5.6 GA 이후, 2026-07-09). provenance.url 참고. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.aa-intelligence-index.title": "AA Intelligence Index",
+  "frontier.board.aa-intelligence-index.xLabel": "Intelligence Index 작업당 비용 (USD)",
+  "frontier.board.aa-intelligence-index.yLabel": "Intelligence Index",
+  "frontier.board.aa-intelligence-index.sourceNote": "Answer / Reasoning / Cache / Input 비용 분해가 포함된 Artificial Analysis Intelligence Index 스냅샷. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.frontiercode.title": "FrontierCode",
+  "frontier.board.frontiercode.xLabel": "롤아웃당 평균 비용 (USD)",
+  "frontier.board.frontiercode.yLabel": "Mergeability score",
+  "frontier.board.frontiercode.sourceNote": "Cognition FrontierCode 스냅샷. 인용 전 cognition.com에서 확인하세요. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.frontierswe.title": "FrontierSWE",
+  "frontier.board.frontierswe.xLabel": "상대 API 비용 (blended $/MTok)",
+  "frontier.board.frontierswe.yLabel": "Dominance",
+  "frontier.board.frontierswe.sourceNote": "frontierswe.com 스냅샷(Mean@5 Dominance). X축은 공개 API $/MTok 상대 비용 — 측정된 $/task 아님. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.terminal-bench-2.1.title": "Terminal Bench 2.1",
+  "frontier.board.terminal-bench-2.1.xLabel": "추정 비용 (USD, 예시)",
+  "frontier.board.terminal-bench-2.1.yLabel": "정확도",
+  "frontier.board.terminal-bench-2.1.sourceNote": "Snorkel 검증 Terminal-Bench 2.1 행 + 공개 GPT-5.6 수치의 예시 혼합. 비용은 근사 프록시입니다. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.program-bench.title": "Program Bench",
+  "frontier.board.program-bench.xLabel": "작업당 평균 비용 (USD)",
+  "frontier.board.program-bench.yLabel": "Almost resolved",
+  "frontier.board.program-bench.sourceNote": "programbench.com 확장 리더보드 스냅샷(mini-SWE-agent, 200 과제). 점수 = almost-resolved(≥95% 테스트). 비용 = 게시된 평균 API $/task. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.swe-marathon.title": "SWE Marathon",
+  "frontier.board.swe-marathon.xLabel": "추정 상대 실행 비용 (USD)",
+  "frontier.board.swe-marathon.yLabel": "Resolution rate",
+  "frontier.board.swe-marathon.sourceNote": "swe-marathon.org 스냅샷(초장기 20과제 pass@1). 비용 축은 추정 상대 실행 비용이며 게시된 $/task가 아닙니다. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.frontend-code-arena.title": "Frontend Code Arena",
+  "frontier.board.frontend-code-arena.xLabel": "상대 API 비용 (blended $/MTok)",
+  "frontier.board.frontend-code-arena.yLabel": "Arena Elo",
+  "frontier.board.frontend-code-arena.sourceNote": "Code Arena Elo 예시 스냅샷. 비용은 상대 API 블렌드이며 측정된 $/task가 아닙니다. OpenCodex 실시간 미터링 아님.",
+
+  "frontier.board.cybench.title": "Cybench",
+  "frontier.board.cybench.xLabel": "추정 상대 실행 비용 (USD)",
+  "frontier.board.cybench.yLabel": "Unguided % solved",
+  "frontier.board.cybench.sourceNote": "Cybench unguided 해결률 예시. 비용은 상대 추정입니다. 재게시 시 Cybench를 인용하세요. OpenCodex 실시간 미터링 아님.",
+
+  // Combos workspace
   "cws.loading": "콤보 불러오는 중…",
   "cws.loadFailed": "콤보를 불러오지 못했습니다.",
   "cws.saveFailed": "콤보를 저장하지 못했습니다.",

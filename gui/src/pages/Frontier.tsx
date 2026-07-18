@@ -19,6 +19,7 @@ import {
   benchmarkHasCostParts,
   benchmarkHasMultiEffort,
   benchmarkHasUniformMeasuredCost,
+  benchmarkModeKind,
   efficiencyRatio,
   priceBandFor,
   rankFrontierRows,
@@ -26,10 +27,11 @@ import {
   selectBestEffortRows,
   type FrontierCatalog,
   type FrontierEffortView,
+  type FrontierBenchmark,
   type FrontierTag,
   type PriceBand,
 } from "../frontier-types";
-import { useI18n, useT, type TKey } from "../i18n";
+import { useI18n, useT, type TFn, type TKey } from "../i18n";
 import { EmptyState } from "../ui";
 import "../styles-frontier-workspace.css";
 
@@ -79,6 +81,27 @@ const EFFORT_VIEW_KEYS: Record<FrontierEffortView, TKey> = {
   all: "frontier.effortView.all",
 };
 
+type BoardCopyField = "title" | "xLabel" | "yLabel" | "sourceNote";
+
+function boardCopy(t: TFn, board: FrontierBenchmark, field: BoardCopyField): string {
+  const key = `frontier.board.${board.id}.${field}` as TKey;
+  return t(key);
+}
+
+function useNarrowViewport(query = "(max-width: 720px)"): boolean {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setNarrow(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [query]);
+  return narrow;
+}
+
 function toggleInSet(set: Set<string>, value: string): Set<string> {
   const next = new Set(set);
   if (next.has(value)) next.delete(value);
@@ -114,6 +137,7 @@ export default function Frontier() {
   const t = useT();
   const { locale } = useI18n();
   const themeRev = useThemeRevision();
+  const narrow = useNarrowViewport();
 
   const benchmarks = data.benchmarks;
   const [domain, setDomain] = useState<FrontierDomainFilter>("all");
@@ -294,16 +318,19 @@ export default function Frontier() {
     return buildFrontierChartOption({
       kind: chartKind,
       rows: chartRows,
-      xLabel: active.axes.xLabel,
-      yLabel: active.axes.yLabel,
+      xLabel: boardCopy(t, active, "xLabel"),
+      yLabel: boardCopy(t, active, "yLabel"),
       yUnit: active.axes.yUnit,
       theme,
       locale,
       modelColors,
     });
-  }, [active, chartRows, theme, locale, chartKind, modelColors]);
+  }, [active, chartRows, theme, locale, chartKind, modelColors, t]);
 
-  const chartHeight = frontierChartHeight(chartKind, chartRows.length);
+  const chartHeight = (() => {
+    const base = frontierChartHeight(chartKind, chartRows.length);
+    return narrow ? Math.min(base, 320) : base;
+  })();
 
   if (!active) {
     return (
@@ -314,6 +341,9 @@ export default function Frontier() {
   }
 
   const yIsPercent = active.axes.yUnit === "%";
+  const modeKind = benchmarkModeKind(active);
+  const modeColKey: TKey = modeKind === "harness" ? "frontier.col.harness" : "frontier.col.effort";
+  const modeFilterKey: TKey = modeKind === "harness" ? "frontier.filter.harness" : "frontier.filter.effort";
 
   return (
     <div className="frontier-workspace-shell">
@@ -367,7 +397,7 @@ export default function Frontier() {
                   ].filter(Boolean).join(" ")}
                   onClick={() => selectBenchmark(b.id)}
                 >
-                  <span className="frontier-workspace-rail-row-title">{b.title}</span>
+                  <span className="frontier-workspace-rail-row-title">{boardCopy(t, b, "title")}</span>
                   {b.taskCount != null && (
                     <span className="frontier-workspace-rail-row-meta">{b.taskCount}</span>
                   )}
@@ -379,12 +409,12 @@ export default function Frontier() {
 
         <div className="frontier-workspace-detail">
           <header className="frontier-workspace-detail-head">
-            <h2 className="frontier-workspace-detail-title">{active.title}</h2>
+            <h2 className="frontier-workspace-detail-title">{boardCopy(t, active, "title")}</h2>
             <p className="frontier-workspace-detail-meta mono">
               {t("frontier.updated", { date: active.provenance?.capturedAt ?? active.updated })}
               {active.taskCount != null ? ` · ${t("frontier.tasks", { count: active.taskCount })}` : ""}
             </p>
-            <p className="frontier-workspace-detail-source">{active.sourceNote}</p>
+            <p className="frontier-workspace-detail-source">{boardCopy(t, active, "sourceNote")}</p>
             {active.provenance && (
               <p className="frontier-workspace-detail-provenance muted text-label">
                 <a href={active.provenance.url} target="_blank" rel="noreferrer">
@@ -486,7 +516,7 @@ export default function Frontier() {
                 )}
 
                 {allEfforts.length > 0 && (
-                  <FilterGroup label={t("frontier.filter.effort")}>
+                  <FilterGroup label={t(modeFilterKey)}>
                     {allEfforts.map(effort => {
                       const on = !hiddenEfforts.has(effort);
                       return (
@@ -600,8 +630,8 @@ export default function Frontier() {
                   <thead>
                     <tr>
                       <th>{t("frontier.col.model")}</th>
-                      <th>{t("frontier.col.effort")}</th>
-                      <th>{active.axes.yLabel}</th>
+                      <th>{t(modeColKey)}</th>
+                      <th>{boardCopy(t, active, "yLabel")}</th>
                       <th>{valueRankingOk ? t("frontier.col.cost") : t("frontier.col.costEstimated")}</th>
                       <th>{valueRankingOk ? t("frontier.col.efficiency") : t("frontier.col.efficiencyNa")}</th>
                       <th>{t("frontier.col.tags")}</th>

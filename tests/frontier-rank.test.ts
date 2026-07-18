@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import catalog from "../gui/src/data/frontier-benchmarks.json";
 import {
   benchmarkHasUniformMeasuredCost,
+  benchmarkModeKind,
   rankFrontierRows,
   type FrontierBenchmark,
+  type FrontierCatalog,
   type FrontierRow,
 } from "../gui/src/frontier-types";
 
@@ -45,5 +48,30 @@ describe("frontier ranking / measured costs", () => {
     expect(benchmarkHasUniformMeasuredCost(board(mixed))).toBe(false);
     const ranked = rankFrontierRows(mixed, { preferValue: true });
     expect(ranked.map(r => r.id)).toEqual(["a", "b"]); // score only
+  });
+});
+
+describe("frontier snapshot integrity", () => {
+  const data = catalog as FrontierCatalog;
+
+  test("ProgramBench costs match extended leaderboard and are measured", () => {
+    const pb = data.benchmarks.find(b => b.id === "program-bench");
+    expect(pb).toBeTruthy();
+    expect(benchmarkHasUniformMeasuredCost(pb!)).toBe(true);
+    const byId = Object.fromEntries(pb!.rows.map(r => [r.id, r.avgCostUsd]));
+    expect(byId["pb-gpt-5.5-xhigh"]).toBe(8.85);
+    expect(byId["pb-gpt-5.5-high"]).toBe(3.65);
+    expect(byId["pb-claude-opus-4.7-xhigh"]).toBe(10.96);
+    expect(byId["pb-gpt-5.5-default"]).toBe(1.21);
+    expect(pb!.provenance.url).toContain("programbench.com/extended");
+  });
+
+  test("harness boards advertise modeKind=harness", () => {
+    for (const id of ["frontierswe", "terminal-bench-2.1", "swe-marathon"]) {
+      const b = data.benchmarks.find(x => x.id === id);
+      expect(b, id).toBeTruthy();
+      expect(benchmarkModeKind(b!)).toBe("harness");
+    }
+    expect(benchmarkModeKind(data.benchmarks.find(b => b.id === "deepswe")!)).toBe("effort");
   });
 });

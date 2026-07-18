@@ -95,6 +95,9 @@ export interface FrontierAxes {
   yUnit?: string;
 }
 
+/** Whether `row.effort` stores reasoning effort or agent harness id. */
+export type FrontierModeKind = "effort" | "harness";
+
 export interface FrontierBenchmark {
   id: string;
   title: string;
@@ -103,9 +106,18 @@ export interface FrontierBenchmark {
   /** @deprecated Prefer provenance.capturedAt — kept for older UI copy. */
   updated: string;
   provenance: FrontierProvenance;
+  /**
+   * How to label `row.effort` in filters / ranking.
+   * Defaults to `effort` when omitted.
+   */
+  modeKind?: FrontierModeKind;
   taskCount?: number;
   axes: FrontierAxes;
   rows: FrontierRow[];
+}
+
+export function benchmarkModeKind(benchmark: FrontierBenchmark): FrontierModeKind {
+  return benchmark.modeKind === "harness" ? "harness" : "effort";
 }
 
 export interface FrontierCatalog {

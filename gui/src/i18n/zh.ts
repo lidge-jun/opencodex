@@ -850,7 +850,60 @@ export const zh: Record<TKey, string> = {
   "frontier.noMultiEffort": "该榜单没有可比较的多推理档位行。",
   "frontier.boardNoMultiEffort": "该榜单无多推理档位 — 请打开 FrontierCode（或其他多档位榜单）。",
 
-// Combos workspace
+  "frontier.col.harness": "Harness",
+  "frontier.filter.harness": "Harness",
+
+  "frontier.board.deepswe.title": "DeepSWE",
+  "frontier.board.deepswe.xLabel": "每任务平均成本 (USD)",
+  "frontier.board.deepswe.yLabel": "Pass@1",
+  "frontier.board.deepswe.sourceNote": "来自公开 DeepSWE 排行榜（mini-swe-agent）的示意快照。分数与成本并非 OpenCodex 实时计量。",
+
+  "frontier.board.aa-coding-agent.title": "AA Coding Agent",
+  "frontier.board.aa-coding-agent.xLabel": "每任务成本 (USD)",
+  "frontier.board.aa-coding-agent.yLabel": "Coding Agent Index",
+  "frontier.board.aa-coding-agent.sourceNote": "Artificial Analysis Coding Agent Index 快照（GPT-5.6 GA 之后，2026-07-09）。见 provenance.url。非 OpenCodex 实时计量。",
+
+  "frontier.board.aa-intelligence-index.title": "AA Intelligence Index",
+  "frontier.board.aa-intelligence-index.xLabel": "每 Intelligence Index 任务成本 (USD)",
+  "frontier.board.aa-intelligence-index.yLabel": "Intelligence Index",
+  "frontier.board.aa-intelligence-index.sourceNote": "含 Answer / Reasoning / Cache / Input 成本拆分的 Artificial Analysis Intelligence Index 快照。非 OpenCodex 实时计量。",
+
+  "frontier.board.frontiercode.title": "FrontierCode",
+  "frontier.board.frontiercode.xLabel": "每次 rollout 平均成本 (USD)",
+  "frontier.board.frontiercode.yLabel": "Mergeability score",
+  "frontier.board.frontiercode.sourceNote": "Cognition FrontierCode 快照；引用前请在 cognition.com 核对。非 OpenCodex 实时计量。",
+
+  "frontier.board.frontierswe.title": "FrontierSWE",
+  "frontier.board.frontierswe.xLabel": "相对 API 成本（混合 $/MTok）",
+  "frontier.board.frontierswe.yLabel": "Dominance",
+  "frontier.board.frontierswe.sourceNote": "来自 frontierswe.com 的示意快照（Mean@5 Dominance）。X 轴为公开 API $/MTok 相对成本——非实测 $/task。非 OpenCodex 实时计量。",
+
+  "frontier.board.terminal-bench-2.1.title": "Terminal Bench 2.1",
+  "frontier.board.terminal-bench-2.1.xLabel": "估计成本（USD，示意）",
+  "frontier.board.terminal-bench-2.1.yLabel": "准确率",
+  "frontier.board.terminal-bench-2.1.sourceNote": "Snorkel 验证的 Terminal-Bench 2.1 行与已发布 GPT-5.6 数据的示意混合。成本为近似代理。非 OpenCodex 实时计量。",
+
+  "frontier.board.program-bench.title": "Program Bench",
+  "frontier.board.program-bench.xLabel": "每任务平均成本 (USD)",
+  "frontier.board.program-bench.yLabel": "Almost resolved",
+  "frontier.board.program-bench.sourceNote": "来自 programbench.com 扩展排行榜的快照（mini-SWE-agent，200 题）。分数 = almost-resolved（≥95% 测试）。成本 = 已发布的平均 API $/task。非 OpenCodex 实时计量。",
+
+  "frontier.board.swe-marathon.title": "SWE Marathon",
+  "frontier.board.swe-marathon.xLabel": "估计相对运行成本 (USD)",
+  "frontier.board.swe-marathon.yLabel": "Resolution rate",
+  "frontier.board.swe-marathon.sourceNote": "来自 swe-marathon.org 的示意快照（20 个超长程任务的 pass@1）。成本轴为估计相对运行成本，非已发布 $/task。非 OpenCodex 实时计量。",
+
+  "frontier.board.frontend-code-arena.title": "Frontend Code Arena",
+  "frontier.board.frontend-code-arena.xLabel": "相对 API 成本（混合 $/MTok）",
+  "frontier.board.frontend-code-arena.yLabel": "Arena Elo",
+  "frontier.board.frontend-code-arena.sourceNote": "Code Arena Elo 示意快照。成本为相对 API 混合，非实测 $/task。非 OpenCodex 实时计量。",
+
+  "frontier.board.cybench.title": "Cybench",
+  "frontier.board.cybench.xLabel": "估计相对运行成本 (USD)",
+  "frontier.board.cybench.yLabel": "Unguided % solved",
+  "frontier.board.cybench.sourceNote": "Cybench unguided 解决率示意。成本为相对估计。转载请引用 Cybench。非 OpenCodex 实时计量。",
+
+  // Combos workspace
   "cws.loading": "正在加载组合…",
   "cws.loadFailed": "无法加载组合。",
   "cws.saveFailed": "无法保存组合。",

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "benchmarks": [
     {
       "id": "deepswe",
@@ -255,7 +255,8 @@
         "url": "https://www.deepwiki.com/deepswe",
         "capturedAt": "2026-07-16",
         "license": "Public leaderboard snapshot; verify current rankings on the source before citing."
-      }
+      },
+      "modeKind": "effort"
     },
     {
       "id": "aa-coding-agent",
@@ -406,7 +407,8 @@
         "capturedAt": "2026-07-09",
         "version": "Coding Agent Index (post GPT-5.6 GA)",
         "license": "Figures from Artificial Analysis public pages; not affiliated with AA."
-      }
+      },
+      "modeKind": "effort"
     },
     {
       "id": "aa-intelligence-index",
@@ -665,7 +667,8 @@
         "url": "https://artificialanalysis.ai/leaderboards/models",
         "capturedAt": "2026-07-16",
         "license": "Figures from Artificial Analysis public pages; not affiliated with AA."
-      }
+      },
+      "modeKind": "effort"
     },
     {
       "id": "frontiercode",
@@ -1386,7 +1389,8 @@
         "url": "https://cognition.com/frontiercode",
         "capturedAt": "2026-07-16",
         "license": "Public FrontierCode snapshot; verify on cognition.com before citing."
-      }
+      },
+      "modeKind": "effort"
     },
     {
       "id": "frontierswe",
@@ -1595,7 +1599,8 @@
         "url": "https://frontierswe.com",
         "capturedAt": "2026-07-16",
         "license": "Scores from FrontierSWE; costs are illustrative API/relative blends, not measured $/task."
-      }
+      },
+      "modeKind": "harness"
     },
     {
       "id": "terminal-bench-2.1",
@@ -1815,18 +1820,19 @@
         "url": "https://www.tbench.ai",
         "capturedAt": "2026-07-11",
         "license": "Harness results from Terminal-Bench; costs are estimates / API blends."
-      }
+      },
+      "modeKind": "harness"
     },
     {
       "id": "program-bench",
       "title": "Program Bench",
-      "sourceNote": "Illustrative snapshot from programbench.com (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs from published run averages where available; GPT-5.5 costs are estimates. Not live OpenCodex metering.",
+      "sourceNote": "Snapshot from programbench.com extended leaderboard (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs = published average API $/task. Not live OpenCodex metering.",
       "updated": "2026-06-23",
       "taskCount": 200,
       "axes": {
         "xKey": "avgCostUsd",
         "yKey": "score",
-        "xLabel": "Estimated cost (USD, illustrative)",
+        "xLabel": "Avg cost per task (USD)",
         "yLabel": "Almost resolved",
         "xUnit": "USD",
         "yUnit": "%"
@@ -1838,12 +1844,12 @@
           "family": "openai",
           "effort": "xhigh",
           "score": 13.5,
-          "avgCostUsd": 14,
+          "avgCostUsd": 8.85,
           "tags": [
             "frontier",
             "planner"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gpt-5.5-high",
@@ -1851,12 +1857,12 @@
           "family": "openai",
           "effort": "high",
           "score": 5,
-          "avgCostUsd": 8,
+          "avgCostUsd": 3.65,
           "tags": [
             "frontier",
             "workhorse"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-claude-opus-4.7-xhigh",
@@ -1864,12 +1870,12 @@
           "family": "anthropic",
           "effort": "xhigh",
           "score": 4.5,
-          "avgCostUsd": 6,
+          "avgCostUsd": 10.96,
           "tags": [
             "planner",
             "frontier"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-claude-opus-4.7",
@@ -1880,7 +1886,7 @@
           "tags": [
             "frontier"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-claude-opus-4.6",
@@ -1891,18 +1897,18 @@
           "tags": [
             "workhorse"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gpt-5.5-default",
           "model": "gpt-5.5",
           "family": "openai",
           "score": 1.5,
-          "avgCostUsd": 5,
+          "avgCostUsd": 1.21,
           "tags": [
             "workhorse"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-claude-sonnet-4.6",
@@ -1913,7 +1919,7 @@
           "tags": [
             "workhorse"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gpt-5.4",
@@ -1925,7 +1931,7 @@
             "fast",
             "cheap-subagent"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gemini-3.1-pro",
@@ -1936,7 +1942,7 @@
           "tags": [
             "frontier"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gemini-3-flash",
@@ -1948,7 +1954,7 @@
             "fast",
             "cheap-subagent"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-claude-haiku-4.5",
@@ -1960,7 +1966,7 @@
             "fast",
             "cheap-subagent"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gpt-5.4-mini",
@@ -1972,7 +1978,7 @@
             "fast",
             "cheap-subagent"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         },
         {
           "id": "pb-gpt-5-mini",
@@ -1984,14 +1990,15 @@
             "fast",
             "cheap-subagent"
           ],
-          "costKind": "estimated"
+          "costKind": "measured"
         }
       ],
       "provenance": {
-        "url": "https://programbench.com",
+        "url": "https://programbench.com/extended/",
         "capturedAt": "2026-06-23",
-        "license": "Scores from ProgramBench; some cost fields disputed vs extended board — treated as estimated."
-      }
+        "license": "Scores and average API costs from ProgramBench extended leaderboard."
+      },
+      "modeKind": "effort"
     },
     {
       "id": "swe-marathon",
@@ -2198,7 +2205,8 @@
         "url": "https://swe-marathon.org",
         "capturedAt": "2026-07-09",
         "license": "Scores from SWE-Marathon; costs are estimates."
-      }
+      },
+      "modeKind": "harness"
     },
     {
       "id": "frontend-code-arena",
@@ -2452,7 +2460,8 @@
         "url": "https://arena.ai",
         "capturedAt": "2026-07-16",
         "license": "Elo/scores from Code Arena; costs are estimates."
-      }
+      },
+      "modeKind": "effort"
     },
     {
       "id": "cybench",
@@ -2649,7 +2658,8 @@
         "capturedAt": "2026-07-16",
         "license": "Please cite Cybench when republishing results (see cybench.github.io).",
         "citation": "Cybench — https://cybench.github.io"
-      }
+      },
+      "modeKind": "effort"
     }
   ]
 }

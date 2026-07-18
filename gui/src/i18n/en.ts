@@ -852,7 +852,60 @@ export const en = {
   "frontier.noMultiEffort": "This board has no multi-effort rows to compare.",
   "frontier.boardNoMultiEffort": "No multi-effort ladder on this board — open FrontierCode (or another multi-effort board).",
 
-// Combos workspace
+  "frontier.col.harness": "Harness",
+  "frontier.filter.harness": "Harness",
+
+  "frontier.board.deepswe.title": "DeepSWE",
+  "frontier.board.deepswe.xLabel": "Avg cost per task (USD)",
+  "frontier.board.deepswe.yLabel": "Pass@1",
+  "frontier.board.deepswe.sourceNote": "Illustrative snapshot from the public DeepSWE leaderboard (mini-swe-agent). Scores and costs are not live OpenCodex metering.",
+
+  "frontier.board.aa-coding-agent.title": "AA Coding Agent",
+  "frontier.board.aa-coding-agent.xLabel": "Cost per task (USD)",
+  "frontier.board.aa-coding-agent.yLabel": "Coding Agent Index",
+  "frontier.board.aa-coding-agent.sourceNote": "Artificial Analysis Coding Agent Index snapshot (post GPT-5.6 GA, 2026-07-09). See provenance.url. Not live OpenCodex metering.",
+
+  "frontier.board.aa-intelligence-index.title": "AA Intelligence Index",
+  "frontier.board.aa-intelligence-index.xLabel": "Cost per Intelligence Index task (USD)",
+  "frontier.board.aa-intelligence-index.yLabel": "Intelligence Index",
+  "frontier.board.aa-intelligence-index.sourceNote": "Illustrative snapshot inspired by Artificial Analysis Intelligence Index cost-per-task (Answer / Reasoning / Cache write / Cache hit / Input). Totals match published headline figures where noted; segment splits are approximate for charting. Not live OpenCodex metering.",
+
+  "frontier.board.frontiercode.title": "FrontierCode",
+  "frontier.board.frontiercode.xLabel": "Avg cost per rollout (USD)",
+  "frontier.board.frontiercode.yLabel": "Mergeability score",
+  "frontier.board.frontiercode.sourceNote": "Illustrative snapshot from cognition.com/frontiercode (FrontierCode 1.1 Main, Jul 2026). Score = mergeability rubric; cost = mean USD per rollout. Best vs all reasoning modes match Cognition’s leaderboard toggle. Not live OpenCodex metering.",
+
+  "frontier.board.frontierswe.title": "FrontierSWE",
+  "frontier.board.frontierswe.xLabel": "Relative API cost (blended $/MTok)",
+  "frontier.board.frontierswe.yLabel": "Dominance",
+  "frontier.board.frontierswe.sourceNote": "Illustrative snapshot from frontierswe.com (Mean@5 dominance). X-axis uses blended public API $/MTok as a relative cost proxy — not measured $/task. Not live OpenCodex metering.",
+
+  "frontier.board.terminal-bench-2.1.title": "Terminal Bench 2.1",
+  "frontier.board.terminal-bench-2.1.xLabel": "Estimated cost (USD, illustrative)",
+  "frontier.board.terminal-bench-2.1.yLabel": "Accuracy",
+  "frontier.board.terminal-bench-2.1.sourceNote": "Illustrative mix of Snorkel-verified Terminal-Bench 2.1 rows + published GPT-5.6 figures. Costs are approximate proxies (DeepSWE overlap or API-tier estimates). Not live OpenCodex metering.",
+
+  "frontier.board.program-bench.title": "Program Bench",
+  "frontier.board.program-bench.xLabel": "Avg cost per task (USD)",
+  "frontier.board.program-bench.yLabel": "Almost resolved",
+  "frontier.board.program-bench.sourceNote": "Snapshot from programbench.com extended leaderboard (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs = published average API $/task. Not live OpenCodex metering.",
+
+  "frontier.board.swe-marathon.title": "SWE Marathon",
+  "frontier.board.swe-marathon.xLabel": "Est. relative run cost (USD)",
+  "frontier.board.swe-marathon.yLabel": "Resolution rate",
+  "frontier.board.swe-marathon.sourceNote": "Illustrative snapshot from swe-marathon.org (pass@1 on 20 ultra-long-horizon tasks). Cost axis is an estimated relative run cost (long trajectories); not published $/task. Not live OpenCodex metering.",
+
+  "frontier.board.frontend-code-arena.title": "Frontend Code Arena",
+  "frontier.board.frontend-code-arena.xLabel": "Relative API cost (blended $/MTok)",
+  "frontier.board.frontend-code-arena.yLabel": "Arena Elo",
+  "frontier.board.frontend-code-arena.sourceNote": "Illustrative snapshot from arena.ai Code Arena | WebDev (Elo from blind human votes on frontend tasks, Jul 16 2026). X-axis is blended public API $/MTok — preference Elo has no $/task. Not live OpenCodex metering.",
+
+  "frontier.board.cybench.title": "Cybench",
+  "frontier.board.cybench.xLabel": "Est. relative run cost (USD)",
+  "frontier.board.cybench.yLabel": "Unguided % solved",
+  "frontier.board.cybench.sourceNote": "Illustrative snapshot from cybench.github.io (unguided % solved on professional CTF tasks). Many rows are system-card / subset results, not one uniform full-suite run. Costs are relative agent-run estimates — Cybench does not publish $/task. Not live OpenCodex metering.",
+
+  // Combos workspace
   "cws.loading": "Loading combos…",
   "cws.loadFailed": "Could not load combos.",
   "cws.saveFailed": "Could not save combo.",
