@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server } from "node:net";
-import { findAvailablePort, isAddrInUse, isPortAvailable, shouldPersistSelectedPort } from "../src/server/ports";
+import { findAvailablePort, isAddrInUse, isPortAvailable, shouldPersistSelectedPort, waitForPortAvailable } from "../src/server/ports";
 
 const servers: Server[] = [];
 
@@ -52,6 +52,41 @@ describe("port selection", () => {
     expect(shouldPersistSelectedPort(58195, 10100, 10100)).toBe(true);
     expect(shouldPersistSelectedPort(10100, 58195, 10100)).toBe(false);
     expect(shouldPersistSelectedPort(10100, 10100, 10100)).toBe(false);
+  });
+
+  test("waitForPortAvailable resolves once a busy port is released", async () => {
+    const { server, port } = await listen();
+    expect(await isPortAvailable(port)).toBe(false);
+
+    const waiting = waitForPortAvailable(port, "127.0.0.1", { timeoutMs: 2000, intervalMs: 25 });
+    await close(server);
+    const idx = servers.indexOf(server);
+    if (idx >= 0) servers.splice(idx, 1);
+
+    await expect(waiting).resolves.toBe(true);
+    expect(await isPortAvailable(port)).toBe(true);
+  });
+
+  test("waitForPortAvailable returns false when the port stays busy past the timeout", async () => {
+    const { port } = await listen();
+    await expect(waitForPortAvailable(port, "127.0.0.1", { timeoutMs: 80, intervalMs: 20 })).resolves.toBe(false);
+    expect(await isPortAvailable(port)).toBe(false);
+  });
+
+  test("findAvailablePort retries the preferred port briefly before falling back", async () => {
+    const { server, port } = await listen();
+    expect(await isPortAvailable(port)).toBe(false);
+
+    const pending = findAvailablePort(port, "127.0.0.1", { preferRetryMs: 500, preferRetryIntervalMs: 25 });
+    // Free the preferred port during the retry window.
+    setTimeout(() => {
+      void close(server).then(() => {
+        const idx = servers.indexOf(server);
+        if (idx >= 0) servers.splice(idx, 1);
+      });
+    }, 60);
+
+    expect(await pending).toBe(port);
   });
 
   test("isAddrInUse recognizes bind conflicts by code or message and rejects everything else", () => {

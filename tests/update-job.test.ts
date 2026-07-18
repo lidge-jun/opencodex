@@ -98,6 +98,17 @@ describe("GUI update execution decisions", () => {
     });
   });
 
+  test("proxy restart pins --port so post-update start does not hop to an ephemeral port", () => {
+    const proxy = restartCommand(false, "npm", "/pkg/bin/ocx.mjs", 10100);
+    expect(proxy.mode).toBe("proxy");
+    expect(proxy.args).toEqual(["/pkg/bin/ocx.mjs", "start", "--port", "10100"]);
+    expect(proxy.display).toContain("start --port 10100");
+    // Service reinstall keeps its own port contract — do not append --port.
+    expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs", 10100).args).toEqual([
+      "/pkg/bin/ocx.mjs", "service", "install",
+    ]);
+  });
+
   test("a running job prevents a second update job", () => {
     const now = new Date().toISOString();
     const job: UpdateJobState = {

@@ -87,7 +87,12 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
 async function chooseListenPort(requestedPort?: number): Promise<number> {
   const config = loadConfig();
   const preferred = requestedPort ?? config.port ?? 10100;
-  const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1");
+  // Brief prefer-retry covers stop→start races (update restart, `ocx restart`) where the
+  // old process has exited but the listen socket is still draining.
+  const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1", {
+    preferRetryMs: 750,
+    preferRetryIntervalMs: 50,
+  });
   if (selected !== preferred) {
     console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
   }
@@ -587,7 +592,7 @@ switch (command) {
     const jobId = args[1];
     if (!jobId) process.exit(1);
     const channel = normalizeUpdateChannel(args[2]);
-    runGuiUpdateWorker(jobId, channel, args[3] === "restart");
+    await runGuiUpdateWorker(jobId, channel, args[3] === "restart");
     break;
   }
   case "restart": {
