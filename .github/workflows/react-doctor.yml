@@ -22,6 +22,10 @@ on:
 
 permissions:
   contents: read
+  # Needed so the action can list PR files for --changed-files-from.
+  # Without this, listFiles fails, the changed-files file is never written,
+  # and the CLI exits 1 on ENOENT even with blocking: none (fork PRs).
+  pull-requests: read
 
 # Cancels any in-flight scan for the same PR (or branch, on push) the moment a
 # new commit arrives, so only the latest run remains.
