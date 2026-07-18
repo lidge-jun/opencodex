@@ -92,21 +92,72 @@ describe("normalizeComboConfig defaultEffort", () => {
       options: { reasoning: undefined as string | undefined },
       _rawBody: {} as { reasoning?: { effort?: string } },
     };
-    const applied = applyComboDefaultEffort(parsed as never, baseConfig({
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-chat",
+          baseUrl: "https://a.example/v1",
+          apiKey: "ka",
+          models: ["m1"],
+          reasoningEfforts: ["low", "medium", "high"],
+        },
+        b: {
+          adapter: "openai-chat",
+          baseUrl: "https://b.example/v1",
+          apiKey: "kb",
+          models: ["m2"],
+          reasoningEfforts: ["low", "medium", "high"],
+        },
+      },
       combos: {
         free: {
           defaultEffort: "high",
           targets: [{ provider: "a", model: "m1" }],
         },
       },
-    }), "free");
+    });
+    const route = { provider: config.providers.a, modelId: "m1" };
+    const applied = applyComboDefaultEffort(parsed as never, config, "free", route);
     expect(applied).toBe("high");
     expect(parsed.options.reasoning).toBe("high");
     expect(parsed._rawBody.reasoning?.effort).toBe("high");
 
     parsed.options.reasoning = "low";
-    expect(applyComboDefaultEffort(parsed as never, baseConfig(), "free")).toBeNull();
+    expect(applyComboDefaultEffort(parsed as never, config, "free", route)).toBeNull();
     expect(parsed.options.reasoning).toBe("low");
+  });
+
+  test("skips defaultEffort when the target has no reasoning ladder", () => {
+    const parsed = {
+      modelId: "combo/free",
+      options: { reasoning: undefined as string | undefined },
+      _rawBody: {} as { reasoning?: { effort?: string } },
+    };
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-chat",
+          baseUrl: "https://a.example/v1",
+          apiKey: "ka",
+          models: ["m1"],
+          noReasoningModels: ["m1"],
+        },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb", models: ["m2"] },
+      },
+      combos: {
+        free: {
+          defaultEffort: "high",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      },
+    });
+    expect(applyComboDefaultEffort(
+      parsed as never,
+      config,
+      "free",
+      { provider: config.providers.a, modelId: "m1" },
+    )).toBeNull();
+    expect(parsed.options.reasoning).toBeUndefined();
   });
 });
 
