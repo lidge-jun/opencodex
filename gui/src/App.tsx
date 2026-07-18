@@ -9,17 +9,18 @@ import Usage from "./pages/Usage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import Combos from "./pages/Combos";
+import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "providers" | "models" | "subagents" | "logs" | "debug" | "usage" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "providers" | "models" | "combos" | "subagents" | "logs" | "debug" | "usage" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "subagents", "logs", "debug", "usage", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "combos", "subagents", "logs", "debug", "usage", "codex-auth", "api", "claude"]);
 
 function readPageFromHash(): Page {
   const raw = location.hash.replace(/^#\/?/, "");
@@ -33,6 +34,7 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
+  { id: "combos", tkey: "nav.combos", Icon: IconShuffle },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "debug", tkey: "nav.debug", Icon: IconTerminal },
@@ -251,6 +253,7 @@ export default function App() {
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}
+          {page === "combos" && <Combos apiBase={API_BASE} />}
           {page === "subagents" && <Subagents apiBase={API_BASE} />}
           {page === "logs" && <Logs apiBase={API_BASE} />}
           {page === "debug" && <Debug apiBase={API_BASE} />}
