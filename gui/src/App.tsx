@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
@@ -6,7 +6,6 @@ import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Debug from "./pages/Debug";
 import Usage from "./pages/Usage";
-import Frontier from "./pages/Frontier";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
@@ -14,6 +13,8 @@ import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconA
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
+
+const Frontier = lazy(() => import("./pages/Frontier"));
 
 installApiAuthFetch();
 
@@ -257,7 +258,11 @@ export default function App() {
           {page === "logs" && <Logs apiBase={API_BASE} />}
           {page === "debug" && <Debug apiBase={API_BASE} />}
           {page === "usage" && <Usage apiBase={API_BASE} />}
-          {page === "frontier" && <Frontier />}
+          {page === "frontier" && (
+            <Suspense fallback={<div className="muted" style={{ padding: 24 }}>{t("common.loading")}</div>}>
+              <Frontier />
+            </Suspense>
+          )}
           {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
           {page === "api" && <ApiKeys apiBase={API_BASE} />}
           {page === "claude" && <ClaudeCode apiBase={API_BASE} />}

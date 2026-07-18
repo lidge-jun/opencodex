@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactEChartsCore from "echarts-for-react/lib/core";
+import echarts from "../frontier-echarts";
 import catalog from "../data/frontier-benchmarks.json";
 import {
   buildFrontierChartOption,
@@ -17,8 +18,10 @@ import {
 import {
   benchmarkHasCostParts,
   benchmarkHasMultiEffort,
+  benchmarkHasUniformMeasuredCost,
   efficiencyRatio,
   priceBandFor,
+  rankFrontierRows,
   rowHasCostParts,
   selectBestEffortRows,
   type FrontierCatalog,
@@ -148,7 +151,13 @@ export default function Frontier() {
   );
   const costStackLocked = chartKind === "costStack";
   const reasoningLocked = chartKind === "reasoning";
+  const valueLocked = chartKind === "efficiency";
   const showEffortView = active != null && benchmarkHasMultiEffort(active);
+  const valueRankingOk = active != null && benchmarkHasUniformMeasuredCost(active);
+  const measuredBoards = useMemo(
+    () => visibleBenchmarks.filter(benchmarkHasUniformMeasuredCost),
+    [visibleBenchmarks],
+  );
 
   const pickFallbackBoard = (candidates: typeof benchmarks) =>
     candidates.find(b => b.id === "frontiercode")
@@ -162,6 +171,7 @@ export default function Frontier() {
     let nextBoards = inDomain;
     if (costStackLocked) nextBoards = nextBoards.filter(benchmarkHasCostParts);
     if (reasoningLocked) nextBoards = nextBoards.filter(benchmarkHasMultiEffort);
+    if (valueLocked) nextBoards = nextBoards.filter(benchmarkHasUniformMeasuredCost);
     if (nextBoards.length === 0) {
       setChartKind("scatter");
       nextBoards = inDomain;
@@ -194,8 +204,12 @@ export default function Frontier() {
     if (!boardMatchesDomain(board, domain)) return;
     if (costStackLocked && !benchmarkHasCostParts(board)) return;
     if (reasoningLocked && !benchmarkHasMultiEffort(board)) return;
+    if (valueLocked && !benchmarkHasUniformMeasuredCost(board)) return;
     setBenchmarkId(id);
     resetFilters();
+    if (chartKind === "efficiency" && !benchmarkHasUniformMeasuredCost(board)) {
+      setChartKind("scatter");
+    }
   };
 
   const selectChartKind = (kind: FrontierChartKind) => {
@@ -226,6 +240,22 @@ export default function Frontier() {
         resetFilters();
       }
       if (!boardMatchesDomain(fallback, domain)) setDomain("all");
+      return;
+    }
+    if (kind === "efficiency") {
+      const currentOk = active != null && benchmarkHasUniformMeasuredCost(active);
+      if (currentOk) return;
+      const fallback = measuredBoards[0]
+        ?? benchmarks.filter(benchmarkHasUniformMeasuredCost)[0];
+      if (!fallback) {
+        setChartKind("scatter");
+        return;
+      }
+      if (fallback.id !== benchmarkId) {
+        setBenchmarkId(fallback.id);
+        resetFilters();
+      }
+      if (!boardMatchesDomain(fallback, domain)) setDomain("all");
     }
   };
 
@@ -243,12 +273,8 @@ export default function Frontier() {
   }, [active, hiddenModels, hiddenEfforts, priceBands, activeTags, showEffortView, effortView]);
 
   const ranked = useMemo(
-    () => [...filtered].toSorted((a, b) => {
-      const eff = efficiencyRatio(b.score, b.avgCostUsd) - efficiencyRatio(a.score, a.avgCostUsd);
-      if (Math.abs(eff) > 1e-9) return eff;
-      return b.score - a.score;
-    }),
-    [filtered],
+    () => rankFrontierRows(filtered, { preferValue: valueRankingOk }),
+    [filtered, valueRankingOk],
   );
 
   const theme = useMemo(() => {
@@ -355,10 +381,25 @@ export default function Frontier() {
           <header className="frontier-workspace-detail-head">
             <h2 className="frontier-workspace-detail-title">{active.title}</h2>
             <p className="frontier-workspace-detail-meta mono">
-              {t("frontier.updated", { date: active.updated })}
+              {t("frontier.updated", { date: active.provenance?.capturedAt ?? active.updated })}
               {active.taskCount != null ? ` · ${t("frontier.tasks", { count: active.taskCount })}` : ""}
             </p>
             <p className="frontier-workspace-detail-source">{active.sourceNote}</p>
+            {active.provenance && (
+              <p className="frontier-workspace-detail-provenance muted text-label">
+                <a href={active.provenance.url} target="_blank" rel="noreferrer">
+                  {t("frontier.sourceLink")}
+                </a>
+                {active.provenance.version ? ` · ${active.provenance.version}` : ""}
+                {active.provenance.license ? ` · ${active.provenance.license}` : ""}
+                {active.provenance.citation ? ` · ${active.provenance.citation}` : ""}
+              </p>
+            )}
+            {!valueRankingOk && (
+              <p className="frontier-workspace-detail-cost-warn muted text-label">
+                {t("frontier.costKindEstimated")}
+              </p>
+            )}
           </header>
 
           <div className="frontier-workspace-detail-body">
@@ -370,18 +411,34 @@ export default function Frontier() {
               <div className="frontier-chart-toolbar">
                 <div className="frontier-chart-toolbar-row">
                   <div className="usage-segmented" role="tablist" aria-label={t("frontier.chartKindsAria")}>
-                    {CHART_KINDS.map(({ id, tkey }) => (
-                      <button
-                        key={id}
-                        type="button"
-                        role="tab"
-                        aria-selected={chartKind === id}
-                        className={`usage-segmented-btn${chartKind === id ? " active" : ""}`}
-                        onClick={() => selectChartKind(id)}
-                      >
-                        {t(tkey)}
-                      </button>
-                    ))}
+                    {CHART_KINDS.map(({ id, tkey }) => {
+                      const disabled =
+                        (id === "costStack" && !benchmarkHasCostParts(active))
+                        || (id === "reasoning" && !benchmarkHasMultiEffort(active))
+                        || (id === "efficiency" && !valueRankingOk);
+                      const title = id === "efficiency" && !valueRankingOk
+                        ? t("frontier.chartValueDisabled")
+                        : id === "costStack" && !benchmarkHasCostParts(active)
+                          ? t("frontier.boardNoCostParts")
+                          : id === "reasoning" && !benchmarkHasMultiEffort(active)
+                            ? t("frontier.boardNoMultiEffort")
+                            : undefined;
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          role="tab"
+                          aria-selected={chartKind === id}
+                          aria-disabled={disabled || undefined}
+                          disabled={disabled}
+                          title={title}
+                          className={`usage-segmented-btn${chartKind === id ? " active" : ""}${disabled ? " is-disabled" : ""}`}
+                          onClick={() => { if (!disabled) selectChartKind(id); }}
+                        >
+                          {t(tkey)}
+                        </button>
+                      );
+                    })}
                   </div>
                   <div
                     className={`usage-segmented frontier-effort-view${showEffortView ? "" : " is-disabled"}`}
@@ -495,7 +552,8 @@ export default function Frontier() {
                 <EmptyState title={t("frontier.noMultiEffort")} />
               ) : (
                 <>
-                  <ReactECharts
+                  <ReactEChartsCore
+                    echarts={echarts}
                     key={`${benchmarkId}-${chartKind}-${themeRev}`}
                     option={option}
                     style={{ height: chartHeight, width: "100%" }}
@@ -533,7 +591,9 @@ export default function Frontier() {
             <section className="panel frontier-table-panel" aria-label={t("frontier.tableAria")}>
               <div className="panel-head">
                 <h3 className="panel-title">{t("frontier.ranking")}</h3>
-                <span className="muted text-label">{t("frontier.rankingHint")}</span>
+                <span className="muted text-label">
+                  {valueRankingOk ? t("frontier.rankingHint") : t("frontier.rankingHintScoreOnly")}
+                </span>
               </div>
               <div className="tbl-wrap usage-scroll">
                 <table className="tbl">
@@ -542,8 +602,8 @@ export default function Frontier() {
                       <th>{t("frontier.col.model")}</th>
                       <th>{t("frontier.col.effort")}</th>
                       <th>{active.axes.yLabel}</th>
-                      <th>{t("frontier.col.cost")}</th>
-                      <th>{t("frontier.col.efficiency")}</th>
+                      <th>{valueRankingOk ? t("frontier.col.cost") : t("frontier.col.costEstimated")}</th>
+                      <th>{valueRankingOk ? t("frontier.col.efficiency") : t("frontier.col.efficiencyNa")}</th>
                       <th>{t("frontier.col.tags")}</th>
                     </tr>
                   </thead>
@@ -561,7 +621,11 @@ export default function Frontier() {
                                 aria-hidden
                               />
                               {row.model}
-                              {best && <span className="badge badge-green text-micro">{t("frontier.bestValue")}</span>}
+                              {best && (
+                                <span className="badge badge-green text-micro">
+                                  {valueRankingOk ? t("frontier.bestValue") : t("frontier.bestScore")}
+                                </span>
+                              )}
                             </span>
                           </td>
                           <td className="muted">{row.effort ?? "—"}</td>
@@ -570,7 +634,7 @@ export default function Frontier() {
                             {row.scoreCi != null ? <span className="muted"> ±{row.scoreCi}</span> : null}
                           </td>
                           <td>${row.avgCostUsd.toLocaleString(locale, { maximumFractionDigits: 2 })}</td>
-                          <td className="mono">{eff.toFixed(1)}</td>
+                          <td className="mono">{valueRankingOk ? eff.toFixed(1) : "—"}</td>
                           <td className="muted">{row.tags.map(tag => t(TAG_KEYS[tag])).join(", ")}</td>
                         </tr>
                       );

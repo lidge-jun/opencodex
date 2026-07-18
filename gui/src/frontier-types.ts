@@ -18,6 +18,29 @@ export type FrontierTag =
   | "cheap-subagent"
   | "fast";
 
+/**
+ * How `avgCostUsd` was obtained. Estimates / API blends must not share a
+ * score-per-dollar ranking axis with leaderboard-measured $/task figures.
+ */
+export type FrontierCostKind =
+  | "measured" // published cost-per-task from the benchmark source
+  | "apiBlend" // derived from list prices × tokens (not a measured task bill)
+  | "estimated" // illustrative / relative / unofficial
+  | "unavailable";
+
+export interface FrontierProvenance {
+  /** Canonical public URL for the board (leaderboard or methodology page). */
+  url: string;
+  /** ISO date (YYYY-MM-DD) when this snapshot was captured from the source. */
+  capturedAt: string;
+  /** Benchmark / index version string when the source publishes one. */
+  version?: string;
+  /** Short reuse / citation terms (e.g. Cybench citation request). */
+  license?: string;
+  /** Optional preferred citation string. */
+  citation?: string;
+}
+
 export interface FrontierCostParts {
   /** USD attributed to answer / completion tokens per task. */
   answer: number;
@@ -45,11 +68,17 @@ export interface FrontierRow {
   id: string;
   model: string;
   family: FrontierFamily;
+  /** Reasoning effort, or harness id when the board reports harness instead of effort. */
   effort?: string;
   /** Board-specific score (pass@1 %, index points, …). */
   score: number;
   scoreCi?: number;
+  /**
+   * Display cost figure (USD). Interpretation is `costKind` — only `measured`
+   * may participate in score/$ rankings.
+   */
   avgCostUsd: number;
+  costKind: FrontierCostKind;
   /** Optional AA-style cost-per-task breakdown (sums ≈ avgCostUsd). */
   costParts?: FrontierCostParts;
   outTokens?: number;
@@ -69,8 +98,11 @@ export interface FrontierAxes {
 export interface FrontierBenchmark {
   id: string;
   title: string;
+  /** Short human blurb; prefer `provenance` for URL / date / license. */
   sourceNote: string;
+  /** @deprecated Prefer provenance.capturedAt — kept for older UI copy. */
   updated: string;
+  provenance: FrontierProvenance;
   taskCount?: number;
   axes: FrontierAxes;
   rows: FrontierRow[];
@@ -87,6 +119,15 @@ export function priceBandFor(cost: number): PriceBand {
   if (cost < 3) return "lt3";
   if (cost <= 8) return "mid";
   return "gt8";
+}
+
+export function rowCostIsMeasured(row: FrontierRow): boolean {
+  return row.costKind === "measured";
+}
+
+/** True when every row has a source-measured $/task (safe for score/$ charts). */
+export function benchmarkHasUniformMeasuredCost(benchmark: FrontierBenchmark): boolean {
+  return benchmark.rows.length > 0 && benchmark.rows.every(rowCostIsMeasured);
 }
 
 export function efficiencyRatio(score: number, cost: number): number {
@@ -127,6 +168,24 @@ export function selectBestEffortRows(rows: FrontierRow[]): FrontierRow[] {
     }
   }
   return [...best.values()];
+}
+
+/**
+ * Rank by score/$ only for measured costs; otherwise rank by score alone
+ * (never award “best value” across estimate/measurement mixes).
+ */
+export function rankFrontierRows(
+  rows: FrontierRow[],
+  opts: { preferValue: boolean },
+): FrontierRow[] {
+  const useValue = opts.preferValue && rows.length > 0 && rows.every(rowCostIsMeasured);
+  return [...rows].toSorted((a, b) => {
+    if (useValue) {
+      const eff = efficiencyRatio(b.score, b.avgCostUsd) - efficiencyRatio(a.score, a.avgCostUsd);
+      if (Math.abs(eff) > 1e-9) return eff;
+    }
+    return b.score - a.score;
+  });
 }
 
 const EFFORT_SORT_RANK: Record<string, number> = {

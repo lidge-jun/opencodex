@@ -171,6 +171,24 @@
   min-height: calc(1.45em * 2);
 }
 
+.frontier-workspace-detail-provenance,
+.frontier-workspace-detail-cost-warn {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 88ch;
+}
+
+.frontier-workspace-detail-provenance a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.frontier-workspace-detail-cost-warn {
+  color: var(--amber, var(--muted));
+}
+
 .frontier-workspace-detail-body {
   flex: 1 1 auto;
   min-height: 0;
