@@ -8,7 +8,15 @@ import { parseRequest } from "../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../responses/compaction";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
-import { routeModel } from "../router";
+import { routeModel, type RouteResult } from "../router";
+import {
+  advanceComboAfterFailure,
+  comboFailureDecision,
+  getCombo,
+  noteComboSuccess,
+  targetKey,
+  type ComboPick,
+} from "../combos";
 import { isInjectionDebugEnabled } from "../lib/debug-settings";
 import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
@@ -485,12 +493,27 @@ export async function handleResponses(
     (logCtx as unknown as Record<string, unknown>).shadowCallRewrittenFrom = _sciOriginal;
   }
 
-  let route;
+  let route: RouteResult;
   try {
     route = routeModel(config, parsed.modelId);
   } catch (err) {
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+
+  let comboPick: ComboPick | undefined = route.combo;
+  const applyComboRoute = (next: RouteResult) => {
+    route = next;
+    comboPick = next.combo ?? comboPick;
+    if (route.modelId !== parsed.modelId) {
+      if (parsed._rawBody && typeof parsed._rawBody === "object") {
+        (parsed._rawBody as { model?: string }).model = route.modelId;
+      }
+      parsed.modelId = route.modelId;
+    }
+    logCtx.model = route.modelId;
+    logCtx.provider = route.providerName;
+    logCtx.providerAdapter = route.provider.adapter;
+  };
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace
   // (e.g. "opencode-go/deepseek-v4-pro" → "deepseek-v4-pro"). Adapters read parsed.modelId,
@@ -653,7 +676,7 @@ export async function handleResponses(
   }
 
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
-  const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  let adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
 
   // Remote compaction v2 on a ROUTED model: Codex sent `compaction_trigger` and requires exactly
@@ -1070,6 +1093,62 @@ export async function handleResponses(
         upstreamResponse = result;
         continue recovery;
       }
+
+      // Combo cross-provider hop: after within-provider recovery is exhausted, try the next
+      // combo target when the failure is retryable (429/5xx/permission gate/…).
+      if (comboPick && !upstreamResponse.ok) {
+        const errorText = await upstreamResponse.text().catch(() => "unknown error");
+        if (comboFailureDecision(upstreamResponse.status, errorText) === "hop") {
+          const nextPick = advanceComboAfterFailure(
+            config,
+            comboPick.comboId,
+            comboPick.target,
+            comboPick.attempted,
+            { retryAfter: upstreamResponse.headers.get("retry-after"), now: Date.now() },
+          );
+          if (nextPick) {
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
+            try {
+              const failedTarget = comboPick.target;
+              const nextRoute = routeModel(config, `${nextPick.target.provider}/${nextPick.target.model}`);
+              applyComboRoute({ ...nextRoute, combo: nextPick });
+              if (route.provider.authMode === "oauth") {
+                const resolved = await getValidAccessTokenSnapshot(route.providerName);
+                if (route.providerName === "xai") sentOAuthSnapshot = resolved;
+                route.provider = { ...route.provider, apiKey: resolved.accessToken };
+              }
+              route.provider = applyCodexAuthContextToProvider(route.provider, authCtx);
+              route.provider = resolveProviderTransport(route.providerName, route.provider, parsed.options.promptCacheKey);
+              activeAdapter = resolveAdapter(
+                resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+                config.cacheRetention,
+              );
+              adapter = activeAdapter;
+              console.warn(
+                `[combo] ${comboPick.comboId}: hopping ${targetKey(failedTarget)} → ${targetKey(nextPick.target)} after ${upstreamResponse.status}`,
+              );
+              comboPick = nextPick;
+              const result = await rebuildAndRefetch();
+              if ("failed" in result) return result.failed;
+              upstreamResponse = result;
+              continue recovery;
+            } catch (err) {
+              cleanupUpstreamAbort();
+              return formatErrorResponse(
+                502,
+                "upstream_error",
+                `Combo hop failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+        }
+        cleanupUpstreamAbort();
+        return formatErrorResponse(
+          upstreamResponse.status,
+          "upstream_error",
+          `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+        );
+      }
       break;
     }
     if (!upstreamResponse.ok) {
@@ -1079,6 +1158,11 @@ export async function handleResponses(
       // material before it reaches the client-facing error surface.
       return formatErrorResponse(upstreamResponse.status, "upstream_error", `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`);
     }
+  }
+
+  if (comboPick) {
+    const combo = getCombo(config, comboPick.comboId);
+    if (combo) noteComboSuccess(comboPick.comboId, combo, comboPick.targetIndex);
   }
 
   if (parsed.stream) {

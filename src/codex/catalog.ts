@@ -1291,6 +1291,10 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
     .filter(shouldExposeRoutedModel);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Virtual combo models (issue #133): advertise as combo/<id> for clients / catalog.
+  for (const id of Object.keys(config.combos ?? {}).sort((a, b) => a.localeCompare(b))) {
+    all.push({ provider: "combo", id, owned_by: "combo" });
+  }
   return all;
 }
 

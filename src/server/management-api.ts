@@ -1195,6 +1195,49 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     return jsonResponse({ success: true }, 200, req, config);
   }
 
+  // Virtual combo models (issue #133): CRUD for multi-provider load-balance / failover groups.
+  if (url.pathname === "/api/combos" && req.method === "GET") {
+    const { listComboIds, getCombo, comboModelId } = await import("../combos");
+    return jsonResponse({
+      combos: listComboIds(config).map(id => ({
+        id,
+        model: comboModelId(id),
+        ...getCombo(config, id)!,
+      })),
+    });
+  }
+
+  if (url.pathname === "/api/combos" && req.method === "PUT") {
+    let body: { id?: string; combo?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const id = body.id?.trim();
+    if (!id) return jsonResponse({ error: "id is required" }, 400);
+    const { comboConfigError, normalizeComboConfig, comboModelId, clearComboStickyState, clearComboTargetCooldowns } = await import("../combos");
+    const err = comboConfigError(id, body.combo, config);
+    if (err) return jsonResponse({ error: err }, 400);
+    const normalized = normalizeComboConfig(body.combo as import("../types").OcxComboConfig);
+    config.combos = { ...(config.combos ?? {}), [id]: normalized };
+    saveConfig(config);
+    clearComboStickyState(id);
+    clearComboTargetCooldowns(id);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ success: true, id, model: comboModelId(id), combo: normalized });
+  }
+
+  if (url.pathname === "/api/combos" && req.method === "DELETE") {
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) return jsonResponse({ error: "id query param is required" }, 400);
+    if (!config.combos?.[id]) return jsonResponse({ error: "unknown combo" }, 404);
+    const { clearComboStickyState, clearComboTargetCooldowns } = await import("../combos");
+    delete config.combos[id];
+    if (Object.keys(config.combos).length === 0) delete config.combos;
+    saveConfig(config);
+    clearComboStickyState(id);
+    clearComboTargetCooldowns(id);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ success: true, id });
+  }
+
   if (url.pathname === "/api/stop" && req.method === "POST") {
     const { restoreNativeCodex } = await import("../codex/inject");
     const { stopServiceIfInstalled } = await import("../service");

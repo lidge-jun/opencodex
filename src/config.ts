@@ -187,6 +187,34 @@ const configSchema = z.object({
       message: "defaultProvider must exist in providers",
     });
   }
+  const combos = (config as { combos?: unknown }).combos;
+  if (combos !== undefined) {
+    if (!combos || typeof combos !== "object" || Array.isArray(combos)) {
+      ctx.addIssue({ code: "custom", path: ["combos"], message: "combos must be an object" });
+    } else {
+      for (const [id, raw] of Object.entries(combos as Record<string, unknown>)) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["combos", id],
+            message: "combo id must start with a letter/number and use letters, numbers, dot, underscore, or hyphen (max 64)",
+          });
+          continue;
+        }
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          ctx.addIssue({ code: "custom", path: ["combos", id], message: "combo must be an object" });
+          continue;
+        }
+        const body = raw as { strategy?: unknown; stickyLimit?: unknown; targets?: unknown };
+        if (body.strategy !== undefined && body.strategy !== "failover" && body.strategy !== "round-robin") {
+          ctx.addIssue({ code: "custom", path: ["combos", id, "strategy"], message: 'strategy must be "failover" or "round-robin"' });
+        }
+        if (!Array.isArray(body.targets) || body.targets.length === 0) {
+          ctx.addIssue({ code: "custom", path: ["combos", id, "targets"], message: "targets must be a non-empty array" });
+        }
+      }
+    }
+  }
 });
 
 /**

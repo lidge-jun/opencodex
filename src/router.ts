@@ -2,11 +2,14 @@ import type { OcxConfig, OcxProviderConfig } from "./types";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { PROVIDER_REGISTRY } from "./providers/registry";
+import { tryPickComboModel, type ComboPick } from "./combos";
 
-interface RouteResult {
+export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  /** Present when the request was routed through a combo virtual model. */
+  combo?: ComboPick;
 }
 
 const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string[] }> = [
@@ -160,6 +163,14 @@ function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][]
 }
 
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
+  // -1. Combo virtual models: `combo/<id>` → pick a concrete provider/model target.
+  const comboPick = tryPickComboModel(config, modelId);
+  if (comboPick) {
+    const concrete = `${comboPick.target.provider}/${comboPick.target.model}`;
+    const routed = routeModel(config, concrete);
+    return { ...routed, combo: comboPick };
+  }
+
   // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when

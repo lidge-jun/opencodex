@@ -467,10 +467,34 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /**
+   * Virtual models that fan out across provider/model targets (issue #133).
+   * Clients request `combo/<id>`; the proxy picks a target (failover or sticky round-robin)
+   * and can hop to another target on retryable upstream failures.
+   */
+  combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+}
+
+/** One backend in a combo chain — always a concrete configured provider + wire model id. */
+export interface OcxComboTarget {
+  provider: string;
+  model: string;
+  /** Relative traffic weight for round-robin picks (default 1). Ignored by failover strategy. */
+  weight?: number;
+}
+
+export type OcxComboStrategy = "failover" | "round-robin";
+
+export interface OcxComboConfig {
+  targets: OcxComboTarget[];
+  /** Default `failover` (ordered try-next). `round-robin` rotates the start target with sticky successes. */
+  strategy?: OcxComboStrategy;
+  /** Sticky RR: stay on the winning target for N successes before rotating (default 1). */
+  stickyLimit?: number;
 }
 
 /**
