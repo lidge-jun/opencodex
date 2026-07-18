@@ -4,13 +4,12 @@ import { applyComboDefaultEffort } from "./effort";
 
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return {
-    name: "p",
     adapter: "openai-chat",
     baseUrl: "https://example.com",
     authMode: "key",
     apiKeyEnv: "K",
     ...overrides,
-  };
+  } as OcxProviderConfig;
 }
 
 function cfg(combo: Record<string, unknown>, providers: OcxProviderConfig[] = [provider()]): OcxConfig {
