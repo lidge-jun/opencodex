@@ -22,6 +22,10 @@ on:
 
 permissions:
   contents: read
+  # Needed so the action can list PR files for --changed-files-from.
+  # Without this, listFiles fails, the changed-files file is never written,
+  # and the CLI exits 1 on ENOENT even with blocking: none (fork PRs).
+  pull-requests: read
 
 # Cancels any in-flight scan for the same PR (or branch, on push) the moment a
 # new commit arrives, so only the latest run remains.
@@ -41,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5 # v2.1.0
+      - uses: millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784 # v2.2.7
         with:
           directory: gui
           # Pin the npm engine — the action wrapper would otherwise fetch
