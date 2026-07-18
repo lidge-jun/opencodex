@@ -306,11 +306,16 @@ async function fetchGithubIdentity(githubAccessToken: string, signal?: AbortSign
     });
     if (!response.ok) return {};
     const user = (await response.json()) as GithubUserResponse;
-    const accountId = typeof user.id === "number" ? String(user.id) : undefined;
-    const email = typeof user.login === "string" && user.login
-      ? `${user.login}@users.noreply.github.com`
-      : undefined;
-    return { email, accountId };
+    // Prefer numeric id for multiauth stability. Only persist email when GitHub returns one —
+    // do not fabricate noreply addresses (privacy-scan + PII hygiene).
+    const accountId = typeof user.id === "number"
+      ? String(user.id)
+      : (typeof user.login === "string" && user.login ? user.login : undefined);
+    const email = typeof user.email === "string" && user.email.includes("@") ? user.email : undefined;
+    return {
+      ...(email ? { email } : {}),
+      ...(accountId ? { accountId } : {}),
+    };
   } catch {
     return {};
   }
