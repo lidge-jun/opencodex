@@ -9,6 +9,13 @@ import {
   requestLogSpeedLabel,
   type RequestLogEntry,
 } from "../src/server";
+import {
+  aggregateAttemptUsage,
+  beginRequestAttempt,
+  finishRequestAttempt,
+  noteAttemptSend,
+  sealRequestAttemptIdentity,
+} from "../src/server/request-log";
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {
@@ -24,6 +31,172 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
+    const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
+    noteAttemptSend(a, 100);
+    noteAttemptSend(a, 120, "transient-5xx");
+    noteAttemptSend(a, 120, "transient-5xx");
+    sealRequestAttemptIdentity(a, "chatgpt-pabcdef", "openai-responses");
+    finishRequestAttempt(a, 503, 12);
+
+    const b = beginRequestAttempt(2, "prov-b", "model-b", "openai-chat");
+    noteAttemptSend(b, undefined);
+    finishRequestAttempt(b, 200, 8, {
+      inputTokens: 10,
+      outputTokens: 2,
+      cachedInputTokens: 4,
+      cacheReadInputTokens: 4,
+    });
+
+    expect(a).toMatchObject({
+      ordinal: 1,
+      provider: "chatgpt-pabcdef",
+      adapter: "openai-responses",
+      status: 503,
+      sendCount: 3,
+      inputTokenEstimate: 120,
+      recoveryKinds: ["transient-5xx"],
+      usageStatus: "estimated",
+      usage: { inputTokens: 120, outputTokens: 0, estimated: true },
+      totalTokens: 120,
+      errorCode: "server_is_overloaded",
+    });
+    expect(b).toMatchObject({ status: 200, sendCount: 1, usageStatus: "reported", totalTokens: 12 });
+
+    expect(aggregateAttemptUsage([a, b])).toEqual({
+      status: "estimated",
+      totalTokens: 132,
+      usage: {
+        inputTokens: 130,
+        outputTokens: 2,
+        totalTokens: 132,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        estimated: true,
+      },
+    });
+  });
+
+  test("folds partial and unsupported attempt measurement honestly", () => {
+    const reported = finishRequestAttempt(
+      beginRequestAttempt(1, "a", "m1", "openai-chat"),
+      200,
+      1,
+      { inputTokens: 4, outputTokens: 1 },
+    );
+    const unreported = finishRequestAttempt(
+      beginRequestAttempt(2, "b", "m2", "openai-chat"),
+      503,
+      1,
+    );
+    expect(aggregateAttemptUsage([reported, unreported])).toMatchObject({
+      status: "unreported",
+      usage: { inputTokens: 4, outputTokens: 1 },
+      totalTokens: 5,
+    });
+    const unsupportedA = { ...unreported, usageStatus: "unsupported" as const };
+    const unsupportedB = { ...unreported, ordinal: 3, usageStatus: "unsupported" as const };
+    expect(aggregateAttemptUsage([unsupportedA, unsupportedB])).toEqual({ status: "unsupported" });
+  });
+
+  test("final combo logging keeps one logical row and finalizes its active attempt", () => {
+    const entries: RequestLogEntry[] = [];
+    const a = finishRequestAttempt(
+      beginRequestAttempt(1, "a", "model-a", "openai-chat"),
+      503,
+      3,
+      { inputTokens: 4, outputTokens: 1 },
+    );
+    const b = beginRequestAttempt(2, "b", "model-b", "openai-chat");
+    noteAttemptSend(b, undefined);
+    const start = Date.now();
+    addFinalRequestLog("combo-parent", start, {
+      model: "combo/free",
+      provider: "combo",
+      requestedModel: "combo/free",
+      resolvedModel: "model-b",
+      providerAdapter: "openai-chat",
+      usage: { inputTokens: 10, outputTokens: 2 },
+      attempts: [a, b],
+      activeAttempt: b,
+      activeAttemptStartedAt: start,
+    }, 200, undefined, entry => entries.push(entry));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      provider: "combo",
+      model: "combo/free",
+      requestedModel: "combo/free",
+      resolvedModel: "model-b",
+      usageStatus: "reported",
+      usage: { inputTokens: 14, outputTokens: 3, totalTokens: 17 },
+      totalTokens: 17,
+      attempts: [
+        { provider: "a", status: 503 },
+        { provider: "b", status: 200, usage: { inputTokens: 10, outputTokens: 2 } },
+      ],
+    });
+  });
+
+  test("streaming terminal usage updates only the committed final attempt", async () => {
+    const entries: RequestLogEntry[] = [];
+    const attempt = beginRequestAttempt(1, "b", "model-b", "openai-chat");
+    noteAttemptSend(attempt, undefined);
+    const payload = JSON.stringify({
+      type: "response.completed",
+      response: {
+        status: "completed",
+        model: "model-b",
+        usage: { input_tokens: 9, output_tokens: 3, total_tokens: 12 },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(`data: ${payload}\n\n`, { headers: { "content-type": "text/event-stream" } }),
+      "combo-stream",
+      Date.now(),
+      {
+        model: "combo/free",
+        provider: "combo",
+        requestedModel: "combo/free",
+        attempts: [attempt],
+        activeAttempt: attempt,
+        activeAttemptStartedAt: Date.now(),
+      },
+      entry => entries.push(entry),
+    );
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.attempts).toEqual([
+      expect.objectContaining({
+        ordinal: 1,
+        status: 200,
+        usageStatus: "reported",
+        usage: { inputTokens: 9, outputTokens: 3, totalTokens: 12 },
+      }),
+    ]);
+  });
+
+  test("provider filtering matches attempts while status filtering remains parent-only", () => {
+    const combo = log({
+      provider: "combo",
+      model: "combo/free",
+      status: 200,
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 503,
+        durationMs: 2,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+      }],
+    });
+    expect(filterRequestLogs([combo], new URLSearchParams("provider=a"))).toEqual([combo]);
+    expect(filterRequestLogs([combo], new URLSearchParams("provider=a&status=503"))).toEqual([]);
+  });
+
   test("records the Claude surface on the final log entry", () => {
     const entries: RequestLogEntry[] = [];
     addFinalRequestLog(

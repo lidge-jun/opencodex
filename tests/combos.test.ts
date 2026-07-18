@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -34,6 +34,7 @@ import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { syncCatalogModels } from "../src/codex/catalog";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
@@ -109,6 +110,7 @@ async function comboApi(
   method: string,
   path: string,
   body?: unknown,
+  refreshCodexCatalog: () => Promise<void> = async () => {},
 ): Promise<Response | null> {
   const req = new Request(`http://localhost${path}`, {
     method,
@@ -116,7 +118,7 @@ async function comboApi(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return handleManagementAPI(req, new URL(req.url), config, {
-    refreshCodexCatalog: async () => {},
+    refreshCodexCatalog,
   });
 }
 
@@ -641,6 +643,57 @@ describe("combo management API", () => {
       expect(deleted?.status).toBe(200);
       expect(config.combos).toBeUndefined();
       expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).combos).toBeUndefined();
+    });
+  });
+
+  test("DELETE refresh immediately retires the final managed combo catalog row", async () => {
+    await withTempHome(async dir => {
+      const previousCodexHome = process.env.CODEX_HOME;
+      const codexHome = join(dir, "codex-home");
+      mkdirSync(codexHome, { recursive: true });
+      process.env.CODEX_HOME = codexHome;
+      const catalogPath = join(codexHome, "opencodex-catalog.json");
+      writeFileSync(catalogPath, JSON.stringify({
+        models: [{
+          slug: "combo/free",
+          display_name: "combo/free",
+          visibility: "list",
+          supported_reasoning_levels: [{ effort: "low" }],
+          input_modalities: ["text"],
+          context_window: 128_000,
+        }],
+      }));
+      try {
+        const config = baseConfig({
+          providers: {
+            a: {
+              adapter: "openai-chat",
+              baseUrl: "https://a.example/v1",
+              apiKey: "ka",
+              liveModels: false,
+              models: ["m1"],
+              modelContextWindows: { m1: 128_000 },
+            },
+          },
+          combos: { free: VALID_COMBO },
+        });
+        saveConfig(config);
+        const deleted = await comboApi(
+          config,
+          "DELETE",
+          "/api/combos?id=free",
+          undefined,
+          async () => { await syncCatalogModels(config); },
+        );
+        expect(deleted?.status).toBe(200);
+        const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+          models: Array<{ slug?: string }>;
+        };
+        expect(catalog.models.some(model => model.slug === "combo/free")).toBe(false);
+      } finally {
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
     });
   });
 

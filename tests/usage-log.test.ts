@@ -27,6 +27,149 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("persists only canonical ordered attempt fields", () => {
+    appendUsageEntry({
+      requestId: "ocx-attempts",
+      timestamp: 1,
+      provider: "combo",
+      model: "combo/free",
+      requestedModel: "combo/free",
+      resolvedModel: "m2",
+      status: 200,
+      durationMs: 20,
+      usageStatus: "estimated",
+      usage: { inputTokens: 15, outputTokens: 2, estimated: true },
+      totalTokens: 17,
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 503,
+        durationMs: 4,
+        sendCount: 2,
+        recoveryKinds: ["transient-5xx", "transient-5xx", "oauth-401"],
+        usageStatus: "estimated",
+        inputTokenEstimate: 5,
+        usage: { inputTokens: 5, outputTokens: 0, estimated: true },
+        totalTokens: 5,
+        headers: { authorization: "Bearer attempt-token" },
+        body: "attempt body secret",
+        messages: ["attempt message secret"],
+        accessToken: "attempt-access",
+        refreshToken: "attempt-refresh",
+        error: "raw attempt error",
+      } as never],
+      headers: { authorization: "Bearer parent-token" },
+      body: "parent body secret",
+      messages: ["parent message secret"],
+    } as unknown as Parameters<typeof appendUsageEntry>[0]);
+
+    const raw = readFileSync(usageLogPath(), "utf-8");
+    for (const forbidden of [
+      "attempt-token", "attempt body secret", "attempt message secret",
+      "attempt-access", "attempt-refresh", "raw attempt error",
+      "parent-token", "parent body secret", "parent message secret",
+      "authorization", "headers", "messages", "refreshToken",
+    ]) expect(raw).not.toContain(forbidden);
+    expect(readUsageEntries()[0]?.attempts).toEqual([{
+      ordinal: 1,
+      provider: "a",
+      model: "m1",
+      adapter: "openai-chat",
+      status: 503,
+      durationMs: 4,
+      sendCount: 2,
+      recoveryKinds: ["transient-5xx", "oauth-401"],
+      usageStatus: "estimated",
+      inputTokenEstimate: 5,
+      usage: { inputTokens: 5, outputTokens: 0, estimated: true },
+      totalTokens: 5,
+    }]);
+  });
+
+  test("drops only malformed persisted attempts while preserving valid siblings", () => {
+    const valid = (ordinal: number) => ({
+      ordinal,
+      provider: ordinal === 1 ? "a" : "c",
+      model: `m${ordinal}`,
+      adapter: "openai-chat",
+      status: 200,
+      durationMs: 1,
+      sendCount: 1,
+      recoveryKinds: [],
+      usageStatus: "reported",
+      usage: { inputTokens: ordinal, outputTokens: 1 },
+      totalTokens: ordinal + 1,
+    });
+    const malformed: Array<Record<string, unknown>> = [
+      { ...valid(2), status: 99 },
+      { ...valid(2), status: 600 },
+      { ...valid(2), status: 200.5 },
+      { ...valid(2), inputTokenEstimate: -1 },
+      { ...valid(2), totalTokens: -1 },
+      { ...valid(2), usage: { inputTokens: "2", outputTokens: 1 } },
+      { ...valid(2), usage: { inputTokens: 2, outputTokens: "1" } },
+    ];
+    for (const middle of malformed) {
+      writeFileSync(usageLogPath(), `${JSON.stringify({
+        requestId: "parent",
+        timestamp: 1,
+        provider: "combo",
+        model: "combo/free",
+        status: 200,
+        durationMs: 3,
+        usageStatus: "reported",
+        usage: { inputTokens: 4, outputTokens: 2 },
+        totalTokens: 6,
+        attempts: [valid(1), middle, valid(3)],
+      })}\n`);
+      const [entry] = readUsageEntries();
+      expect(entry?.requestId).toBe("parent");
+      expect(entry?.attempts?.map(attempt => attempt.ordinal)).toEqual([1, 3]);
+    }
+  });
+
+  test("ignores malformed attempt arrays and keeps legacy parents readable", () => {
+    writeFileSync(usageLogPath(), [
+      JSON.stringify({
+        requestId: "bad-attempt-array",
+        timestamp: 1,
+        provider: "combo",
+        model: "combo/free",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "unreported",
+        attempts: { ordinal: 1 },
+      }),
+      JSON.stringify({
+        requestId: "legacy",
+        timestamp: 2,
+        provider: "openai",
+        model: "gpt-5.5",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "reported",
+        usage: { inputTokens: 1, outputTokens: 2 },
+        totalTokens: 3,
+      }),
+    ].join("\n"));
+    const entries = readUsageEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).not.toHaveProperty("attempts");
+    expect(entries[1]).toEqual({
+      requestId: "legacy",
+      timestamp: 2,
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 2 },
+      totalTokens: 3,
+    });
+  });
+
   test("uses OPENCODEX_HOME for the append-only JSONL path", () => {
     expect(usageLogPath()).toBe(join(testDir, "usage.jsonl"));
   });

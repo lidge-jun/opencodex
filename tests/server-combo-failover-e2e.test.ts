@@ -15,6 +15,11 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { clearRequestLogsForTests, type RequestLogContext } from "../src/server/request-log";
+import { responseWithDeferredRequestLog } from "../src/server/relay";
+import { readUsageEntries } from "../src/usage/log";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { formatCodexProviderForLog } from "../src/codex/routing";
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -23,6 +28,7 @@ const actualFetchWithTransientRetry = actualRetry.fetchWithTransientRetry;
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
 let customTransientResponse: (() => Promise<Response>) | undefined;
+let customUsageEstimate: ((model: string) => number | undefined) | undefined;
 
 mock.module("../src/server/adapter-resolve", () => ({
   ...actualResolver,
@@ -46,6 +52,13 @@ mock.module("../src/server/adapter-resolve", () => ({
       return {
         ...base,
         name: "test-response",
+        async buildRequest(parsed, options) {
+          const request = await base.buildRequest(parsed, options);
+          const estimate = customUsageEstimate?.(parsed.modelId);
+          return estimate === undefined
+            ? request
+            : { ...request, usageLog: { inputTokens: estimate } };
+        },
         async fetchResponse(request, context) {
           if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
           return customFetchResponse(request, context);
@@ -94,6 +107,8 @@ beforeEach(() => {
   customRunTurn = undefined;
   customFetchResponse = undefined;
   customTransientResponse = undefined;
+  customUsageEstimate = undefined;
+  clearRequestLogsForTests();
 });
 
 afterEach(async () => {
@@ -109,6 +124,7 @@ afterEach(async () => {
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearRequestLogsForTests();
 });
 
 function serve(handler: (request: Request) => Response | Promise<Response>) {
@@ -199,6 +215,52 @@ async function post(
   }), config, { model: "", provider: "" }, options);
 }
 
+let loggedRequestSequence = 0;
+
+async function postLogged(
+  config: OcxConfig,
+  raw: Record<string, unknown> = {},
+  options: HandleOptions = {},
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const start = Date.now();
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
+  }), config, logCtx, options);
+  loggedRequestSequence += 1;
+  return responseWithDeferredRequestLog(
+    response,
+    `combo-test-${loggedRequestSequence}`,
+    start,
+    logCtx,
+  );
+}
+
+async function latestAttemptReceipts(config: OcxConfig) {
+  const response = await management(config, "GET", "/api/logs?tail=1");
+  const logs = await response!.json() as Array<Record<string, unknown>>;
+  const usage = readUsageEntries();
+  return { log: logs[0]!, usage: usage.at(-1)! };
+}
+
+async function expectCancelledAttemptReceipt(
+  config: OcxConfig,
+  expected: { provider: string; model: string; adapter: string },
+): Promise<void> {
+  const { log, usage } = await latestAttemptReceipts(config);
+  for (const receipt of [log, usage]) {
+    expect(receipt).toMatchObject({
+      provider: "combo",
+      model: "combo/free",
+      attempts: [{ ...expected, status: 499 }],
+    });
+    expect((receipt.attempts as unknown[])).toHaveLength(1);
+  }
+}
+
 interface SseFrame {
   event?: string;
   data: Record<string, unknown>;
@@ -285,6 +347,193 @@ describe("server combo failover 030 activation matrix", () => {
     expect(streaming.status).toBe(200);
     expect(JSON.stringify(await collectSse(streaming))).toContain("stream backup");
     expect(hits).toEqual(["a:false", "b:false", "a:true", "b:true"]);
+  });
+
+  test("persists one logical A503 to B200 request with ordered physical usage", async () => {
+    const a = serve(() => Response.json({
+      error: { message: "overloaded" },
+      usage: { input_tokens: 7, output_tokens: 1, total_tokens: 8 },
+    }, { status: 503 }));
+    const b = serve(() => chatSuccess("logged backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedModel: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 503, usage: { inputTokens: 7, outputTokens: 1 } },
+          { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
+        ],
+      });
+    }
+  });
+
+  test("seals a Codex pool child to its safe account label and final wire adapter", async () => {
+    const rawAccountId = "raw-pool-account-id";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "pabc123",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-safe",
+    });
+    customTransientResponse = async () => Response.json(responsesSuccess("pool success", "gpt-5.4"));
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const expectedProvider = formatCodexProviderForLog("openai", rawAccountId, config);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        attempts: [{
+          provider: expectedProvider,
+          adapter: "openai-responses",
+          status: 200,
+        }],
+      });
+      expect(JSON.stringify(receipt)).not.toContain(rawAccountId);
+      expect(JSON.stringify(receipt)).not.toContain("acct-pool-safe");
+    }
+  });
+
+  test("keeps a failed estimate on A without overwriting B reported usage", async () => {
+    customUsageEstimate = model => model === "m1" ? 41 : undefined;
+    customFetchResponse = async request => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model;
+      return model === "m1"
+        ? Response.json({ error: { message: "down" } }, { status: 503 })
+        : chatSuccess("estimate backup", "m2");
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const response = await postLogged(config);
+    await response.text();
+    const { usage } = await latestAttemptReceipts(config);
+    expect(usage.attempts).toMatchObject([
+      { provider: "a", usageStatus: "estimated", inputTokenEstimate: 41, usage: { inputTokens: 41, outputTokens: 0, estimated: true } },
+      { provider: "b", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 } },
+    ]);
+  });
+
+  test("captures ordinary failed usage from its original bounded body exactly once", async () => {
+    let ordinaryReads = 0;
+    customFetchResponse = async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        ordinaryReads += 1;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({
+          error: { message: "ordinary failed" },
+          usage: { input_tokens: 11, output_tokens: 2, total_tokens: 13 },
+        })));
+        controller.close();
+      },
+    }), { status: 503, headers: { "content-type": "application/json" } });
+    const ordinaryConfig = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+    });
+    const ordinary = await postLogged(ordinaryConfig);
+    const ordinaryBody = await ordinary.json() as Record<string, unknown>;
+    expect(ordinaryBody).not.toHaveProperty("usage");
+    expect(ordinaryReads).toBe(1);
+    expect((await latestAttemptReceipts(ordinaryConfig)).usage.attempts?.[0]?.usage)
+      .toEqual({ inputTokens: 11, outputTokens: 2, totalTokens: 13 });
+  });
+
+  test("captures passthrough failed usage from its original bounded body exactly once", async () => {
+    let passthroughReads = 0;
+    let passthroughResponses = 0;
+    customTransientResponse = async () => {
+      passthroughResponses += 1;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({
+          error: { message: "passthrough failed" },
+          usage: { input_tokens: 17, output_tokens: 3, total_tokens: 20 },
+        })));
+        controller.close();
+        },
+      });
+      const response = new Response(body, { status: 503, headers: { "content-type": "application/json" } });
+      Object.defineProperty(response, "body", {
+        configurable: true,
+        get() {
+          passthroughReads += 1;
+          return body;
+        },
+      });
+      return response;
+    };
+    const passthroughConfig = comboConfig({
+      a: provider("openai-responses", "https://passthrough.test/v1", "key-a"),
+    });
+    const passthrough = await postLogged(passthroughConfig);
+    expect(passthrough.status).toBe(503);
+    const passthroughBody = await passthrough.json() as Record<string, unknown>;
+    expect(passthroughBody).not.toHaveProperty("usage");
+    expect(passthroughResponses).toBe(1);
+    expect(passthroughReads).toBe(1);
+    expect((await latestAttemptReceipts(passthroughConfig)).usage.attempts?.[0]?.usage)
+      .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
+  });
+
+  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+    const estimates = [10, 25];
+    customUsageEstimate = () => estimates.shift();
+    let calls = 0;
+    customFetchResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ error: { message: "rotate" } }, { status: 429 })
+        : chatSuccess("rotated", "m1");
+    };
+    const pool = [
+      { id: "k1", key: "key-alpha-000111222333", addedAt: 1 },
+      { id: "k2", key: "key-beta-444555666777", addedAt: 2 },
+    ];
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", pool[0]!.key, { apiKeyPool: pool }),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({
+      provider: "a",
+      model: "m1",
+      sendCount: 2,
+      inputTokenEstimate: 25,
+      recoveryKinds: ["key-429"],
+    });
   });
 
   test("connection exception reaches the backup exactly once", async () => {
@@ -767,12 +1016,13 @@ describe("server combo failover 030 activation matrix", () => {
     const originalWarn = console.warn;
     console.warn = (...args: unknown[]) => { warnings.push(args); };
     try {
-      const pending = post(config, {}, { abortSignal: abort.signal });
+      const pending = postLogged(config, {}, { abortSignal: abort.signal });
       await aStarted.promise;
       abort.abort(new DOMException("client closed", "AbortError"));
       const response = await pending;
       expect(response.status).toBe(499);
       expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+      await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "openai-chat" });
       expect(bHits).toBe(0);
       expect(warnings.some(row => String(row[0]).includes("[combo]"))).toBe(false);
       expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
@@ -810,11 +1060,13 @@ describe("server combo failover 030 activation matrix", () => {
       b: provider("test-response", "https://test.invalid/v1", "key-b"),
     });
     const abort = new AbortController();
-    const pending = post(config, {}, { abortSignal: abort.signal });
+    const pending = postLogged(config, {}, { abortSignal: abort.signal });
     await bodyRead.promise;
     abort.abort(new DOMException("client closed", "AbortError"));
     const response = await pending;
     expect(response.status).toBe(499);
+    await response.text();
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
     expect(bHits).toBe(0);
     await within(bodyCancelled.promise);
     expect(cancelled).toBe(1);
@@ -843,18 +1095,42 @@ describe("server combo failover 030 activation matrix", () => {
     }, undefined, { strategy: "round-robin", stickyLimit: 2 });
     const abort = new AbortController();
     let authPublications = 0;
-    const pending = post(config, {}, {
+    const pending = postLogged(config, {}, {
       abortSignal: abort.signal,
       onCodexAuthContextResolved: () => { authPublications += 1; },
     });
     await started.promise;
     abort.abort();
-    expect((await pending).status).toBe(499);
+    const cancelledResponse = await pending;
+    expect(cancelledResponse.status).toBe(499);
+    await cancelledResponse.text();
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
     expect(authPublications).toBe(0);
 
     waitForAbort = false;
     for (let i = 0; i < 3; i++) expect((await post(config)).status).toBe(200);
     expect(models).toEqual(["m1", "m1", "m1", "m2"]);
+  });
+
+  test("direct child status 499 is retained exactly once without backup", async () => {
+    let bHits = 0;
+    customFetchResponse = async request => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model;
+      if (model === "m2") {
+        bHits += 1;
+        return chatSuccess("must not run", "m2");
+      }
+      return Response.json({ error: { code: "client_cancelled" } }, { status: 499 });
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(499);
+    await response.text();
+    expect(bHits).toBe(0);
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
   });
 
   test("oversized ordinary failure is canceled once, leaks no prefix, and advances", async () => {
@@ -876,13 +1152,16 @@ describe("server combo failover 030 activation matrix", () => {
       a: provider("test-response", "https://test.invalid/v1", "key-a"),
       b: provider("test-response", "https://test.invalid/v1", "key-b"),
     });
-    const response = await post(config);
+    const response = await postLogged(config);
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(text).toContain("safe backup");
     expect(text).not.toContain("hostile-prefix");
     expect(reads).toBe(1);
     expect(cancels).toBe(1);
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });
+    expect(attempt).not.toHaveProperty("usage");
   });
 
   test("stalled passthrough JSON is canceled at five seconds and advances once", async () => {
@@ -909,7 +1188,7 @@ describe("server combo failover 030 activation matrix", () => {
       b: provider("openai-chat", baseUrl(b), "key-b"),
     });
     const started = performance.now();
-    const response = await post(config);
+    const response = await postLogged(config);
     const elapsed = performance.now() - started;
     expect(response.status).toBe(200);
     const text = await response.text();
@@ -918,5 +1197,8 @@ describe("server combo failover 030 activation matrix", () => {
     await within(cancelled.promise);
     expect([reads, cancels, bHits]).toEqual([1, 1, 1]);
     expect(elapsed).toBeGreaterThanOrEqual(4_500);
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });
+    expect(attempt).not.toHaveProperty("usage");
   }, 10_000);
 });

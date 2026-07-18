@@ -151,6 +151,22 @@ describe("combo catalog capability intersection", () => {
 
   test("never repairs an exact combo with an empty modality intersection", () => {
     const exact = new Set(["combo/hidden"]);
+    const derived = deriveComboCatalogModel("hidden", normalizedCombo(), [
+      { ...memberA, inputModalities: ["image"] },
+      { ...memberB, inputModalities: ["text"] },
+    ]);
+    expect(derived).toBeNull();
+    const productionBuild = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      derived ? [derived] : [],
+      undefined,
+      false,
+      "default",
+      exact,
+    );
+    expect(productionBuild.some(entry => entry.slug === "combo/hidden")).toBe(false);
+
     const malformed = {
       provider: "combo",
       id: "hidden",
@@ -192,6 +208,7 @@ describe("combo catalog capability intersection", () => {
   });
 
   test("gathers sorted rows, filters disabled combos, and deduplicates redacted warnings until reset", async () => {
+    const warningSentinel = ["sk", "warning-secret-123456"].join("-");
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "a",
@@ -201,7 +218,7 @@ describe("combo catalog capability intersection", () => {
       },
       combos: {
         mixed: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
-        hidden: { targets: [{ provider: "a", model: "sk-warning-secret-123456" }] },
+        hidden: { targets: [{ provider: "a", model: warningSentinel }] },
       },
       disabledModels: ["combo/mixed"],
     };
@@ -215,7 +232,7 @@ describe("combo catalog capability intersection", () => {
       expect(filterCatalogVisibleModels(first, config).some(model => model.id === "mixed")).toBe(false);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]?.[0])).toContain("[REDACTED]");
-      expect(String(warn.mock.calls[0]?.[0])).not.toContain("sk-warning-secret-123456");
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain(warningSentinel);
       expect(second).toEqual(first);
 
       resetCatalogRuntimeStateForTests();
