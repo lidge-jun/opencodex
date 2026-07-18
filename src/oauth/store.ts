@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 type AuthStore = Record<string, ProviderAccountSet>;
@@ -118,6 +119,12 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
+  if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
+    // Persist only allowlisted Copilot origins; drop anything else so auth.json cannot
+    // become an SSRF springboard across reloads.
+    const validated = validateCopilotApiBaseUrl(candidate.apiBaseUrl);
+    if (validated) normalized.apiBaseUrl = validated;
+  }
   return normalized;
 }
 

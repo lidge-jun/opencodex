@@ -29,6 +29,7 @@ import { modelInList, namespacedToolName } from "../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import {
   forceRefreshOAuthAccessSnapshot,
+  getOAuthCredentialApiBaseUrl,
   getOAuthCredentialProjectId,
   getValidAccessTokenSnapshot,
   type OAuthAccessSnapshot,
@@ -974,7 +975,12 @@ export async function handleResponses(
       return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
     }
   }
-  route.provider = resolveProviderTransport(route.providerName, route.provider, parsed.options.promptCacheKey);
+  route.provider = resolveProviderTransport(
+    route.providerName,
+    route.provider,
+    parsed.options.promptCacheKey,
+    route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+  );
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   logCtx.providerAdapter = adapter.name;
@@ -1443,6 +1449,7 @@ export async function handleResponses(
           route.providerName,
           { ...route.provider, apiKey: refreshed.accessToken },
           parsed.options.promptCacheKey,
+          route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
         );
         route.provider = refreshedProvider;
         activeAdapter = resolveAdapter(

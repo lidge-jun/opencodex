@@ -10,6 +10,11 @@ export type OAuthCredentials = {
   source?: OAuthCredentialSource;
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
+  /**
+   * GitHub Copilot allowlisted API origin from token `endpoints.api` (HTTPS `*.githubcopilot.com` only).
+   * Never reuse for Antigravity projectId; validated on write and again at request time.
+   */
+  apiBaseUrl?: string;
 };
 
 /** One logged-in account inside a provider's account set (multiauth). */

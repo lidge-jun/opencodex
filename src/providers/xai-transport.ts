@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
+import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
@@ -90,7 +91,11 @@ export function resolveProviderTransport(
   providerName: string,
   provider: OcxProviderTransport,
   promptCacheKey?: string,
+  apiBaseUrl?: string,
 ): OcxProviderTransport {
+  if (providerName === "github-copilot") {
+    return resolveGithubCopilotTransport(provider, apiBaseUrl);
+  }
   if (providerName !== "xai") return provider;
 
   const cacheKey = promptCacheKey?.trim();
