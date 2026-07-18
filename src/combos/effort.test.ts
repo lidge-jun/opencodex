@@ -7,7 +7,7 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
     name: "p",
     adapter: "openai-chat",
     baseUrl: "https://example.com",
-    authMode: "api-key",
+    authMode: "key",
     apiKeyEnv: "K",
     ...overrides,
   };
@@ -36,9 +36,11 @@ function parsed(effort?: string): OcxParsedRequest {
   return {
     modelId: "combo/team",
     input: [],
+    context: [],
+    stream: false,
     options: { reasoning: effort },
     _rawBody: effort ? { model: "combo/team", reasoning: { effort } } : { model: "combo/team" },
-  } as OcxParsedRequest;
+  } as unknown as OcxParsedRequest;
 }
 
 describe("applyComboDefaultEffort", () => {
