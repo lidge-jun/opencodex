@@ -70,6 +70,7 @@ flowchart LR
 
 ```bash
 # 설치 (Bun 런타임이 자동으로 번들됩니다 — Node 18+ 만 있으면 됩니다)
+# 사용자 소유 Node(nvm/fnm)를 권장합니다 — `sudo npm install -g …`는 피하세요
 npm install -g @bitkyc08/opencodex
 
 # 대화형 설정 (config 작성 + Codex 주입 + 자동 시작 shim 설치 선택)
@@ -86,7 +87,7 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>"bundled Bun runtime is missing" 오류가 나나요?</b></summary>
+<summary><b>"bundled Bun runtime is missing" 오류 / npm이 Bun 설치 스크립트를 차단했나요?</b></summary>
 
 <br/>
 
@@ -101,6 +102,9 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 
 npm 경고가 제안하는 축약 명령에는 패키지 이름이 빠져 있어 현재 디렉터리를
 재설치하게 됩니다. 항상 `@bitkyc08/opencodex`를 명시하세요.
+
+sudo로 루트 소유 prefix에 설치했다면 위의 sudo 재설치가 해당 prefix를 풀어주지만,
+가능할 때 사용자 소유 Node(nvm, fnm, 사용자 npm prefix)로 옮기는 편이 좋습니다.
 
 </details>
 

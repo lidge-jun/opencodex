@@ -69,6 +69,7 @@ flowchart LR
 
 ```bash
 # 安装（自动打包 Bun 运行时 —— 只需 Node 18+）
+# 推荐使用用户自有的 Node（nvm/fnm）—— 避免 `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 
 # 交互式初始化（写入配置 + 注入 Codex）
@@ -82,7 +83,7 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>遇到 "bundled Bun runtime is missing" 错误？</b></summary>
+<summary><b>遇到 "bundled Bun runtime is missing" 错误 / npm 拦截了 Bun 安装脚本？</b></summary>
 
 <br/>
 
@@ -97,6 +98,9 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 
 npm 警告里给出的缩写命令缺少包名，会把当前目录重新安装进去，
 请始终显式写上 `@bitkyc08/opencodex`。
+
+如果之前用 sudo 安装到了 root 前缀，上面的 sudo 重装可以解除该前缀的拦截 ——
+但建议在条件允许时迁移到用户自有的 Node（nvm、fnm 或用户 npm prefix）。
 
 </details>
 

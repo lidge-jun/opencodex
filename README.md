@@ -70,6 +70,7 @@ Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled automaticall
 
 ```bash
 # Install (bundles the Bun runtime automatically — only Node 18+ required)
+# Prefer a user-owned Node (nvm/fnm) — avoid `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 
 # Interactive setup (writes config, injects into Codex, and offers autostart shim install)
@@ -86,7 +87,7 @@ codex "Write a hello world in Rust"
 ```
 
 <details>
-<summary><b>"bundled Bun runtime is missing" error?</b></summary>
+<summary><b>"bundled Bun runtime is missing" / npm blocked Bun install scripts?</b></summary>
 
 <br/>
 
@@ -106,6 +107,10 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 npm's own warning suggests an abbreviated command without the package name —
 that would reinstall the current directory, so always pass
 `@bitkyc08/opencodex` explicitly.
+
+If you installed with `sudo` into a root-owned prefix, the sudo reinstall above
+unblocks that prefix — but prefer migrating to a user-owned Node (nvm, fnm, or
+a user npm prefix) when you can.
 
 </details>
 
