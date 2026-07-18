@@ -249,7 +249,7 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className="main-inner">
+        <div className={`main-inner${page === "frontier" ? " main-inner--providers" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}
