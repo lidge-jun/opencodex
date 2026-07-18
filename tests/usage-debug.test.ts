@@ -150,7 +150,10 @@ describe("appendUsageDebug", () => {
   });
 
   test("keeps file size bounded by MAX_LINES across long runs", () => {
-    for (let i = 0; i < USAGE_DEBUG_MAX_LINES * 3; i++) {
+    // Cross the rotate threshold twice — enough to prove the bound holds across
+    // multiple rewrites without MAX*3 appends (that path times out under full-suite load).
+    const total = USAGE_DEBUG_MAX_LINES + USAGE_DEBUG_KEEP_LINES + 25;
+    for (let i = 0; i < total; i++) {
       appendUsageDebug(sample({ requestId: `ocx-${i}`, ts: i }));
     }
     const path = usageDebugPath();
