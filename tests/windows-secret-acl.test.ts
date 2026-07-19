@@ -208,3 +208,12 @@ describe("diagnostics sanitization contract", () => {
     }
   });
 });
+
+describe("Windows icacls spawn contract", () => {
+  test("runIcacls always passes windowsHide so GUI/proxy spawns do not hang", async () => {
+    const src = await Bun.file(new URL("../src/lib/windows-secret-acl.ts", import.meta.url)).text();
+    const hideCount = [...src.matchAll(/windowsHide:\s*true/g)].length;
+    // Three icacls steps (inheritance / remove / grant) each need windowsHide.
+    expect(hideCount).toBeGreaterThanOrEqual(3);
+  });
+});
