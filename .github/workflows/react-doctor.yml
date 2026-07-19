@@ -41,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5 # v2.1.0
+      - uses: millionco/react-doctor@547e1e4ecdb70315d81a91ec3605701d58616ee2 # v2.1.0
         with:
           directory: gui
           # Pin the npm engine — the action wrapper would otherwise fetch
