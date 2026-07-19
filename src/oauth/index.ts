@@ -11,6 +11,7 @@ import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
+import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { effectiveGoogleMode } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
@@ -100,6 +101,14 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: oauthConfig("cursor"),
     defaultModel: oauthDefaultModel("cursor"),
   },
+  "github-copilot": {
+    login: (ctrl) => loginGithubCopilot(ctrl),
+    refresh: (rt, signal) => refreshGithubCopilotToken(rt, signal),
+    providerConfig: oauthConfig("github-copilot"),
+    defaultModel: oauthDefaultModel("github-copilot"),
+    // Unofficial Copilot bridge — keep proactive traffic lazy-only (no background guardian spam).
+    defaultRefreshPolicy: "lazy-only",
+  },
   chatgpt: {
     login: loginChatGPT,
     refresh: (rt) => refreshChatGPTToken(rt),
@@ -135,6 +144,11 @@ export function resolveRefreshPolicy(provider: string, config: OcxConfig): Refre
 /** The discovered project id stored on an OAuth credential (Antigravity CCA), if any. */
 export function getOAuthCredentialProjectId(provider: string): string | undefined {
   return getCredential(provider)?.projectId;
+}
+
+/** Allowlisted Copilot API origin from the active credential, if still valid. */
+export function getOAuthCredentialApiBaseUrl(provider: string): string | undefined {
+  return validateCopilotApiBaseUrl(getCredential(provider)?.apiBaseUrl);
 }
 
 /** Provider ids that support real OAuth login (drives the GUI's "Log in with …" buttons). */
@@ -203,10 +217,13 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
   return resolveAccessSnapshotForAccount(provider, set.activeAccountId);
 }
 
+/** Providers whose upstream-401 replay path may force a snapshot refresh. */
+const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot"]);
+
 export async function forceRefreshOAuthAccessSnapshot(
   rejected: OAuthAccessSnapshot,
 ): Promise<OAuthAccessSnapshot> {
-  if (rejected.provider !== "xai") throw new UnsupportedOAuthProviderError(rejected.provider);
+  if (!FORCE_REFRESH_PROVIDERS.has(rejected.provider)) throw new UnsupportedOAuthProviderError(rejected.provider);
   return resolveAccessSnapshotForAccount(rejected.provider, rejected.accountId, rejected.generation);
 }
 
@@ -233,11 +250,25 @@ function readFreshKiroCliCredential(): OAuthCredentials | undefined {
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */
 function isTerminalRefreshError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return msg.includes("invalid_grant") || msg.includes("refresh_token_reused") || msg.includes("revoked");
+  return msg.includes("invalid_grant")
+    || msg.includes("refresh_token_reused")
+    || msg.includes("revoked")
+    // GitHub Copilot refresh surfaces allowlisted OAuth codes (github-copilot.ts):
+    || msg.includes("access_denied")
+    || msg.includes("expired_token");
 }
 function terminal(error:unknown):boolean{return error instanceof XaiTokenRequestError?["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??""):isTerminalRefreshError(error);}
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
-function merged(fresh:OAuthCredentials,previous:OAuthCredentials):OAuthCredentials{return{...fresh,source:previous.source==="local-cli"?"oauth":fresh.source??previous.source??"oauth",...(fresh.projectId===undefined&&previous.projectId?{projectId:previous.projectId}:{}),...(fresh.email===undefined&&previous.email?{email:previous.email}:{}),...(fresh.accountId===undefined&&previous.accountId?{accountId:previous.accountId}:{})};}
+function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+  return {
+    ...fresh,
+    source: previous.source === "local-cli" ? "oauth" : fresh.source ?? previous.source ?? "oauth",
+    ...(fresh.projectId === undefined && previous.projectId ? { projectId: previous.projectId } : {}),
+    ...(fresh.apiBaseUrl === undefined && previous.apiBaseUrl ? { apiBaseUrl: previous.apiBaseUrl } : {}),
+    ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
+    ...(fresh.accountId === undefined && previous.accountId ? { accountId: previous.accountId } : {}),
+  };
+}
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(!terminal(error))throw error;permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),now()+XAI_PERMANENT_FAILURE_TTL_MS);await markAccountNeedsReauthIfGeneration(provider,accountId,generation);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 async function refreshAndPersistAccessToken(
@@ -269,6 +300,7 @@ async function refreshAndPersistAccessToken(
       // Preserve a previously-discovered project id when a refresh-time re-discovery comes back empty
       // (e.g. a transient network blip), so Antigravity does not lose its CCA project across refresh.
       ...(fresh.projectId === undefined && cred.projectId ? { projectId: cred.projectId } : {}),
+      ...(fresh.apiBaseUrl === undefined && cred.apiBaseUrl ? { apiBaseUrl: cred.apiBaseUrl } : {}),
       // Preserve identity fields the refresh response may omit, so identity matching stays stable.
       ...(fresh.email === undefined && cred.email ? { email: cred.email } : {}),
       ...(fresh.accountId === undefined && cred.accountId ? { accountId: cred.accountId } : {}),
@@ -318,7 +350,12 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
  * response.
  */
 export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined, providerName = ""): { url: string; headers: Record<string, string> } {
-  const effectiveProvider = resolveProviderTransport(providerName, prov);
+  const effectiveProvider = resolveProviderTransport(
+    providerName,
+    prov,
+    undefined,
+    providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
+  );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),

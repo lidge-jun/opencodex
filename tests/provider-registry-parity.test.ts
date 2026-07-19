@@ -32,9 +32,9 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
-  "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "qianfan", "alibaba", "alibaba-token-plan", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
-  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
+  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "gitlab-duo",
 ];
 
 describe("provider registry parity", () => {
@@ -198,6 +198,33 @@ describe("provider registry parity", () => {
         expect(entry?.modelContextWindows?.[modelId]).toBe(204_800);
       }
     }
+  });
+
+  test("Alibaba Token Plan exposes the official Beijing model contract separately from Coding Plan", () => {
+    expect(KEY_LOGIN_PROVIDERS.alibaba).toMatchObject({
+      label: "Alibaba Coding Plan",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    });
+    expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"]).toMatchObject({
+      label: "Alibaba Token Plan (Beijing)",
+      adapter: "openai-chat",
+      baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      defaultModel: "qwen3.8-max-preview",
+      liveModels: false,
+      models: [
+        "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "glm-5.2", "deepseek-v4-pro",
+      ],
+      modelInputModalities: {
+        "qwen3.8-max-preview": ["text", "image"],
+        "qwen3.7-max": ["text"],
+      },
+      modelReasoningEfforts: {
+        "qwen3.8-max-preview": ["low", "medium", "high", "xhigh", "max"],
+      },
+    });
+    expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
+      .toContain("qwen3.8-max-preview");
   });
 
   test("aggregator defaults and Neuralwatt seeds match the audited live catalogs", () => {

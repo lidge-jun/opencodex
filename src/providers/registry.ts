@@ -172,6 +172,25 @@ const DEEPSEEK_THINKING_REASONING_MAP: Record<string, string> = {
   xhigh: "max",
   max: "max",
 };
+// 260719 Alibaba Token Plan Personal Edition (China/Beijing). Keep it distinct from
+// Coding Plan: the products use different exact allowlists and different base URLs.
+// Evidence: https://help.aliyun.com/en/model-studio/token-plan-personal-overview
+//           https://help.aliyun.com/en/model-studio/token-plan-quickstart
+const ALIBABA_TOKEN_PLAN_MODELS = [
+  "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+  "glm-5.2", "deepseek-v4-pro",
+];
+const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
+  "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+];
+const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
+  "qwen3.8-max-preview": ["text", "image"],
+  "qwen3.7-max": ["text"],
+  "qwen3.7-plus": ["text", "image"],
+  "qwen3.6-flash": ["text", "image"],
+  "glm-5.2": ["text"],
+  "deepseek-v4-pro": ["text"],
+};
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
 // alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
@@ -649,6 +668,27 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
+  {
+    id: "alibaba-token-plan",
+    label: "Alibaba Token Plan (Beijing)",
+    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=plan",
+    defaultModel: "qwen3.8-max-preview",
+    models: ALIBABA_TOKEN_PLAN_MODELS,
+    liveModels: false,
+    note: "Token Plan Personal Edition · China (Beijing)",
+    modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
+    modelReasoningEfforts: {
+      ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
+      "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+    },
+    modelReasoningEffortMap: { "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
+    thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS,
+    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro"],
+  },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
   // Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
@@ -757,8 +797,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "No key needed — uses Xiaomi MiMo's free public tier (limited-time offer). A JWT is bootstrapped automatically with an anonymous random client id stored locally. The endpoint contract mirrors the official MiMoCode client and is not publicly documented — Xiaomi may change or restrict it at any time. Prompts may be processed/retained by Xiaomi; do not send confidential material.",
   },
   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
-  // FREEZE 2026-07-10: /models is auth-gated, so ids remain unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
-  { id: "github-copilot", label: "GitHub Copilot", baseUrl: "https://api.githubcopilot.com", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://github.com/settings/copilot" },
+  // FREEZE 2026-07-10: /models was auth-gated under key login. OAuth device-flow + copilot_internal
+  // exchange (issue #151) unlocks live discovery; static seed is a cold-start fallback only.
+  {
+    id: "github-copilot",
+    label: "GitHub Copilot",
+    baseUrl: "https://api.githubcopilot.com",
+    adapter: "openai-chat",
+    authKind: "oauth",
+    allowKeyAuthOverride: true,
+    featured: false,
+    dashboardUrl: "https://github.com/settings/copilot",
+    liveModels: true,
+    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro"],
+    defaultModel: "gpt-4o",
+    note: "Experimental unofficial Copilot bridge. Logs in via GitHub device flow using the public VS Code OAuth client id, then exchanges for a short-lived Copilot API token (copilot_internal). Requires an active Copilot subscription. GitHub may tighten or revoke this path; do not send confidential material you would not paste into Copilot Chat.",
+  },
   // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
 ];

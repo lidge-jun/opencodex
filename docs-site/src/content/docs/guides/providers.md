@@ -32,7 +32,7 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | --- | --- | --- |
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
-| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
+| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
 
 ## 1. ChatGPT login (forward / passthrough)
 
@@ -58,7 +58,8 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
-Six provider presets use OAuth login. opencodex stores their credentials in
+Six provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
+device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
 CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
 
@@ -69,6 +70,7 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
+ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login chatgpt      # standalone ChatGPT OAuth login
 ocx logout <provider>
 ```
@@ -81,6 +83,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Import-first login reuses the installed `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 You can also start OAuth from the [web dashboard](/opencodex/guides/web-dashboard/).
 
@@ -94,7 +97,7 @@ Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked me
 
 ## 3. API-key catalog
 
-opencodex v2.7.1 ships 50 built-in presets: 40 key-based, six OAuth, three local, and the default
+opencodex ships 53 built-in presets: 42 key-based, seven OAuth, three local, and the default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it. Notable entries:
 
@@ -120,7 +123,7 @@ validates the key, and stores it. Notable entries:
 | Qwen Portal | `https://portal.qwen.ai/v1` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
-| GitHub Copilot · GitLab Duo | `https://api.githubcopilot.com` · `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
+| GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
@@ -157,9 +160,9 @@ A provider is included when opencodex has a matching wire adapter, **not** based
 (AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`, and
 `cursor`. A proprietary API without one of these implementations, such as native Amazon Bedrock,
 is not supported directly.
-**GitHub Copilot** and **GitLab Duo** are multi-model gateways mapped to their universal
-OpenAI-compatible endpoint; they authenticate with a Bearer **subscription token** (not a plain API
-key), and Copilot may need a `User-Agent` header set via the provider's `headers`. **Cloudflare AI
+**GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
+device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
+a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
 Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`

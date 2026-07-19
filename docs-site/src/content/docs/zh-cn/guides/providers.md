@@ -146,8 +146,10 @@ GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实
 “agent”产品。当前 adapter id 包括 `openai-chat`、`openai-responses`、`anthropic`、`google`
 （AI Studio、Vertex、Antigravity/Cloud Code Assist 模式）、`azure` / `azure-openai`、`kiro` 和
 `cursor`。原生 Amazon Bedrock 这类无法匹配上述实现的专有 API 暂不直接支持。**GitHub Copilot** 和
-**GitLab Duo** 是多模型 gateway，映射到各自的通用 OpenAI 兼容端点；它们使用 Bearer **订阅令牌**
-（而非普通 API 密钥）进行认证，并且 Copilot 可能需要通过提供商的 `headers` 设置 `User-Agent`。
+**GitLab Duo** 是多模型 gateway，映射到各自的通用 OpenAI 兼容端点。Copilot 支持通过
+`ocx login github-copilot` 使用 GitHub 设备流 OAuth 登录（非官方桥接 — 使用 VS Code 公开客户端 id
+登录后换取短期 Copilot API 令牌，需要有效的 Copilot 订阅，GitHub 政策收紧时可能失效）；GitLab Duo
+使用 Bearer **订阅令牌**（而非普通 API 密钥）进行认证。
 **Cloudflare AI Gateway** 需要将 account 和 gateway id 填入 URL。
 
 Cursor 作为单独的实验性 adapter 进行跟踪。`adapter: "cursor"` 会作为实验性本地配置出现在

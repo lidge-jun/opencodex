@@ -35,6 +35,7 @@ interface CommandResult {
 }
 
 const CI_WORKFLOW = "ci.yml";
+const SERVICE_WORKFLOW = "service-lifecycle.yml";
 const CI_WAIT_TIMEOUT_MS = 20 * 60 * 1000;
 const CI_POLL_MS = 10 * 1000;
 
@@ -155,38 +156,38 @@ async function waitForReleaseWorkflowRun(sha: string, branch: string, createdAft
   process.exit(1);
 }
 
-async function listCiRuns(sha: string): Promise<GhRun[]> {
-  const raw = await $`gh run list --workflow ${CI_WORKFLOW} --commit ${sha} --limit 20 --json conclusion,databaseId,headSha,status,url`.text();
+async function listCiRuns(sha: string, workflow: string = CI_WORKFLOW): Promise<GhRun[]> {
+  const raw = await $`gh run list --workflow ${workflow} --commit ${sha} --limit 20 --json conclusion,databaseId,headSha,status,url`.text();
   const runs = JSON.parse(raw) as GhRun[];
   return runs.filter(run => run.headSha === sha);
 }
 
-async function waitForSuccessfulCi(sha: string): Promise<GhRun> {
+async function waitForSuccessfulCi(sha: string, workflow: string = CI_WORKFLOW, label = "Cross-platform CI"): Promise<GhRun> {
   const deadline = Date.now() + CI_WAIT_TIMEOUT_MS;
   let attempt = 1;
   while (Date.now() < deadline) {
-    const runs = await listCiRuns(sha);
+    const runs = await listCiRuns(sha, workflow);
     const successful = runs.find(run => run.status === "completed" && run.conclusion === "success");
     if (successful) {
-      console.log(`→ Cross-platform CI passed: ${successful.url}`);
+      console.log(`→ ${label} passed: ${successful.url}`);
       return successful;
     }
 
     const failed = runs.find(run => run.status === "completed" && run.conclusion && run.conclusion !== "success");
     if (failed) {
-      console.error(`✗ Cross-platform CI failed for ${sha}: ${failed.url}`);
+      console.error(`✗ ${label} failed for ${sha}: ${failed.url}`);
       process.exit(1);
     }
 
     const state = runs.length > 0
       ? runs.map(run => `${run.status}${run.conclusion ? `/${run.conclusion}` : ""}`).join(", ")
       : "not started yet";
-    console.log(`→ waiting for Cross-platform CI (${sha.slice(0, 7)}) attempt ${attempt}: ${state}`);
+    console.log(`→ waiting for ${label} (${sha.slice(0, 7)}) attempt ${attempt}: ${state}`);
     attempt += 1;
     await Bun.sleep(CI_POLL_MS);
   }
 
-  console.error(`✗ timed out waiting for Cross-platform CI on ${sha}`);
+  console.error(`✗ timed out waiting for ${label} on ${sha}`);
   process.exit(1);
 }
 
@@ -255,6 +256,12 @@ await $`git push origin ${branch}`;
 // 4. Wait for the pushed release commit to pass CI, then dispatch the Release workflow.
 console.log(`→ wait for Cross-platform CI (${releaseSha})`);
 await waitForSuccessfulCi(releaseSha);
+
+// The release bump always touches package.json, which is a service-lifecycle trigger path —
+// and release.yml's service gate requires an already-successful Service lifecycle run for
+// the release SHA. Wait for it too, or the dispatch races the still-running workflow.
+console.log(`→ wait for Service lifecycle (${releaseSha})`);
+await waitForSuccessfulCi(releaseSha, SERVICE_WORKFLOW, "Service lifecycle");
 
 const originSha = (await $`git rev-parse origin/${branch}`.text()).trim();
 if (originSha !== releaseSha) {

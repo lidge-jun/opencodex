@@ -1,5 +1,6 @@
 import { fetchMainAccountInfo, listCodexAuthAccounts } from "../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
+import { resolveEnvValue } from "../config";
 import { getValidAccessToken } from "../oauth";
 import { getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
@@ -79,7 +80,14 @@ function providerLabel(providerId: string): string {
 function normalizeResetAt(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value > 10_000_000_000 ? value : value * 1000;
   if (typeof value === "string" && value.trim()) {
-    const parsed = Date.parse(value);
+    const trimmed = value.trim();
+    // Cursor Connect RPC returns billingCycleEnd as a unix-ms decimal string ("1771077734000").
+    // Date.parse treats that as invalid; numeric epoch strings must be handled explicitly.
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    }
+    const parsed = Date.parse(trimmed);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
@@ -231,38 +239,70 @@ function quotaResetAt(row: Record<string, unknown>): number | undefined {
   return normalizeResetAt(row.resetTime ?? row.resetAt ?? row.reset_time ?? row.reset_at);
 }
 
+function isCanonicalKimiCodeBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === KIMI_CODE_BASE_URL;
+}
+
+/** Prefer the nested `data` shell when the outer object is only an envelope. */
+function unwrapKimiQuotaPayload(value: unknown): Record<string, unknown> | null {
+  const body = asRecord(value);
+  if (!body) return null;
+  const nested = asRecord(body.data);
+  if (!nested) return body;
+  // A null/non-usable outer field is a placeholder, not data — an envelope like
+  // { usage: null, data: { usage: {...} } } must still unwrap to the nested payload.
+  const usable = (field: unknown): boolean => field !== undefined && field !== null;
+  const outerHasUsage = usable(body.usage) || usable(body.limits) || usable(body.totalQuota);
+  const nestedHasUsage = usable(nested.usage) || usable(nested.limits) || usable(nested.totalQuota);
+  return !outerHasUsage && nestedHasUsage ? nested : body;
+}
+
+function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, unknown>): string {
+  return [item.name, item.title, item.scope, detail.name, detail.title]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+}
+
 function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknown>): { percent: number; resetAt?: number } | null {
   const row = asRecord(value);
   if (!row) return null;
-  const limit = toFiniteNumber(row.limit);
-  if (limit === undefined || limit <= 0) return null;
-  let used = toFiniteNumber(row.used);
-  if (used === undefined) {
-    const remaining = toFiniteNumber(row.remaining);
-    if (remaining === undefined) return null;
-    used = limit - remaining;
-  }
-  const percent = normalizePercent((used / limit) * 100);
-  if (percent === undefined) return null;
   const resetAt = quotaResetAt(row) ?? (resetFallback ? quotaResetAt(resetFallback) : undefined);
-  return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+  const limit = toFiniteNumber(row.limit);
+  if (limit !== undefined && limit > 0) {
+    let used = toFiniteNumber(row.used);
+    if (used === undefined) {
+      const remaining = toFiniteNumber(row.remaining);
+      if (remaining !== undefined) used = limit - remaining;
+    }
+    if (used !== undefined) {
+      const percent = normalizePercent((used / limit) * 100);
+      if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+    }
+  }
+  // Some payloads expose utilisation directly when limit/used arithmetic is absent.
+  const direct = normalizePercent(row.utilization ?? row.percent ?? row.usedPercent ?? row.used_percent);
+  return direct === undefined ? null : { percent: direct, ...(resetAt !== undefined ? { resetAt } : {}) };
 }
 
 function isKimiFiveHourLimit(item: Record<string, unknown>, detail: Record<string, unknown>, window: Record<string, unknown>): boolean {
   const duration = toFiniteNumber(window.duration ?? item.duration ?? detail.duration);
   const unit = String(window.timeUnit ?? item.timeUnit ?? detail.timeUnit ?? "").toUpperCase();
   if ((unit.includes("MINUTE") && duration === 300) || (unit.includes("HOUR") && duration === 5)) return true;
-  const label = [item.name, item.title, item.scope, detail.name, detail.title]
-    .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase();
-  return /(^|\b)5\s*(?:h|hour)/.test(label);
+  return /(^|\b)5\s*(?:h|hour)/.test(kimiLimitLabel(item, detail));
+}
+
+function isKimiWeeklyLimit(item: Record<string, unknown>, detail: Record<string, unknown>, window: Record<string, unknown>): boolean {
+  const duration = toFiniteNumber(window.duration ?? item.duration ?? detail.duration);
+  const unit = String(window.timeUnit ?? item.timeUnit ?? detail.timeUnit ?? "").toUpperCase();
+  if ((unit.includes("DAY") && duration === 7) || (unit.includes("HOUR") && duration === 168)) return true;
+  return /weekly|7\s*(?:d|day)/.test(kimiLimitLabel(item, detail));
 }
 
 function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
-  const body = asRecord(value);
+  const body = unwrapKimiQuotaPayload(value);
   if (!body) return null;
-  const weekly = parseKimiQuotaRow(body.usage);
+  let weekly = parseKimiQuotaRow(body.usage);
   const total = parseKimiQuotaRow(body.totalQuota);
   let fiveHour: { percent: number; resetAt?: number } | null = null;
   if (Array.isArray(body.limits)) {
@@ -271,9 +311,13 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
       if (!item) continue;
       const detail = asRecord(item.detail) ?? item;
       const window = asRecord(item.window) ?? {};
-      if (!isKimiFiveHourLimit(item, detail, window)) continue;
-      fiveHour = parseKimiQuotaRow(detail, window);
-      if (fiveHour) break;
+      if (!fiveHour && isKimiFiveHourLimit(item, detail, window)) {
+        fiveHour = parseKimiQuotaRow(detail, window);
+      }
+      if (!weekly && isKimiWeeklyLimit(item, detail, window)) {
+        weekly = parseKimiQuotaRow(detail, window);
+      }
+      if (fiveHour && weekly) break;
     }
   }
   const quota: ProviderQuota = {
@@ -291,15 +335,26 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
   return hasQuotaRows(quota) ? quota : null;
 }
 
-async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  // Never release an OAuth token to a user-edited or lookalike provider host.
-  if (normalizedBaseUrl(config.baseUrl) !== KIMI_CODE_BASE_URL) return null;
-  let accessToken: string;
-  try {
-    accessToken = await getValidAccessToken("kimi");
-  } catch {
-    return null;
+async function resolveKimiQuotaBearer(config: OcxProviderConfig): Promise<string | null> {
+  if (config.authMode === "oauth") {
+    try {
+      return await getValidAccessToken("kimi");
+    } catch {
+      return null;
+    }
   }
+  // ACTIVE key only: silently walking apiKeyPool when the primary env reference is
+  // unresolved would render a quota bar for a DIFFERENT account than the one routing
+  // requests — a wrong meter is worse than no meter.
+  const primary = resolveEnvValue(config.apiKey)?.trim();
+  return primary || null;
+}
+
+async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  // Never release credentials to a user-edited or lookalike provider host.
+  if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
+  const accessToken = await resolveKimiQuotaBearer(config);
+  if (!accessToken) return null;
   const response = await fetch(KIMI_CODE_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -342,7 +397,22 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
       const planUsage = asRecord(body?.planUsage);
       if (planUsage) {
         const resetAt = normalizeResetAt(body?.billingCycleEnd ?? planUsage.billingCycleEnd ?? body?.periodEnd);
-        // Cursor tracks two linked pools: First-party models (Auto/Composer/Grok) and API usage.
+
+        // Primary meter: overall included allowance (Cursor Settings → Usage total %).
+        // autoPercentUsed / apiPercentUsed are secondary pools and must not replace the total.
+        const limit = toFiniteNumber(planUsage.limit ?? planUsage.limitCents ?? planUsage.totalLimitCents);
+        const remaining = toFiniteNumber(planUsage.remaining ?? planUsage.remainingCents);
+        const includedSpend = toFiniteNumber(planUsage.includedSpend ?? planUsage.usedCents ?? planUsage.used);
+        const totalSpend = toFiniteNumber(planUsage.totalSpend);
+        let used: number | undefined;
+        if (includedSpend !== undefined) used = includedSpend;
+        else if (limit !== undefined && remaining !== undefined) used = Math.max(0, limit - remaining);
+        else if (totalSpend !== undefined) used = totalSpend;
+        const totalPercent = normalizePercent(planUsage.totalPercentUsed ?? planUsage.percentUsed)
+          ?? (limit !== undefined && limit > 0 && used !== undefined
+            ? normalizePercent((used / limit) * 100)
+            : undefined);
+
         const autoPercent = normalizePercent(planUsage.autoPercentUsed);
         const apiPercent = normalizePercent(planUsage.apiPercentUsed);
         const customWindows: ProviderQuotaWindow[] = [];
@@ -360,37 +430,14 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
             ...(resetAt !== undefined ? { resetAt } : {}),
           });
         }
-        if (customWindows.length > 0) {
-          const built = report(provider, "cursor:period-usage", {
-            customWindows,
-            updatedAt: Date.now(),
-          });
-          if (built) return { ...built, reverseEngineered: true };
-        }
 
-        const limit = toFiniteNumber(planUsage.limit ?? planUsage.limitCents ?? planUsage.totalLimitCents);
-        const remaining = toFiniteNumber(planUsage.remaining ?? planUsage.remainingCents);
-        const includedSpend = toFiniteNumber(planUsage.includedSpend ?? planUsage.usedCents ?? planUsage.used);
-        const totalSpend = toFiniteNumber(planUsage.totalSpend);
-        let used: number | undefined;
-        if (includedSpend !== undefined) used = includedSpend;
-        else if (limit !== undefined && remaining !== undefined) used = Math.max(0, limit - remaining);
-        else if (totalSpend !== undefined) used = totalSpend;
-        const totalPercent = normalizePercent(planUsage.totalPercentUsed ?? planUsage.percentUsed);
-        if (limit !== undefined && limit > 0 && used !== undefined) {
-          const percent = totalPercent ?? normalizePercent((used / limit) * 100);
-          if (percent !== undefined) {
-            const built = report(provider, "cursor:period-usage", {
-              monthlyPercent: percent,
-              ...(resetAt !== undefined ? { monthlyResetAt: resetAt } : {}),
-              updatedAt: Date.now(),
-            });
-            if (built) return { ...built, reverseEngineered: true };
-          }
-        } else if (totalPercent !== undefined) {
+        if (totalPercent !== undefined || customWindows.length > 0) {
           const built = report(provider, "cursor:period-usage", {
-            monthlyPercent: totalPercent,
-            ...(resetAt !== undefined ? { monthlyResetAt: resetAt } : {}),
+            ...(totalPercent !== undefined ? {
+              monthlyPercent: totalPercent,
+              ...(resetAt !== undefined ? { monthlyResetAt: resetAt } : {}),
+            } : {}),
+            ...(customWindows.length > 0 ? { customWindows } : {}),
             updatedAt: Date.now(),
           });
           if (built) return { ...built, reverseEngineered: true };
@@ -596,7 +643,12 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
     if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
+    // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical
+    // host and only for real key auth — forward/local modes carry no credential of ours.
     if (provider.authMode === "oauth" && name === "kimi") return fetchKimiQuota(name, provider);
+    if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
+      return fetchKimiQuota(name, provider);
+    }
     return null;
   } catch {
     return null;

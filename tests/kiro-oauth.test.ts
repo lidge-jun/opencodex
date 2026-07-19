@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectKiroCliSqlite, loginKiro, readKiroCliSqlite, refreshKiroToken, resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRegion } from "../src/oauth/kiro";
+
+// Windows CI cold runners take 5-7s for the real SQLite create/inspect cycles here
+// (same flake class as 810fa115); the default 5s harness timeout is too tight.
+setDefaultTimeout(30_000);
 
 const origHome = process.env.HOME;
 const origEnvTok = process.env.KIRO_ACCESS_TOKEN;

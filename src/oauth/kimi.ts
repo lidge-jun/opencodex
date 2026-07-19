@@ -32,6 +32,51 @@ interface TokenResponse {
   interval?: number;
 }
 
+interface KimiJwtPayload {
+  user_id?: unknown;
+  sub?: unknown;
+  email?: unknown;
+}
+
+function decodeKimiJwtPayload(token: string): KimiJwtPayload | undefined {
+  const parts = token.split(".");
+  const payload = parts[1];
+  if (parts.length !== 3 || !payload) return undefined;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as KimiJwtPayload;
+  } catch {
+    return undefined;
+  }
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Stable multiauth identity from Kimi JWTs. `user_id` is preferred ACROSS both tokens
+ * before falling back to `sub` — the two claims come from the same issuer namespace but
+ * `sub` is the weaker fallback, so a refresh-token `user_id` must beat an access-token
+ * `sub`. Email fills from either token and is lowercased.
+ */
+export function identityFromKimiTokens(accessToken: string, refreshToken?: string): {
+  accountId?: string;
+  email?: string;
+} {
+  const access = decodeKimiJwtPayload(accessToken);
+  const refresh = refreshToken ? decodeKimiJwtPayload(refreshToken) : undefined;
+  const accountId =
+    nonEmptyString(access?.user_id) ??
+    nonEmptyString(refresh?.user_id) ??
+    nonEmptyString(access?.sub) ??
+    nonEmptyString(refresh?.sub);
+  const email = (nonEmptyString(access?.email) ?? nonEmptyString(refresh?.email))?.toLowerCase();
+  return {
+    ...(accountId ? { accountId } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
 function resolveOAuthHost(): string {
   return process.env.KIMI_CODE_OAUTH_HOST || process.env.KIMI_OAUTH_HOST || DEFAULT_OAUTH_HOST;
 }
@@ -109,7 +154,13 @@ function parseTokenPayload(payload: TokenResponse, refreshFallback?: string): OA
   }
   const refresh = payload.refresh_token ?? refreshFallback;
   if (!refresh) throw new Error("Kimi token response missing refresh token");
-  return { access: payload.access_token, refresh, expires: Date.now() + payload.expires_in * 1000 - OAUTH_EXPIRY_SKEW_MS };
+  const identity = identityFromKimiTokens(payload.access_token, refresh);
+  return {
+    access: payload.access_token,
+    refresh,
+    expires: Date.now() + payload.expires_in * 1000 - OAUTH_EXPIRY_SKEW_MS,
+    ...identity,
+  };
 }
 
 async function pollForToken(deviceCode: string, intervalMs: number, expiresInMs: number, signal?: AbortSignal): Promise<OAuthCredentials> {

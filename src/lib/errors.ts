@@ -57,8 +57,39 @@ function isPermissionMessage(text: string): boolean {
   );
 }
 
+/**
+ * Client cancelled / closed the turn. Matches ONLY abort phrases this codebase
+ * produces — "client closed request during web-search" (src/web-search/loop.ts),
+ * "Client cancelled request" (src/server/responses.ts) — plus the explicit
+ * "request cancel(l)ed by client" forms. Deliberately narrow: bare "client closed"
+ * would also swallow legitimate upstream failures like "upstream HTTP client
+ * closed idle connection" and turn a real 502 into a 499.
+ */
+export function isClientClosedMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("client closed request") ||
+    lower.includes("client cancelled request") ||
+    lower.includes("client canceled request") ||
+    lower.includes("request canceled by client") ||
+    lower.includes("request cancelled by client")
+  );
+}
+
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
+  // Preserve explicit cancel types used by compact/combo JSON errors; unify message-inferred
+  // client closes (web-search abort text) onto client_closed_request for /api/logs.
+  if (type === "client_cancelled") {
+    return { message, type: "client_cancelled", code: "client_cancelled" };
+  }
+  if (
+    status === 499 ||
+    type === "client_closed_request" ||
+    isClientClosedMessage(text)
+  ) {
+    return { message, type: "invalid_request_error", code: "client_closed_request" };
+  }
   if (
     text.includes("context_length_exceeded") ||
     text.includes("context window") ||
@@ -166,6 +197,8 @@ export function parseRetryAfterFromMessage(message: string): number | undefined 
 /** Infer HTTP status from adapter terminal error text (provider-agnostic keyword matching). */
 export function inferHttpStatusFromAdapterMessage(message: string): number {
   const lower = message.toLowerCase();
+  // Client aborts (e.g. mid web-search loop) must not look like upstream 502s in /api/logs.
+  if (isClientClosedMessage(lower)) return 499;
   if (
     lower.includes("resource_exhausted") ||
     lower.includes("resource exhausted") ||
@@ -207,17 +240,19 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
   if (retryAfterSeconds && !/please try again in /i.test(message)) {
     finalMessage = `${message} Please try again in ${retryAfterSeconds}s.`;
   }
-  const errorType = httpStatus === 429
-    ? "rate_limit_error"
-    : httpStatus === 401
-      ? "authentication_error"
-      : httpStatus === 403
-        ? "permission_error"
-        : httpStatus === 503 || httpStatus === 504
-          ? "server_error"
-          : httpStatus === 400
-            ? "invalid_request_error"
-            : "upstream_error";
+  const errorType = httpStatus === 499
+    ? "client_closed_request"
+    : httpStatus === 429
+      ? "rate_limit_error"
+      : httpStatus === 401
+        ? "authentication_error"
+        : httpStatus === 403
+          ? "permission_error"
+          : httpStatus === 503 || httpStatus === 504
+            ? "server_error"
+            : httpStatus === 400
+              ? "invalid_request_error"
+              : "upstream_error";
   return {
     httpStatus,
     error: classifyError(httpStatus, errorType, finalMessage),
@@ -231,6 +266,7 @@ export function httpStatusFromTerminalError(error: {
   message?: string;
 } | undefined): number {
   if (!error) return 502;
+  if (error.code === "client_closed_request" || error.code === "client_cancelled") return 499;
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
   if (
@@ -240,9 +276,12 @@ export function httpStatusFromTerminalError(error: {
   ) return 403;
   if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
+  // Client-closed messages often arrive as invalid_request_error after classifyError; check message
+  // before treating every invalid_request_error as HTTP 400.
+  const message = error.message ?? "";
+  if (message && isClientClosedMessage(message)) return 499;
   if (error.type === "invalid_request_error") return 400;
   if (error.type === "proxy_error") return 500;
-  const message = error.message ?? "";
   if (message) return inferHttpStatusFromAdapterMessage(message);
   return 502;
 }

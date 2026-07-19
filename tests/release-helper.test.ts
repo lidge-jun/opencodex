@@ -133,6 +133,11 @@ if (args[0] === "run" && args[1] === "list") {
     process.exit(0);
   }
 
+  if (args.includes("service-lifecycle.yml")) {
+    stdout(JSON.stringify([{ conclusion: "success", databaseId: 8, headSha, status: "completed", url: "https://example.test/service" }]));
+    process.exit(0);
+  }
+
   if (args.includes("release.yml")) {
     stdout(JSON.stringify([{ createdAt: new Date().toISOString(), databaseId: 9, headSha, status: "queued", url: "https://example.test/release" }]));
     process.exit(0);

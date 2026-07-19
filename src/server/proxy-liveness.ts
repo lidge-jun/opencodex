@@ -9,7 +9,7 @@
  *
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
-import { loadConfig, readAlivePid, readRuntimePort } from "../config";
+import { loadConfig, readAlivePid, readRuntimePort, verifyPidIdentity } from "../config";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -22,6 +22,11 @@ export interface HealthzIdentity {
 export interface LivenessIo {
   fetchFn?: typeof fetch;
   readPidFn?: () => number | null;
+  /**
+   * Full identity check of the passed candidate pid; must return the SAME pid or null.
+   * Destructive callers only ever receive pids that passed this gate.
+   */
+  verifyPidFn?: (candidatePid: number) => number | null;
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
@@ -89,8 +94,18 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
   // expensive for waitForProxy's 150ms poll loop, and /healthz identity is the real trust gate.
   const readPidFn = io.readPidFn ?? readAlivePid;
+  const verifyPidFn = io.verifyPidFn ?? verifyPidIdentity;
   const readRuntimeFn = io.readRuntimeFn ?? readRuntimePort;
   const configFn = io.configFn ?? loadConfig;
+
+  // The cheap pid is discovery-only. Before it can appear in a returned (killable) result
+  // it must pass the full identity check AND the verifier must echo the exact candidate —
+  // a pidfile rewrite between discovery and verification can never swap in another process.
+  const killablePid = (candidate: number | null): number | null => {
+    if (candidate === null) return null;
+    const verified = verifyPidFn(candidate);
+    return verified === candidate ? verified : null;
+  };
 
   const pid = readPidFn();
   let probedPort: number | null = null;
@@ -99,7 +114,12 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     if (runtime?.port) {
       probedPort = runtime.port;
       const identity = await proxyIdentityAt(runtime.port, { hostname: runtime.hostname, expectedPid: pid }, io);
-      if (identity) return { pid, port: runtime.port, hostname: runtime.hostname };
+      if (identity) {
+        // healthz confirmed the pid itself → trusted; a pidless legacy body did not,
+        // so the cheap pid must pass full identity verification before it is returned.
+        const trusted = identity.pid === pid ? pid : killablePid(pid);
+        return { pid: trusted, port: runtime.port, hostname: runtime.hostname };
+      }
     }
   }
 
@@ -119,6 +139,6 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   const config = configFn();
   const port = config.port ?? 10100;
   const identity = await proxyIdentityAt(port, { hostname: config.hostname }, io);
-  if (identity) return { pid: identity.pid ?? pid ?? null, port, hostname: config.hostname };
+  if (identity) return { pid: identity.pid ?? killablePid(pid), port, hostname: config.hostname };
   return null;
 }

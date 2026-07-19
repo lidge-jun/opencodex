@@ -29,6 +29,7 @@ import { modelInList, namespacedToolName } from "../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import {
   forceRefreshOAuthAccessSnapshot,
+  getOAuthCredentialApiBaseUrl,
   getOAuthCredentialProjectId,
   getValidAccessTokenSnapshot,
   type OAuthAccessSnapshot,
@@ -950,12 +951,13 @@ export async function handleResponses(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
-  const isXaiOAuthRequest = route.providerName === "xai" && route.provider.authMode === "oauth";
+  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot")
+    && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   if (route.provider.authMode === "oauth") {
     try {
       const resolved = await getValidAccessTokenSnapshot(route.providerName);
-      if (isXaiOAuthRequest) sentOAuthSnapshot = resolved;
+      if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
       route.provider = { ...route.provider, apiKey: resolved.accessToken };
       // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
       // CCA envelope; the server injects only the bare token, so pull project from the credential.
@@ -974,7 +976,12 @@ export async function handleResponses(
       return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
     }
   }
-  route.provider = resolveProviderTransport(route.providerName, route.provider, parsed.options.promptCacheKey);
+  route.provider = resolveProviderTransport(
+    route.providerName,
+    route.provider,
+    parsed.options.promptCacheKey,
+    route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+  );
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   logCtx.providerAdapter = adapter.name;
@@ -1425,7 +1432,7 @@ export async function handleResponses(
     recovery: for (;;) {
       if (
         upstreamResponse.status === 401
-        && isXaiOAuthRequest
+        && isOAuth401ReplayProvider
         && sentOAuthSnapshot
         && !oauth401ReplayAttempted
       ) {
@@ -1443,6 +1450,7 @@ export async function handleResponses(
           route.providerName,
           { ...route.provider, apiKey: refreshed.accessToken },
           parsed.options.promptCacheKey,
+          route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
         );
         route.provider = refreshedProvider;
         activeAdapter = resolveAdapter(
@@ -1588,7 +1596,8 @@ function compactResponseTooLargeError(): Response {
   }), { status: 502, headers: { "Content-Type": "application/json" } });
 }
 
-async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
+/** Exported for tests: owns the compact client-cancel branch (499 client_cancelled). */
+export async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
   const reader = upstream.body?.getReader();
   const contentType = upstream.headers.get("content-type") ?? "application/json";
   if (!reader) return new Response(null, { status: upstream.status, headers: { "Content-Type": contentType } });

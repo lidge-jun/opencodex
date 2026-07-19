@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   adapterFailureFromMessage,
+  classifyError,
   parseRetryAfterFromMessage,
 } from "../src/lib/errors";
+import { bufferCompactResponse } from "../src/server/responses";
 
 describe("adapterFailureFromMessage", () => {
   test("maps resource_exhausted to 429 rate_limit_error", () => {
@@ -64,5 +66,57 @@ describe("adapterFailureFromMessage", () => {
       httpStatus: 401,
       error: { type: "authentication_error", code: "invalid_api_key" },
     });
+  });
+
+  test("maps client-closed web-search aborts to 499 client_closed_request", () => {
+    expect(adapterFailureFromMessage("client closed request during web-search")).toMatchObject({
+      httpStatus: 499,
+      error: { type: "invalid_request_error", code: "client_closed_request" },
+    });
+    expect(adapterFailureFromMessage("Client cancelled request")).toMatchObject({
+      httpStatus: 499,
+      error: { code: "client_closed_request" },
+    });
+    expect(adapterFailureFromMessage("search request canceled by client")).toMatchObject({
+      httpStatus: 499,
+      error: { code: "client_closed_request" },
+    });
+  });
+
+  test("preserves explicit client_cancelled JSON error type from compact/combo paths", () => {
+    expect(classifyError(499, "client_cancelled", "Client cancelled request")).toMatchObject({
+      type: "client_cancelled",
+      code: "client_cancelled",
+    });
+  });
+
+  test("upstream failures that merely mention a closed client stay 502 (matcher is narrow)", () => {
+    // A real upstream error wording — must NOT be reclassified as a client cancel.
+    expect(adapterFailureFromMessage("upstream HTTP client closed idle connection")).toMatchObject({
+      httpStatus: 502,
+      error: { code: "upstream_server_error" },
+    });
+    expect(adapterFailureFromMessage("connection closed by upstream client pool")).toMatchObject({
+      httpStatus: 502,
+    });
+  });
+
+  test("an aborted compact request activates the 499 client_cancelled branch", async () => {
+    // Drive the real compact cancellation path: a mid-stream abort while buffering.
+    const controller = new AbortController();
+    const upstream = new Response(new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(new TextEncoder().encode("{\"partial\":"));
+        controller.abort(); // client goes away mid-buffer
+        streamController.enqueue(new TextEncoder().encode("true}"));
+        streamController.close();
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+
+    const response = await bufferCompactResponse(upstream, controller.signal);
+
+    expect(response.status).toBe(499);
+    const body = await response.json() as { error?: { type?: string; code?: string } };
+    expect(body.error).toMatchObject({ type: "client_cancelled", code: "client_cancelled" });
   });
 });

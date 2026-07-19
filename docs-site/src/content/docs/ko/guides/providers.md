@@ -157,8 +157,10 @@ Sol/Terra/Luna를 폴백 목록에 넣어 둡니다.
 Vertex, Antigravity/Cloud Code Assist 모드), `azure` / `azure-openai`, `kiro`, `cursor`입니다.
 Amazon Bedrock 네이티브 API처럼 이 구현 중 어느 것과도 맞지 않는 독자 프로토콜은 직접 지원하지 않습니다.
 **GitHub Copilot**과 **GitLab Duo**는 자신의 범용 OpenAI 호환 엔드포인트에 매핑된 멀티 모델
-게이트웨이입니다. 이들은 Bearer **구독 토큰**(일반 API 키가 아님)으로 인증하며,
-Copilot은 프로바이더의 `headers`를 통해 `User-Agent` 헤더 설정이 필요할 수 있습니다. **Cloudflare AI
+게이트웨이입니다. Copilot은 `ocx login github-copilot`으로 GitHub 디바이스 플로우 OAuth 로그인을
+지원합니다(비공식 브리지 — VS Code 공개 클라이언트 id로 로그인 후 단기 Copilot API 토큰으로
+교환하며, 활성 Copilot 구독이 필요하고 GitHub 정책 변경으로 막힐 수 있음). GitLab Duo는 Bearer
+**구독 토큰**(일반 API 키가 아님)으로 인증합니다. **Cloudflare AI
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
 Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ocx init`과 dashboard Add

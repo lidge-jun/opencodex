@@ -10,15 +10,16 @@
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
  *   for Codex pool logins, which have their own ledger (codex-accounts.json).
- * - Credentials without identity (no accountId/email — kimi, kiro) replace the active slot
+ * - Credentials without identity (no accountId/email — e.g. kiro) replace the active slot
  *   instead of appending: their refresh tokens rotate, so a derived id would duplicate the
- *   same human on every re-login. Cursor login extracts JWT `sub` as accountId so multiauth
- *   can append distinct accounts.
+ *   same human on every re-login. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor
+ *   extracts JWT `sub` — both append distinct accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 type AuthStore = Record<string, ProviderAccountSet>;
@@ -118,6 +119,12 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
+  if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
+    // Persist only allowlisted Copilot origins; drop anything else so auth.json cannot
+    // become an SSRF springboard across reloads.
+    const validated = validateCopilotApiBaseUrl(candidate.apiBaseUrl);
+    if (validated) normalized.apiBaseUrl = validated;
+  }
   return normalized;
 }
 
@@ -221,6 +228,16 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
         existing.credential = safe;
         delete existing.needsReauth;
         set.activeAccountId = existing.id;
+        return;
+      }
+      // Legacy migration: a pre-identity row (no accountId/email) for this provider is the
+      // SAME human re-logging in after the identity extraction shipped — upgrading the
+      // active identity-less row in place prevents a stale duplicate that stays selectable
+      // and would re-refresh into a second row with the same identity.
+      const active = set.accounts.find(a => a.id === set.activeAccountId);
+      if (active && active.credential.accountId === undefined && active.credential.email === undefined) {
+        active.credential = safe;
+        delete active.needsReauth;
         return;
       }
       const id = newAccountId(safe);

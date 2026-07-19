@@ -582,6 +582,29 @@ describe("thinking-budget models (260709)", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
+  test("Alibaba Token Plan routes Qwen3.8 Max Preview with the Qwen thinking budget contract", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "alibaba-token-plan",
+      providers: {
+        "alibaba-token-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          apiKey: "k",
+        },
+      },
+    } as unknown as OcxConfig;
+    const route = routeModel(config, "alibaba-token-plan/qwen3.8-max-preview");
+
+    expect(route.provider.modelInputModalities?.[route.modelId]).toEqual(["text", "image"]);
+    expect(route.provider.thinkingBudgetModels).toContain(route.modelId);
+    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+    const body = buildBody(route.provider, route.modelId, { reasoning: "max", maxOutputTokens: 65536 });
+    expect(body).toMatchObject({ model: "qwen3.8-max-preview", thinking_budget: 65536 });
+    expect(body).not.toHaveProperty("reasoning_effort");
+  });
+
   test("opencode-go Qwen models are no longer pinned to the Anthropic wire", () => {
     const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1" };
 
