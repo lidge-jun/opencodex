@@ -195,6 +195,8 @@ describe("fetchProviderQuotaReports", () => {
     ]);
     expect(byProvider.cursor?.source).toBe("cursor:period-usage");
     expect(byProvider.cursor?.reverseEngineered).toBe(true);
+    expect(byProvider.cursor?.quota.monthlyPercent).toBe(30);
+    expect(byProvider.cursor?.quota.monthlyResetAt).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
     expect(byProvider.cursor?.quota.customWindows).toEqual([
       { label: "First-party models", percent: 12.5, resetAt: Date.parse("2026-08-01T00:00:00.000Z") },
       { label: "API usage", percent: 58, resetAt: Date.parse("2026-08-01T00:00:00.000Z") },
@@ -310,6 +312,87 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports[0]?.quota.fiveHourPercent).toBe(25);
     expect(result.reports[0]?.quota.fiveHourResetAt).toBe(Date.parse("2026-07-18T08:00:00Z"));
+  });
+
+  test("Kimi quota unwraps a data envelope and maps weekly from limits when usage is absent", async () => {
+    await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: {
+        limits: [
+          {
+            window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+            detail: { limit: "100", remaining: "80", resetTime: "2026-07-18T08:00:00Z" },
+          },
+          {
+            name: "Weekly limit",
+            window: { duration: 7, timeUnit: "TIME_UNIT_DAY" },
+            detail: { limit: "200", used: "50", resetTime: "2026-07-24T12:00:00Z" },
+          },
+        ],
+        totalQuota: { limit: "100", remaining: "90" },
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(kimiOnlyConfig(), true);
+
+    expect(result.reports[0]?.source).toBe("kimi:usages");
+    expect(result.reports[0]?.quota.fiveHourPercent).toBe(20);
+    expect(result.reports[0]?.quota.weeklyPercent).toBe(25);
+    expect(result.reports[0]?.quota.weeklyResetAt).toBe(Date.parse("2026-07-24T12:00:00Z"));
+    expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Total subscription credits", percent: 10 }]);
+  });
+
+  test("Kimi Code API-key providers on the canonical host receive usages probes", async () => {
+    const seen: Array<{ url: string; authorization?: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url: String(input), authorization: headers?.Authorization });
+      return new Response(JSON.stringify({ usage: { limit: "100", used: "40" } }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "kimi-code",
+      providers: {
+        "kimi-code": {
+          adapter: "openai-chat",
+          authMode: "key",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          apiKey: "sk-kimi-quota-secret",
+        },
+      },
+    } as OcxConfig, true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.provider).toBe("kimi-code");
+    expect(result.reports[0]?.source).toBe("kimi:usages");
+    expect(result.reports[0]?.quota.weeklyPercent).toBe(40);
+    expect(seen).toEqual([{
+      url: "https://api.kimi.com/coding/v1/usages",
+      authorization: "Bearer sk-kimi-quota-secret",
+    }]);
+  });
+
+  test("Kimi key providers never send credentials to a non-canonical base URL", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "kimi-code",
+      providers: {
+        "kimi-code": {
+          adapter: "openai-chat",
+          authMode: "key",
+          baseUrl: "https://attacker.example/coding/v1",
+          apiKey: "sk-kimi-quota-secret",
+        },
+      },
+    } as OcxConfig, true);
+
+    expect(result.reports).toEqual([]);
+    expect(seen).toEqual([]);
   });
 
   test("Kimi quota preserves a last-good row after 401 only within the shared age bound", async () => {
@@ -430,6 +513,37 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.source).toBe("cursor:usage-summary");
     expect(result.reports[0]?.quota.monthlyPercent).toBe(42);
     expect(result.reports[0]?.quota.monthlyResetAt).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
+  });
+
+  test("cursor period-usage keeps totalPercentUsed as monthly while retaining auto/API pool windows", async () => {
+    await saveCredential("cursor", { access: "cursor-access-secret", refresh: "cursor-refresh-secret", expires: Date.now() + 3600_000 });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("GetCurrentPeriodUsage")) {
+        return new Response(JSON.stringify({
+          planUsage: {
+            includedSpend: 23222,
+            remaining: 16778,
+            limit: 40000,
+            autoPercentUsed: 0,
+            apiPercentUsed: 46.444,
+            totalPercentUsed: 15.48,
+          },
+          // Connect RPC shape: unix ms as a decimal string (Date.parse would fail).
+          billingCycleEnd: "1771077734000",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(cursorOnlyConfig(), true);
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("cursor:period-usage");
+    expect(result.reports[0]?.quota.monthlyPercent).toBe(15.48);
+    expect(result.reports[0]?.quota.monthlyResetAt).toBe(1_771_077_734_000);
+    expect(result.reports[0]?.quota.customWindows).toEqual([
+      { label: "First-party models", percent: 0, resetAt: 1_771_077_734_000 },
+      { label: "API usage", percent: 46.444, resetAt: 1_771_077_734_000 },
+    ]);
   });
 
   test("cursor falls back to auth-usage with a UTC month rollover when the richer endpoints fail", async () => {
