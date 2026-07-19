@@ -276,6 +276,7 @@ describe("request log metadata", () => {
     )).toBe("invalid_api_key");
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
+    expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");
     expect(requestLogErrorCode(503)).toBe("server_is_overloaded");
     expect(requestLogErrorCode(502)).toBe("upstream_server_error");
     expect(requestLogErrorCode(404)).toBe("http_404");
@@ -535,12 +536,80 @@ describe("request log metadata", () => {
     });
   });
 
+  test("deferred SSE logging maps web-search client closes to 499 client_cancel", async () => {
+    const entries: RequestLogEntry[] = [];
+    const message = "client closed request during web-search";
+    const failedPayload = JSON.stringify({
+      type: "response.failed",
+      response: {
+        error: { type: "invalid_request_error", code: "client_closed_request", message },
+        last_error: { type: "invalid_request_error", code: "client_closed_request", message },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${failedPayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-web-search-client-close",
+      Date.now(),
+      { model: "k3", provider: "kimi" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      upstreamError: message,
+      status: 499,
+      errorCode: "client_closed_request",
+      closeReason: "client_cancel",
+    });
+  });
+
+  test("addFinalRequestLog remaps legacy 502 client-close messages to 499", () => {
+    const entries: RequestLogEntry[] = [];
+    addFinalRequestLog(
+      "ocx-test-legacy-client-close",
+      Date.now(),
+      {
+        model: "k3",
+        provider: "kimi",
+        upstreamError: "client closed request during web-search",
+      },
+      502,
+      { terminalStatus: "failed", closeReason: "terminal" },
+      entry => entries.push(entry),
+    );
+    expect(entries[0]).toMatchObject({
+      status: 499,
+      errorCode: "client_closed_request",
+      closeReason: "client_cancel",
+      upstreamError: "client closed request during web-search",
+    });
+  });
+
   test("httpStatusFromTerminalError maps Cursor rate limits to 429", () => {
     expect(httpStatusFromTerminalError({
       type: "rate_limit_error",
       code: "rate_limit_exceeded",
       message: "Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests",
     })).toBe(429);
+  });
+
+  test("httpStatusFromTerminalError maps client-closed web-search aborts to 499", () => {
+    expect(httpStatusFromTerminalError({
+      type: "invalid_request_error",
+      code: "client_closed_request",
+      message: "client closed request during web-search",
+    })).toBe(499);
+    expect(httpStatusFromTerminalError({
+      message: "client closed request during web-search",
+    })).toBe(499);
   });
 
   test("httpStatusFromTerminalError preserves auth precedence and permission status", () => {

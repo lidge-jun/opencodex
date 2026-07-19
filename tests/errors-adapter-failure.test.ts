@@ -65,4 +65,19 @@ describe("adapterFailureFromMessage", () => {
       error: { type: "authentication_error", code: "invalid_api_key" },
     });
   });
+
+  test("maps client-closed web-search aborts to 499 client_closed_request", () => {
+    expect(adapterFailureFromMessage("client closed request during web-search")).toMatchObject({
+      httpStatus: 499,
+      error: { type: "invalid_request_error", code: "client_closed_request" },
+    });
+    expect(adapterFailureFromMessage("Client cancelled request")).toMatchObject({
+      httpStatus: 499,
+      error: { code: "client_closed_request" },
+    });
+    expect(adapterFailureFromMessage("search request canceled by client")).toMatchObject({
+      httpStatus: 499,
+      error: { code: "client_closed_request" },
+    });
+  });
 });

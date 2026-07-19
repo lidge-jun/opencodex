@@ -3,6 +3,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import {
   classifyError,
   httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
+  isClientClosedMessage,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
@@ -134,6 +135,10 @@ export function nextRequestLogId(timestamp = Date.now()): string {
 
 export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
   if (status >= 200 && status < 400) return undefined;
+  // Defense in depth: mid-stream web-search aborts used to land as 502 with this message.
+  if (status === 499 || (upstreamError?.trim() && classifyError(status, "upstream_error", upstreamError).code === "client_closed_request")) {
+    return "client_closed_request";
+  }
   if (status === 400 || status === 409) return "invalid_request_error";
   if (status === 401) return "invalid_api_key";
   if (status === 403) {
@@ -146,7 +151,6 @@ export function requestLogErrorCode(status: number, upstreamError?: string): str
     return "permission_denied";
   }
   if (status === 429) return "rate_limit_exceeded";
-  if (status === 499) return "client_closed_request";
   if (status === 503) return "server_is_overloaded";
   if (status >= 500) return "upstream_server_error";
   return `http_${status}`;
@@ -400,11 +404,21 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  const errorCode = requestLogErrorCode(status, logCtx.upstreamError);
+  // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
+  // Prefer the client-close classification whenever the captured reason says so.
+  const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
+    ? 499
+    : status;
+  const errorCode = requestLogErrorCode(effectiveStatus, logCtx.upstreamError);
+  // A response.failed whose classified status is 499 is still a client cancel, not an upstream
+  // terminal failure — keep /api/logs closeReason aligned with that.
+  const closeReason = effectiveStatus === 499
+    ? "client_cancel"
+    : meta?.closeReason;
   if (logCtx.activeAttempt) {
     finishRequestAttempt(
       logCtx.activeAttempt,
-      status,
+      effectiveStatus,
       Date.now() - (logCtx.activeAttemptStartedAt ?? start),
       logCtx.usage,
     );
@@ -440,11 +454,11 @@ export function addFinalRequestLog(
     ...(logCtx.modelSupportsServiceTier !== undefined ? { modelSupportsServiceTier: logCtx.modelSupportsServiceTier } : {}),
     ...(logCtx.responseServiceTier ? { responseServiceTier: logCtx.responseServiceTier } : {}),
     ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
-    status,
+    status: effectiveStatus,
     durationMs: Date.now() - start,
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
-    ...(meta?.closeReason ? { closeReason: meta.closeReason } : {}),
+    ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
@@ -458,7 +472,7 @@ export function addFinalRequestLog(
       provider: logCtx.provider,
       model: logCtx.model,
       upstreamContentType: logCtx.usageDebugContentType ?? null,
-      upstreamStatus: status,
+      upstreamStatus: effectiveStatus,
       bodyKind: logCtx.usageDebugBodyKind ?? "none",
       bodySample: logCtx.usageDebugBodySample ?? "",
       extractedUsage: loggedUsage ?? null,
