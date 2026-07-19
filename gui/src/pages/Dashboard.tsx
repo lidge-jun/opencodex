@@ -117,9 +117,30 @@ function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBa
   return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
 }
 
-/** Restore focus to the opener without painting :focus-visible (avoids a sticky ring after mouse close). */
+/**
+ * Last input modality, tracked window-wide. Quiet focus restore is only correct for
+ * POINTER-originated closes; a keyboard close (Escape / Enter / Space) must keep the
+ * visible :focus-visible ring or keyboard users lose their location on close.
+ */
+let lastInputWasKeyboard = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", () => { lastInputWasKeyboard = true; }, { capture: true, passive: true });
+  window.addEventListener("pointerdown", () => { lastInputWasKeyboard = false; }, { capture: true, passive: true });
+}
+
+/**
+ * Restore focus to the opener. Pointer closes suppress :focus-visible (avoids the
+ * sticky double ring after a mouse close); keyboard closes restore plain focus so the
+ * ring paints. `focusVisible` support is Chrome 145+/FF 104+/Safari 18.4+ — engines
+ * that ignore the option keep the pre-repair behavior, which the origin tracking
+ * already makes correct for keyboard users everywhere.
+ */
 function focusTriggerQuietly(trigger: HTMLButtonElement | null) {
   if (!trigger) return;
+  if (lastInputWasKeyboard) {
+    trigger.focus({ preventScroll: true });
+    return;
+  }
   try {
     trigger.focus({ preventScroll: true, focusVisible: false });
   } catch {
