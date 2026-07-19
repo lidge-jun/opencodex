@@ -45,6 +45,10 @@ function windowsServiceScriptPath(): string {
   return join(getConfigDir(), "opencodex-service.cmd");
 }
 
+function windowsServiceVbsPath(): string {
+  return join(getConfigDir(), "opencodex-service.vbs");
+}
+
 function windowsTaskXmlPath(): string {
   return join(getConfigDir(), "opencodex-service-task.xml");
 }
@@ -295,7 +299,7 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
   const lines = [
     "@echo off",
     "setlocal",
-    // The wrapper runs in its own hidden console, so switching that console to UTF-8 is
+    // The wrapper is launched via a hidden WScript helper, so switching that console to UTF-8 is
     // safe (no leak into user shells) and lets cmd parse any UTF-8 remnants correctly.
     "chcp 65001 >nul",
     windowsBatchSet("OCX_SERVICE", "1"),
@@ -335,8 +339,17 @@ export function buildWindowsSchtasksCreateArgs(script = windowsServiceScriptPath
   return ["/create", "/tn", TASK, "/xml", xml, "/f"];
 }
 
-export function buildWindowsTaskXml(script = windowsServiceScriptPath()): string {
-  const escapedScript = taskXmlString(script);
+/**
+ * Hidden launcher for the service `.cmd`. Task Scheduler Exec of a console-subsystem
+ * batch paints a visible window; WScript Run with window style 0 does not.
+ */
+export function buildWindowsServiceVbs(script = windowsServiceScriptPath()): string {
+  const escaped = script.replace(/"/g, '""');
+  return `CreateObject("WScript.Shell").Run """${escaped}""", 0, False\r\n`;
+}
+
+export function buildWindowsTaskXml(vbs = windowsServiceVbsPath()): string {
+  const escapedArgs = taskXmlString(`//B //Nologo "${vbs}"`);
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -362,7 +375,7 @@ export function buildWindowsTaskXml(script = windowsServiceScriptPath()): string
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
+    <Hidden>true</Hidden>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
     <RestartOnFailure>
@@ -372,7 +385,8 @@ export function buildWindowsTaskXml(script = windowsServiceScriptPath()): string
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${escapedScript}</Command>
+      <Command>wscript.exe</Command>
+      <Arguments>${escapedArgs}</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -425,8 +439,10 @@ function installWindows(): void {
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
   try { stopWindows(); } catch { /* not running */ }
   const script = windowsServiceScriptPath();
+  const vbs = windowsServiceVbsPath();
   writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
-  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
+  writeServiceAssetWithRetry(vbs, buildWindowsServiceVbs(script), "utf8");
+  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(vbs)}`, "utf16le");
   schtasks(buildWindowsSchtasksCreateArgs(script));
   schtasks(["/run", "/tn", TASK]);
   writeServiceInstallState();
@@ -437,6 +453,7 @@ function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]
 function uninstallWindows(): void {
   try { schtasks(["/delete", "/tn", TASK, "/f"]); } catch { /* absent */ }
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
+  if (existsSync(windowsServiceVbsPath())) unlinkSync(windowsServiceVbsPath());
   if (existsSync(windowsTaskXmlPath())) unlinkSync(windowsTaskXmlPath());
 }
 

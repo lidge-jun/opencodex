@@ -65,6 +65,14 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
     expect(launcherSource).toContain("stopRes.status !== 0 || stillHasRuntimeState");
   });
+
+  test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {
+    expect(updateSource).toContain("function updateChildStdio()");
+    expect(updateSource).toContain('process.env.OCX_SERVICE === "1"');
+    expect(updateSource).toContain('return "pipe"');
+    expect(updateSource).toContain("stdio: installStdio");
+    expect(updateSource).toContain("windowsHide: true");
+  });
 });
 
 describe("/healthz identity fields", () => {

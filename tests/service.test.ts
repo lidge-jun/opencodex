@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsServiceVbs, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -184,8 +184,8 @@ describe("Windows service task", () => {
   });
 
   test("builds service-like Task Scheduler XML settings", () => {
-    const script = "C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd";
-    const xml = buildWindowsTaskXml(script);
+    const vbs = "C:\\Users\\a&b\\.opencodex\\opencodex-service.vbs";
+    const xml = buildWindowsTaskXml(vbs);
 
     expect(xml).toContain('<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">');
     expect(xml).toContain("<LogonTrigger>");
@@ -197,13 +197,24 @@ describe("Windows service task", () => {
     expect(xml).toContain("<RestartOnFailure>");
     expect(xml).toContain("<Interval>PT1M</Interval>");
     expect(xml).toContain("<Count>3</Count>");
-    expect(xml).toContain("<Command>C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.cmd</Command>");
+    expect(xml).toContain("<Hidden>true</Hidden>");
+    expect(xml).toContain("<Command>wscript.exe</Command>");
+    expect(xml).toContain('<Arguments>//B //Nologo &quot;C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.vbs&quot;</Arguments>');
+    expect(xml).not.toContain("opencodex-service.cmd</Command>");
+  });
+
+  test("builds a hidden WScript launcher for the service batch", () => {
+    const script = "C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd";
+    expect(buildWindowsServiceVbs(script)).toBe(
+      'CreateObject("WScript.Shell").Run """C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd""", 0, False\r\n',
+    );
   });
 
   test("writes Task Scheduler XML with a UTF-16 BOM for schtasks", async () => {
     const service = await Bun.file(new URL("../src/service.ts", import.meta.url)).text();
 
-    expect(service).toContain('writeServiceAssetWithRetry(windowsTaskXmlPath(), `\\uFEFF${buildWindowsTaskXml(script)}`, "utf16le")');
+    expect(service).toContain('writeServiceAssetWithRetry(windowsTaskXmlPath(), `\\uFEFF${buildWindowsTaskXml(vbs)}`, "utf16le")');
+    expect(service).toContain("writeServiceAssetWithRetry(vbs, buildWindowsServiceVbs(script), \"utf8\")");
   });
 
   test("escapes environment values that would break out of set quotes", () => {
@@ -385,7 +396,9 @@ describe("service lifecycle cleanup ordering", () => {
     const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"), service.indexOf("function serviceDiagnosticsSummary()"));
 
     expect(uninstallWindows).toContain("windowsServiceScriptPath()");
+    expect(uninstallWindows).toContain("windowsServiceVbsPath()");
     expect(uninstallWindows).toContain("windowsTaskXmlPath()");
+    expect(uninstallWindows).toContain("unlinkSync(windowsServiceVbsPath())");
     expect(uninstallWindows).toContain("unlinkSync(windowsTaskXmlPath())");
   });
 

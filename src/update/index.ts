@@ -58,6 +58,23 @@ function npmSpawnTarget(bin: string): { bin: string; shell: boolean } {
   return { bin: "npm.cmd", shell: true };
 }
 
+/**
+ * GUI update worker sets OCX_SERVICE=1 and has stdio ignored — inheriting that for
+ * `npm.cmd` (shell:true) opens stacked visible consoles on Windows. Pipe instead.
+ */
+function updateChildStdio(): "inherit" | "pipe" {
+  if (process.env.OCX_SERVICE === "1") return "pipe";
+  if (typeof process.stdout.isTTY === "boolean" && !process.stdout.isTTY) return "pipe";
+  return "inherit";
+}
+
+function logSpawnOutput(label: string, result: { stdout?: string | Buffer | null; stderr?: string | Buffer | null }): void {
+  const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  if (stdout) console.log(stdout.length > 4000 ? `${label}${stdout.slice(-4000)}` : stdout);
+  if (stderr) console.error(stderr.length > 4000 ? `${label}${stderr.slice(-4000)}` : stderr);
+}
+
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
 export function latestVersion(tag: string): string | null {
   const npm = npmSpawnTarget("npm");
@@ -160,7 +177,13 @@ export async function runUpdate(): Promise<void> {
   // Full `ocx stop` semantics (drain, service stop, restore).
   if (serviceWasInstalled || readPid() || readRuntimePort()) {
     console.log("⏹  Stopping the running proxy before updating...");
-    const stop = spawnSync(process.execPath, [process.argv[1], "stop"], { stdio: "inherit", windowsHide: true });
+    const stopStdio = updateChildStdio();
+    const stop = spawnSync(process.execPath, [process.argv[1], "stop"], {
+      stdio: stopStdio,
+      encoding: stopStdio === "pipe" ? "utf8" : undefined,
+      windowsHide: true,
+    });
+    if (stopStdio === "pipe") logSpawnOutput("", stop);
     if (stop.status !== 0 || readPid() || readRuntimePort()) {
       console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
@@ -178,7 +201,15 @@ export async function runUpdate(): Promise<void> {
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
   const target = npmSpawnTarget(bin);
-  const r = spawnSync(target.bin, cmdArgs, { stdio: "inherit", timeout: 180000, windowsHide: true, shell: target.shell });
+  const installStdio = updateChildStdio();
+  const r = spawnSync(target.bin, cmdArgs, {
+    stdio: installStdio,
+    encoding: installStdio === "pipe" ? "utf8" : undefined,
+    timeout: 180000,
+    windowsHide: true,
+    shell: target.shell,
+  });
+  if (installStdio === "pipe") logSpawnOutput("", r);
   if (r.status === 0) {
     console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
     // Re-bake the bundled Bun path into the Codex autostart shim on every
@@ -197,7 +228,13 @@ export async function runUpdate(): Promise<void> {
     // launchd/schtasks/systemd user isn't left with the background proxy down.
     if (serviceWasInstalled) {
       console.log("🔁 Reinstalling the background service with the updated files...");
-      const svc = spawnSync(process.execPath, [process.argv[1], "service", "install"], { stdio: "inherit", windowsHide: true });
+      const svcStdio = updateChildStdio();
+      const svc = spawnSync(process.execPath, [process.argv[1], "service", "install"], {
+        stdio: svcStdio,
+        encoding: svcStdio === "pipe" ? "utf8" : undefined,
+        windowsHide: true,
+      });
+      if (svcStdio === "pipe") logSpawnOutput("", svc);
       if (svc.status !== 0) console.warn("⚠️  Service refresh failed — run 'ocx service install' manually.");
     } else {
       console.log("Restart the proxy:  ocx start");
