@@ -855,6 +855,22 @@ export function readAlivePid(): number | null {
   }
 }
 
+/**
+ * Full identity check of a KNOWN candidate pid (alive + ocx-start command line).
+ * Companion to {@link readAlivePid}: liveness discovery may be cheap, but any pid
+ * handed to a destructive caller must pass this check — and must equal the candidate
+ * it was asked about, so a pidfile rewrite between discovery and verification can
+ * never swap in a different process (TOCTOU guard).
+ */
+export function verifyPidIdentity(candidatePid: number): number | null {
+  try {
+    process.kill(candidatePid, 0);
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
+  }
+  return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
+}
+
 function readProcessCommandLine(pid: number): string | undefined {
   try {
     if (process.platform === "win32") {

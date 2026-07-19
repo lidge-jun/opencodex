@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   checkForUpdate,
   restartCommand,
+  restartAfterUpdateForTests,
   startUpdateJob,
   updateExecutionCommand,
   updateJobPath,
@@ -107,6 +108,39 @@ describe("GUI update execution decisions", () => {
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs", 10100).args).toEqual([
       "/pkg/bin/ocx.mjs", "service", "install",
     ]);
+  });
+
+  test("restart waits on the captured pre-update port unconditionally and pins the spawn to it", async () => {
+    // The stop-first update flow clears pid/runtime state before restartAfterUpdate runs,
+    // so the wait must fire even with no readable pid — driven here via the io seam.
+    const waited: Array<{ port: number; hostname: string }> = [];
+    const spawned: Array<{ port?: number }> = [];
+    const job: UpdateJobState = {
+      id: "restart-io",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.6.17",
+      latestVersion: "2.6.18",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 12345, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => false, // drive the proxy-mode branch regardless of host state
+      waitForPort: async (port, hostname) => {
+        waited.push({ port, hostname: hostname ?? "" });
+        return true;
+      },
+      spawnStart: (_job, _installer, port) => {
+        spawned.push({ port });
+      },
+    });
+    expect(waited).toEqual([{ port: 12345, hostname: "127.0.0.1" }]);
+    expect(spawned).toEqual([{ port: 12345 }]);
   });
 
   test("a running job prevents a second update job", () => {

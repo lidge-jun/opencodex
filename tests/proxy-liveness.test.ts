@@ -147,4 +147,48 @@ describe("findLiveProxy", () => {
     // without a pid expectation and adopts the reported live pid instead.
     expect(live).toEqual({ pid: 9999, port: 58195 });
   });
+
+  test("a pidless legacy healthz never promotes an unverified cheap pid to a kill target", async () => {
+    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 }; // no pid in body
+    const live = await findLiveProxy({
+      readPidFn: () => 1111, // cheap discovery says alive — but identity is unverified
+      verifyPidFn: () => null, // full cmdline identity check fails (reused pid)
+      readRuntimeFn: () => ({ port: 58195 }),
+      configFn: () => ({ port: 10100 }),
+      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
+    });
+
+    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined });
+  });
+
+  test("a pidless legacy healthz returns the cheap pid once full identity verification echoes it", async () => {
+    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 };
+    const verified: number[] = [];
+    const live = await findLiveProxy({
+      readPidFn: () => 1111,
+      verifyPidFn: candidate => {
+        verified.push(candidate);
+        return candidate; // identity confirmed for the exact candidate
+      },
+      readRuntimeFn: () => ({ port: 58195 }),
+      configFn: () => ({ port: 10100 }),
+      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
+    });
+
+    expect(verified).toEqual([1111]);
+    expect(live).toEqual({ pid: 1111, port: 58195, hostname: undefined });
+  });
+
+  test("a verifier answering with a DIFFERENT pid than the candidate is rejected (TOCTOU guard)", async () => {
+    const legacyBody = { status: "ok", version: "2.6.16", uptime: 5 };
+    const live = await findLiveProxy({
+      readPidFn: () => 1111,
+      verifyPidFn: () => 2222, // pidfile rewritten between discovery and verification
+      readRuntimeFn: () => ({ port: 58195 }),
+      configFn: () => ({ port: 10100 }),
+      fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
+    });
+
+    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined });
+  });
 });

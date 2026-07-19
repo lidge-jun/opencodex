@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWriteFile, getConfigDir, loadConfig, readPid } from "../config";
+import { atomicWriteFile, getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
 import { killProxy } from "../lib/process-control";
 import { waitForPortAvailable } from "../server/ports";
 import { isServiceInstalled } from "../service";
@@ -284,11 +284,25 @@ function spawnDetachedStart(job: UpdateJobState, installer: Installer, port?: nu
   child.unref();
 }
 
-async function restartAfterUpdate(job: UpdateJobState): Promise<void> {
-  const serviceInstalled = isServiceInstalled();
+/** Test seam: the wait/spawn pair is injectable so the restart path is verifiable. */
+export interface RestartIo {
+  waitForPort?: typeof waitForPortAvailable;
+  spawnStart?: (job: UpdateJobState, installer: Installer, port?: number) => void;
+  serviceInstalledFn?: () => boolean;
+}
+
+async function restartAfterUpdate(
+  job: UpdateJobState,
+  captured?: { port: number; hostname: string },
+  io: RestartIo = {},
+): Promise<void> {
+  const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
   const config = loadConfig();
-  const port = config.port ?? 10100;
-  const hostname = config.hostname ?? "127.0.0.1";
+  // The stop-first update flow has already cleared pid/runtime state by the time we run,
+  // so the pre-update capture (taken before the update command) is the authoritative
+  // port to wait on; config is only the cold-start fallback.
+  const port = captured?.port ?? config.port ?? 10100;
+  const hostname = captured?.hostname ?? config.hostname ?? "127.0.0.1";
   const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port);
   if (serviceInstalled) {
     const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
@@ -302,20 +316,39 @@ async function restartAfterUpdate(job: UpdateJobState): Promise<void> {
   if (pid) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
     killProxy(pid);
-    // Windows taskkill can leave the listen socket busy briefly; wait only after a real
-    // kill so cold restarts are not charged a multi-second prefer-wait.
-    const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 2000, intervalMs: 25 });
-    if (!freed) {
-      updateJob(job, {}, `Port ${port} still busy after stop; starting with --port ${port} anyway.`);
-    }
   }
-  spawnDetachedStart(job, job.installer, port);
+  // The old socket can stay busy briefly after stop (Windows taskkill drain, or the
+  // stop-first update path that already killed the proxy before we got here) — wait
+  // unconditionally on the captured port so the pinned start does not race the drain.
+  const waitFn = io.waitForPort ?? waitForPortAvailable;
+  const freed = await waitFn(port, hostname, { timeoutMs: 2000, intervalMs: 25 });
+  if (!freed) {
+    updateJob(job, {}, `Port ${port} still busy after stop; starting with --port ${port} anyway.`);
+  }
+  (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port);
+}
+
+/** Exposed for tests: drives the non-service restart path with injected io. */
+export function restartAfterUpdateForTests(
+  job: UpdateJobState,
+  captured: { port: number; hostname: string },
+  io: RestartIo,
+): Promise<void> {
+  return restartAfterUpdate(job, captured, io);
 }
 
 export async function runGuiUpdateWorker(jobId: string, channel: Channel, restart: boolean): Promise<void> {
   let job = readUpdateJob(jobId);
   const check = checkForUpdate(channel);
   const now = new Date().toISOString();
+  // Capture the live listen target BEFORE the update command runs: the stop-first update
+  // flow clears pid/runtime state, so this is the last moment the real port is knowable.
+  const rt = readRuntimePort();
+  const preUpdateConfig = loadConfig();
+  const captured = {
+    port: rt?.port ?? preUpdateConfig.port ?? 10100,
+    hostname: rt?.hostname ?? preUpdateConfig.hostname ?? "127.0.0.1",
+  };
   if (!job) {
     job = {
       id: jobId,
@@ -377,7 +410,7 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
 
     if (restart) {
       job = updateJob(job, { status: "restarting" }, "Update installed. Restarting proxy...");
-      await restartAfterUpdate(job);
+      await restartAfterUpdate(job, captured);
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested.");
       return;
     }
