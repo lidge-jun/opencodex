@@ -64,13 +64,11 @@ function runIcacls(targetPath: string, directory: boolean): void {
     throw new Error("Cannot determine current Windows user for ACL hardening");
   }
 
-  // windowsHide: console-subsystem tools (icacls) otherwise flash a visible window per call.
   // Step 1: disable inheritance and remove inherited ACEs
   execFileSync("icacls.exe", [targetPath, "/inheritance:r"], {
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5000,
     shell: false,
-    windowsHide: true,
   });
 
   // Step 2: remove broad explicit grants using stable SIDs (not localized names).
@@ -84,7 +82,6 @@ function runIcacls(targetPath: string, directory: boolean): void {
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5000,
     shell: false,
-    windowsHide: true,
   });
 
   // Step 3: grant current user full control.
@@ -93,7 +90,6 @@ function runIcacls(targetPath: string, directory: boolean): void {
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5000,
     shell: false,
-    windowsHide: true,
   });
 }
 
