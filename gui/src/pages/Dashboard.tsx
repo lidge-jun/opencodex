@@ -117,6 +117,16 @@ function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBa
   return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
 }
 
+/** Restore focus to the opener without painting :focus-visible (avoids a sticky ring after mouse close). */
+function focusTriggerQuietly(trigger: HTMLButtonElement | null) {
+  if (!trigger) return;
+  try {
+    trigger.focus({ preventScroll: true, focusVisible: false });
+  } catch {
+    trigger.focus({ preventScroll: true });
+  }
+}
+
 function useModalDialog(open: boolean, triggerRef: RefObject<HTMLButtonElement | null>) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
@@ -130,13 +140,13 @@ function useModalDialog(open: boolean, triggerRef: RefObject<HTMLButtonElement |
     }
 
     if (dialog.open) dialog.close();
-    triggerRef.current?.focus();
+    focusTriggerQuietly(triggerRef.current);
   }, [open, triggerRef]);
 
   useEffect(() => () => {
     const dialog = dialogRef.current;
     if (dialog?.open) dialog.close();
-    triggerRef.current?.focus();
+    focusTriggerQuietly(triggerRef.current);
   }, [triggerRef]);
 
   return dialogRef;

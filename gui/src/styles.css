@@ -628,6 +628,20 @@ select.input { appearance: none; }
 /* ---- modal ---- */
 /* Liquid-glass modal: heavy tint + blur so background content is unreadable */
 .modal-overlay { position: fixed; inset: 0; background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82)); backdrop-filter: blur(40px) saturate(1.2); -webkit-backdrop-filter: blur(40px) saturate(1.2); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; z-index: 50; }
+/* Native <dialog>.showModal() UA styles (solid border + ::backdrop) stack on top of
+   .modal-overlay and produce a white frame + double dim. Reset when the dialog IS the overlay. */
+dialog.modal-overlay {
+  border: none;
+  margin: 0;
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+dialog.modal-overlay::backdrop {
+  background: transparent;
+}
 .modal-card { background: color-mix(in oklab, canvas 92%, transparent); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; width: 100%; max-width: 520px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.18); max-height: 84vh; overflow-y: auto; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .modal-head h3 { font-size: var(--text-subtitle); }
