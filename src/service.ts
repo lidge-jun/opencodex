@@ -342,10 +342,12 @@ export function buildWindowsSchtasksCreateArgs(script = windowsServiceScriptPath
 /**
  * Hidden launcher for the service `.cmd`. Task Scheduler Exec of a console-subsystem
  * batch paints a visible window; WScript Run with window style 0 does not.
+ * WaitOnReturn must be True so the scheduled task stays Running while the wrapper
+ * (and proxy) are alive — False returns immediately and Task Scheduler flips to Ready.
  */
 export function buildWindowsServiceVbs(script = windowsServiceScriptPath()): string {
   const escaped = script.replace(/"/g, '""');
-  return `CreateObject("WScript.Shell").Run """${escaped}""", 0, False\r\n`;
+  return `CreateObject("WScript.Shell").Run """${escaped}""", 0, True\r\n`;
 }
 
 export function buildWindowsTaskXml(vbs = windowsServiceVbsPath()): string {

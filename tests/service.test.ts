@@ -206,7 +206,7 @@ describe("Windows service task", () => {
   test("builds a hidden WScript launcher for the service batch", () => {
     const script = "C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd";
     expect(buildWindowsServiceVbs(script)).toBe(
-      'CreateObject("WScript.Shell").Run """C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd""", 0, False\r\n',
+      'CreateObject("WScript.Shell").Run """C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd""", 0, True\r\n',
     );
   });
 
