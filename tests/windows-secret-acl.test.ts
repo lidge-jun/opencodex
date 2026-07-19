@@ -208,3 +208,11 @@ describe("diagnostics sanitization contract", () => {
     }
   });
 });
+
+describe("Windows icacls spawn contract", () => {
+  test("icacls spawn uses windowsHide so GUI/proxy spawns do not hang", async () => {
+    const src = await Bun.file(new URL("../src/lib/windows-secret-acl.ts", import.meta.url)).text();
+    expect(src).toContain("windowsHide: true");
+    expect(src).toContain("Bun.spawnSync");
+  });
+});

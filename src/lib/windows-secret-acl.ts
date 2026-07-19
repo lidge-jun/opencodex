@@ -18,12 +18,14 @@
  *   hardenSecretDir  — same contract for directories.
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { env, platform } from "node:process";
 
 const hardenedDirectories = new Set<string>();
 const hardenedPaths = new Set<string>();
+
+/** Serialize icacls — concurrent hardens on auth.json + dir during OAuth can stall until timeout. */
+let icaclsHeld = false;
 
 export interface HardenResult {
   ok: boolean;
@@ -48,15 +50,81 @@ function currentWindowsUser(): string | undefined {
   return domain ? `${domain}\\${username}` : username;
 }
 
+function errorCode(error: unknown): string {
+  return error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return errorCode(error) === "ETIMEDOUT";
+}
+
+/** ACL failures that should not block auth/config writes (chmod still applied by caller). */
+function isSoftFailAclError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ETIMEDOUT" || code === "EPERM" || code === "EACCES";
+}
+
+/**
+ * Run one icacls argv via Bun.spawnSync (windowsHide + timeout).
+ * Node execFileSync has hung under the GUI/proxy even with windowsHide.
+ */
+function icaclsOnce(args: string[], timeoutMs: number): void {
+  const result = Bun.spawnSync(["icacls.exe", ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  if (result.success) return;
+
+  const err = new Error(`icacls exited ${result.exitCode ?? "null"}`) as NodeJS.ErrnoException;
+  // Bun sets exitedDueToTimeout when the timeout kills the child.
+  err.code = result.exitedDueToTimeout ? "ETIMEDOUT" : "EPERM";
+  throw err;
+}
+
+function icaclsWithRetry(args: string[]): void {
+  const attempts = 3;
+  const timeoutMs = 15_000;
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      icaclsOnce(args, timeoutMs);
+      return;
+    } catch (error) {
+      last = error;
+      if (!isTimeoutError(error) || i === attempts - 1) throw error;
+      Bun.sleepSync(100 * (i + 1));
+    }
+  }
+  throw last;
+}
+
+function withIcaclsLock(fn: () => void): void {
+  const started = Date.now();
+  while (icaclsHeld) {
+    if (Date.now() - started > 60_000) {
+      const err = new Error("icacls lock timeout") as NodeJS.ErrnoException;
+      err.code = "ETIMEDOUT";
+      throw err;
+    }
+    Bun.sleepSync(25);
+  }
+  icaclsHeld = true;
+  try {
+    fn();
+  } finally {
+    icaclsHeld = false;
+  }
+}
+
 /**
  * Run icacls to harden a single file system entry.
  * - Disables inheritance (keeps nothing: /inheritance:r)
  * - Grants the current user Full Control
  *
- * We do NOT use a shell string; all arguments are passed as an array so no
- * shell injection is possible even for paths with unusual characters.
- *
- * Throws the raw child_process error on failure (caller sanitizes).
+ * Throws the raw child_process-like error on failure (caller sanitizes).
  */
 function runIcacls(targetPath: string, directory: boolean): void {
   const user = currentWindowsUser();
@@ -64,32 +132,28 @@ function runIcacls(targetPath: string, directory: boolean): void {
     throw new Error("Cannot determine current Windows user for ACL hardening");
   }
 
-  // Step 1: disable inheritance and remove inherited ACEs
-  execFileSync("icacls.exe", [targetPath, "/inheritance:r"], {
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5000,
-    shell: false,
-  });
+  withIcaclsLock(() => {
+    // Step 1: disable inheritance and remove inherited ACEs
+    icaclsWithRetry([targetPath, "/inheritance:r"]);
 
-  // Step 2: remove broad explicit grants using stable SIDs (not localized names).
-  execFileSync("icacls.exe", [
-    targetPath,
-    "/remove:g",
-    "*S-1-1-0",
-    "*S-1-5-11",
-    "*S-1-5-32-545",
-  ], {
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5000,
-    shell: false,
-  });
+    // Step 2: remove broad explicit grants using stable SIDs (not localized names).
+    // Missing ACEs can yield a non-zero exit — treat as best-effort, not fatal.
+    try {
+      icaclsWithRetry([
+        targetPath,
+        "/remove:g",
+        "*S-1-1-0",
+        "*S-1-5-11",
+        "*S-1-5-32-545",
+      ]);
+    } catch (error) {
+      if (isTimeoutError(error)) throw error;
+      // ACE already absent / not granted — continue to grant.
+    }
 
-  // Step 3: grant current user full control.
-  const grant = directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
-  execFileSync("icacls.exe", [targetPath, "/grant:r", grant], {
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5000,
-    shell: false,
+    // Step 3: grant current user full control.
+    const grant = directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
+    icaclsWithRetry([targetPath, "/grant:r", grant]);
   });
 }
 
@@ -101,7 +165,7 @@ function runIcacls(targetPath: string, directory: boolean): void {
 function sanitizeDiagnostics(error: unknown): string {
   // We do not expose the raw error message or any path-like fragments.
   // Just describe what failed generically.
-  const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+  const code = errorCode(error);
   const codePart = code ? ` (${code})` : "";
   return `ACL hardening failed${codePart} — filesystem may not support per-user NTFS ACLs`;
 }
@@ -133,6 +197,12 @@ export function hardenSecretPath(targetPath: string, opts: HardenOptions): Harde
   } catch (err) {
     const diagnostics = sanitizeDiagnostics(err);
     if (opts.required) {
+      // Last-resort: do not block OAuth/login/token refresh when icacls fails
+      // (timeout or filesystem ACL unsupported). chmod still applied by caller.
+      if (isSoftFailAclError(err)) {
+        console.warn(`[opencodex] ${diagnostics} — continuing without NTFS ACL harden`);
+        return { ok: false, diagnostics };
+      }
       throw new Error(diagnostics);
     }
     return { ok: false, diagnostics };
@@ -166,6 +236,10 @@ export function hardenSecretDir(targetPath: string, opts: HardenOptions): Harden
   } catch (err) {
     const diagnostics = sanitizeDiagnostics(err);
     if (opts.required) {
+      if (isSoftFailAclError(err)) {
+        console.warn(`[opencodex] ${diagnostics} — continuing without NTFS ACL harden`);
+        return { ok: false, diagnostics };
+      }
       throw new Error(diagnostics);
     }
     return { ok: false, diagnostics };
