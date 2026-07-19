@@ -73,10 +73,14 @@ export function isClientClosedMessage(text: string): boolean {
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
+  // Preserve explicit cancel types used by compact/combo JSON errors; unify message-inferred
+  // client closes (web-search abort text) onto client_closed_request for /api/logs.
+  if (type === "client_cancelled") {
+    return { message, type: "client_cancelled", code: "client_cancelled" };
+  }
   if (
     status === 499 ||
     type === "client_closed_request" ||
-    type === "client_cancelled" ||
     isClientClosedMessage(text)
   ) {
     return { message, type: "invalid_request_error", code: "client_closed_request" };

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   adapterFailureFromMessage,
+  classifyError,
   parseRetryAfterFromMessage,
 } from "../src/lib/errors";
 
@@ -78,6 +79,13 @@ describe("adapterFailureFromMessage", () => {
     expect(adapterFailureFromMessage("search request canceled by client")).toMatchObject({
       httpStatus: 499,
       error: { code: "client_closed_request" },
+    });
+  });
+
+  test("preserves explicit client_cancelled JSON error type from compact/combo paths", () => {
+    expect(classifyError(499, "client_cancelled", "Client cancelled request")).toMatchObject({
+      type: "client_cancelled",
+      code: "client_cancelled",
     });
   });
 });
