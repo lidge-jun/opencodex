@@ -78,7 +78,9 @@ export default function ProviderSettings({
   };
 
   const saveRef = useRef(save);
-  saveRef.current = save;
+  useEffect(() => {
+    saveRef.current = save;
+  });
   useEffect(() => {
     if (!onRegisterSave) return;
     onRegisterSave(() => saveRef.current());

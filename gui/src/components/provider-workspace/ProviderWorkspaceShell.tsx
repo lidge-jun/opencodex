@@ -89,37 +89,45 @@ export default function ProviderWorkspaceShell({
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>({});
+  const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
-  const modelsRequestIdRef = useRef(0);
 
   const sections = useMemo(
     () => buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers)),
     [providers],
   );
 
-  const loadModels = useCallback(() => {
-    const requestId = ++modelsRequestIdRef.current;
-    setModelsLoading(true);
-    fetch(`${apiBase}/api/selected-models`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
-      .then(data => {
-        if (requestId !== modelsRequestIdRef.current) return;
-        setModelCounts(countAvailableModels(data));
-        setAvailableModels(parseAvailableModels(data));
-        setSelectedModels(parseSelectedModels(data));
-        setModelsLoadFailed(false);
-        setModelsLoading(false);
-      })
-      .catch(() => {
-        if (requestId !== modelsRequestIdRef.current) return;
-        setModelsLoadFailed(true);
-        setModelsLoading(false);
-      });
-  }, [apiBase]);
+  const retryModels = useCallback(() => {
+    setModelsLoadEpoch(epoch => epoch + 1);
+  }, []);
 
   useEffect(() => {
-    loadModels();
-  }, [loadModels, modelsRefreshToken]);
+    // Deferred load (matches Models/Usage/ClaudeCode): avoids synchronous setState
+    // inside the effect, per the react-hooks/set-state-in-effect lint gate.
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setModelsLoading(true);
+      fetch(`${apiBase}/api/selected-models`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+        .then(data => {
+          if (cancelled) return;
+          setModelCounts(countAvailableModels(data));
+          setAvailableModels(parseAvailableModels(data));
+          setSelectedModels(parseSelectedModels(data));
+          setModelsLoadFailed(false);
+          setModelsLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setModelsLoadFailed(true);
+          setModelsLoading(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [apiBase, modelsRefreshToken, modelsLoadEpoch]);
 
   useEffect(() => {
     let cancelled = false;
@@ -415,7 +423,7 @@ export default function ProviderWorkspaceShell({
             selectedModels: selectedModels[selectedItem.name] ?? [],
             modelsLoading,
             modelsLoadFailed,
-            onRetryModels: loadModels,
+            onRetryModels: retryModels,
           }) ?? (
             <div className="pws-detail-placeholder">
               <h3>{formatProviderDisplayName(selectedItem.name)}</h3>

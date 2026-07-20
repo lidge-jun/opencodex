@@ -33,7 +33,7 @@ export default function ProviderModels({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyResetRef = useRef<number | null>(null);
   const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
-  const configuredModels = item.models ?? [];
+  const configuredModels = useMemo(() => item.models ?? [], [item.models]);
   const models = useMemo(
     () => filterModels(availableModels, item.defaultModel, query, configuredModels),
     [availableModels, item.defaultModel, query, configuredModels],
