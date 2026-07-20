@@ -235,8 +235,9 @@ export function applyActiveAccountReauth(
   const needsSetup = [...sections.needsSetup];
   for (const item of sections.ready) {
     if (demote.has(item.name)) {
-      const { tier: _tier, ...rest } = item;
-      needsSetup.push({ ...rest, activeNeedsReauth: true });
+      const demoted: WorkspaceItem = { ...item, activeNeedsReauth: true };
+      delete demoted.tier;
+      needsSetup.push(demoted);
     } else {
       stillReady.push(item);
     }

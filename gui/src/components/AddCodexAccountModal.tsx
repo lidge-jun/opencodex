@@ -11,6 +11,12 @@ export default function AddCodexAccountModal({
   reauthAccountId?: string;
 }) {
   const t = useT();
+  const [step, setStep] = useState<"pick" | "oauth-waiting">(reauthAccountId ? "oauth-waiting" : "pick");
+  const [id, setId] = useState("");
+  const [error, setError] = useState("");
+  const [authUrl, setAuthUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
   const aliveRef = useRef(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -19,8 +25,15 @@ export default function AddCodexAccountModal({
   const startedReauthRef = useRef<string | null>(null);
   const onAddedRef = useRef(onAdded);
   const onCloseRef = useRef(onClose);
-  onAddedRef.current = onAdded;
-  onCloseRef.current = onClose;
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onAddedRef.current = onAdded;
+  }, [onAdded]);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -55,15 +68,6 @@ export default function AddCodexAccountModal({
       }).catch(() => {});
     }
   }, [apiBase]);
-
-  const [step, setStep] = useState<"pick" | "oauth-waiting">(reauthAccountId ? "oauth-waiting" : "pick");
-  const [id, setId] = useState("");
-  const [error, setError] = useState("");
-  const [authUrl, setAuthUrl] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   const closeModal = useCallback(() => {
     if (step === "oauth-waiting") void cancelLogin();
