@@ -12,16 +12,23 @@ export const ANTIGRAVITY_REQUEST_UA = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT 
 
 /**
  * Whether a stored `OcxToolCall.thoughtSignature` is a REAL upstream Gemini signature versus a
- * synthetic Responses item id (`fc_...`, `call_...`, `rs_...`, etc) that the bridge/parser stashes
- * on the field. Only real signatures may be forwarded to Gemini/Antigravity — sending a synthetic
- * id as `thoughtSignature` breaks multi-turn reasoning continuity (upstream rejects it). Real
- * signatures are opaque base64-ish blobs with no Responses-id prefix.
+ * foreign id that must not be forwarded to Gemini/Antigravity.
+ *
+ * Foreign ids that have 400'd Antigravity (`TYPE_BYTES` / Base64 decoding failed) include:
+ * - Responses/bridge item ids: `fc_...`, `ctc_...` (custom_tool_call), `call_...`, `rs_...`, …
+ * - Anthropic tool-use ids: `toolu_...`
+ *
+ * Only real signatures may be forwarded — sending a foreign id as `thoughtSignature` breaks
+ * multi-turn reasoning continuity. Real signatures are opaque base64-ish blobs with no
+ * Responses/Anthropic id prefix.
+ *
+ * Note: do NOT reject a bare `sig_` / `sig-` prefix — existing Gemini replay fixtures and some
+ * upstream blobs use that shape; a deny-list entry for `sig` would drop valid continuity tokens.
  */
 export function isLikelyRealThoughtSignature(sig: string | undefined): boolean {
   if (typeof sig !== "string" || sig.length < 16) return false;
-  // Reject synthetic Responses/tool-call ids in both `_` and `-` separated spellings
-  // (e.g. `fc_...`, `call_...`, `function-call-...`, `tool-call-...`).
-  if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(sig)) return false;
+  // Reject synthetic Responses/tool-call ids and Anthropic tool-use ids (`_` or `-` separators).
+  if (/^(fc|ctc|call|msg|rs|resp|reasoning|item|ws|toolu|tool|func|function)[-_]/i.test(sig)) return false;
   // Real Gemini thought signatures are opaque base64/base64url blobs: only [A-Za-z0-9+/_=-].
   // Anything containing other characters (or whitespace) is not a real signature.
   return /^[A-Za-z0-9+/_=-]+$/.test(sig);
