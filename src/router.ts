@@ -253,9 +253,14 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
     if (hasOwnProvider(config.providers, provName)) {
       const prov = config.providers[provName];
       if (prov.disabled === true) throw new Error(`Provider is disabled: ${provName}`);
+      const known = knownModelIdsForProvider(provName, prov);
+      // Self-namespaced native id — the vendor segment equals the provider id, so the FULL ref is
+      // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
+      // remainder, which would send a bare `auto` the upstream cannot resolve.
+      if (known.includes(modelId)) return routeResult(provName, prov, modelId);
       // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
       // slash id via an exact known-id lookup; raw full-slash selectors keep working.
-      return routeResult(provName, prov, decodeRoutedModelId(modelId.slice(slash + 1), knownModelIdsForProvider(provName, prov)));
+      return routeResult(provName, prov, decodeRoutedModelId(modelId.slice(slash + 1), known));
     }
   }
 

@@ -572,18 +572,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "deepseek/deepseek-v4-pro",
       "orcarouter/auto",
     ],
-    // gpt-5 family and Claude reasoning models reject `temperature` upstream (400). This is an
-    // exact-id list, so it covers the seeded ids only; live-discovered gpt-5.x reasoning variants
-    // would need their own entries (pending a live-catalog enumeration).
-    noTemperatureModels: ["openai/gpt-5.5", "anthropic/claude-opus-4.8"],
     // Text-only models → the vision sidecar describes images instead.
     noVisionModels: ["deepseek/deepseek-v4-pro"],
-    // OrcaRouter's chat/completions accepts reasoning_effort low|medium|high for gpt-5.5, so cap the
-    // advertised ladder there — mapReasoningEffort clamps xhigh/max requests down to high. DeepSeek
-    // V4 mirrors the direct-DeepSeek wiring for the same upstream model (thinking-effort map +
-    // reasoning_content history replay) so namespaced selections behave identically.
+    // Reasoning/temperature behavior verified live 2026-07-20 against api.orcarouter.ai:
+    // - openai/gpt-5.5 accepts reasoning_effort none|low|medium|high|xhigh but rejects `max` (400),
+    //   so advertise up to xhigh and let mapReasoningEffort clamp a `max`/`ultra` request to xhigh.
+    // - deepseek/deepseek-v4-pro mirrors the direct-DeepSeek wiring (thinking-effort map +
+    //   reasoning_content history replay) so the namespaced selection behaves identically.
+    // - temperature is accepted by every seeded model (gpt-5.5, claude-opus-4.8, deepseek-v4-pro all
+    //   returned 200), so no noTemperatureModels entry is warranted here.
     modelReasoningEfforts: {
-      "openai/gpt-5.5": ["low", "medium", "high"],
+      "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
       "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
     },
     modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
