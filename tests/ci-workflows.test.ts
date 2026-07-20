@@ -171,7 +171,9 @@ describe("GitHub Actions hardening", () => {
     expect(guiPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
-    // The prepush chain runs the doctor last, after the gating steps.
+    expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
+    // Gating steps (typecheck, eslint, tests, privacy) run before advisory React Doctor.
+    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });
