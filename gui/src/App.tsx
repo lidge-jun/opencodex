@@ -35,6 +35,27 @@ function hashBelongsToPage(rawHash: string, page: Page): boolean {
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
+const PROVIDERS_VIEW_KEY = "ocx-providers-view";
+
+function readProvidersViewPreference(): "classic" | "workspace" {
+  try {
+    return localStorage.getItem(PROVIDERS_VIEW_KEY) === "workspace" ? "workspace" : "classic";
+  } catch {
+    return "classic";
+  }
+}
+
+function writeProvidersViewPreference(view: "classic" | "workspace"): void {
+  try {
+    localStorage.setItem(PROVIDERS_VIEW_KEY, view);
+  } catch {
+    /* ignore quota / private-mode failures */
+  }
+}
+
+function providersHashForPage(): string {
+  return readProvidersViewPreference() === "workspace" ? "providers/workspace" : "providers";
+}
 
 const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
@@ -84,8 +105,21 @@ export default function App() {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       setNavOpen(false);
       if (!hashBelongsToPage(rawHash, nextPage)) {
-        window.location.hash = nextPage;
+        window.location.hash = nextPage === "providers" ? providersHashForPage() : nextPage;
         return;
+      }
+      // Preference is source of truth for Classic/Workspace. Bare #providers must not
+      // wipe a saved workspace choice (that regressed when leaving Providers and returning).
+      if (nextPage === "providers") {
+        const preferred = readProvidersViewPreference();
+        if (rawHash === "providers/workspace") {
+          writeProvidersViewPreference("workspace");
+        } else if (rawHash === "providers" && preferred === "workspace") {
+          window.location.hash = "providers/workspace";
+          return;
+        } else if (rawHash === "providers") {
+          writeProvidersViewPreference("classic");
+        }
       }
       setPageState(nextPage);
     };
@@ -95,6 +129,11 @@ export default function App() {
 
   useEffect(() => {
     const rawHash = window.location.hash.replace(/^#\/?/, "");
+    if (page === "providers") {
+      const wanted = providersHashForPage();
+      if (rawHash !== wanted) window.location.hash = wanted;
+      return;
+    }
     if (!hashBelongsToPage(rawHash, page)) {
       window.location.hash = page;
     }
@@ -224,7 +263,12 @@ export default function App() {
         <nav>
           {NAV.map(({ id, tkey, Icon }) => (
             <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
-              onClick={() => { setPageState(id); setNavOpen(false); }}
+              onClick={() => {
+                // Always sync the hash on nav click so Providers restores Classic/Workspace preference.
+                window.location.hash = id === "providers" ? providersHashForPage() : id;
+                setPageState(id);
+                setNavOpen(false);
+              }}
               aria-current={page === id ? "page" : undefined}>
               <Icon /> {t(tkey)}
             </button>

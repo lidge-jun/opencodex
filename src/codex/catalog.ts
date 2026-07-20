@@ -1266,7 +1266,12 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     const staleCursor = getStaleCached(name);
     return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
   }
-  if (prov.authMode === "oauth" && !apiKey) return []; // not logged in → skip
+  if (prov.authMode === "oauth" && !apiKey) {
+    // No usable token (logged out, or account marked needsReauth). Still surface the
+    // configured static catalog so the GUI Models tab / rail counts are not empty —
+    // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
+    return configured;
+  }
   if (prov.liveModels === false) {
     return configured;
   }

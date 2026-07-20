@@ -3,15 +3,24 @@
 .pws-dashboard {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
   padding: 4px 0;
-  max-width: 680px;
+  max-width: 100%;
 }
 
 .pws-dashboard-header {
   display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pws-dashboard-header-text {
+  display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .pws-dashboard-title {
@@ -36,7 +45,7 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 12px 22px;
+  padding: 10px 20px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-secondary, var(--bg));
@@ -59,11 +68,20 @@
   letter-spacing: 0.02em;
 }
 
+/* Rate Limits | Recently Used side-by-side (no vertical stack / scroll) */
+.pws-dashboard-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
 /* Sections (Rate Limits / Recently Used) */
 .pws-dashboard-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .pws-dashboard-section-title {
@@ -80,7 +98,7 @@
 .pws-dashboard-rows {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .pws-dashboard-row {
@@ -88,7 +106,7 @@
   grid-template-columns: 22px 1fr auto auto;
   align-items: center;
   gap: 8px;
-  padding: 8px 6px;
+  padding: 6px 6px;
   border-radius: 6px;
   border: none;
   background: none;
@@ -153,10 +171,24 @@
 .pws-dashboard-row-bars {
   grid-column: 1 / -1;
   padding-left: 30px;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
-/* Responsive: stack cards on narrow viewports */
+/* Narrow main pane / mobile: stack columns */
+@container provider-workspace (max-width: 920px) {
+  .pws-dashboard-columns {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+
+@media (max-width: 900px) {
+  .pws-dashboard-columns {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+
 @media (max-width: 600px) {
   .pws-dashboard-summary {
     flex-direction: column;

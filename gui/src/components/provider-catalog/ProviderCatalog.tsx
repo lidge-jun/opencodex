@@ -15,12 +15,14 @@ import {
 /** How many rows the home view shows per tab before "browse all". */
 const HOME_SLOT_COUNT = 6;
 
-export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string };
+export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
 export type AccountLoginRow = {
   id: string;
   label: string;
-  kind: "oauth" | "key";
+  kind: "oauth" | "key" | "codex";
   statusLabel?: string;
+  /** Optional deep-link for codex/account-pool management. */
+  href?: string;
 };
 
 export type CatalogTier = "accounts" | "free" | "paid";
@@ -115,8 +117,7 @@ export default function ProviderCatalog({
 
       {tier === "accounts" && (
         <div className="provider-catalog-accounts-hint muted text-label">
-          {t("modal.accountsHint")}{" "}
-          <a href="#codex-auth">{t("modal.accountsCodexAuthLink")}</a>
+          {t("modal.accountsHint")}
         </div>
       )}
 
@@ -134,7 +135,7 @@ export default function ProviderCatalog({
         {presetsLoading && rows.length === 0 && (
           <div className="muted text-control provider-catalog-empty">{t("modal.catalogLoading")}</div>
         )}
-        {rows.map(p => (
+        {tier !== "accounts" && rows.map(p => (
           <button key={p.id} className="list-row" onClick={() => onSelectPreset(p)}>
             <div>
               <div className="title">{p.label}</div>
@@ -143,25 +144,36 @@ export default function ProviderCatalog({
             <div className="provider-catalog-badges">{badges(p)}</div>
           </button>
         ))}
-        {!presetsLoading && rows.length === 0 && (
+        {tier !== "accounts" && !presetsLoading && rows.length === 0 && (
           <div className="muted text-control provider-catalog-empty">{t("modal.noMatch")}</div>
         )}
 
         {tier === "accounts" && accountRows.map(row => {
           const status = accountStatus[row.id];
           const busy = busyProvider === row.id;
+          const loggedIn = !!status?.loggedIn;
+          const statusText = loggedIn
+            ? (status?.email ?? row.statusLabel ?? t("modal.accountLoggedIn"))
+            : (status?.error ?? row.statusLabel ?? t("modal.accountLoggedOut"));
           return (
             <div key={row.id} className="list-row provider-catalog-account-row">
               <div>
                 <div className="title">{row.label}</div>
-                <div className="sub">
-                  {status?.loggedIn
-                    ? (status.email ?? row.statusLabel ?? t("modal.accountLoggedIn"))
-                    : (status?.error ?? row.statusLabel ?? t("modal.accountLoggedOut"))}
-                </div>
+                <div className="sub">{statusText}</div>
               </div>
               <div className="provider-catalog-badges">
-                {status?.loggedIn ? (
+                {row.kind === "key" ? null : row.kind === "codex" ? (
+                  <>
+                    {loggedIn && (
+                      <a className="btn btn-ghost" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
+                    )}
+                    {onLogin && (
+                      <button className={loggedIn ? "btn btn-ghost" : "btn btn-primary"} onClick={() => onLogin(row.id)}>
+                        {loggedIn ? t("modal.accountAdd") : t("modal.accountLogin")}
+                      </button>
+                    )}
+                  </>
+                ) : loggedIn ? (
                   onLogout && <button className="btn btn-ghost" onClick={() => onLogout(row.id)}>{t("modal.accountLogout")}</button>
                 ) : busy ? (
                   onCancelLogin && <button className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>{t("common.cancel")}</button>
@@ -172,13 +184,16 @@ export default function ProviderCatalog({
             </div>
           );
         })}
+        {tier === "accounts" && accountRows.length === 0 && !presetsLoading && (
+          <div className="muted text-control provider-catalog-empty">{t("modal.noMatch")}</div>
+        )}
       </div>
 
       <div className="provider-catalog-footer">
-        {view === "home" && tierList.length > HOME_SLOT_COUNT && (
+        {tier !== "accounts" && view === "home" && tierList.length > HOME_SLOT_COUNT && (
           <button className="link-btn" onClick={openBrowse}>{t("modal.browseAll", { count: tierList.length })}</button>
         )}
-        {view === "browse" && (
+        {tier !== "accounts" && view === "browse" && (
           <button className="link-btn" onClick={() => { setView("home"); setQuery(""); }}>{t("modal.browseBack")}</button>
         )}
         <div style={{ flex: 1 }} />

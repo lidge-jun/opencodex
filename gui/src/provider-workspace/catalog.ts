@@ -30,6 +30,8 @@ export interface WorkspaceProvider {
   hasApiKey?: boolean;
   hasHeaders?: boolean;
   defaultModel?: string;
+  /** Static/configured model ids from provider config (offline fallback). */
+  models?: string[];
   authMode?: "key" | "forward" | "oauth" | "local" | string;
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
