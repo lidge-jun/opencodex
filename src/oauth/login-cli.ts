@@ -62,11 +62,11 @@ async function handleOAuthLogin(name: string): Promise<void> {
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
 }
 
-export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string): OcxProviderConfig {
-  return {
-    adapter: def.adapter,
-    baseUrl: def.baseUrl,
-    apiKey: key,
+export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string, baseUrlOverride?: string): OcxProviderConfig {
+ return {
+   adapter: def.adapter,
+    baseUrl: baseUrlOverride ?? def.baseUrl,
+   apiKey: key,
     ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
     ...(def.models ? { models: [...def.models] } : {}),
     ...(def.contextWindow !== undefined ? { contextWindow: def.contextWindow } : {}),
@@ -93,21 +93,26 @@ async function handleKeyLogin(name: string): Promise<void> {
   console.log(`\n🔑 ${def.label} — opening ${def.dashboardUrl} so you can create/copy an API key...`);
   openUrl(def.dashboardUrl);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const key = (await new Promise<string>((res) => rl.question(`Paste your ${def.label} API key: `, res))).trim();
-  rl.close();
-  if (!key) {
-    console.error("No key entered.");
-    process.exit(1);
+ const key = (await new Promise<string>((res) => rl.question(`Paste your ${def.label} API key: `, res))).trim();
+  let baseUrl = def.baseUrl;
+  if (/\{[^}]*\}/.test(baseUrl)) {
+    const resolved = (await new Promise<string>((res) => rl.question(`Your endpoint URL (${baseUrl}): `, res))).trim();
+    if (resolved) baseUrl = resolved;
   }
-  process.stdout.write("   validating… ");
-  const valid = await validateApiKey(def, key);
-  console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
-  if (valid === false) {
-    console.error("Provider rejected the key. Not saved.");
-    process.exit(1);
-  }
-  const provider = providerConfigFromKeyLoginProvider(def, key);
-  const config = loadConfig();
+ rl.close();
+ if (!key) {
+   console.error("No key entered.");
+   process.exit(1);
+ }
+ process.stdout.write("   validating… ");
+ const valid = await validateApiKey(def, key);
+ console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
+ if (valid === false) {
+   console.error("Provider rejected the key. Not saved.");
+   process.exit(1);
+ }
+  const provider = providerConfigFromKeyLoginProvider(def, key, baseUrl);
+ const config = loadConfig();
   config.providers[name] = provider;
   saveConfig(config);
   await notifyRunningProxy(name, provider);

@@ -82,6 +82,12 @@ export async function runInit(): Promise<void> {
     } else {
       // key + local: collect a key (local usually blank).
       if (p.dashboardUrl) console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+      // Template URL with placeholders (e.g. Cloudflare's {account_id}) needs a resolved value.
+      let baseUrl = p.baseUrl;
+      if (/\{[^}]*\}/.test(baseUrl)) {
+        const resolved = (await prompt.ask(`   Your endpoint URL (${baseUrl}): `)).trim();
+        if (resolved) baseUrl = resolved;
+      }
       const env = envKeyFor(p.id);
       const hint = p.kind === "local" ? "API key (usually blank — press Enter): " : `API key (paste, or env var $${env}): `;
       const apiKey = (await prompt.ask(`\n${hint}`)).trim();
@@ -89,7 +95,7 @@ export async function runInit(): Promise<void> {
       const defaultModel = modelChoice || p.defaultModel;
       providerConfig = {
         adapter: p.adapter,
-        baseUrl: p.baseUrl,
+        baseUrl,
         ...(p.kind === "key" ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
         ...(defaultModel ? { defaultModel } : {}),
       };

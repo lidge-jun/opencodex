@@ -98,6 +98,50 @@ const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet
 
 const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+// Cloudflare Workers AI — live /v1/models omits callable @cf ids, so this list is authoritative.
+const CLOUDFLARE_WORKERS_AI_MODELS = [
+  "@cf/moonshotai/kimi-k2.7-code", "@cf/moonshotai/kimi-k2.6", "@cf/moonshotai/kimi-k2.5",
+  "@cf/zai-org/glm-5.2", "@cf/zai-org/glm-4.7-flash",
+  "@cf/openai/gpt-oss-120b", "@cf/openai/gpt-oss-20b",
+  "@cf/qwen/qwen2.5-coder-32b-instruct", "@cf/qwen/qwq-32b", "@cf/qwen/qwen3-30b-a3b-fp8",
+  "@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct",
+  "@cf/meta/llama-3.2-11b-vision-instruct", "@cf/meta/llama-3.2-3b-instruct", "@cf/meta/llama-3.2-1b-instruct",
+  "@cf/google/gemma-4-26b-a4b-it", "@cf/google/gemma-3-12b-it",
+  "@cf/mistralai/mistral-small-3.1-24b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1",
+  "@cf/nvidia/nemotron-3-120b-a12b", "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+  "@cf/ibm-granite/granite-4.0-h-micro",
+];
+const CLOUDFLARE_WORKERS_AI_CONTEXT_WINDOWS: Record<string, number> = {
+  "@cf/moonshotai/kimi-k2.7-code": 262_144, "@cf/moonshotai/kimi-k2.6": 262_144, "@cf/moonshotai/kimi-k2.5": 256_000,
+  "@cf/zai-org/glm-5.2": 262_144, "@cf/zai-org/glm-4.7-flash": 131_072,
+  "@cf/openai/gpt-oss-120b": 128_000, "@cf/openai/gpt-oss-20b": 128_000,
+  "@cf/qwen/qwen2.5-coder-32b-instruct": 32_768, "@cf/qwen/qwq-32b": 24_000, "@cf/qwen/qwen3-30b-a3b-fp8": 32_768,
+  "@cf/meta/llama-4-scout-17b-16e-instruct": 131_000, "@cf/meta/llama-3.3-70b-instruct-fp8-fast": 24_000,
+  "@cf/meta/llama-3.1-70b-instruct": 24_000, "@cf/meta/llama-3.1-8b-instruct": 7_968,
+  "@cf/meta/llama-3.2-11b-vision-instruct": 128_000, "@cf/meta/llama-3.2-3b-instruct": 80_000, "@cf/meta/llama-3.2-1b-instruct": 60_000,
+  "@cf/google/gemma-4-26b-a4b-it": 256_000, "@cf/google/gemma-3-12b-it": 80_000,
+  "@cf/mistralai/mistral-small-3.1-24b-instruct": 128_000, "@cf/mistral/mistral-7b-instruct-v0.1": 2_824,
+  "@cf/nvidia/nemotron-3-120b-a12b": 256_000, "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": 80_000,
+  "@cf/ibm-granite/granite-4.0-h-micro": 131_000,
+};
+const CLOUDFLARE_WORKERS_AI_VISION_MODELS = [
+  "@cf/moonshotai/kimi-k2.7-code", "@cf/moonshotai/kimi-k2.6", "@cf/moonshotai/kimi-k2.5",
+  "@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/meta/llama-3.2-11b-vision-instruct",
+  "@cf/google/gemma-4-26b-a4b-it",
+];
+const CLOUDFLARE_WORKERS_AI_MODEL_INPUT_MODALITIES = Object.fromEntries(
+  CLOUDFLARE_WORKERS_AI_VISION_MODELS.map(id => [id, ["text", "image"]]),
+);
+const CLOUDFLARE_WORKERS_AI_NO_REASONING_MODELS = [
+  "@cf/qwen/qwen2.5-coder-32b-instruct",
+  "@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct",
+  "@cf/meta/llama-3.2-11b-vision-instruct", "@cf/meta/llama-3.2-3b-instruct", "@cf/meta/llama-3.2-1b-instruct",
+  "@cf/google/gemma-3-12b-it",
+  "@cf/mistralai/mistral-small-3.1-24b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1",
+  "@cf/ibm-granite/granite-4.0-h-micro",
+];
 // 260710 MiniMax models and context windows: Tier-2 evidence in
 // devlog/_plan/260710_provider_hardening/002_research_cn.md.
 const MINIMAX_MODELS = [
@@ -691,6 +735,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
     baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    allowBaseUrlOverride: true,
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=plan",
@@ -816,6 +861,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "No key needed — uses Xiaomi MiMo's free public tier (limited-time offer). A JWT is bootstrapped automatically with an anonymous random client id stored locally. The endpoint contract mirrors the official MiMoCode client and is not publicly documented — Xiaomi may change or restrict it at any time. Prompts may be processed/retained by Xiaomi; do not send confidential material.",
   },
   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
+ {
+    id: "cloudflare-workers-ai",
+    label: "Cloudflare Workers AI",
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    allowBaseUrlOverride: true,
+    dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/workers-ai",
+    note: "Serverless open models on Cloudflare. 10,000 Neurons/day free.",
+    models: [...CLOUDFLARE_WORKERS_AI_MODELS],
+    defaultModel: "@cf/moonshotai/kimi-k2.7-code",
+    freeTier: true,
+  liveModels: false,
+  modelContextWindows: { ...CLOUDFLARE_WORKERS_AI_CONTEXT_WINDOWS },
+   modelInputModalities: CLOUDFLARE_WORKERS_AI_MODEL_INPUT_MODALITIES,
+   noReasoningModels: CLOUDFLARE_WORKERS_AI_NO_REASONING_MODELS,
+},
   // FREEZE 2026-07-10: /models was auth-gated under key login. OAuth device-flow + copilot_internal
   // exchange (issue #151) unlocks live discovery; static seed is a cold-start fallback only.
   {
