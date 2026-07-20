@@ -209,6 +209,12 @@ describe("Cursor request builder", () => {
       description: `Native tool ${i}`,
       parameters: { type: "object" as const, properties: {} },
     }));
+    // Include tool_search so the deferred note references it
+    const toolSearch = {
+      name: "tool_search",
+      description: "Search for tools",
+      parameters: { type: "object" as const, properties: {} },
+    };
     const namespaceTools = Array.from({ length: 340 }, (_, i) => ({
       name: `tool_${i}`,
       namespace: `ns_${Math.floor(i / 50)}`,
@@ -219,7 +225,7 @@ describe("Cursor request builder", () => {
       ...base,
       context: {
         messages: [{ role: "user", content: "hello", timestamp: 1 }],
-        tools: [...nativeTools, ...namespaceTools],
+        tools: [...nativeTools, toolSearch, ...namespaceTools],
       },
     });
     const systemText = (request.system ?? []).join("\n");
@@ -238,5 +244,126 @@ describe("Cursor request builder", () => {
     });
     const systemText = (request.system ?? []).join("\n");
     expect(systemText).not.toContain("Not all tools could be advertised");
+  });
+
+  // --- Review-finding tests (PR #192 round 2) ---
+
+  test("preserves toolChoice-targeted tools even when their namespace is trimmed", () => {
+    const nativeTools = Array.from({ length: 11 }, (_, i) => ({
+      name: `native_${i}`,
+      description: `Native tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    // One huge namespace that will be trimmed
+    const hugeNs = Array.from({ length: 250 }, (_, i) => ({
+      name: `huge_${i}`,
+      namespace: "ns_huge",
+      description: `Huge tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    // The specific tool we force via toolChoice
+    const forcedTool = {
+      name: "critical_action",
+      namespace: "ns_huge",
+      description: "Must survive",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [{ role: "user", content: "do it", timestamp: 1 }],
+        tools: [...nativeTools, ...hugeNs, forcedTool],
+      },
+      options: { toolChoice: { name: "ns_huge__critical_action" } },
+    });
+    const kept = request.tools ?? [];
+    const hasForced = kept.some(t => t.name === "critical_action" && t.namespace === "ns_huge");
+    expect(hasForced).toBe(true);
+  });
+
+  test("does not suggest tool_search when it is not in the kept catalog", () => {
+    const nativeTools = Array.from({ length: 11 }, (_, i) => ({
+      name: `native_${i}`,
+      description: `Native tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const namespaceTools = Array.from({ length: 340 }, (_, i) => ({
+      name: `tool_${i}`,
+      namespace: `ns_${Math.floor(i / 50)}`,
+      description: `NS tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    // No tool_search in the catalog at all
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: [...nativeTools, ...namespaceTools],
+      },
+    });
+    const systemText = (request.system ?? []).join("\n");
+    expect(systemText).toContain("Not all tools could be advertised");
+    expect(systemText).not.toContain("tool_search");
+  });
+
+  test("caps oversized bare-function catalogs at the budget", () => {
+    // 250 native (non-namespace) tools — exceeds budget without any namespaces
+    const tools = Array.from({ length: 250 }, (_, i) => ({
+      name: `func_${i}`,
+      description: `Function tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    const kept = request.tools ?? [];
+    expect(kept.length).toBeLessThanOrEqual(200);
+    const systemText = (request.system ?? []).join("\n");
+    expect(systemText).toContain("Not all tools could be advertised");
+  });
+
+  test("keeps previously-used tools from trimmed namespaces across turns", () => {
+    const nativeTools = Array.from({ length: 11 }, (_, i) => ({
+      name: `native_${i}`,
+      description: `Native tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    // Huge namespace that will be trimmed
+    const hugeNs = Array.from({ length: 250 }, (_, i) => ({
+      name: `huge_${i}`,
+      namespace: "ns_huge",
+      description: `Huge tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    // A tool that was loaded via tool_search in a prior turn
+    const searchedTool = {
+      name: "special_action",
+      namespace: "ns_huge",
+      description: "Previously loaded",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          { role: "user", content: "use it", timestamp: 1 },
+          // Prior tool result referencing the searched tool
+          {
+            role: "toolResult",
+            toolCallId: "call_prev",
+            toolName: "special_action",
+            toolNamespace: "ns_huge",
+            content: "result from previous turn",
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [...nativeTools, ...hugeNs, searchedTool],
+      },
+    });
+    const kept = request.tools ?? [];
+    const hasSearched = kept.some(t => t.name === "special_action" && t.namespace === "ns_huge");
+    expect(hasSearched).toBe(true);
   });
 });
