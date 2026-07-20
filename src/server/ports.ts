@@ -49,7 +49,22 @@ export type FindAvailablePortOptions = {
   /** How long to keep retrying the preferred port before falling back to an ephemeral port. */
   preferRetryMs?: number;
   preferRetryIntervalMs?: number;
+  /**
+   * When false, never bind `port: 0` — prefer-retry then throw if the preferred port
+   * stays busy. Used for explicit `ocx start --port N` and service-baked pins so an
+   * update restart cannot hop to a random ephemeral listener (PR #152 gap).
+   */
+  allowEphemeralFallback?: boolean;
 };
+
+export class PortUnavailableError extends Error {
+  readonly port: number;
+  constructor(port: number, hostname: string) {
+    super(`Port ${port} on ${hostname} is still busy after prefer-retry; refusing ephemeral fallback.`);
+    this.name = "PortUnavailableError";
+    this.port = port;
+  }
+}
 
 export async function findAvailablePort(
   preferredPort: number,
@@ -57,6 +72,7 @@ export async function findAvailablePort(
   opts: FindAvailablePortOptions = {},
 ): Promise<number> {
   const preferRetryMs = opts.preferRetryMs ?? 0;
+  const allowEphemeral = opts.allowEphemeralFallback !== false;
   if (preferRetryMs > 0) {
     if (await waitForPortAvailable(preferredPort, hostname, {
       timeoutMs: preferRetryMs,
@@ -66,6 +82,10 @@ export async function findAvailablePort(
     }
   } else if (await isPortAvailable(preferredPort, hostname)) {
     return preferredPort;
+  }
+
+  if (!allowEphemeral) {
+    throw new PortUnavailableError(preferredPort, hostname);
   }
 
   return await new Promise((resolve, reject) => {

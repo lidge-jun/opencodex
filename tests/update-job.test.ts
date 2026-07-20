@@ -104,7 +104,7 @@ describe("GUI update execution decisions", () => {
     expect(proxy.mode).toBe("proxy");
     expect(proxy.args).toEqual(["/pkg/bin/ocx.mjs", "start", "--port", "10100"]);
     expect(proxy.display).toContain("start --port 10100");
-    // Service reinstall keeps its own port contract — do not append --port.
+    // Service reinstall stays install-only at the argv level; wrappers bake --port via OCX_BAKE_PORT.
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs", 10100).args).toEqual([
       "/pkg/bin/ocx.mjs", "service", "install",
     ]);
@@ -141,6 +141,41 @@ describe("GUI update execution decisions", () => {
     });
     expect(waited).toEqual([{ port: 12345, hostname: "127.0.0.1" }]);
     expect(spawned).toEqual([{ port: 12345 }]);
+  });
+
+  test("service restart waits on the captured port and clears OCX_BAKE_PORT after install", async () => {
+    const waited: Array<{ port: number; hostname: string }> = [];
+    const job: UpdateJobState = {
+      id: "restart-svc",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.26",
+      latestVersion: "2.7.28",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const prev = process.env.OCX_BAKE_PORT;
+    delete process.env.OCX_BAKE_PORT;
+    try {
+      await expect(restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        waitForPort: async (port, hostname) => {
+          waited.push({ port, hostname: hostname ?? "" });
+          expect(process.env.OCX_BAKE_PORT).toBeUndefined();
+          return true;
+        },
+      })).rejects.toThrow(/service restart failed/);
+      expect(waited).toEqual([{ port: 18765, hostname: "127.0.0.1" }]);
+      expect(process.env.OCX_BAKE_PORT).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.OCX_BAKE_PORT;
+      else process.env.OCX_BAKE_PORT = prev;
+    }
   });
 
   test("a running job prevents a second update job", () => {

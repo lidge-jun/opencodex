@@ -313,10 +313,25 @@ async function restartAfterUpdate(
     } catch { /* fallback to default service install */ }
   }
   const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port, svcArgs);
+  const waitFn = io.waitForPort ?? waitForPortAvailable;
+
   if (serviceInstalled) {
-    const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
-    if (result.status !== 0) {
-      throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
+    // Stop-first update already unloaded the service; wait for the socket to drain,
+    // then reinstall wrappers that bake `--port` via OCX_BAKE_PORT (PR #152 gap).
+    const freed = await waitFn(port, hostname, { timeoutMs: 5_000, intervalMs: 25 });
+    if (!freed) {
+      updateJob(job, {}, `Port ${port} still busy after stop; reinstalling service with pinned --port ${port} anyway.`);
+    }
+    const prevBake = process.env.OCX_BAKE_PORT;
+    process.env.OCX_BAKE_PORT = String(Math.trunc(port));
+    try {
+      const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
+      if (result.status !== 0) {
+        throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
+      }
+    } finally {
+      if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+      else process.env.OCX_BAKE_PORT = prevBake;
     }
     return;
   }
@@ -329,8 +344,7 @@ async function restartAfterUpdate(
   // The old socket can stay busy briefly after stop (Windows taskkill drain, or the
   // stop-first update path that already killed the proxy before we got here) — wait
   // unconditionally on the captured port so the pinned start does not race the drain.
-  const waitFn = io.waitForPort ?? waitForPortAvailable;
-  const freed = await waitFn(port, hostname, { timeoutMs: 2000, intervalMs: 25 });
+  const freed = await waitFn(port, hostname, { timeoutMs: 2_000, intervalMs: 25 });
   if (!freed) {
     updateJob(job, {}, `Port ${port} still busy after stop; starting with --port ${port} anyway.`);
   }

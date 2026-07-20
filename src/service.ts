@@ -242,9 +242,25 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function buildServiceShellCommand(bun: string, cli: string): string {
+/**
+ * Listen port baked into service wrappers / WinSW XML.
+ * Priority: explicit override → OCX_BAKE_PORT (update restart) → config.port → 10100.
+ */
+export function resolveServiceListenPort(override?: number): number {
+  if (typeof override === "number" && Number.isFinite(override) && override > 0 && override <= 65535) {
+    return Math.trunc(override);
+  }
+  const baked = process.env.OCX_BAKE_PORT?.trim();
+  if (baked && /^\d+$/.test(baked)) {
+    const n = Number(baked);
+    if (n > 0 && n <= 65535) return n;
+  }
+  return loadConfig().port ?? 10100;
+}
+
+function buildServiceShellCommand(bun: string, cli: string, port = resolveServiceListenPort()): string {
   const tokenFile = serviceApiTokenFilePath();
-  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start`;
+  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start --port ${port}`;
 }
 
 function systemdQuote(value: string): string {
@@ -316,7 +332,7 @@ function taskXmlString(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export function buildWindowsServiceScript(entry = cliEntry()): string {
+export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
   const { bun, cli } = entry;
   const bunRuntime = durableBunRuntime();
   const path = process.env.PATH ?? "";
@@ -345,7 +361,7 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
     '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
-    '"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1',
+    `"%OCX_BUN%" "%OCX_CLI%" start --port ${port} >>"%OCX_SERVICE_LOG%" 2>&1`,
     "if %ERRORLEVEL% NEQ 0 (",
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',
     // `timeout` needs console stdin and dies with "Input redirection is not supported"

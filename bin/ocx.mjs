@@ -124,6 +124,19 @@ function runNpmSelfUpdate() {
     return [launcher, "service", "install"];
   }
 
+  // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
+  let bakePort = 10100;
+  try {
+    const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
+    if (Number.isFinite(rt?.port) && rt.port > 0) bakePort = Math.trunc(rt.port);
+  } catch { /* fall through to config */ }
+  if (bakePort === 10100) {
+    try {
+      const cfg = JSON.parse(readFileSync(join(configDir(), "config.json"), "utf8"));
+      if (Number.isFinite(cfg?.port) && cfg.port > 0) bakePort = Math.trunc(cfg.port);
+    } catch { /* keep default */ }
+  }
+
   // Never replace package files under a live proxy — stop it first (full `ocx stop`
   // semantics: graceful drain, service stop, native Codex restore). Gate on the service
   // and the runtime-port record too: a service-managed or orphaned proxy can be live
@@ -163,9 +176,16 @@ function runNpmSelfUpdate() {
     // launcher so the new files write the baked paths and the service restarts.
     if (serviceWasInstalled) {
       console.log("Reinstalling the background service with the updated files...");
-      const svcArgs = serviceReinstallArgs();
-      const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
-      if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+      const prevBake = process.env.OCX_BAKE_PORT;
+      process.env.OCX_BAKE_PORT = String(bakePort);
+      try {
+        const svcArgs = serviceReinstallArgs();
+        const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
+        if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+      } finally {
+        if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+        else process.env.OCX_BAKE_PORT = prevBake;
+      }
     } else {
       console.log("Restart the proxy:  ocx start");
     }

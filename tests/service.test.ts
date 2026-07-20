@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, resolveServiceListenPort, serviceLogPath, serviceStatusSummary } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -49,6 +49,35 @@ function pathVariants(path: string): string[] {
 function expectTextToContainPath(text: string, path: string): void {
   expect(pathVariants(path).some(candidate => text.includes(candidate))).toBe(true);
 }
+
+describe("service listen-port bake", () => {
+  test("resolveServiceListenPort prefers override, then OCX_BAKE_PORT, then config", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    saveConfig({ port: 10100, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
+    expect(resolveServiceListenPort(18765)).toBe(18765);
+    const prev = process.env.OCX_BAKE_PORT;
+    try {
+      process.env.OCX_BAKE_PORT = "15555";
+      expect(resolveServiceListenPort()).toBe(15555);
+      delete process.env.OCX_BAKE_PORT;
+      expect(resolveServiceListenPort()).toBe(10100);
+    } finally {
+      if (prev === undefined) delete process.env.OCX_BAKE_PORT;
+      else process.env.OCX_BAKE_PORT = prev;
+    }
+  });
+
+  test("Windows batch and launchd/systemd shell commands bake start --port", () => {
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    mkdirSync(TEST_DIR, { recursive: true });
+    saveConfig({ port: 13337, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    expect(script).toContain("start --port 13337");
+    expect(buildPlist()).toContain("start --port 13337");
+    expect(buildUnit()).toContain("start --port 13337");
+  });
+});
 
 describe("systemd service unit", () => {
   test("bare service command defaults to the install/update/start path", async () => {
@@ -269,7 +298,7 @@ describe("Windows service task", () => {
 
     expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
     expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
-    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start');
+    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start --port');
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
   });
 
@@ -326,7 +355,7 @@ describe("Windows service task", () => {
       expect(script).toContain('echo opencodex_home="%OPENCODEX_HOME%"');
       expect(script).toContain('echo codex_home="%CODEX_HOME%"');
       expect(script).toContain('echo token_file="%OCX_API_TOKEN_FILE%"');
-      expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1');
+      expect(script).toMatch(/"%OCX_BUN%" "%OCX_CLI%" start --port \d+ >>"%OCX_SERVICE_LOG%" 2>&1/);
       expect(script).toContain("child exited with code %ERRORLEVEL%");
       expect(script).not.toContain("local-secret");
       expect(script).not.toContain('set "OPENCODEX_API_AUTH_TOKEN=');
