@@ -223,6 +223,7 @@ describe("isLikelyRealThoughtSignature", () => {
     for (const id of [
       "fc_d8df7548e31a4130b7624f3d27571cdd",
       "ctc_038f26d3f20962bc016a54f0fcfa208190a8ec0f289c2ba211",
+      "tsc_0123456789abcdef01234567",
       "call_1f57fdea0000",
       "function-call-1234567890",
       "tool-call-abcdef123456",
