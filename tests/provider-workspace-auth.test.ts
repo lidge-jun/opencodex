@@ -125,18 +125,27 @@ describe("workspace account integration seam", () => {
   });
 
   test("wires OAuth re-authenticate handlers in classic and workspace", async () => {
-    const [page, panel] = await Promise.all([
+    const [page, panel, details, overview] = await Promise.all([
       Bun.file("gui/src/pages/Providers.tsx").text(),
       Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderDetails.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderOverview.tsx").text(),
     ]);
     expect(page).toContain("onReauth:");
+    expect(page).toContain("onCancelLogin: cancelLoginOAuth");
     expect(page).toContain("loginOAuth(provider, true)");
+    expect(page).toContain("oauthLoginGenerationRef");
+    expect(page).toContain("/api/oauth/login/cancel");
     // Classic provider-level CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
     expect(page).toContain('activeAccountNeedsReauth[name] && prov.authMode === "oauth"');
     expect(page).toContain('activeAccountNeedsReauth[name] && name === "openai"');
     expect(page).toContain('href="#codex-auth"');
     expect(panel).toContain("onReauth");
     expect(panel).toContain("pws.reauthenticate");
+    expect(panel).toContain("onCancelLogin");
+    expect(details).toContain("onReauthenticate=");
+    expect(overview).toContain("onReauthenticate");
+    expect(overview).toContain("pws.reauthenticate");
   });
 
   test("wires Codex active reauth health into openai rail status", async () => {

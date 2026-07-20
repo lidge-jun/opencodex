@@ -102,6 +102,11 @@ export default function ProviderAuthPanel({
                       <IconExternal style={{ width: 13, height: 13 }} /> {t("prov.didntOpen")}
                     </a>
                   )}
+                  {authHandlers.onCancelLogin && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
+                      {t("common.cancel")}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

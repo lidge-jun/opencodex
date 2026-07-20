@@ -188,6 +188,20 @@ export default function ProviderDetails({
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}
             onUpdateProvider={onUpdateProvider}
+            reauthBusy={busyProvider === item.name}
+            onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(item.name) : undefined}
+            onReauthenticate={
+              item.activeNeedsReauth
+                ? () => {
+                    if (item.authMode === "oauth") {
+                      void authHandlers?.onReauth(item.name);
+                      return;
+                    }
+                    // Codex / forward: Accounts tab owns the pool reauth CTA.
+                    switchTab("accounts");
+                  }
+                : undefined
+            }
           />
         )}
         {tab === "models" && (

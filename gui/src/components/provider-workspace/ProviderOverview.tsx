@@ -15,6 +15,7 @@ import type { ProviderUpdatePatch } from "./types";
 export default function ProviderOverview({
   item, usageTotals, quotaReport, oauthEmail,
   onEditSettings, onViewUsage, onUpdateProvider,
+  onReauthenticate, onCancelLogin, reauthBusy = false,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -23,6 +24,9 @@ export default function ProviderOverview({
   onEditSettings?: () => void;
   onViewUsage?: () => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  onReauthenticate?: () => void;
+  onCancelLogin?: () => void;
+  reauthBusy?: boolean;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -83,13 +87,30 @@ export default function ProviderOverview({
         {needsAttention ? (
           <div className="pws-auth-summary pws-auth-summary--warn" role="status">
             <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
-            <span>
-              <strong>{t("pws.status.needsAttention")}</strong>
-              {" — "}
-              {item.authMode === "forward"
-                ? t("pws.attention.reauthForward")
-                : t("pws.attention.reauth")}
-            </span>
+            <div className="pws-auth-summary-body">
+              <span>
+                <strong>{t("pws.status.needsAttention")}</strong>
+                {" — "}
+                {item.authMode === "forward"
+                  ? t("pws.attention.reauthForward")
+                  : t("pws.attention.reauth")}
+              </span>
+              {onReauthenticate && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={reauthBusy}
+                  onClick={() => onReauthenticate()}
+                >
+                  {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
+                </button>
+              )}
+              {reauthBusy && onCancelLogin && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
+                  {t("common.cancel")}
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div className="pws-auth-summary">

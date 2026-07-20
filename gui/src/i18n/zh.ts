@@ -150,6 +150,8 @@ export const zh: Record<TKey, string> = {
   "prov.loginFailStart": "{provider} 登录启动失败",
   "prov.loginError": "{provider} 登录错误：{error}",
   "prov.loginRequestFail": "{provider} 登录请求失败",
+  "prov.loginCancelled": "{provider} 登录已取消",
+  "prov.loginTimeout": "{provider} 登录超时 — 浏览器已关闭或未完成。请重试。",
   "prov.loginOk": "已登录到 {provider}。运行 {cmd}（或实时生效）以列出其模型。",
   "prov.logoutOk": "已退出 {provider}。",
   "prov.logoutFail": "无法退出 {provider}。账户状态保持不变。",

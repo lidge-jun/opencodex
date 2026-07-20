@@ -71,6 +71,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
   const codexReauthGenerationRef = useRef(0);
+  const oauthLoginGenerationRef = useRef(0);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
 
@@ -368,7 +369,25 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const cancelLoginOAuth = useCallback(async (provider: string) => {
+    oauthLoginGenerationRef.current += 1;
+    try {
+      await fetch(`${apiBase}/api/oauth/login/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+    } catch { /* ignore */ }
+    if (!aliveRef.current) return;
+    setBusy(current => current === provider ? null : current);
+    setLoginInfo(current => current?.provider === provider ? null : current);
+    setManualCode("");
+    setManualCodeMsg("");
+    notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
+  }, [apiBase, t]);
+
   const loginOAuth = async (provider: string, addAccount = false) => {
+    const generation = ++oauthLoginGenerationRef.current;
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
@@ -381,20 +400,37 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         body: JSON.stringify(addAccount ? { provider, addAccount: true } : { provider }),
       });
       const data = await res.json();
+      if (oauthLoginGenerationRef.current !== generation || !aliveRef.current) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
       // The server opens the browser itself (popup-safe). Show the URL + paste fallback.
       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       // Poll until the loopback callback (or device flow / manual paste) completes.
-      for (let i = 0; i < 150 && aliveRef.current; i++) {
+      // Prefer s.done so cancel/timeout/error clear "waiting for browser" instead of hanging.
+      let finished = false;
+      for (let i = 0; i < 150 && aliveRef.current && oauthLoginGenerationRef.current === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
+        if (oauthLoginGenerationRef.current !== generation || !aliveRef.current) return;
         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
         if (!s) continue;
-        // For add-account flows the provider is already "logged in": wait for the account count to grow.
-        // addAccount: wait for a new slot OR flow completion (same-account re-login won't grow count).
+        if (s.error) {
+          setOauthStatus(prev => ({ ...prev, [provider]: s }));
+          const cancelled = /cancel/i.test(s.error);
+          notify(
+            cancelled
+              ? t("prov.loginCancelled", { provider: oauthLabel(provider) })
+              : t("prov.loginError", { provider: oauthLabel(provider), error: s.error }),
+            false,
+          );
+          setLoginInfo(null);
+          finished = true;
+          break;
+        }
+        // For add-account / reauth flows the provider may already be "logged in": wait for a
+        // new slot OR flow completion (same-account re-login won't grow count).
         const completed = addAccount
-          ? ((s.accounts?.length ?? 0) > baselineCount || (s.done === true && !s.error))
-          : s.loggedIn;
+          ? ((s.accounts?.length ?? 0) > baselineCount || s.done === true)
+          : (s.loggedIn || s.done === true);
         if (completed) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
@@ -404,19 +440,26 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           fetchConfig();
           fetchAccountSets(Object.keys(accountSets).includes(provider) ? Object.keys(accountSets) : [...Object.keys(accountSets), provider]);
           fetchProviderQuotas(true);
-          break;
-        }
-        if (s.error) {
-          setOauthStatus(prev => ({ ...prev, [provider]: s }));
-          notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
-          setLoginInfo(null);
+          finished = true;
           break;
         }
       }
+      if (!finished && oauthLoginGenerationRef.current === generation && aliveRef.current) {
+        // Browser abandoned / never completed — stop waiting and cancel the server flow.
+        await fetch(`${apiBase}/api/oauth/login/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider }),
+        }).catch(() => {});
+        notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
+        setLoginInfo(null);
+      }
     } catch {
-      notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+      if (oauthLoginGenerationRef.current === generation) {
+        notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+      }
     } finally {
-      if (aliveRef.current) setBusy(null);
+      if (aliveRef.current && oauthLoginGenerationRef.current === generation) setBusy(null);
     }
   };
 
@@ -596,6 +639,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               loginHint={loginInfo}
               authHandlers={{
                 onLogin: loginOAuth,
+                onCancelLogin: cancelLoginOAuth,
                 onLogout: logoutOAuth,
                 onReauth: provider => loginOAuth(provider, true),
                 onSwitchAccount: switchAccount,
@@ -704,6 +748,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         <IconLink width={14} height={14} />{linkCopied ? t("prov.linkCopied") : t("prov.copyLink")}
                       </button>
                       {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                      {isBusy && (
+                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => void cancelLoginOAuth(p)}>
+                          {t("common.cancel")}
+                        </button>
+                      )}
                     </span>
                     <span className="oauth-login-paste">
                       <input

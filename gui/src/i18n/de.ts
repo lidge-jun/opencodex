@@ -144,6 +144,8 @@ export const de = {
   "prov.loginFailStart": "{provider}-Login konnte nicht gestartet werden",
   "prov.loginError": "{provider}-Login-Fehler: {error}",
   "prov.loginRequestFail": "{provider}-Login-Anfrage fehlgeschlagen",
+  "prov.loginCancelled": "{provider}-Login abgebrochen",
+  "prov.loginTimeout": "{provider}-Login abgelaufen — Browser geschlossen oder nicht beendet. Erneut versuchen.",
   "prov.loginOk": "Bei {provider} angemeldet. Führe {cmd} aus (oder es gilt live), um seine Modelle aufzulisten.",
   "prov.logoutOk": "Von {provider} abgemeldet.",
   "prov.logoutFail": "Abmeldung von {provider} fehlgeschlagen. Der Kontostatus bleibt unverändert.",

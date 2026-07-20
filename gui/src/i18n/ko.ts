@@ -150,6 +150,8 @@ export const ko: Record<TKey, string> = {
   "prov.loginFailStart": "{provider} 로그인을 시작하지 못했습니다",
   "prov.loginError": "{provider} 로그인 오류: {error}",
   "prov.loginRequestFail": "{provider} 로그인 요청 실패",
+  "prov.loginCancelled": "{provider} 로그인이 취소되었습니다",
+  "prov.loginTimeout": "{provider} 로그인 시간 초과 — 브라우저를 닫았거나 완료되지 않았습니다. 다시 시도하세요.",
   "prov.loginOk": "{provider} 에 로그인했습니다. 모델을 표시하려면 {cmd} 를 실행하세요(또는 실시간 적용됩니다).",
   "prov.logoutOk": "{provider} 에서 로그아웃했습니다.",
   "prov.logoutFail": "{provider}에서 로그아웃하지 못했습니다. 계정 상태는 그대로입니다.",

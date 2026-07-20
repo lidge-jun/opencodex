@@ -155,6 +155,8 @@ export const en = {
   "prov.loginFailStart": "{provider} login failed to start",
   "prov.loginError": "{provider} login error: {error}",
   "prov.loginRequestFail": "{provider} login request failed",
+  "prov.loginCancelled": "{provider} login cancelled",
+  "prov.loginTimeout": "{provider} login timed out — browser closed or never finished. Try again.",
   "prov.loginOk": "Logged in to {provider}. Run {cmd} (or it applies live) to list its models.",
   "prov.logoutOk": "Logged out of {provider}.",
   "prov.logoutFail": "Could not log out of {provider}. Your account state is unchanged.",

@@ -567,6 +567,15 @@
   color: inherit;
 }
 
+.pws-auth-summary-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  flex: 1;
+  min-width: 0;
+}
+
 .pws-auth-summary--warn svg {
   flex-shrink: 0;
   margin-top: 2px;
