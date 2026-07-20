@@ -62,6 +62,8 @@ describe("service listen-port bake", () => {
       expect(resolveServiceListenPort()).toBe(15555);
       delete process.env.OCX_BAKE_PORT;
       expect(resolveServiceListenPort()).toBe(10100);
+      saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
+      expect(resolveServiceListenPort()).toBe(10100);
     } finally {
       if (prev === undefined) delete process.env.OCX_BAKE_PORT;
       else process.env.OCX_BAKE_PORT = prev;

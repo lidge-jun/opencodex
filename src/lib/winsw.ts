@@ -84,6 +84,8 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
     }
     return loadConfig().port ?? 10100;
   })();
+  // Services never bake `--port 0` (parsePortOption rejects it); treat as default.
+  const safeListenPort = listenPort > 0 && listenPort <= 65535 ? listenPort : 10100;
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
@@ -97,7 +99,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   <name>OpenCodex Proxy (native)</name>
   <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
-  <arguments>${xmlEscape(`"${entry.cli}" start --port ${listenPort}`)}</arguments>
+  <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
   <logpath>${xmlEscape(winswLogDir())}</logpath>
   <log mode="roll-by-size">

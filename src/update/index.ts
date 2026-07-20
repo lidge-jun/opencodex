@@ -172,11 +172,17 @@ export async function runUpdate(): Promise<void> {
   } catch { /* best-effort */ }
 
   // Capture listen target before stop clears runtime state (same contract as GUI update worker).
-  const preUpdateRt = readRuntimePort();
+  // Prefer a live runtime record; a stale crashed leftover must not override config.port.
   const preUpdateConfig = loadConfig();
+  const preUpdateRt = readRuntimePort();
+  const livePid = readPid();
+  const runtimeTrusted = !!(preUpdateRt && livePid && preUpdateRt.pid === livePid);
+  const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
+    ? preUpdateConfig.port
+    : 10100;
   const capturedListen = {
-    port: preUpdateRt?.port ?? preUpdateConfig.port ?? 10100,
-    hostname: preUpdateRt?.hostname ?? preUpdateConfig.hostname ?? "127.0.0.1",
+    port: runtimeTrusted ? preUpdateRt.port : configPort,
+    hostname: (runtimeTrusted ? preUpdateRt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
   };
 
   // Never replace package files under a live proxy: the running server dynamic-imports

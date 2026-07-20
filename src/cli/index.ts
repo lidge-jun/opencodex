@@ -96,7 +96,7 @@ function startArgv(port?: number): string[] {
 
 async function chooseListenPort(requestedPort?: number): Promise<number> {
   const config = loadConfig();
-  const preferred = requestedPort ?? config.port ?? 10100;
+  const preferred = requestedPort ?? (config.port && config.port > 0 ? config.port : 10100);
   const hardPin = requestedPort !== undefined;
   // Soft start: brief prefer-retry then ephemeral hop.
   // Explicit `--port` (service wrappers / update restart): longer prefer-retry, never hop.
@@ -280,7 +280,7 @@ async function handleEnsure() {
       return;
     }
 
-  const pinPort = config.port ?? 10100;
+  const pinPort = config.port && config.port > 0 ? config.port : 10100;
   const child = spawn(process.execPath, startArgv(pinPort), {
     detached: true,
     stdio: "ignore",
@@ -569,7 +569,7 @@ switch (command) {
     let live = await findLiveProxy();
     if (!live) {
       console.log("Proxy not running. Starting...");
-      const child = spawn(process.execPath, startArgv(config.port ?? 10100), {
+      const child = spawn(process.execPath, startArgv(config.port && config.port > 0 ? config.port : 10100), {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -577,6 +577,10 @@ switch (command) {
       });
       child.unref();
       live = await waitForProxy();
+      if (!live) {
+        console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
+        process.exit(1);
+      }
     }
     // Open the host the proxy actually binds — `localhost` only answers for
     // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.

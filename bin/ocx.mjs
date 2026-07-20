@@ -125,15 +125,33 @@ function runNpmSelfUpdate() {
   }
 
   // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
+  // Do not treat a live runtime port of 10100 as "missing" — track whether the read succeeded.
   let bakePort = 10100;
+  let sawRuntimePort = false;
   try {
     const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
-    if (Number.isFinite(rt?.port) && rt.port > 0) bakePort = Math.trunc(rt.port);
+    if (Number.isFinite(rt?.port) && rt.port > 0 && rt.port <= 65535) {
+      // Only trust runtime when its pid still looks alive (stale crash leftovers fall back to config).
+      const rtPid = Number(rt?.pid);
+      let runtimeLive = false;
+      if (Number.isSafeInteger(rtPid) && rtPid > 0) {
+        try {
+          process.kill(rtPid, 0);
+          runtimeLive = true;
+        } catch (e) {
+          if (e && typeof e === "object" && "code" in e && e.code === "EPERM") runtimeLive = true;
+        }
+      }
+      if (runtimeLive) {
+        bakePort = Math.trunc(rt.port);
+        sawRuntimePort = true;
+      }
+    }
   } catch { /* fall through to config */ }
-  if (bakePort === 10100) {
+  if (!sawRuntimePort) {
     try {
       const cfg = JSON.parse(readFileSync(join(configDir(), "config.json"), "utf8"));
-      if (Number.isFinite(cfg?.port) && cfg.port > 0) bakePort = Math.trunc(cfg.port);
+      if (Number.isFinite(cfg?.port) && cfg.port > 0 && cfg.port <= 65535) bakePort = Math.trunc(cfg.port);
     } catch { /* keep default */ }
   }
 

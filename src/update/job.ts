@@ -373,11 +373,17 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
   const now = new Date().toISOString();
   // Capture the live listen target BEFORE the update command runs: the stop-first update
   // flow clears pid/runtime state, so this is the last moment the real port is knowable.
+  // Only trust runtime-port.json when its pid matches the live pidfile process.
   const rt = readRuntimePort();
+  const livePid = readPid();
   const preUpdateConfig = loadConfig();
+  const runtimeTrusted = !!(rt && livePid && rt.pid === livePid);
+  const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
+    ? preUpdateConfig.port
+    : 10100;
   const captured = {
-    port: rt?.port ?? preUpdateConfig.port ?? 10100,
-    hostname: rt?.hostname ?? preUpdateConfig.hostname ?? "127.0.0.1",
+    port: runtimeTrusted ? rt.port : configPort,
+    hostname: (runtimeTrusted ? rt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
   };
   if (!job) {
     job = {

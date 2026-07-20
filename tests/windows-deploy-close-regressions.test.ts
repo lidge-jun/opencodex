@@ -26,7 +26,9 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
   test("service update restart bakes OCX_BAKE_PORT so wrappers hard-pin the captured port", () => {
     expect(src).toContain("OCX_BAKE_PORT");
     expect(src).toContain("reinstalling service with pinned --port");
+    expect(src).toContain("runtimeTrusted");
     expect(read("src/cli/index.ts")).toContain("allowEphemeralFallback: !hardPin");
+    expect(read("src/cli/index.ts")).toContain("Not opening the GUI");
     expect(read("src/server/ports.ts")).toContain("allowEphemeralFallback");
   });
 });

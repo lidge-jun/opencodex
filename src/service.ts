@@ -245,6 +245,8 @@ function shellQuote(value: string): string {
 /**
  * Listen port baked into service wrappers / WinSW XML.
  * Priority: explicit override → OCX_BAKE_PORT (update restart) → config.port → 10100.
+ * `config.port === 0` means ephemeral for interactive start; services need a stable pin,
+ * so treat 0 / invalid like unset (default 10100) instead of baking `--port 0`.
  */
 export function resolveServiceListenPort(override?: number): number {
   if (typeof override === "number" && Number.isFinite(override) && override > 0 && override <= 65535) {
@@ -255,7 +257,9 @@ export function resolveServiceListenPort(override?: number): number {
     const n = Number(baked);
     if (n > 0 && n <= 65535) return n;
   }
-  return loadConfig().port ?? 10100;
+  const configured = loadConfig().port;
+  if (typeof configured === "number" && configured > 0 && configured <= 65535) return configured;
+  return 10100;
 }
 
 function buildServiceShellCommand(bun: string, cli: string, port = resolveServiceListenPort()): string {
