@@ -691,6 +691,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
     baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    allowBaseUrlOverride: true,
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=plan",

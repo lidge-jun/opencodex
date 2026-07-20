@@ -418,7 +418,9 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual([
+      "ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan", "litellm",
+    ]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
