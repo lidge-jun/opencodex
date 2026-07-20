@@ -404,9 +404,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
             console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
           }
         }
+        // Do NOT map Responses item `id` (fc_/ctc_/…) onto `thoughtSignature`. That field is
+        // reserved for Gemini/Antigravity opaque thought tokens; forwarding item ids as
+        // thoughtSignature 400s Antigravity (Base64 / TYPE_BYTES). Continuity for CCA comes from
+        // the in-process replay cache (and any already-real signature stored on the tool call).
         const toolCall: OcxToolCall = {
           type: "toolCall", id: call.call_id, name: call.name, arguments: args,
-          ...(call.id ? { thoughtSignature: call.id } : {}),
           ...(call.namespace ? { namespace: call.namespace } : {}),
         };
         assistantHolderWithReasoning().content.push(toolCall);
@@ -419,7 +422,6 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
           customWireName: call.name,
-          ...(call.id ? { thoughtSignature: call.id } : {}),
         };
         assistantHolderWithReasoning().content.push(toolCall);
         continue;
