@@ -108,6 +108,9 @@ describe("usage log", () => {
       { ...valid(2), status: 200.5 },
       { ...valid(2), inputTokenEstimate: -1 },
       { ...valid(2), totalTokens: -1 },
+      { ...valid(2), firstOutputMs: -1 },
+      { ...valid(2), firstOutputMs: null },
+      { ...valid(2), firstOutputMs: "3" },
       { ...valid(2), usage: { inputTokens: "2", outputTokens: 1 } },
       { ...valid(2), usage: { inputTokens: 2, outputTokens: "1" } },
     ];
@@ -128,6 +131,76 @@ describe("usage log", () => {
       expect(entry?.requestId).toBe("parent");
       expect(entry?.attempts?.map(attempt => attempt.ordinal)).toEqual([1, 3]);
     }
+  });
+
+  test("persists parent and attempt firstOutputMs roundtrip (WP4 TTFT)", () => {
+    appendUsageEntry({
+      requestId: "ocx-ttft",
+      timestamp: 1,
+      provider: "a",
+      model: "m1",
+      status: 200,
+      durationMs: 20,
+      firstOutputMs: 7,
+      usageStatus: "reported",
+      usage: { inputTokens: 10, outputTokens: 5 },
+      totalTokens: 15,
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 18,
+        firstOutputMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "reported",
+        usage: { inputTokens: 10, outputTokens: 5 },
+        totalTokens: 15,
+      }],
+    });
+    const [entry] = readUsageEntries();
+    expect(entry?.firstOutputMs).toBe(7);
+    expect(entry?.attempts?.[0]?.firstOutputMs).toBe(3);
+  });
+
+  test("omits malformed parent firstOutputMs without dropping the entry (direct input)", () => {
+    // JSON.stringify turns Infinity/NaN into null, so exercise appendUsageEntry directly
+    // (audit blocker #3): the normalizer must omit non-finite values at write time.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -5]) {
+      rmSync(usageLogPath(), { force: true });
+      appendUsageEntry({
+        requestId: "ocx-ttft-bad",
+        timestamp: 1,
+        provider: "a",
+        model: "m1",
+        status: 200,
+        durationMs: 20,
+        firstOutputMs: bad,
+        usageStatus: "reported",
+        usage: { inputTokens: 10, outputTokens: 5 },
+      });
+      const [entry] = readUsageEntries();
+      expect(entry?.requestId).toBe("ocx-ttft-bad");
+      expect(entry).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("legacy lines without firstOutputMs stay readable and unset", () => {
+    writeFileSync(usageLogPath(), `${JSON.stringify({
+      requestId: "legacy",
+      timestamp: 1,
+      provider: "a",
+      model: "m1",
+      status: 200,
+      durationMs: 5,
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    })}\n`);
+    const [entry] = readUsageEntries();
+    expect(entry?.requestId).toBe("legacy");
+    expect(entry).not.toHaveProperty("firstOutputMs");
   });
 
   test("ignores malformed attempt arrays and keeps legacy parents readable", () => {

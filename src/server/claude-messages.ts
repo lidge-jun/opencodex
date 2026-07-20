@@ -25,7 +25,7 @@ import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
-import { addFinalRequestLog, httpStatusForTerminalStatus, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 
@@ -657,6 +657,7 @@ export async function handleClaudeMessages(
   };
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
     abortSignal: req.signal,
+    ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });

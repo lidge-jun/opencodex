@@ -58,6 +58,7 @@ import {
   httpStatusForTerminalStatus,
   inspectResponseLogSsePayload,
   nextRequestLogId,
+  recordFirstOutput,
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
@@ -407,6 +408,7 @@ export function startServer(port?: number) {
         };
         const response = await handleResponses(req, config, logCtx, {
           abortSignal: req.signal,
+          onFirstOutput: () => recordFirstOutput(logCtx, start),
           onNativePassthroughTerminal: status => {
             finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
               terminalStatus: status,
@@ -553,6 +555,7 @@ export function startServer(port?: number) {
             const response = await handleResponses(req, config, logCtx, {
               forceEmptyResponseId: true,
               abortSignal: turnAbort.signal,
+              onFirstOutput: () => recordFirstOutput(logCtx, start),
               onCodexAuthContextResolved: context => updateCodexWebSocketAuthContext(ws, context),
               recordTerminalOutcomes: false,
               setTerminalOutcomeRecorder: recorder => {

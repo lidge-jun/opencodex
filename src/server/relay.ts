@@ -6,6 +6,7 @@ import {
   httpStatusForRequestLogTerminal,
   inspectResponseLogJson,
   inspectResponseLogSsePayload,
+  recordFirstOutput,
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
@@ -107,6 +108,34 @@ export function sseDataPayload(block: string): string | null {
 }
 
 export function terminalStatusFromSsePayload(payload: string): ResponsesTerminalStatus | null {
+  return terminalStatusFromSsePayloadInner(payload);
+}
+
+/** True when a native Responses SSE payload carries the FIRST kind of non-empty model output. */
+export function isFirstOutputSsePayload(payload: string | null): boolean {
+  if (!payload || payload === "[DONE]") return false;
+  try {
+    const event = JSON.parse(payload) as { type?: unknown; delta?: unknown };
+    return (event.type === "response.output_text.delta"
+      || event.type === "response.reasoning_summary_text.delta"
+      || event.type === "response.reasoning_text.delta")
+      && typeof event.delta === "string"
+      && event.delta.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function createFirstOutputReporter(onFirstOutput?: () => void): (payload: string | null) => void {
+  let reported = false;
+  return payload => {
+    if (reported || !isFirstOutputSsePayload(payload)) return;
+    reported = true;
+    try { onFirstOutput?.(); } catch { /* metrics must not break the stream */ }
+  };
+}
+
+function terminalStatusFromSsePayloadInner(payload: string): ResponsesTerminalStatus | null {
   if (payload === "[DONE]") return null;
   try {
     const json = JSON.parse(payload) as { type?: unknown };
@@ -144,11 +173,13 @@ export function trackSseForRequestLog(
   onTerminal: (status: ResponsesTerminalStatus) => void,
   onCancel: () => void,
   logCtx?: RequestLogContext,
+  onFirstOutput?: () => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let terminalReported = false;
+  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported) return;
@@ -159,6 +190,7 @@ export function trackSseForRequestLog(
   const inspectPayload = (payload: string | null) => {
     if (!payload) return;
     if (logCtx) inspectResponseLogSsePayload(logCtx, payload);
+    reportFirstOutput(payload);
     const status = terminalStatusFromSsePayload(payload);
     if (status) reportTerminal(status);
   };
@@ -264,6 +296,7 @@ export function responseWithDeferredRequestLog(
       addFinalRequestLog(requestId, start, logCtx, 499, { closeReason: "client_cancel" }, addLog);
     },
     logCtx,
+    () => recordFirstOutput(logCtx, start),
   );
   return new Response(body, {
     status: response.status,
@@ -379,12 +412,14 @@ export function consumeForInspection(
   logCtx?: RequestLogContext,
   onCancel?: () => void,
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void,
+  onFirstOutput?: () => void,
 ): void {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let reported = false;
   let cancelled = false;
+  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
   if (signal) {
     if (signal.aborted) {
       // Aborted before we could read anything (Codex disconnects the instant it finishes reading).
@@ -413,6 +448,7 @@ export function consumeForInspection(
           if (buffer.trim() && !reported) {
             const payload = sseDataPayload(buffer);
             if (logCtx) inspectResponseLogSsePayload(logCtx, payload);
+            reportFirstOutput(payload);
             if (payload) {
               const status = terminalStatusFromSsePayload(payload);
               if (status) { reported = true; onTerminal(status); }
@@ -432,6 +468,7 @@ export function consumeForInspection(
           if (reported && !onCompletedResponse) continue;
           const payload = sseDataPayload(next.block);
           if (!reported && logCtx) inspectResponseLogSsePayload(logCtx, payload);
+          reportFirstOutput(payload);
           if (!payload) continue;
           if (!reported) {
             const status = terminalStatusFromSsePayload(payload);
@@ -458,10 +495,12 @@ export function consumeForResponseLogMetadata(
   signal?: AbortSignal,
   onDone?: () => void,
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void,
+  onFirstOutput?: () => void,
 ): void {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
   if (signal) {
     if (signal.aborted) {
       reader.cancel(signal.reason).catch(() => {});
@@ -481,6 +520,7 @@ export function consumeForResponseLogMetadata(
           if (buffer.trim()) {
             const payload = sseDataPayload(buffer);
             inspectResponseLogSsePayload(logCtx, payload);
+            reportFirstOutput(payload);
             if (payload && onCompletedResponse) {
               const response = completedResponseFromSsePayload(payload);
               if (response) onCompletedResponse(response);
@@ -494,6 +534,7 @@ export function consumeForResponseLogMetadata(
           buffer = next.rest;
           const payload = sseDataPayload(next.block);
           inspectResponseLogSsePayload(logCtx, payload);
+          reportFirstOutput(payload);
           if (payload && onCompletedResponse) {
             const response = completedResponseFromSsePayload(payload);
             if (response) onCompletedResponse(response);

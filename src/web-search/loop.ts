@@ -186,6 +186,8 @@ export interface WebSearchLoopDeps {
    * sidecar search, so a legitimately slow-but-progressing unit never trips the bridge watchdog.
    */
   stallTimeoutSec?: number;
+  /** One-shot TTFT callback: first non-empty model output observed (WP4). */
+  onFirstOutput?: () => void;
   /**
    * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
    * or null when the pool is exhausted (same semantics as the normal routed path).
@@ -550,6 +552,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
+      ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });

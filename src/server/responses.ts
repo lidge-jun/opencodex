@@ -462,6 +462,8 @@ interface ConsumedComboFailure {
 interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
+  /** One-shot TTFT callback: first non-empty model output observed (WP4). */
+  onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
   recordTerminalOutcomes?: boolean;
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus) => void) | undefined) => void;
@@ -634,6 +636,14 @@ async function handleComboResponses(
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
+        // Object.assign(logCtx, childLog) would overwrite the request-relative value).
+        onFirstOutput: () => {
+          if (attempt.firstOutputMs === undefined) {
+            attempt.firstOutputMs = Math.max(0, Date.now() - started);
+          }
+          options.onFirstOutput?.();
+        },
         onCodexAuthContextResolved: value => { resolvedAuth = value; },
         setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
         onConsumedComboFailure: value => { consumedChildFailure = value; },
@@ -1176,9 +1186,17 @@ export async function handleResponses(
           logCtx,
           () => options.onNativePassthroughCancel?.(),
           rememberPassthroughResponse,
+          options.onFirstOutput,
         );
       } else {
-        consumeForResponseLogMetadata(inspectBody, logCtx, turnAc.signal, () => unregisterTurn(turnAc), rememberPassthroughResponse);
+        consumeForResponseLogMetadata(
+          inspectBody,
+          logCtx,
+          turnAc.signal,
+          () => unregisterTurn(turnAc),
+          rememberPassthroughResponse,
+          options.onFirstOutput,
+        );
       }
       if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
@@ -1266,6 +1284,7 @@ export async function handleResponses(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
           ...(routedCompaction ? {} : { onCompletedResponse: (response: Record<string, unknown>) => rememberResponseState(parsed._rawBody, response, parsed._cursorConversationId) }),
         },
@@ -1317,6 +1336,7 @@ export async function handleResponses(
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
+      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
@@ -1529,6 +1549,7 @@ export async function handleResponses(
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
         // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
         // PRE-compaction history, and a later previous_response_id expansion would rehydrate the

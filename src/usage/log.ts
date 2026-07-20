@@ -20,6 +20,8 @@ export interface PersistedUsageAttempt {
   adapter: string;
   status: number;
   durationMs: number;
+  /** TTFT relative to THIS attempt's start (WP4); unset for non-streaming/tool-only. */
+  firstOutputMs?: number;
   sendCount: number;
   recoveryKinds: AttemptRecoveryKind[];
   usageStatus: UsageStatus;
@@ -39,6 +41,8 @@ export interface PersistedUsageEntry {
   requestedModel?: string;
   status: number;
   durationMs: number;
+  /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
+  firstOutputMs?: number;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -151,6 +155,8 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   }
   if ("inputTokenEstimate" in attempt
     && !isNonNegativeFiniteNumber(attempt.inputTokenEstimate)) return null;
+  if ("firstOutputMs" in attempt
+    && !isNonNegativeFiniteNumber(attempt.firstOutputMs)) return null;
   if ("totalTokens" in attempt
     && !isNonNegativeFiniteNumber(attempt.totalTokens)) return null;
   const usage = "usage" in attempt ? normalizeAttemptUsage(attempt.usage) : undefined;
@@ -168,6 +174,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     adapter: attempt.adapter,
     status: attempt.status,
     durationMs: attempt.durationMs,
+    ...(isNonNegativeFiniteNumber(attempt.firstOutputMs)
+      ? { firstOutputMs: attempt.firstOutputMs }
+      : {}),
     sendCount: attempt.sendCount as number,
     recoveryKinds,
     usageStatus: attempt.usageStatus as UsageStatus,
@@ -200,6 +209,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
+    ...(isNonNegativeFiniteNumber(entry.firstOutputMs)
+      ? { firstOutputMs: entry.firstOutputMs }
+      : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),

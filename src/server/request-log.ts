@@ -29,6 +29,8 @@ import {
 export interface RequestLogContext {
   model: string;
   provider: string;
+  /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
+  firstOutputMs?: number;
   surface?: "claude";
   requestedModel?: string;
   requestedEffort?: string;
@@ -65,6 +67,8 @@ export interface RequestLogEntry {
   timestamp: number;
   model: string;
   provider: string;
+  /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
+  firstOutputMs?: number;
   surface?: "claude";
   requestedModel?: string;
   requestedEffort?: string;
@@ -117,6 +121,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
+      ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
@@ -131,6 +136,26 @@ export function addRequestLog(entry: RequestLogEntry) {
 export function nextRequestLogId(timestamp = Date.now()): string {
   requestLogSeq = (requestLogSeq % 1_000_000) + 1;
   return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
+}
+
+/**
+ * One-shot TTFT recorder (WP4). Records the first non-empty model output moment
+ * relative to the request start, and — when a combo attempt is in flight —
+ * relative to that attempt's start as well. Later calls are no-ops, so both the
+ * bridge callback and the deferred SSE tap may fire without double-recording.
+ */
+export function recordFirstOutput(
+  logCtx: RequestLogContext,
+  requestStartedAt: number,
+  now = Date.now(),
+): void {
+  if (!Number.isFinite(requestStartedAt) || !Number.isFinite(now)) return;
+  const requestElapsed = Math.max(0, now - requestStartedAt);
+  if (logCtx.firstOutputMs === undefined) logCtx.firstOutputMs = requestElapsed;
+  if (logCtx.activeAttempt && logCtx.activeAttempt.firstOutputMs === undefined) {
+    const attemptStartedAt = logCtx.activeAttemptStartedAt ?? requestStartedAt;
+    logCtx.activeAttempt.firstOutputMs = Math.max(0, now - attemptStartedAt);
+  }
 }
 
 export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
@@ -456,6 +481,7 @@ export function addFinalRequestLog(
     ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
     status: effectiveStatus,
     durationMs: Date.now() - start,
+    ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),

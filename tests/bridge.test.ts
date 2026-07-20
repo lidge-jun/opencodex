@@ -27,6 +27,59 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("Responses bridge reasoning and usage parity", () => {
+  test("first-output callback fires once on first non-empty delta (heartbeat/empty skipped)", async () => {
+    let firstOutputs = 0;
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "heartbeat" },
+      { type: "text_delta", text: "" },
+      { type: "thinking_delta", thinking: "" },
+      { type: "reasoning_raw_delta", text: "thinking..." },
+      { type: "text_delta", text: "answer" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      onFirstOutput: () => { firstOutputs += 1; },
+    }));
+    expect(firstOutputs).toBe(1);
+  });
+
+  test("first-output callback fires once for plain text streams", async () => {
+    let firstOutputs = 0;
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: " world" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      onFirstOutput: () => { firstOutputs += 1; },
+    }));
+    expect(firstOutputs).toBe(1);
+  });
+
+  test("first-output callback ignores tool-only streams", async () => {
+    let firstOutputs = 0;
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end", id: "call_1" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      onFirstOutput: () => { firstOutputs += 1; },
+    }));
+    expect(firstOutputs).toBe(0);
+  });
+
+  test("first-output callback still fires for hidden reasoning", async () => {
+    let firstOutputs = 0;
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "thinking_delta", thinking: "hidden thought" },
+      { type: "text_delta", text: "visible" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      onFirstOutput: () => { firstOutputs += 1; },
+      hideThinkingSummary: true,
+    }));
+    expect(firstOutputs).toBe(1);
+  });
+
   test("streaming raw reasoning emits reasoning_text deltas and final raw content", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "reasoning_raw_delta", text: "raw detail" },
