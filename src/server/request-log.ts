@@ -11,7 +11,7 @@ import type { OcxUsage } from "../types";
 import { redactSecretString } from "../lib/redact";
 import {
   appendUsageEntry,
-  readUsageEntries,
+  readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
@@ -130,6 +130,15 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+    ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
+    ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
+    ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
+    ...(entry.configuredSpeedLabel ? { configuredSpeedLabel: entry.configuredSpeedLabel } : {}),
+    ...(entry.modelSupportsServiceTier !== undefined
+      ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
+      : {}),
+    ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
@@ -147,21 +156,32 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
 /**
  * Seed the in-memory Logs ring buffer from usage.jsonl so GUI /api/logs survives
  * `ocx stop` / `ocx start` (process restart). Idempotent per process; no-ops when
- * the buffer already has live entries.
+ * the buffer already has live entries. Read failures are non-fatal (same as /api/usage).
  */
 export function hydrateRequestLogsFromDisk(
-  reader: () => PersistedUsageEntry[] = readUsageEntries,
+  reader: () => PersistedUsageEntry[] = () => readRecentUsageEntries(MAX_LOG_SIZE),
 ): number {
   if (requestLogsHydratedFromDisk) return 0;
-  requestLogsHydratedFromDisk = true;
-  if (requestLog.length > 0) return 0;
-  const persisted = reader();
-  if (persisted.length === 0) return 0;
-  const slice = persisted.length > MAX_LOG_SIZE
-    ? persisted.slice(persisted.length - MAX_LOG_SIZE)
-    : persisted;
-  for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
-  return slice.length;
+  if (requestLog.length > 0) {
+    requestLogsHydratedFromDisk = true;
+    return 0;
+  }
+  try {
+    const persisted = reader();
+    requestLogsHydratedFromDisk = true;
+    if (persisted.length === 0) return 0;
+    const slice = persisted.length > MAX_LOG_SIZE
+      ? persisted.slice(persisted.length - MAX_LOG_SIZE)
+      : persisted;
+    for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
+    return slice.length;
+  } catch (err) {
+    requestLogsHydratedFromDisk = true;
+    console.warn(
+      `[request-log] failed to hydrate from usage.jsonl: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
+  }
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
@@ -187,6 +207,15 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+      ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+      ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
+      ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
+      ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
+      ...(entry.configuredSpeedLabel ? { configuredSpeedLabel: entry.configuredSpeedLabel } : {}),
+      ...(entry.modelSupportsServiceTier !== undefined
+        ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
+        : {}),
+      ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),

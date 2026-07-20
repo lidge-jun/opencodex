@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendUsageEntry,
+  readRecentUsageEntries,
   readUsageEntries,
   usageForFinalLog,
   usageLogPath,
@@ -411,5 +412,56 @@ describe("usage log", () => {
       },
       totalTokens: 110,
     });
+  });
+
+  test("persists and reads back effort / service-tier GUI metadata", () => {
+    appendUsageEntry({
+      requestId: "ocx-effort",
+      timestamp: 9,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      requestedModel: "gpt-5.6-sol",
+      requestedEffort: "high",
+      requestedServiceTier: "priority",
+      requestedSpeedLabel: "fast",
+      configuredServiceTier: "auto",
+      modelSupportsServiceTier: true,
+      responseServiceTier: "priority",
+      status: 200,
+      durationMs: 5,
+      usageStatus: "unreported",
+    });
+    expect(readUsageEntries()[0]).toMatchObject({
+      requestId: "ocx-effort",
+      requestedEffort: "high",
+      requestedServiceTier: "priority",
+      requestedSpeedLabel: "fast",
+      configuredServiceTier: "auto",
+      modelSupportsServiceTier: true,
+      responseServiceTier: "priority",
+    });
+  });
+
+  test("readRecentUsageEntries returns only the newest N rows", () => {
+    for (let i = 0; i < 12; i++) {
+      appendUsageEntry({
+        requestId: `ocx-tail-${i}`,
+        timestamp: i,
+        provider: "openai",
+        model: "gpt",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "unreported",
+      });
+    }
+    expect(readRecentUsageEntries(5).map(e => e.requestId)).toEqual([
+      "ocx-tail-7",
+      "ocx-tail-8",
+      "ocx-tail-9",
+      "ocx-tail-10",
+      "ocx-tail-11",
+    ]);
+    expect(readRecentUsageEntries(0)).toEqual([]);
+    expect(readRecentUsageEntries(-1)).toEqual([]);
   });
 });

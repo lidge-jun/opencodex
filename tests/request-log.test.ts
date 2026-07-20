@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   filterRequestLogs,
   addFinalRequestLog,
@@ -833,6 +833,11 @@ describe("request log restart hydrate", () => {
       provider: "chatgpt-pabcdef",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
+      requestedEffort: "high",
+      requestedServiceTier: "priority",
+      requestedSpeedLabel: "fast",
+      configuredServiceTier: "auto",
+      modelSupportsServiceTier: true,
       status: 502,
       durationMs: 42,
       usageStatus: "unreported",
@@ -847,6 +852,11 @@ describe("request log restart hydrate", () => {
       provider: "chatgpt-pabcdef",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
+      requestedEffort: "high",
+      requestedServiceTier: "priority",
+      requestedSpeedLabel: "fast",
+      configuredServiceTier: "auto",
+      modelSupportsServiceTier: true,
       status: 502,
       durationMs: 42,
       usageStatus: "unreported",
@@ -878,6 +888,7 @@ describe("request log restart hydrate", () => {
         timestamp: 2,
         provider: "openai",
         model: "gpt-b",
+        requestedEffort: "xhigh",
         status: 502,
         durationMs: 9,
         usageStatus: "unreported",
@@ -895,6 +906,7 @@ describe("request log restart hydrate", () => {
       status: 502,
       errorCode: "upstream_server_error",
       upstreamError: "Provider unreachable",
+      requestedEffort: "xhigh",
     });
 
     // Idempotent: a second start in the same process must not duplicate.
@@ -917,5 +929,23 @@ describe("request log restart hydrate", () => {
     const ids = getRequestLogEntries().map(e => e.requestId);
     expect(ids[0]).toBe("ocx-5");
     expect(ids.at(-1)).toBe("ocx-204");
+  });
+
+  test("hydrate swallows usage.jsonl read failures instead of crashing startup", () => {
+    clearRequestLogsForTests();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(hydrateRequestLogsFromDisk(() => {
+        throw new Error("EISDIR: illegal operation on a directory");
+      })).toBe(0);
+      expect(getRequestLogEntries()).toHaveLength(0);
+      expect(warn).toHaveBeenCalled();
+      // Still idempotent after the failed attempt.
+      expect(hydrateRequestLogsFromDisk(() => {
+        throw new Error("should not run");
+      })).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
