@@ -280,6 +280,7 @@ ocx codex-shim install         # run `ocx ensure` whenever `codex` is launched
 ocx status                     # is the proxy running?
 ocx login <provider>          # OAuth login (xai, anthropic, kimi, cursor, ...)
 ocx logout <provider>          # remove a stored login
+ocx account <list|current|use> # list/switch accounts & API-key pools (masked; also refresh/auto-switch/remove/add-key)
 ocx gui                        # open the web dashboard
 ocx claude [args...]           # launch Claude Code wired to the proxy (model discovery on)
 ocx service [install|start|stop|status|uninstall]   # install/update/start background service

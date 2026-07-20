@@ -192,6 +192,135 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ```
 
+### `ocx account <subcommand>`
+
+실행 중인 프록시를 통해 프로바이더 계정과 API-key pool을 조회하고 전환합니다. 배포된 도움말의
+명령 표면은 다음과 같습니다.
+
+```text
+ocx account <list|current|use|refresh|auto-switch|remove|add-key> ...
+
+List and switch provider accounts and API-key pools (GUI parity).
+
+list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+current <provider>  Show the active account or key.
+use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+refresh <provider>  Force-refresh Codex or provider quota reports.
+auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
+remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+add-key <provider> [--label <label>]  Add a key read only from piped stdin.
+Codex pool switches apply to new sessions; running threads keep their account.
+```
+
+모든 하위 명령은 프록시가 실행 중이어야 하며 CLI가 기록된 런타임 포트를 자동으로 찾습니다. 성공은
+종료 코드 0을 반환합니다. 잘못된 사용법, 알 수 없는 프로바이더나 계정/key id, 프록시 연결 실패,
+API 오류는 종료 코드 1입니다. 자격 증명 필드는 management API가 반환한 그대로(API가 적용한
+마스킹 포함) 표시하며, 원본 API key와 OAuth token은 반환하지 않습니다. 화면 편의 값은 대시보드와
+같은 방식으로 CLI가 합성합니다: `main`은 `openai` 계정 풀의 Codex App 로그인 별칭이고, 이메일이
+없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan → 마스킹 이메일 → label →
+마스킹 key 순으로 대체합니다.
+
+`--json`의 계정 행은 아래 공통 형태를 사용합니다(값이 없으면 선택 필드는 생략됩니다).
+
+```json
+{
+  "provider": "openai",
+  "type": "codex | oauth | api-key",
+  "id": "__main__",
+  "label": "plus",
+  "email": "m***@example.com",
+  "plan": "plus",
+  "masked": "sk-ab****wxyz",
+  "active": true,
+  "needsReauth": false,
+  "quota": null
+}
+```
+
+#### `ocx account list [provider] [--json] [--all]`
+
+프로바이더를 생략하면 Codex pool, OAuth 계정, 설정된 API-key pool을 모두 나열합니다. 빈
+프로바이더는 `--all`을 지정하지 않으면 건너뛰며, 프로바이더를 지정하면 해당 자격 증명 family만
+조회합니다. 일반 출력 열은 `PROVIDER TYPE ID PLAN/LABEL STATUS`이고 고정된 Codex 행에는
+`next session`이 표시됩니다. 저장된 Kiro 계정이 있으면 로그인 슬롯이 하나이며 다시 로그인하면 현재 계정이
+교체된다는 안내가 나옵니다. 결과가 비어 있어도 성공입니다. `--json`은 다음을 반환합니다.
+
+```text
+{ accounts: AccountRow[], notes: string[] }
+```
+
+#### `ocx account current <provider> [--json]`
+
+활성 계정이나 key를 표시합니다. 수동 pin이 없는 Codex pool은 사용량이 가장 낮은 계정을 자동으로
+선택한다고 표시합니다. 다른 family에 활성 자격 증명이 없어도 그 상태를 알리고 종료 코드 0을
+반환합니다. `--json` 형태는 다음과 같습니다.
+
+```text
+{ provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
+```
+
+#### `ocx account use <provider> <account-or-key-id|main> [--json]`
+
+기존 Codex 계정, OAuth 계정 또는 API key를 선택합니다. `openai`에서 `main`은 Codex App 로그인을
+선택합니다. Codex 선택은 **새 세션**부터 적용되며 기존 thread는 현재 계정을 유지합니다. auto-switch
+threshold가 켜져 있으면 나중에 수동 pin을 덮어쓸 수 있습니다. 알 수 없는 프로바이더나 id는 종료
+코드 1입니다. `--json`은 다음을 반환합니다.
+
+```text
+{ ok: true, provider, type, activeId }
+```
+
+#### `ocx account refresh <provider> [--json]`
+
+Codex pool은 `ocx account refresh openai [--json]`을 사용합니다. 계정 quota를 강제로 새로 고치고
+확인 가능한 주간/월간 백분율과 reset 시각을 표시합니다. quota 정보가 없으면 0%가 아니라 unknown으로
+표시합니다. JSON envelope은 `{ accounts: AccountRow[] }`이며 각 Codex 행에 `quota`가 들어갑니다.
+
+OAuth 및 API-key 프로바이더에서는 provider quota-report endpoint를 강제로 새로 고칩니다. token
+재로그인이나 단순 account-list 재조회가 아닙니다. `--json`은
+`{ provider, report: ProviderQuotaReport | null }`을 반환합니다. 지원되는 quota report가 없으면
+`no quota report available for <provider>`를 출력하고 종료 코드 0을 반환합니다. 알 수 없는
+프로바이더와 management API 오류는 종료 코드 1이며, upstream quota probe가 실패하거나 시간
+초과되면 대시보드의 quota 막대와 마찬가지로 null/오래된 report로 저하되어 종료 코드 0을
+반환합니다.
+
+#### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+
+`openai` Codex 계정 pool만 제어합니다. `on`은 80%, `off`는 0%로 설정하고 `status`는 현재 값을
+읽습니다. `threshold <n>`은 0부터 100까지의 정수만 받습니다. 다른 프로바이더나 잘못된 값은 종료
+코드 1입니다. `--json`은 다음을 반환합니다.
+
+```text
+{ provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+#### `ocx account remove <provider> <id|main> --yes [--json]`
+
+보호된 비대화형 삭제이므로 `--yes`가 필수입니다. 삭제 전에 id 존재 여부를 확인하며, 없는 id는
+DELETE를 보내지 않고 종료 코드 1을 반환합니다. 메인 Codex App 로그인은 제거할 수 없으므로
+`remove openai main --yes`도 거부합니다. 삭제 후 family를 다시 읽습니다. 고정된 Codex 계정을
+지우면 pin이 해제되어 자동 선택으로 돌아가고, OAuth는 남은 첫 계정을 활성화하거나 계정 없음으로
+표시하며, API-key pool은 남은 첫 key를 활성화하거나 key 없음으로 표시합니다. `--json`의 성공/실패
+형태는 다음과 같습니다.
+
+```text
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ error: string } // stderr, exit 1
+```
+
+#### `ocx account add-key <provider> [--label <label>] [--json]`
+
+API-key 프로바이더에 key를 추가하고 활성화합니다. key는 TTY가 아닌 pipe/redirect stdin으로만
+읽습니다. 대화형 TTY 입력, 빈 입력, OAuth/Codex 프로바이더, API 오류는 종료 코드 1입니다. label
+안에 key가 들어 있어도 key를 절대 echo하지 않습니다. secret manager나 here-string을 사용하세요.
+
+```bash
+ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ocx account add-key openrouter --json
+```
+
+`--json`은 `{ ok: true, id: string | null, label?: string }`을 반환하며 key를 포함하지 않습니다.
+
 ## 인증
 
 ### `ocx login <provider>`

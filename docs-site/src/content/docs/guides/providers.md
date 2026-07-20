@@ -137,6 +137,13 @@ under `provider.apiKeyPool`, makes it active, and mirrors it to `provider.apiKey
 adapters continue to read the same field as before. The same dropdown can switch or remove keys; the
 management API is `/api/providers/keys` and returns masked keys only.
 
+### Switching accounts from the terminal
+
+Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect or switch the same
+Codex, OAuth, and API-key pools without opening the dashboard. See the
+[CLI reference](/opencodex/reference/cli/#ocx-account-subcommand) for commands, JSON output, and
+new-session behavior.
+
 ### GPT-5.6 preview paths
 
 GPT-5.6 Sol/Terra/Luna are seeded in provider fallback lists so `ocx sync` can keep the models
