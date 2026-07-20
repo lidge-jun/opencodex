@@ -9,7 +9,9 @@ import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   getCodexUpstreamHealth,
+  isCodexAccountSoftAvoided,
   recordCodexUpstreamOutcome,
+  resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { loadConfig, saveConfig } from "../src/config";
 import { deriveProviderPresets } from "../src/providers/derive";
@@ -2482,6 +2484,67 @@ describe("server local API auth", () => {
         consecutiveFailures: 1,
         lastFailureStatus: 0,
       });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("compact connect failure records pool health and soft-avoids the pinned thread", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("pool-a");
+    clearAccountNeedsReauth("pool-b");
+
+    redirectCanonicalCodexTo("http://127.0.0.1:9/");
+    const cfg = {
+      port: 0,
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: poolProviders(),
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+        { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" },
+      ],
+      activeCodexAccountId: "pool-a",
+      upstreamFailoverThreshold: 3,
+      connectTimeoutMs: 200,
+    } as OcxConfig;
+    saveConfig(cfg);
+    for (const id of ["pool-a", "pool-b"] as const) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}-access-token`,
+        refreshToken: `${id}-refresh-token`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `acct-${id}`,
+      });
+    }
+    updateAccountQuota("pool-a", 10, 5);
+    updateAccountQuota("pool-b", 20, 5);
+    expect(resolveCodexAccountForThread("compact-sticky", cfg)).toBe("pool-a");
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses/compact", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer inbound-main-token",
+          "x-codex-parent-thread-id": "compact-sticky",
+        },
+        body: JSON.stringify({ model: "gpt-test", input: [] }),
+      });
+
+      expect(response.status).toBe(502);
+      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+        consecutiveFailures: 1,
+        lastFailureStatus: 0,
+      });
+      expect(isCodexAccountSoftAvoided("pool-a")).toBe(true);
+      expect(resolveCodexAccountForThread("compact-sticky", cfg)).toBe("pool-b");
     } finally {
       await server.stop(true);
     }

@@ -1732,10 +1732,11 @@ export async function handleResponsesCompact(
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
     // active for this thread while normal turns succeed.
     let compactProvider = route.provider;
+    let authCtx: CodexAuthContext = { kind: "main", accountId: null };
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
@@ -1766,19 +1767,54 @@ export async function handleResponsesCompact(
     const base = (compactProvider.baseUrl ?? "").replace(/\/$/, "");
     if (compactProvider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     const { reasoning: _reasoning, ...compactBody } = raw as typeof raw & { reasoning?: unknown };
+    const compactUrl = `${base}/responses/compact`;
+    const compactThreadId = req.headers.get("x-codex-parent-thread-id");
+    const connectMs = config.connectTimeoutMs ?? 200_000;
+    const recordCompactPoolOutcome = (outcome: CodexUpstreamOutcome, meta: { retryAfter?: string | null } = {}) => {
+      if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
+      recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+        ...meta,
+        threadId: compactThreadId,
+      });
+    };
     let upstream: Response;
     try {
-      upstream = await fetch(`${base}/responses/compact`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ ...compactBody, model: route.modelId }),
-        signal: req.signal,
-      });
-    } catch {
+      // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
+      // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
+      upstream = await fetchWithTransientRetry(
+        recovery => fetchWithHeaderTimeout(
+          compactUrl,
+          {
+            method: "POST",
+            headers: applyUpstreamRecoveryHeaders(headers, recovery),
+            body: JSON.stringify({ ...compactBody, model: route.modelId }),
+          },
+          req.signal,
+          connectMs,
+          false,
+          providerFetch(compactProvider),
+        ),
+        { abortSignal: req.signal, label: safeHostLabel(compactUrl) },
+      );
+    } catch (err) {
       if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+      recordCompactPoolOutcome(outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
-    return bufferCompactResponse(upstream, req.signal);
+    const retryAfter = upstream.headers.get("retry-after");
+    const buffered = await bufferCompactResponse(upstream, req.signal);
+    // Record pool health only after the body is fully delivered (or definitively failed).
+    // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
+    if (buffered.status === 499) {
+      return buffered;
+    }
+    if (upstream.ok && buffered.status >= 500) {
+      recordCompactPoolOutcome("connect_error");
+    } else {
+      recordCompactPoolOutcome(upstream.status, { retryAfter });
+    }
+    return buffered;
   }
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
