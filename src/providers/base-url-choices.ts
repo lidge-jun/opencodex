@@ -26,10 +26,11 @@ export function matchBaseUrlChoice(
   choices: readonly ProviderBaseUrlChoice[],
   baseUrl: string,
 ): string {
+  if (!choices.length) return "custom";
   const normalized = baseUrl.trim().replace(/\/+$/, "");
   for (const choice of choices) {
     if (!choice.baseUrl) continue;
-    if (choice.baseUrl.replace(/\/+$/, "") === normalized) return choice.id;
+    if (choice.baseUrl.trim().replace(/\/+$/, "") === normalized) return choice.id;
   }
-  return "custom";
+  return choices.some(c => c.id === "custom") ? "custom" : choices[0]!.id;
 }

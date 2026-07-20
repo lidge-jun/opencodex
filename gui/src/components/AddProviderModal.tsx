@@ -10,7 +10,7 @@ import {
 } from "../provider-payload";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
-import { baseUrlForChoice, matchChoiceId } from "../base-url-choice";
+import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -151,11 +151,15 @@ export default function AddProviderModal({
   const submit = async () => {
     if (!form) return;
     const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
+    const resolvedBaseUrl = preset?.baseUrlChoices?.length
+      ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
+      : form.baseUrl.trim();
     if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
-    if (!reserved && !form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
+    if (!reserved && !resolvedBaseUrl) { setError(t("modal.baseUrlRequired")); return; }
+    const submitForm = { ...form, baseUrl: resolvedBaseUrl };
     let postBody: { name: string; provider: ProviderPayload };
     try {
-      postBody = buildProviderPostBody(preset ?? { id: "custom" }, form);
+      postBody = buildProviderPostBody(preset ?? { id: "custom" }, submitForm);
     } catch {
       setError(t("modal.invalidPreset"));
       return;
