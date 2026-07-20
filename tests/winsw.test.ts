@@ -134,8 +134,11 @@ describe("winsw fail-closed lifecycle", () => {
     const winsw = readFileSync(new URL("../src/lib/winsw.ts", import.meta.url), "utf8");
     const fn = winsw.slice(winsw.indexOf("export function uninstallWinswService"), winsw.indexOf("export function winswStatusSummary"));
     expect(fn).toContain("!existsSync(winswExePath())");
-    expect(fn).toContain("probeScmRegistration() === true");
+    expect(fn).toContain("probeScmRegistration()");
     expect(fn).toContain('["delete", WINSW_SERVICE_ID]');
+    // An unverifiable registration (probe "error") must abort, not silently succeed.
+    expect(fn).toContain('probe === "error"');
+    expect(fn).toContain("Uninstall aborted");
   });
 });
 

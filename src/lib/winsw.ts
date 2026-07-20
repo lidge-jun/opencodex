@@ -297,11 +297,22 @@ export function uninstallWinswService(): void {
     // The binary is gone but the SCM registration can outlive it (quarantine, partial
     // uninstall). WinSW can't run without its exe, so remove the stale registration
     // directly via sc.exe — otherwise the SCM service survives every cleanup path.
-    if (process.platform === "win32" && probeScmRegistration() === true) {
-      try {
-        execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-      } catch { /* not running */ }
-      execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    if (process.platform === "win32") {
+      const probe = probeScmRegistration();
+      if (probe === "error") {
+        // Presence unknown — fail closed: keep service state, surface the failure
+        // instead of reporting a clean uninstall over a possibly-live registration.
+        throw new Error(
+          `Cannot verify the native service registration (sc.exe query failed). ` +
+            `Uninstall aborted; check 'sc query ${WINSW_SERVICE_ID}' and retry.`,
+        );
+      }
+      if (probe === true) {
+        try {
+          execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        } catch { /* not running */ }
+        execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      }
     }
     return;
   }
