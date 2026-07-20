@@ -112,4 +112,72 @@ describe("workspace account integration seam", () => {
     expect(source).not.toContain('onClick={() => !a.needsReauth && setConfirm(a)}');
     expect(source).not.toContain('onClick={() => !isMainActive ? setConfirm');
   });
+
+  test("wires active reauth health into workspace rail status", async () => {
+    const [shell, page] = await Promise.all([
+      Bun.file("gui/src/components/provider-workspace/ProviderWorkspaceShell.tsx").text(),
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+    ]);
+    expect(shell).toContain("applyActiveAccountReauth");
+    expect(shell).toContain("activeAccountNeedsReauth");
+    expect(page).toContain("activeAccountNeedsReauth");
+    expect(page).toContain("activeAccountNeedsReauth={activeAccountNeedsReauth}");
+  });
+
+  test("wires OAuth re-authenticate handlers in classic and workspace", async () => {
+    const [page, panel, details, overview] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderDetails.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderOverview.tsx").text(),
+    ]);
+    expect(page).toContain("onReauth:");
+    expect(page).toContain("onCancelLogin: cancelLoginOAuth");
+    expect(page).toContain("loginOAuth(provider, true, accountId)");
+    expect(page).toContain("accountId: reauthTargetId, reauth: true");
+    expect(page).toContain("prov.reauthIdentityMismatch");
+    expect(page).toContain("loginOAuth(name, true, account.id)");
+    expect(page).toContain("oauthLoginGenerationRef");
+    expect(page).toContain("/api/oauth/login/cancel");
+    // Classic provider-level CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
+    expect(page).toContain('activeAccountNeedsReauth[name] && prov.authMode === "oauth"');
+    expect(page).toContain('activeAccountNeedsReauth[name] && name === "openai"');
+    expect(page).toContain('href="#codex-auth"');
+    expect(panel).toContain("onReauth");
+    expect(panel).toContain("pws.reauthenticate");
+    expect(panel).toContain("onCancelLogin");
+    expect(details).toContain("onReauthenticate=");
+    expect(details).toContain("authHandlers?.onReauth(item.name, active?.id)");
+    expect(overview).toContain("onReauthenticate");
+    expect(overview).toContain("pws.reauthenticate");
+  });
+
+  test("wires Codex active reauth health into openai rail status", async () => {
+    const [page, pool, panel, modal] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/AddCodexAccountModal.tsx").text(),
+    ]);
+    expect(page).toContain("codexActiveNeedsReauth");
+    expect(page).toContain("map.openai = true");
+    expect(page).toContain("onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}");
+    expect(page).toContain("codexReauthGenerationRef");
+    expect(pool).toContain("onActiveNeedsReauthChange");
+    expect(pool).toContain("if (showAdd)");
+    expect(modal).toContain("reauth: true");
+    expect(modal).toContain("startedReauthRef");
+    expect(modal).toContain("&reauth=1");
+    expect(pool).toContain("codexAuth.reauthenticate");
+    expect(pool).toContain("codexAuth.mainTokenExpired");
+    expect(panel).toContain("onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}");
+  });
+
+  test("keeps classic stale-account reauth and remove outside disabled row shell", async () => {
+    const page = await Bun.file("gui/src/pages/Providers.tsx").text();
+    expect(page).toContain('className="prov-account-row-main"');
+    expect(page).toContain('className="prov-account-reauth"');
+    expect(page).toContain("disabled={busy === name}");
+    expect(page).toMatch(/<div[\s\S]*?className=\{`prov-account-row\$\{account\.active/);
+  });
 });

@@ -31,7 +31,7 @@ function nativeTemplate(): Record<string, unknown> {
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
+  "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-cloud",
   "qianfan", "alibaba", "alibaba-token-plan", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "gitlab-duo",
@@ -415,10 +415,10 @@ describe("provider registry parity", () => {
     expect(deriveProviderPresets().find(p => p.id === "venice")).not.toHaveProperty("freeTier");
   });
 
-  test("base URL override permission is registry-only and limited to local/self-hosted providers", () => {
+  test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

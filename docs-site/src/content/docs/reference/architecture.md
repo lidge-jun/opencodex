@@ -96,7 +96,7 @@ understands:
 
 The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits a
 parser-ignored `response.heartbeat` SSE event every 2 seconds to re-arm Codex's idle timer. The
-default **stall deadline** is 90 seconds (`stallTimeoutSec`); reaching it aborts the upstream and emits
+default **stall deadline** is 300 seconds (`stallTimeoutSec`); reaching it aborts the upstream and emits
 `response.incomplete` with reason `upstream_stall_timeout`, preventing a hung connection from blocking
 Codex indefinitely.
 

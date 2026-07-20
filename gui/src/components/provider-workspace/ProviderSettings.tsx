@@ -1,22 +1,32 @@
 /**
  * ProviderSettings — adapter/baseUrl/defaultModel/authMode/note editing form
  * for the workspace Settings tab (WP091). Uses PATCH /api/providers via an
- * onUpdateProvider prop; no direct fetch.
+ * onUpdateProvider prop. May fetch `/api/provider-presets` once per provider
+ * to discover `baseUrlChoices` (e.g. Qwen Cloud endpoint picker).
+ *
+ * Parent should remount on provider change (`key={item.name}`) so choice-loading
+ * state resets cleanly without sync setState-in-effect.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
 import { useT } from "../../i18n";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
+import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import type { WorkspaceItem, ProviderUpdatePatch } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 
+type ChoicesStatus = "idle" | "loading" | "ready" | "error";
+
 export default function ProviderSettings({
-  item, availableModels = [], onUpdateProvider, onDirtyChange, onRegisterSave,
+  item, availableModels = [], apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: {
   item: WorkspaceItem;
   availableModels?: string[];
+  /** When set, load endpoint choices for catalog providers that expose baseUrlChoices. */
+  apiBase?: string;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   onDirtyChange?: (dirty: boolean) => void;
   /** Lets parent dialogs trigger the same save path as the sticky bar. */
@@ -29,25 +39,57 @@ export default function ProviderSettings({
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
   const [authMode, setAuthMode] = useState(initialAuth);
   const [note, setNote] = useState(item.note ?? "");
+  const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
+  const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase ? "loading" : "idle");
+  const [endpointChoice, setEndpointChoice] = useState(() => "custom");
 
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset on provider switch */
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? "");
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setNote(item.note ?? "");
+    setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setMsg(null);
-  }, [item.name, item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note]);
+    queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note, item.allowPrivateNetwork, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!apiBase) return;
+    let cancelled = false;
+    const providerId = item.name;
+    const savedBaseUrl = item.baseUrl;
+    fetch(`${apiBase}/api/provider-presets`)
+      .then(r => r.json())
+      .then((d: { providers?: CatalogPreset[] }) => {
+        if (cancelled) return;
+        const preset = (d.providers ?? []).find(p => p.id === providerId);
+        const choices = preset?.baseUrlChoices;
+        setBaseUrlChoices(choices);
+        setChoicesStatus("ready");
+        setEndpointChoice(matchChoiceId(choices, savedBaseUrl));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBaseUrlChoices(undefined);
+        setChoicesStatus("error");
+      });
+    return () => { cancelled = true; };
+    // Remount via key={item.name}; capture savedBaseUrl once per mount/fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- item.baseUrl sync is handled by the form-reset effect
+  }, [apiBase, item.name]);
 
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
-    || note.trim() !== (item.note ?? "");
+    || note.trim() !== (item.note ?? "")
+    || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false);
 
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
@@ -65,12 +107,19 @@ export default function ProviderSettings({
   }, [adapter]);
 
   const isPreset = isCatalogProviderId(item.name);
+  const hasEndpointPicker = choicesStatus === "ready" && !!(baseUrlChoices && baseUrlChoices.length > 0);
+  // Lock plain baseUrl for presets while loading or when there is no picker.
+  // On fetch error, keep it editable so allowBaseUrlOverride providers are not trapped.
+  const plainBaseUrlLocked = isPreset && choicesStatus !== "error";
 
   const save = async (): Promise<boolean> => {
     if (!onUpdateProvider) { setMsg({ ok: false, text: t("pws.updatesUnavailable") }); return false; }
-    if (!adapter.trim() || !baseUrl.trim()) { setMsg({ ok: false, text: t("pws.adapterBaseRequired") }); return false; }
+    const nextBaseUrl = hasEndpointPicker
+      ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
+      : baseUrl.trim();
+    if (!adapter.trim() || !nextBaseUrl) { setMsg({ ok: false, text: t("pws.adapterBaseRequired") }); return false; }
     setSaving(true); setMsg(null);
-    const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: baseUrl.trim(), defaultModel: defaultModel.trim(), authMode, note: note.trim() };
+    const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork };
     const res = await onUpdateProvider(item.name, patch);
     setSaving(false);
     setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
@@ -90,7 +139,17 @@ export default function ProviderSettings({
   const discard = () => {
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
-    setNote(item.note ?? ""); setMsg(null);
+    setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setMsg(null);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
+  };
+
+  const endpointLabel = (id: string, fallback: string) => {
+    switch (id) {
+      case "token-plan": return t("modal.endpoint.tokenPlan");
+      case "payg": return t("modal.endpoint.payAsYouGo");
+      case "custom": return t("modal.endpoint.custom");
+      default: return fallback;
+    }
   };
 
   return (
@@ -107,10 +166,37 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
-      <label className="pwi-settings-field">
-        <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
-        <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={isPreset} disabled={isPreset} />
-      </label>
+      {hasEndpointPicker ? (
+        <>
+          <label className="pwi-settings-field">
+            <span className="pwi-settings-label">{t("modal.endpoint")}</span>
+            <select
+              className="input"
+              value={endpointChoice}
+              onChange={e => {
+                const id = e.target.value;
+                setEndpointChoice(id);
+                setBaseUrl(baseUrlForChoice(baseUrlChoices, id, baseUrl));
+              }}
+            >
+              {baseUrlChoices!.map(c => (
+                <option key={c.id} value={c.id}>{endpointLabel(c.id, c.label)}</option>
+              ))}
+            </select>
+          </label>
+          {endpointChoice === "custom" && (
+            <label className="pwi-settings-field">
+              <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
+              <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
+            </label>
+          )}
+        </>
+      ) : (
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
+          <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={plainBaseUrlLocked} disabled={plainBaseUrlLocked} />
+        </label>
+      )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
         {modelOptions.length > 0 ? (
@@ -136,6 +222,10 @@ export default function ProviderSettings({
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.note")}</span>
         <textarea className="input pwi-settings-textarea" value={note} onChange={e => setNote(e.target.value)} rows={2} />
+      </label>
+      <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <input type="checkbox" checked={allowPrivateNetwork} onChange={e => setAllowPrivateNetwork(e.target.checked)} />
+        <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
       {dirty && (
         <div className="pwi-settings-sticky-bar">

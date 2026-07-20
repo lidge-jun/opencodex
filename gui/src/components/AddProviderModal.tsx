@@ -8,9 +8,12 @@ import {
   type ProviderPayload,
   type ProviderPayloadForm,
 } from "../provider-payload";
+import { oauthTosRisk } from "../oauth-tos-risk";
+import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
+import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -48,7 +51,7 @@ export default function AddProviderModal({
   );
   const [form, setForm] = useState<FormState | null>(
     initialCustom
-      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "" }
+      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "", allowPrivateNetwork: false }
       : null,
   );
   const [saving, setSaving] = useState(false);
@@ -64,6 +67,8 @@ export default function AddProviderModal({
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [usageRank, setUsageRank] = useState<Record<string, number>>({});
+  const [endpointChoice, setEndpointChoice] = useState("custom");
+  const [oauthTosPending, setOauthTosPending] = useState<string | null>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -88,10 +93,13 @@ export default function AddProviderModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only open hook
   }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      // Child ToS warning owns Escape while it is open.
+      if (e.key === "Escape" && !oauthTosPending) onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, oauthTosPending]);
   useEffect(() => {
     fetch(`${apiBase}/api/oauth/providers`).then(r => r.json()).then(d => setOauthSupported(d.providers ?? [])).catch(() => {});
   }, [apiBase]);
@@ -125,13 +133,18 @@ export default function AddProviderModal({
 
   const choosePreset = (p: Preset) => {
     setPreset(p);
+    const choiceId = matchChoiceId(p.baseUrlChoices, p.baseUrl);
+    setEndpointChoice(choiceId);
     setForm({
       name: p.id === "custom" ? "" : p.id,
       adapter: p.adapter,
-      baseUrl: p.baseUrl,
+      baseUrl: p.baseUrlChoices?.length
+        ? baseUrlForChoice(p.baseUrlChoices, choiceId, p.baseUrl)
+        : p.baseUrl,
       authMode: p.auth,
       apiKey: "",
       defaultModel: p.defaultModel ?? "",
+      allowPrivateNetwork: false,
     });
     setError("");
     setOauthMsg("");
@@ -144,6 +157,7 @@ export default function AddProviderModal({
   const back = () => {
     setPreset(null);
     setForm(null);
+    setEndpointChoice("custom");
     setError("");
     setOauthMsg("");
     setOauthMsgTone("ok");
@@ -155,11 +169,15 @@ export default function AddProviderModal({
   const submit = async () => {
     if (!form) return;
     const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
+    const resolvedBaseUrl = preset?.baseUrlChoices?.length
+      ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
+      : form.baseUrl.trim();
     if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
-    if (!reserved && !form.baseUrl.trim()) { setError(t("modal.baseUrlRequired")); return; }
+    if (!reserved && !resolvedBaseUrl) { setError(t("modal.baseUrlRequired")); return; }
+    const submitForm = { ...form, baseUrl: resolvedBaseUrl };
     let postBody: { name: string; provider: ProviderPayload };
     try {
-      postBody = buildProviderPostBody(preset ?? { id: "custom" }, form);
+      postBody = buildProviderPostBody(preset ?? { id: "custom" }, submitForm);
     } catch {
       setError(t("modal.invalidPreset"));
       return;
@@ -238,6 +256,15 @@ export default function AddProviderModal({
     }
   };
 
+  const requestLoginOAuth = (providerId: string) => {
+    if (oauthBusy) return;
+    if (oauthTosRisk(providerId)) {
+      setOauthTosPending(providerId);
+      return;
+    }
+    void loginOAuth(providerId);
+  };
+
   const submitManualCode = async (providerId: string) => {
     const input = manualCode.trim();
     if (!input || manualCodeBusy) return;
@@ -275,6 +302,7 @@ export default function AddProviderModal({
   const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
 
   return (
+    <>
     <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
       <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
@@ -303,7 +331,7 @@ export default function AddProviderModal({
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div className="muted text-control">{preset.note ?? t("modal.oauthDefaultNote")}</div>
               {oauthSupported.includes(preset.oauthProvider ?? "") ? (
-                <button className="btn btn-primary" onClick={() => loginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
+                <button className="btn btn-primary" onClick={() => requestLoginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
                   style={{ width: "100%", padding: "12px 16px" }}>
                   <IconLock />{oauthBusy ? t("modal.waitingBrowser") : t("modal.logInWith", { label: preset.label })}
                 </button>
@@ -404,9 +432,53 @@ export default function AddProviderModal({
                     {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </Field>
-                <Field label={t("modal.baseUrl")}>
-                  <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
-                </Field>
+                {preset.baseUrlChoices && preset.baseUrlChoices.length > 0 ? (
+                  <>
+                    <Field label={t("modal.endpoint")}>
+                      <select
+                        className="input"
+                        value={endpointChoice}
+                        onChange={e => {
+                          const id = e.target.value;
+                          setEndpointChoice(id);
+                          setForm({
+                            ...form,
+                            baseUrl: baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl),
+                          });
+                        }}
+                      >
+                        {preset.baseUrlChoices.map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.id === "token-plan" ? t("modal.endpoint.tokenPlan")
+                              : c.id === "payg" ? t("modal.endpoint.payAsYouGo")
+                              : c.id === "custom" ? t("modal.endpoint.custom")
+                              : c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    {endpointChoice === "custom" && (
+                      <Field label={t("modal.baseUrl")}>
+                        <input
+                          className="input"
+                          value={form.baseUrl}
+                          onChange={e => setForm({ ...form, baseUrl: e.target.value })}
+                          placeholder={t("modal.baseUrlPlaceholder")}
+                        />
+                      </Field>
+                    )}
+                  </>
+                ) : (
+                  <Field label={t("modal.baseUrl")}>
+                    <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+                  </Field>
+                )}
+                {(isCustom || isLocal) && (
+                  <label className="modal-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <input type="checkbox" checked={form?.allowPrivateNetwork ?? false} onChange={e => setForm(f => f ? { ...f, allowPrivateNetwork: e.target.checked } : f)} />
+                    <span className="muted text-control">{t("modal.allowPrivateNetwork")}</span>
+                  </label>
+                )}
               </>}
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
@@ -447,6 +519,21 @@ export default function AddProviderModal({
         )}
       </div>
     </div>
+    {oauthTosPending && (
+      <OAuthTosWarningModal
+        key={oauthTosPending}
+        providerId={oauthTosPending}
+        providerLabel={preset?.label ?? oauthTosPending}
+        onCancel={() => setOauthTosPending(null)}
+        onContinue={() => {
+          const id = oauthTosPending;
+          if (!id) return;
+          setOauthTosPending(null);
+          void loginOAuth(id);
+        }}
+      />
+    )}
+    </>
   );
 }
 

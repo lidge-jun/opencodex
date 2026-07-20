@@ -196,11 +196,41 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
     const fcPart = modelTurn?.parts.find(part => "functionCall" in part);
     expect(fcPart?.thoughtSignature).toBeUndefined();
   });
+
+  test("custom_tool_call item ids (ctc_...) from Claude/mixed history are NOT forwarded (issue #174)", async () => {
+    const p = {
+      modelId: "gemini-3-pro",
+      stream: false,
+      context: {
+        messages: [
+          { role: "user", content: "go" },
+          { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: {}, thoughtSignature: "ctc_038f26d3f20962bc016a54f0fcfa208190a8ec0f289c2ba211" }] },
+        ],
+        systemPrompt: [], tools: [],
+      },
+      options: {},
+    } as unknown as OcxParsedRequest;
+    const req = await createGoogleAdapter(provider).buildRequest(p);
+    const env = JSON.parse(req.body);
+    const modelTurn = (env.request.contents as { role: string; parts: Record<string, unknown>[] }[]).find(c => c.role === "model");
+    const fcPart = modelTurn?.parts.find(part => "functionCall" in part);
+    expect(fcPart?.thoughtSignature).toBeUndefined();
+  });
 });
 
 describe("isLikelyRealThoughtSignature", () => {
   test("rejects synthetic Responses/tool-call ids (underscore and hyphen variants)", () => {
-    for (const id of ["fc_d8df7548e31a4130b7624f3d27571cdd", "call_1f57fdea0000", "function-call-1234567890", "tool-call-abcdef123456", "msg_0123456789abcdef", "rs_0123456789abcdef"]) {
+    for (const id of [
+      "fc_d8df7548e31a4130b7624f3d27571cdd",
+      "ctc_038f26d3f20962bc016a54f0fcfa208190a8ec0f289c2ba211",
+      "tsc_0123456789abcdef01234567",
+      "call_1f57fdea0000",
+      "function-call-1234567890",
+      "tool-call-abcdef123456",
+      "toolu_01AbCdEfGhIjKlMnOpQrStUv",
+      "msg_0123456789abcdef",
+      "rs_0123456789abcdef",
+    ]) {
       expect(isLikelyRealThoughtSignature(id)).toBe(false);
     }
   });
@@ -212,5 +242,7 @@ describe("isLikelyRealThoughtSignature", () => {
   test("accepts an opaque base64/base64url signature blob", () => {
     expect(isLikelyRealThoughtSignature("CisBVKhc7+abcDEF0123456789/xyz==")).toBe(true);
     expect(isLikelyRealThoughtSignature("abcd1234abcd1234abcd1234")).toBe(true);
+    // `sig-…` shapes are used by replay fixtures / some upstream blobs — must NOT be deny-listed.
+    expect(isLikelyRealThoughtSignature("sig-abcdef0123456789")).toBe(true);
   });
 });

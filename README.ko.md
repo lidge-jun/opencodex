@@ -232,7 +232,7 @@ opencodex는 두 가지 동작을 분리해서 유지합니다:
 | Ollama / vLLM / LM Studio (로컬) | `openai-chat` | key (보통 비워둠) |
 | 모든 OpenAI 호환 엔드포인트 | `openai-chat` | key |
 
-그 외에 DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Portal 등이 있습니다. 전체 목록은 `ocx init` 또는 [프로바이더 문서](https://lidge-jun.github.io/opencodex/ko/reference/configuration/)에서 확인하세요.
+그 외에 DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Cloud 등이 있습니다. 전체 목록은 `ocx init` 또는 [프로바이더 문서](https://lidge-jun.github.io/opencodex/ko/reference/configuration/)에서 확인하세요.
 
 ## CLI
 

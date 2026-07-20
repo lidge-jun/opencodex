@@ -564,15 +564,23 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/login" && req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as { id?: string };
+    const body = (await req.json().catch(() => ({}))) as { id?: string; reauth?: boolean };
     const requestedAccountId = body.id?.trim();
+    const reauth = body.reauth === true;
     if (requestedAccountId && !ACCOUNT_ID_RE.test(requestedAccountId)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
     const runtimeConfig = getRuntimeConfig(config);
-    if ((runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || getCodexAccountCredential(accountId)) {
+    const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || Boolean(getCodexAccountCredential(accountId));
+    if (exists && !reauth) {
       return jsonResponse({ error: `Account id already exists: ${accountId}` }, 400);
+    }
+    if (reauth) {
+      if (!requestedAccountId) return jsonResponse({ error: "id required for reauth" }, 400);
+      if (!configuredPoolAccount(runtimeConfig, accountId)) {
+        return jsonResponse({ error: "Unknown pool account for reauth" }, 404);
+      }
     }
     const flowId = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -622,8 +630,49 @@ export async function handleCodexAuthAPI(
                   quota = parseUsageQuota(data);
                 }
               } catch { /* wham fetch is non-blocking */ }
+              // Reauth must refresh the same ChatGPT identity already bound to this pool slot.
+              // Otherwise a different login would silently overwrite credentials under a trusted id.
+              if (reauth) {
+                const existingCred = getCodexAccountCredential(accountId);
+                const poolAccount = configuredPoolAccount(getRuntimeConfig(config), accountId);
+                const expectedChatgptId = existingCred?.chatgptAccountId?.trim();
+                const expectedEmail = poolAccount?.email?.trim().toLowerCase();
+                const gotEmail = email.trim().toLowerCase();
+                if (expectedChatgptId) {
+                  if (expectedChatgptId !== oauthAccountId) {
+                    codexAuthLoginState.set(flowId, {
+                      status: "error",
+                      error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                      doneAt: Date.now(),
+                    });
+                    completed = true;
+                    break;
+                  }
+                } else if (expectedEmail) {
+                  if (!gotEmail || gotEmail !== expectedEmail) {
+                    codexAuthLoginState.set(flowId, {
+                      status: "error",
+                      error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                      doneAt: Date.now(),
+                    });
+                    completed = true;
+                    break;
+                  }
+                } else {
+                  // No chatgptAccountId and no pool email — refuse silent identity replacement
+                  // (including empty credential slots that still have a pool row).
+                  codexAuthLoginState.set(flowId, {
+                    status: "error",
+                    error: "Cannot verify account identity for reauth. Remove this account and add it again.",
+                    doneAt: Date.now(),
+                  });
+                  completed = true;
+                  break;
+                }
+              }
+
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
-              const collision = checkAccountIdCollision(oauthAccountId, email, plan);
+              const collision = checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
               if (collision.collision) {
                 codexAuthLoginState.set(flowId, {
                   status: "error", error: collision.reason, doneAt: Date.now(),
@@ -665,7 +714,18 @@ export async function handleCodexAuthAPI(
 
               const latestConfig = getRuntimeConfig(config);
               const accounts = latestConfig.codexAccounts ?? [];
-              if (!accounts.find(a => a.id === accountId)) {
+              const existingIdx = accounts.findIndex(a => a.id === accountId);
+              if (existingIdx >= 0) {
+                // Keep the pool id stable; refresh display metadata after a successful login/reauth.
+                accounts[existingIdx] = withCodexAccountLogLabel({
+                  ...accounts[existingIdx],
+                  email,
+                  plan,
+                  isMain: false,
+                }, accounts);
+                latestConfig.codexAccounts = accounts;
+                saveRuntimeConfig(config, latestConfig);
+              } else {
                 accounts.push(withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts));
                 latestConfig.codexAccounts = accounts;
                 saveRuntimeConfig(config, latestConfig);
@@ -714,9 +774,12 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/login-status" && req.method === "GET") {
     const flowId = url.searchParams.get("flowId");
     const accountId = url.searchParams.get("accountId")?.trim();
+    // Reauth always has a pre-existing credential; never treat "credential exists" as success
+    // when the flow map entry is gone (would false-complete on lost/expired flow state).
+    const reauthStatus = url.searchParams.get("reauth") === "1";
     if (flowId) {
       const st = codexAuthLoginState.get(flowId);
-      if (!st && accountId && getCodexAccountCredential(accountId)) {
+      if (!st && accountId && !reauthStatus && getCodexAccountCredential(accountId)) {
         return jsonResponse({ status: "done", accountId });
       }
       return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useT } from "../../i18n";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey } from "../../icons";
 import {
+  applyActiveAccountReauth,
   buildProviderWorkspace,
   hideRedundantChatGptForwardProviders,
   isFreeProvider,
@@ -58,6 +59,7 @@ export default function ProviderWorkspaceShell({
   jsonEditor,
   jsonSaving = false,
   modelsRefreshToken = 0,
+  activeAccountNeedsReauth,
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -71,6 +73,7 @@ export default function ProviderWorkspaceShell({
   jsonSaving?: boolean;
   /** Bump after login/config changes so /api/selected-models is refetched. */
   modelsRefreshToken?: number;
+  activeAccountNeedsReauth?: Record<string, boolean>;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
 }) {
@@ -92,10 +95,10 @@ export default function ProviderWorkspaceShell({
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
-  const sections = useMemo(
-    () => buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers)),
-    [providers],
-  );
+  const sections = useMemo(() => {
+    const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));
+    return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
+  }, [providers, activeAccountNeedsReauth]);
 
   const retryModels = useCallback(() => {
     setModelsLoadEpoch(epoch => epoch + 1);

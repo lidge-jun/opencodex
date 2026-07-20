@@ -15,6 +15,7 @@ import type { ProviderUpdatePatch } from "./types";
 export default function ProviderOverview({
   item, usageTotals, quotaReport, oauthEmail,
   onEditSettings, onViewUsage, onUpdateProvider,
+  onReauthenticate, onCancelLogin, reauthBusy = false,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -23,14 +24,20 @@ export default function ProviderOverview({
   onEditSettings?: () => void;
   onViewUsage?: () => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  onReauthenticate?: () => void;
+  onCancelLogin?: () => void;
+  reauthBusy?: boolean;
 }) {
   const t = useT();
   const { locale } = useI18n();
   const timeLabels = relativeTimeLabelsFromT(t);
   const status = binProviderStatus(item);
+  const needsAttention = Boolean(item.activeNeedsReauth);
   const statusText = status === "ready"
     ? t("pws.status.connected")
-    : status === "needs-setup" ? t("pws.status.needsSetup") : t("prov.disabledBadge");
+    : status === "needs-setup"
+      ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
+      : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   const quota = accountQuotaFromReport(quotaReport);
@@ -77,18 +84,48 @@ export default function ProviderOverview({
 
       <section className="pws-section" aria-label={t("pws.authSummary")}>
         <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
-        <div className="pws-auth-summary">
-          <span className="pws-auth-dot" />
-          <span>
-            {item.authMode === "forward"
-              ? t("pws.passthrough")
-              : item.authMode === "oauth"
-                ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
-                : item.hasApiKey
-                  ? t("pws.apiKeyConfigured")
-                  : authModeLabel(item, t)}
-          </span>
-        </div>
+        {needsAttention ? (
+          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            <div className="pws-auth-summary-body">
+              <span>
+                <strong>{t("pws.status.needsAttention")}</strong>
+                {" — "}
+                {item.authMode === "forward"
+                  ? t("pws.attention.reauthForward")
+                  : t("pws.attention.reauth")}
+              </span>
+              {onReauthenticate && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={reauthBusy}
+                  onClick={() => onReauthenticate()}
+                >
+                  {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
+                </button>
+              )}
+              {reauthBusy && onCancelLogin && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
+                  {t("common.cancel")}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="pws-auth-summary">
+            <span className="pws-auth-dot" />
+            <span>
+              {item.authMode === "forward"
+                ? t("pws.passthrough")
+                : item.authMode === "oauth"
+                  ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
+                  : item.hasApiKey
+                    ? t("pws.apiKeyConfigured")
+                    : authModeLabel(item, t)}
+            </span>
+          </div>
+        )}
       </section>
       </div>
 

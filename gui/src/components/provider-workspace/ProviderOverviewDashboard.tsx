@@ -5,10 +5,11 @@
  */
 import { useMemo } from "react";
 import { useT, useI18n } from "../../i18n";
-import { IconChevron } from "../../icons";
+import { IconAlert, IconChevron } from "../../icons";
 import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/catalog";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import {
+  attentionReasonKey,
   buildAttentionItems,
   buildMostUsedProviders,
   formatRelativeTime,
@@ -44,12 +45,11 @@ export default function ProviderOverviewDashboard({
   );
   const knownNames = useMemo(() => new Set(allItems.map(p => p.name)), [allItems]);
 
-  const attentionItems = useMemo(
-    () => buildAttentionItems(sections, {}).map(item => ({
-      ...item,
-      reason: item.reason === "Missing credentials" ? t("pws.missingCredentials") : item.reason,
-    })),
-    [sections, t],
+  const attention = useMemo(() => buildAttentionItems(sections, {}), [sections]);
+  const attentionCount = attention.length;
+  const reauthCount = useMemo(
+    () => sections.needsSetup.filter(p => p.activeNeedsReauth).length,
+    [sections],
   );
 
   /* Rate-limit rows: urgency first (highest utilisation), then name */
@@ -74,6 +74,13 @@ export default function ProviderOverviewDashboard({
     return buildMostUsedProviders(filtered).slice(0, 4);
   }, [usageTotals, knownNames]);
 
+  const localizeAttentionReason = (reason: string) => {
+    const key = attentionReasonKey(reason);
+    if (key === "reauth") return t("pws.attention.reauth");
+    if (key === "missing") return t("pws.attention.missingCredentials");
+    return reason;
+  };
+
   return (
     <div className="pws-dashboard">
       <div className="pws-dashboard-header">
@@ -90,26 +97,32 @@ export default function ProviderOverviewDashboard({
 
       <div className="pws-dashboard-summary">
         <SummaryCard count={sections.ready.length} label={t("pws.status.ready")} tone="ok" />
-        <SummaryCard count={sections.needsSetup.length} label={t("pws.status.needsSetup")} tone="warn" />
+        <SummaryCard
+          count={sections.needsSetup.length}
+          label={reauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
+          tone="warn"
+        />
         <SummaryCard count={sections.disabled.length} label={t("prov.disabledBadge")} tone="muted" />
       </div>
 
-      {attentionItems.length > 0 && (
-        <section className="pws-dashboard-section" aria-label={t("pws.attentionRequired")}>
-          <h3 className="pws-dashboard-section-title">{t("pws.attentionRequired")}</h3>
+      {attentionCount > 0 && (
+        <section className="pws-dashboard-section pws-dashboard-attention" aria-label={t("pws.attentionTitle")}>
+          <h3 className="pws-dashboard-section-title">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            {t("pws.attentionTitle")}
+          </h3>
           <div className="pws-dashboard-rows">
-            {attentionItems.map(ai => (
+            {attention.map(item => (
               <button
-                key={ai.name}
+                key={`${item.name}:${item.reason}`}
                 type="button"
-                className="pws-dashboard-row"
-                onClick={() => onSelectProvider(ai.name)}
-                aria-label={t("pws.attentionAria", { name: ai.name, reason: ai.reason })}
+                className="pws-dashboard-row pws-dashboard-row--attention"
+                onClick={() => onSelectProvider(item.name)}
               >
-                <ProviderIcon name={ai.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
+                <ProviderIcon name={item.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
                 <div className="pws-dashboard-row-info">
-                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(ai.name)}</span>
-                  <span className="pws-dashboard-row-meta muted">{ai.reason}</span>
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                  <span className="pws-dashboard-row-meta muted">{localizeAttentionReason(item.reason)}</span>
                 </div>
                 <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
               </button>

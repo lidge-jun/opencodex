@@ -39,7 +39,7 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 三态 multi-agent surface override。`"v1"` 覆盖 upstream pin，强制全部模型使用 v1；`"default"` 遵循 upstream model pin（sol/terra=v2，luna=v1）；`"v2"` 强制全部模型使用 v2。可在仪表盘 Models 页面或 `ocx v2 mode` 中设置。 |
 | `providerContextCaps?` | `Record<string,number>` | `{}` | provider 级 Codex 可见 context cap。只会降低已知 context window。 |
 | `contextCapValue?` | `number` | `350000` | 仪表盘 context-cap 控件使用的值；修改后会更新 `providerContextCaps` 中所有已启用条目。 |
-| `stallTimeoutSec?` | `number` | `90` | 上游无数据后 bridge 中止并发出 `response.incomplete` 前等待的秒数。最小值 1。 |
+| `stallTimeoutSec?` | `number` | `300` | 上游无数据后 bridge 中止并发出 `response.incomplete` 前等待的秒数。最小值 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试仅等待 DNS/TCP/TLS 和最终响应 header 的 deadline；在响应 body 生成前结束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 中止活跃 turn 前的 graceful drain deadline。 |
 | `websockets?` | `boolean` | `false` | 公布 `supports_websockets`，让 Codex 使用 Responses WebSocket 路径。省略或设为 `false` 会保持 HTTP/SSE。 |

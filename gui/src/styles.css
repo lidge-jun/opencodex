@@ -699,7 +699,10 @@ dialog.modal-overlay::backdrop {
 /* Logs table column tuning: model narrower (two-line OK), tokens wider */
 .log-col-model { max-width: 18ch; overflow-wrap: break-word; word-break: normal; }
 .log-col-tokens { min-width: 10ch; }
-.log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+table.logs-table { min-width: 960px; }
+.log-col-rate { min-width: 7ch; white-space: nowrap; }
+.log-col-cost { min-width: 10ch; white-space: nowrap; }
+.log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 7ch; line-height: var(--leading-tight); }
 .log-detail-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent-hover); font: inherit; font-size: var(--text-caption); text-decoration: underline;
@@ -707,6 +710,36 @@ dialog.modal-overlay::backdrop {
 }
 .log-detail-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: var(--text-control); }
 .log-detail-break { word-break: break-all; }
+.log-detail-card { max-width: 760px; }
+.log-detail-section { padding: 14px 0; border-top: 1px solid var(--border-soft); }
+.log-detail-section:first-of-type { padding-top: 0; border-top: 0; }
+.log-detail-section-title {
+  margin: 0 0 10px; font-size: var(--text-label);
+  font-weight: var(--weight-semibold); color: var(--text);
+}
+.log-detail-request-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.log-detail-request-row > span { min-width: 0; }
+.log-detail-notes { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: var(--text-label); }
+.log-detail-notes-line { margin: 8px 0 0; font-size: var(--text-label); }
+.log-detail-attempts-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.log-detail-attempts { min-width: 680px; }
+.log-detail-attempts th, .log-detail-attempts td { vertical-align: top; }
+.log-detail-raw { margin-top: 14px; }
+.log-detail-raw > summary { cursor: pointer; color: var(--muted); font-size: var(--text-label); }
+.log-detail-raw[open] > summary { margin-bottom: 6px; }
+.usage-cost-row {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 10px 0 4px; padding: 10px 14px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+.usage-cost-value { font-size: var(--text-lg, 1.15em); }
+@media (max-width: 760px) {
+  .modal-overlay { padding: 16px 10px; }
+  .log-detail-card { max-height: calc(100dvh - 32px); padding: 16px; }
+  .log-detail-grid { grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr); gap: 8px 10px; }
+  .log-detail-request-row { align-items: flex-start; flex-direction: column; }
+}
 .log-detail-json {
   background: var(--raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
   padding: 10px 12px; font-family: var(--font-code); font-size: var(--text-caption); line-height: var(--leading-body);
@@ -754,14 +787,29 @@ dialog.modal-overlay::backdrop {
 .prov-accounts-toggle.open .chev svg { transform: rotate(-90deg); }
 .prov-accounts-list { border-top: 1px solid var(--border-soft); padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 2px; }
 .prov-account-row {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  background: none; border: none; border-radius: var(--radius-xs);
-  color: var(--text); font: inherit; font-size: var(--text-control); line-height: var(--leading-ui); padding: 6px 8px; cursor: pointer; min-height: 32px;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border-radius: var(--radius-xs); padding: 6px 8px; min-height: 32px;
 }
-.prov-account-row:hover { background: var(--raised); }
-.prov-account-row.active { cursor: default; }
+button.prov-account-row {
+  text-align: left; background: none; border: none; color: var(--text); font: inherit;
+  font-size: var(--text-control); line-height: var(--leading-ui); cursor: pointer;
+}
+button.prov-account-row:hover, .prov-account-row:hover { background: var(--raised); }
+button.prov-account-row.active { cursor: default; }
+.prov-account-row-main {
+  appearance: none; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0; border: 0; background: transparent; color: inherit; text-align: left;
+  cursor: pointer; font: inherit; font-size: var(--text-control); line-height: var(--leading-ui);
+}
+.prov-account-row-main:disabled { cursor: default; opacity: 0.72; }
 .prov-account-row .prov-account-email { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prov-account-row .badge { flex: 0 0 auto; }
+.prov-account-reauth {
+  flex: 0 0 auto; background: none; border: none; color: var(--accent); cursor: pointer;
+  font: inherit; font-size: var(--text-label); padding: 4px 6px; border-radius: var(--radius-xs);
+}
+.prov-account-reauth:hover:not(:disabled) { color: var(--accent-hover); background: var(--raised); }
+.prov-account-reauth:disabled { opacity: 0.6; cursor: default; }
 .prov-account-remove { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: var(--radius-xs); }
 .prov-account-remove:hover { color: var(--red); background: var(--red-soft); }
 .prov-account-add { color: var(--muted); font-size: var(--text-label); }

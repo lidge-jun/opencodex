@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyActiveAccountReauth,
   binProviderStatus,
   buildProviderWorkspace,
   hideRedundantChatGptForwardProviders,
@@ -56,6 +57,49 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
     ...overrides,
   });
 }
+
+describe("applyActiveAccountReauth", () => {
+  test("demotes ready provider when active account needs reauth", () => {
+    const sections = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth" }),
+      keyed: prov({ authMode: "key", hasApiKey: true }),
+    });
+    expect(sections.ready.map(p => p.name)).toContain("anthropic");
+    const next = applyActiveAccountReauth(sections, { anthropic: true });
+    expect(next.ready.map(p => p.name)).not.toContain("anthropic");
+    expect(next.needsSetup.map(p => p.name)).toContain("anthropic");
+    expect(next.ready.map(p => p.name)).toContain("keyed");
+  });
+
+  test("leaves provider ready when only inactive accounts would need reauth (map false/absent)", () => {
+    const sections = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth" }),
+    });
+    const next = applyActiveAccountReauth(sections, { anthropic: false });
+    expect(next.ready.map(p => p.name)).toContain("anthropic");
+    expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+  });
+
+  test("does not move disabled providers", () => {
+    const sections = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth", disabled: true }),
+    });
+    const next = applyActiveAccountReauth(sections, { anthropic: true });
+    expect(next.disabled.map(p => p.name)).toContain("anthropic");
+    expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+  });
+
+  test("demoted items carry activeNeedsReauth and binProviderStatus is needs-setup", () => {
+    const sections = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth" }),
+    });
+    const next = applyActiveAccountReauth(sections, { anthropic: true });
+    const demoted = next.needsSetup.find(p => p.name === "anthropic");
+    expect(demoted?.activeNeedsReauth).toBe(true);
+    expect(binProviderStatus(demoted!)).toBe("needs-setup");
+    expect(binProviderStatus(prov({ authMode: "oauth" }))).toBe("ready");
+  });
+});
 
 describe("catalog: section membership", () => {
   test("disabled providers always land in disabled", () => {
@@ -302,6 +346,19 @@ describe("usage: most-used and attention", () => {
     ]);
     expect(items.some(i => i.name === "healthy")).toBe(false);
     expect(items.some(i => i.name === "silent")).toBe(false);
+  });
+
+  test("buildAttentionItems: activeNeedsReauth uses reauth reason", () => {
+    const base = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth" }),
+      missing: prov({ authMode: "key" }),
+    });
+    const sections = applyActiveAccountReauth(base, { anthropic: true });
+    const items = buildAttentionItems(sections, {});
+    expect(items).toEqual([
+      { name: "missing", reason: "Missing credentials" },
+      { name: "anthropic", reason: "Active account needs re-authentication" },
+    ]);
   });
 });
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
+import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
@@ -8,6 +9,7 @@ import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import { oauthTosRisk } from "../oauth-tos-risk";
 import { Notice } from "../ui";
 import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, IconLink } from "../icons";
 import { useT } from "../i18n";
@@ -21,7 +23,7 @@ interface Config {
   providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
 }
 
-interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean }
+interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
 interface ProviderQuotaReport { provider: string; quota: AccountQuota; source: string; updatedAt: number }
 interface OAuthAccount { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
@@ -36,6 +38,9 @@ const OAUTH_LABELS: Record<string, string> = {
   xai: "xAI (Grok)",
   anthropic: "Anthropic (Claude)",
   kimi: "Kimi (Moonshot)",
+  "google-antigravity": "Google Antigravity",
+  "github-copilot": "GitHub Copilot",
+  cursor: "Cursor",
 };
 const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;
 
@@ -83,11 +88,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
+  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
+  const [codexActiveNeedsReauth, setCodexActiveNeedsReauth] = useState(false);
   const aliveRef = useRef(true);
-  const loginEpochRef = useRef(0);
   const removeBusyRef = useRef(false);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
+  const codexReauthGenerationRef = useRef(0);
+  const oauthLoginGenerationRef = useRef<Map<string, number>>(new Map());
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
 
@@ -202,6 +210,29 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     } catch {
       /* keep last-good */
     }
+  }, [apiBase]);
+
+  const fetchCodexActiveReauth = useCallback(async () => {
+    const generation = ++codexReauthGenerationRef.current;
+    try {
+      const [accountsRes, activeRes] = await Promise.all([
+        fetch(`${apiBase}/api/codex-auth/accounts`),
+        fetch(`${apiBase}/api/codex-auth/active`),
+      ]);
+      if (!accountsRes.ok || !activeRes.ok) return;
+      const accts = await accountsRes.json() as { accounts?: Array<{ id: string; isMain?: boolean; needsReauth?: boolean }> };
+      const active = await activeRes.json() as { activeCodexAccountId?: string | null };
+      if (!aliveRef.current || codexReauthGenerationRef.current !== generation) return;
+      const accounts = accts.accounts ?? [];
+      const activeId = active.activeCodexAccountId ?? null;
+      const activePoolAccount = activeId && activeId !== "__main__"
+        ? accounts.find(a => a.id === activeId)
+        : null;
+      const needs = activePoolAccount
+        ? Boolean(activePoolAccount.needsReauth)
+        : Boolean(accounts.find(a => a.isMain)?.needsReauth);
+      setCodexActiveNeedsReauth(needs);
+    } catch { /* ignore */ }
   }, [apiBase]);
 
   // Multiauth: per-provider logged-in account lists for the card dropdowns (oauth cards only;
@@ -361,9 +392,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       void fetchConfig();
       void fetchOauth();
       void fetchProviderQuotas();
+      void fetchCodexActiveReauth();
     }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [fetchConfig, fetchOauth, fetchProviderQuotas]);
+    const iv = window.setInterval(() => { void fetchCodexActiveReauth(); }, 30_000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(iv);
+    };
+  }, [fetchConfig, fetchOauth, fetchProviderQuotas, fetchCodexActiveReauth]);
 
   // Load account sets once config tells us which providers are oauth-backed.
   const oauthCardProviders = useMemo(
@@ -387,6 +423,16 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       : [],
     [config],
   );
+
+  const activeAccountNeedsReauth = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    for (const [provider, set] of Object.entries(accountSets)) {
+      const active = set.accounts.find(a => a.active) ?? set.accounts.find(a => a.id === set.activeAccountId);
+      if (active?.needsReauth) map[provider] = true;
+    }
+    if (codexActiveNeedsReauth) map.openai = true;
+    return map;
+  }, [accountSets, codexActiveNeedsReauth]);
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
     const timeout = window.setTimeout(() => {
@@ -456,25 +502,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const jsonIsDirty = jsonEditorOpen && draft !== jsonBaseline;
 
-  const cancelOAuthLogin = async (provider?: string | null) => {
-    const p = (provider ?? busy)?.trim();
-    loginEpochRef.current += 1;
-    setBusy(null);
-    setLoginInfo(null);
-    setManualCode("");
-    setManualCodeMsg("");
-    if (p) {
-      notify(t("codexAuth.oauthCancelled"), false);
+  const cancelLoginOAuth = useCallback(async (provider: string) => {
+    const gen = (oauthLoginGenerationRef.current.get(provider) ?? 0) + 1;
+    oauthLoginGenerationRef.current.set(provider, gen);
+    try {
       await fetch(`${apiBase}/api/oauth/login/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: p }),
-      }).catch(() => {});
+        body: JSON.stringify({ provider }),
+      });
+    } catch { /* ignore */ }
+    if (!aliveRef.current) return;
+    if (oauthLoginGenerationRef.current.get(provider) === gen) {
+      setBusy(current => current === provider ? null : current);
+      setLoginInfo(current => current?.provider === provider ? null : current);
     }
-  };
+    setManualCode("");
+    setManualCodeMsg("");
+    notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
+  }, [apiBase, t]);
 
-  const loginOAuth = async (provider: string, addAccount = false) => {
-    const epoch = ++loginEpochRef.current;
+  const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+    const nextGen = (oauthLoginGenerationRef.current.get(provider) ?? 0) + 1;
+    oauthLoginGenerationRef.current.set(provider, nextGen);
+    const generation = nextGen;
+    const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
@@ -484,24 +536,60 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(addAccount ? { provider, addAccount: true } : { provider }),
+        body: JSON.stringify({
+          provider,
+          ...(addAccount || reauthTargetId ? { addAccount: true } : {}),
+          ...(reauthTargetId ? { accountId: reauthTargetId, reauth: true } : {}),
+        }),
       });
       const data = await res.json();
-      if (loginEpochRef.current !== epoch) return;
+      if (oauthLoginGenerationRef.current.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
-      for (let i = 0; i < 150 && aliveRef.current && loginEpochRef.current === epoch; i++) {
+      // Poll until the loopback callback (or device flow / manual paste) completes.
+      // Prefer s.done so cancel/timeout/error clear "waiting for browser" instead of hanging.
+      let finished = false;
+      for (let i = 0; i < 150 && aliveRef.current && oauthLoginGenerationRef.current.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
-        if (loginEpochRef.current !== epoch) return;
+        if (oauthLoginGenerationRef.current.get(provider) !== generation || !aliveRef.current) return;
         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
-        if (loginEpochRef.current !== epoch) return;
         if (!s) continue;
-        const completed = addAccount
-          ? ((s.accounts?.length ?? 0) > baselineCount || (s.done === true && !s.error))
-          : s.loggedIn;
+        if (s.error) {
+          setOauthStatus(prev => ({ ...prev, [provider]: s }));
+          const cancelled = /cancel/i.test(s.error);
+          notify(
+            cancelled
+              ? t("prov.loginCancelled", { provider: oauthLabel(provider) })
+              : t("prov.loginError", { provider: oauthLabel(provider), error: s.error }),
+            false,
+          );
+          setLoginInfo(null);
+          finished = true;
+          break;
+        }
+        // For add-account / reauth flows the provider may already be "logged in": wait for a
+        // new slot OR flow completion (same-account re-login won't grow count).
+        const completed = addAccount || reauthTargetId
+          ? ((s.accounts?.length ?? 0) > baselineCount || s.done === true)
+          : (s.loggedIn || s.done === true);
         if (completed) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
+          const target = reauthTargetId
+            ? s.accounts?.find(a => a.id === reauthTargetId)
+            : s.accounts?.find(a => a.active) ?? s.accounts?.find(a => a.id === s.activeAccountId);
+          if (reauthTargetId && !target) {
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthAccountMissing") }), false);
+            setLoginInfo(null);
+            finished = true;
+            break;
+          }
+          if (target?.needsReauth) {
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), false);
+            setLoginInfo(null);
+            finished = true;
+            break;
+          }
           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
           setLoginInfo(null);
           setManualCode("");
@@ -510,26 +598,37 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           fetchAccountSets(Object.keys(accountSets).includes(provider) ? Object.keys(accountSets) : [...Object.keys(accountSets), provider]);
           fetchProviderQuotas(true);
           setModelsRefreshToken(n => n + 1);
-          break;
-        }
-        if (s.error) {
-          if (s.error === "Login cancelled") break;
-          setOauthStatus(prev => ({ ...prev, [provider]: s }));
-          notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
-          setLoginInfo(null);
+          finished = true;
           break;
         }
       }
+      if (!finished && oauthLoginGenerationRef.current.get(provider) === generation && aliveRef.current) {
+        // Browser abandoned / never completed — stop waiting and cancel the server flow.
+        await fetch(`${apiBase}/api/oauth/login/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider }),
+        }).catch(() => {});
+        notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
+        setLoginInfo(null);
+      }
     } catch {
-      if (loginEpochRef.current === epoch) {
+      if (oauthLoginGenerationRef.current.get(provider) === generation) {
         notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
       }
     } finally {
-      if (aliveRef.current && loginEpochRef.current === epoch) {
-        setBusy(null);
-        setLoginInfo(null);
-      }
+      if (aliveRef.current && oauthLoginGenerationRef.current.get(provider) === generation) setBusy(null);
+
     }
+  };
+
+  const requestLoginOAuth = (provider: string, addAccount = false) => {
+    if (busy === provider) return;
+    if (oauthTosRisk(provider)) {
+      setOauthTosPending({ provider, addAccount });
+      return;
+    }
+    void loginOAuth(provider, addAccount);
   };
 
   /** Paste redirect URL / auth code when the browser cannot hit the loopback callback. */
@@ -728,7 +827,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
     // API-key rows have no OAuth login path (catalog hides the button).
     if (config.providers[provider]?.authMode === "oauth" || oauthProviders.includes(provider)) {
-      void loginOAuth(provider);
+      requestLoginOAuth(provider);
     }
   };
 
@@ -778,6 +877,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           }}
           jsonSaving={jsonSaving}
           modelsRefreshToken={modelsRefreshToken}
+          activeAccountNeedsReauth={activeAccountNeedsReauth}
           detail={(item, data) => {
             const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
             return (
@@ -802,9 +902,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               busyProvider={busy}
               loginHint={loginInfo}
               authHandlers={{
-                onLogin: loginOAuth,
-                onCancelLogin: (provider) => { void cancelOAuthLogin(provider); },
+                onLogin: requestLoginOAuth,
+                onCancelLogin: cancelLoginOAuth,
                 onLogout: logoutOAuth,
+                onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
                 onSwitchAccount: switchAccount,
                 onRemoveAccount: removeAccount,
                 onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
@@ -816,6 +917,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onRemoveProvider={removeProvider}
               onSetDisabled={setProviderDisabled}
               onUpdateProvider={updateProvider}
+              onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}
             />
             );
           }}
@@ -827,7 +929,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             initialTier={addIntent?.tier}
             initialCustom={addIntent?.custom}
             onClose={() => {
-              if (busy) void cancelOAuthLogin(busy);
+              if (busy) void cancelLoginOAuth(busy);
               setAdding(false);
               setAddIntent(null);
             }}
@@ -836,7 +938,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             accountStatus={accountLoginStatus}
             accountBusy={busy}
             onAccountLogin={onAccountLogin}
-            onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
+            onAccountCancelLogin={(provider) => { void cancelLoginOAuth(provider); }}
             onAccountLogout={(provider) => { void logoutOAuth(provider); }}
             onOpen={fetchOauth}
           />
@@ -855,6 +957,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onCancel={() => { if (!jsonSaving) setJsonLeaveOpen(false); }}
             onDiscard={discardJsonEditor}
             onSave={() => { void saveConfig(); }}
+          />
+        )}
+        {oauthTosPending && (
+          <OAuthTosWarningModal
+            key={`${oauthTosPending.provider}:${oauthTosPending.addAccount ? "add" : "login"}`}
+            providerId={oauthTosPending.provider}
+            providerLabel={oauthLabel(oauthTosPending.provider)}
+            onCancel={() => setOauthTosPending(null)}
+            onContinue={() => {
+              const pending = oauthTosPending;
+              if (!pending) return;
+              setOauthTosPending(null);
+              void loginOAuth(pending.provider, pending.addAccount);
+            }}
           />
         )}
       </>
@@ -918,10 +1034,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                   {st.loggedIn ? (
                     <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
                   ) : isBusy ? (
-                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelOAuthLogin(p); }}>{t("common.cancel")}</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelLoginOAuth(p); }}>{t("common.cancel")}</button>
                   ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(p)} disabled={isBusy}>
-                      <><IconLock />{t("prov.login")}</>
+                    <button className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(p)} disabled={isBusy}>
+                      {isBusy ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconLock />{t("prov.login")}</>}
                     </button>
                   )}
                 </span>
@@ -940,6 +1056,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         <IconLink width={14} height={14} />{linkCopied ? t("prov.linkCopied") : t("prov.copyLink")}
                       </button>
                       {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                      {isBusy && (
+                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => void cancelLoginOAuth(p)}>
+                          {t("common.cancel")}
+                        </button>
+                      )}
                     </span>
                     <span className="oauth-login-paste">
                       <input
@@ -1033,7 +1154,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                       <div className="prov-title">
                         <span className="font-semibold">{name}</span>
                         {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
-                        {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
+                        {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : activeAccountNeedsReauth[name] ? <span className="badge badge-amber">{t("pws.reauth")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
                         {openAiMode === "direct" && <span className="badge badge-green">{t("prov.openaiModeDirect")}</span>}
                         {openAiMode === "pool" && <span className="badge badge-accent">{t("prov.openaiModePool")}</span>}
@@ -1077,6 +1198,17 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </div>
                   </div>
                   <div className="provider-actions">
+                    {activeAccountNeedsReauth[name] && prov.authMode === "oauth" && (
+                      <button className="btn btn-primary btn-sm" onClick={() => {
+                        const active = accountSets[name]?.accounts.find(a => a.active && a.needsReauth);
+                        void loginOAuth(name, true, active?.id);
+                      }} disabled={busy === name}>
+                        {t("prov.reauthenticate")}
+                      </button>
+                    )}
+                    {activeAccountNeedsReauth[name] && name === "openai" && (
+                      <a className="btn btn-primary btn-sm" href="#codex-auth">{t("prov.reauthenticate")}</a>
+                    )}
                     <button
                       className={`btn ${isDisabled ? "btn-primary" : "btn-ghost"} btn-sm`}
                       onClick={() => setProviderDisabled(name, !isDisabled)}
@@ -1107,25 +1239,41 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {(accountSet?.accounts ?? []).map(account => {
                           const accountLabel = oauthAccountDisplayLabel(accountSet?.accounts ?? [account], account, t);
                           return (
-                          <button
+                          <div
                             key={account.id}
                             className={`prov-account-row${account.active ? " active" : ""}`}
-                            onClick={() => switchAccount(name, account)}
-                            title={account.active ? undefined : t("prov.accountSwitchTitle")}
                           >
-                            <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
-                            <span className="prov-account-email">{accountLabel}</span>
-                            {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
-                            {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                            <span
+                            <button
+                              type="button"
+                              className="prov-account-row-main"
+                              onClick={() => { if (!account.needsReauth) void switchAccount(name, account); }}
+                              title={account.active || account.needsReauth ? undefined : t("prov.accountSwitchTitle")}
+                              disabled={Boolean(account.needsReauth)}
+                            >
+                              <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
+                              <span className="prov-account-email">{accountLabel}</span>
+                              {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
+                              {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                            </button>
+                            {account.needsReauth && (
+                              <button
+                                type="button"
+                                className="prov-account-reauth"
+                                disabled={busy === name}
+                                onClick={e => { e.stopPropagation(); void loginOAuth(name, true, account.id); }}
+                              >
+                                {t("prov.reauthenticate")}
+                              </button>
+                            )}
+                            <button
+                              type="button"
                               className="prov-account-remove"
-                              role="button"
                               aria-label={t("prov.accountRemoveAria", { email: accountLabel })}
                               onClick={e => { e.stopPropagation(); removeAccount(name, account); }}
                             >
                               <IconTrash style={{ width: 13, height: 13 }} />
-                            </span>
-                          </button>
+                            </button>
+                          </div>
                           );
                         })}
                         {keyPool.map(entry => (
@@ -1149,7 +1297,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                           </button>
                         ))}
                         {accountSet ? (
-                          <button className="prov-account-row prov-account-add" onClick={() => loginOAuth(name, true)} disabled={busy === name}>
+                          <button className="prov-account-row prov-account-add" onClick={() => requestLoginOAuth(name, true)} disabled={busy === name}>
                             {busy === name ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconPlus style={{ width: 13, height: 13 }} />{t("prov.accountAdd")}</>}
                           </button>
                         ) : addingKeyFor === name ? (
@@ -1188,7 +1336,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           apiBase={apiBase}
           existingNames={Object.keys(config.providers)}
           onClose={() => {
-            if (busy) void cancelOAuthLogin(busy);
+            if (busy) void cancelLoginOAuth(busy);
             setAdding(false);
           }}
           onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
@@ -1196,7 +1344,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           accountStatus={accountLoginStatus}
           accountBusy={busy}
           onAccountLogin={onAccountLogin}
-          onAccountCancelLogin={(provider) => { void cancelOAuthLogin(provider); }}
+          onAccountCancelLogin={(provider) => { void cancelLoginOAuth(provider); }}
           onAccountLogout={(provider) => { void logoutOAuth(provider); }}
           onOpen={fetchOauth}
         />
@@ -1207,6 +1355,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           providerName={removeConfirmName}
           onCancel={() => setRemoveConfirmName(null)}
           onConfirm={() => { void confirmRemoveProvider(); }}
+        />
+      )}
+      {oauthTosPending && (
+        <OAuthTosWarningModal
+          key={`${oauthTosPending.provider}:${oauthTosPending.addAccount ? "add" : "login"}`}
+          providerId={oauthTosPending.provider}
+          providerLabel={oauthLabel(oauthTosPending.provider)}
+          onCancel={() => setOauthTosPending(null)}
+          onContinue={() => {
+            const pending = oauthTosPending;
+            if (!pending) return;
+            setOauthTosPending(null);
+            void loginOAuth(pending.provider, pending.addAccount);
+          }}
         />
       )}
     </>

@@ -3,6 +3,7 @@ import { modelInList } from "../types";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { getAccountSet } from "../oauth/store";
+import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
 
 export { runWithWebSearch } from "./loop";
 export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
@@ -18,8 +19,6 @@ const DEFAULT_MAX_SEARCHES = 3;
 const DEFAULT_TIMEOUT_MS = 200_000;
 const DEFAULT_ROUTED_MODEL_STALL_TIMEOUT_MS = 200_000;
 const MAX_ROUTED_MODEL_STALL_TIMEOUT_MS = 2_147_483_647;
-// Mirrors the bridge's stall default (bridge.ts `options?.stallTimeoutSec ?? 90`).
-const DEFAULT_STALL_TIMEOUT_SEC = 90;
 const STALL_MARGIN_SEC = 30;
 
 /**
@@ -47,7 +46,7 @@ function finiteCeil(value: number | undefined, fallback: number): number {
  * are individually bounded by the configured bridge stall, response-header connect timeout,
  * routed-model response-body inactivity timeout, or sidecar timeout. The stall deadline must cover
  * the largest unit plus a margin;
- * otherwise a legitimately slow search trips the bridge's 90s default upstream_stall_timeout and
+ * otherwise a legitimately slow search trips the bridge's default upstream_stall_timeout and
  * kills the whole turn. Stays finite so a genuine hang is still cut off.
  */
 export function webSearchStallTimeoutSec(

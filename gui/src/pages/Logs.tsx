@@ -15,9 +15,74 @@ interface UsageBreakdown {
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   reasoningOutputTokens?: number;
+  estimated?: boolean;
 }
 
 type LogUsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
+
+type MetricUnavailableReason =
+  | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
+  | "price_unmatched" | "invalid_cache_breakdown"
+  | "invalid_usage" | "combo_attempt_unavailable";
+
+type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+
+type TokPerSecondResult =
+  | { kind: "value"; value: number; estimated: boolean }
+  | { kind: "unavailable"; reason: MetricUnavailableReason };
+
+interface MatchedPriceInfo {
+  provider: string;
+  modelId: string;
+  jawcodeProvider?: string;
+  source: "jawcode" | "expected";
+  sourceRef?: string;
+  verifiedAt?: string;
+  status: "verified" | "verified-derived";
+}
+
+type CostResult =
+  | {
+    kind: "value";
+    estimate: {
+      cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+      estimated: boolean;
+      price?: MatchedPriceInfo;
+      attempts?: Array<{ ordinal: number; price: MatchedPriceInfo }>;
+    };
+    estimateReasons: CostEstimateReason[];
+  }
+  | { kind: "unavailable"; reason: MetricUnavailableReason };
+
+interface LogDisplayMetrics {
+  tokPerSecond: TokPerSecondResult;
+  cost: CostResult;
+}
+
+type AttemptRecoveryKind =
+  | "transient-5xx"
+  | "connection-reset"
+  | "oauth-401"
+  | "key-429"
+  | "image-413";
+
+interface LogAttempt {
+  ordinal: number;
+  provider: string;
+  model: string;
+  adapter: string;
+  status: number;
+  durationMs: number;
+  sendCount: number;
+  recoveryKinds: AttemptRecoveryKind[];
+  usageStatus: LogUsageStatus;
+  inputTokenEstimate?: number;
+  usage?: UsageBreakdown;
+  totalTokens?: number;
+  errorCode?: string;
+  firstOutputMs?: number;
+  displayMetrics?: LogDisplayMetrics;
+}
 
 interface LogEntry {
   requestId?: string;
@@ -40,6 +105,9 @@ interface LogEntry {
   usageStatus?: LogUsageStatus;
   usage?: UsageBreakdown;
   totalTokens?: number;
+  firstOutputMs?: number;
+  attempts?: LogAttempt[];
+  displayMetrics?: LogDisplayMetrics;
 }
 
 function tokensTitle(log: LogEntry, t: TFn): string | undefined {
@@ -85,6 +153,62 @@ function speedLabel(log: LogEntry): string | undefined {
   if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
   if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
   return undefined;
+}
+
+function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
+  if (!result || result.kind === "unavailable" || !Number.isFinite(result.value) || result.value <= 0) return "\u2014";
+  const digits = result.value >= 100 ? 0 : 1;
+  const value = new Intl.NumberFormat(localeTag, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(result.value);
+  return `${result.estimated ? "~" : ""}${value}`;
+}
+
+function formatEstimatedUsd(result: CostResult | undefined, localeTag?: string): string {
+  if (!result || result.kind === "unavailable" || !Number.isFinite(result.estimate.cost.total) || result.estimate.cost.total < 0) return "\u2014";
+  const totalUsd = result.estimate.cost.total;
+  return `~$${new Intl.NumberFormat(localeTag, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(totalUsd)}`;
+}
+
+function formatEstimatedUsdValue(value: number, localeTag?: string): string {
+  if (!Number.isFinite(value) || value < 0) return "\u2014";
+  return `~$${new Intl.NumberFormat(localeTag, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value)}`;
+}
+
+const METRIC_REASON_KEYS = {
+  usage_missing: "logs.detail.reason.usage_missing",
+  usage_unsupported: "logs.detail.reason.usage_unsupported",
+  output_missing: "logs.detail.reason.output_missing",
+  invalid_duration: "logs.detail.reason.invalid_duration",
+  price_unmatched: "logs.detail.reason.price_unmatched",
+  invalid_cache_breakdown: "logs.detail.reason.invalid_cache_breakdown",
+  invalid_usage: "logs.detail.reason.invalid_usage",
+  combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
+} as const satisfies Record<MetricUnavailableReason, string>;
+
+const ESTIMATE_REASON_KEYS = {
+  usage_estimated: "logs.detail.estimate.usage_estimated",
+  cache_detail_missing: "logs.detail.estimate.cache_detail_missing",
+  expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
+} as const satisfies Record<CostEstimateReason, string>;
+
+function metricReasonKey(reason: MetricUnavailableReason) {
+  return METRIC_REASON_KEYS[reason];
+}
+
+function estimateReasonKey(reason: CostEstimateReason) {
+  return ESTIMATE_REASON_KEYS[reason];
+}
+
+function verificationKey(status: MatchedPriceInfo["status"]): "logs.detail.verification.verified" | "logs.detail.verification.derived" {
+  return status === "verified" ? "logs.detail.verification.verified" : "logs.detail.verification.derived";
 }
 
 function statusColor(status: number): string {
@@ -189,11 +313,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <EmptyState title={t("logs.noRequests")} />
       ) : (
         <div ref={scrollContainerRef} className="tbl-wrap" style={{ overflowY: "auto", maxHeight: "calc(100vh - 260px)" }}>
-          <table className="tbl">
+          <table className="tbl logs-table">
             <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--surface)" }}>
              <tr>
                <th>{t("logs.col.time")}</th>
                 <th className="num log-col-tokens">{t("logs.col.tokens")}</th>
+                <th className="num log-col-rate" title={t("logs.metric.tokPerSecTitle")}>{t("logs.col.tokPerSec")}</th>
+                <th className="num log-col-cost" title={t("logs.metric.estimatedCostTitle")}>{t("logs.col.estimatedCost")}</th>
                <th className="log-col-model">{t("logs.col.model")}</th>
                <th>{t("logs.col.effort")}</th>
                <th>{t("logs.col.provider")}</th>
@@ -205,7 +331,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             <tbody>
               {paddingTop > 0 && (
                 <tr>
-                  <td colSpan={8} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                  <td colSpan={10} style={{ height: paddingTop, padding: 0, border: 0 }} />
                 </tr>
               )}
               {virtualRows.map(virtualRow => {
@@ -245,6 +371,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                         : <span className="muted">{t(`logs.tokens.${log.usageStatus ?? "unreported"}`)}</span>;
                     })()}
                   </td>
+                  <td className="num mono log-col-rate">
+                    {formatTokPerSecond(log.displayMetrics?.tokPerSecond, localeTag)}
+                  </td>
+                  <td className="num mono log-col-cost">
+                    {formatEstimatedUsd(log.displayMetrics?.cost, localeTag)}
+                  </td>
                  <td className="mono log-col-model" title={modelTitle(log)}>
                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
@@ -257,11 +389,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   <td>
                     <span className="log-status-cell">
                       <span className="mono font-semibold" style={{ color: statusColor(log.status) }}>{log.status}</span>
-                      {log.status >= 400 && (
-                        <button type="button" className="log-detail-btn" onClick={() => setDetail(log)}>
-                          {t("logs.details")}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="log-detail-btn"
+                        onClick={() => setDetail(log)}
+                        aria-label={`${t("logs.details")}: ${log.requestId ?? log.status}`}
+                      >
+                        {t("logs.details")}
+                      </button>
                     </span>
                  </td>
                   <td className="muted mono"><span className="log-reqid" title={log.requestId}>{log.requestId ?? "-"}</span></td>
@@ -271,7 +406,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               })}
               {paddingBottom > 0 && (
                 <tr>
-                  <td colSpan={8} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                  <td colSpan={10} style={{ height: paddingBottom, padding: 0, border: 0 }} />
                 </tr>
               )}
             </tbody>
@@ -280,7 +415,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       )}
 
       {detail && (
-        <LogDetailDialog detail={detail} detailInfo={detailInfo} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
+        <LogDetailDialog detail={detail} detailInfo={detailInfo} localeCode={locale} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
       )}
     </>
   );
@@ -298,15 +433,31 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeTag, t, onClose,
+  detail, detailInfo, localeCode, localeTag, t, onClose,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
+  localeCode: string;
   localeTag?: string;
   t: TFn;
   onClose: () => void;
 }) {
   const dialogRef = useModalDialog(true);
+  const [copied, setCopied] = useState(false);
+  const tokenSplit = cacheSplit(detail);
+  const cost = detail.displayMetrics?.cost;
+
+  const copyRequestId = async () => {
+    if (!detail.requestId) return;
+    try {
+      await navigator.clipboard.writeText(detail.requestId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // copy failure must not break the dialog
+    }
+  };
+
   return (
     <dialog
       ref={dialogRef}
@@ -314,7 +465,7 @@ function LogDetailDialog({
       aria-labelledby="log-detail-title"
       onCancel={e => { e.preventDefault(); onClose(); }}
     >
-      <div className="modal-card">
+      <div className="modal-card log-detail-card">
         <div className="modal-head">
           <h3 id="log-detail-title">
             <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
@@ -323,17 +474,141 @@ function LogDetailDialog({
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>
         {detailInfo && <p className="modal-desc">{detailInfo.description}</p>}
-        <div className="log-detail-grid">
-          <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
-          <span className="muted">{t("logs.col.request")}</span><span className="mono log-detail-break">{detail.requestId ?? "-"}</span>
-          <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
-          <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
-          {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
-          {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
-          <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
-        </div>
-        <div className="muted text-label" style={{ margin: "12px 0 6px" }}>{t("logs.detailRaw")}</div>
-        <pre className="log-detail-json">{JSON.stringify(detail, null, 2)}</pre>
+
+        <section className="log-detail-section" aria-labelledby="log-detail-basic">
+          <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
+          <div className="log-detail-grid">
+            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
+            <span className="muted">{t("logs.col.request")}</span>
+            <span className="log-detail-request-row">
+              <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>
+              {detail.requestId && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyRequestId()}>
+                  {t(copied ? "logs.detail.copied" : "logs.detail.copyRequestId")}
+                </button>
+              )}
+            </span>
+            <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
+            <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+            {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
+            {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
+          </div>
+        </section>
+
+        <section className="log-detail-section" aria-labelledby="log-detail-performance">
+          <h4 id="log-detail-performance" className="log-detail-section-title">{t("logs.detail.section.performance")}</h4>
+          <div className="log-detail-grid">
+            <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
+            <span className="muted">{t("logs.col.tokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics?.tokPerSecond, localeTag)}</span>
+            {detail.firstOutputMs !== undefined && (
+              <><span className="muted">{t("logs.detail.ttft")}</span><span className="mono">{detail.firstOutputMs}ms</span></>
+            )}
+          </div>
+          {detail.displayMetrics?.tokPerSecond.kind === "unavailable" && (
+            <p className="log-detail-notes-line muted">{t(metricReasonKey(detail.displayMetrics.tokPerSecond.reason))}</p>
+          )}
+        </section>
+
+        <section className="log-detail-section" aria-labelledby="log-detail-cost">
+          <h4 id="log-detail-cost" className="log-detail-section-title">{t("logs.detail.section.cost")}</h4>
+          {cost?.kind === "value" ? (
+            <>
+              <div className="log-detail-grid">
+                <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, localeTag)}</span>
+                <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, localeTag)}</span>
+                <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, localeTag)}</span>
+                <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, localeTag)}</span>
+                <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, localeTag)}</span>
+                {cost.estimate.price && (
+                  <>
+                    <span className="muted">{t("logs.detail.matchedKey")}</span>
+                    <span className="mono log-detail-break">{cost.estimate.price.jawcodeProvider ?? cost.estimate.price.provider}/{cost.estimate.price.modelId}</span>
+                    <span className="muted">{t("logs.detail.priceSource")}</span>
+                    <span>{t(`logs.detail.source.${cost.estimate.price.source}`)} · {t(verificationKey(cost.estimate.price.status))}</span>
+                  </>
+                )}
+              </div>
+              {cost.estimateReasons.length > 0 && (
+                <ul className="log-detail-notes">
+                  {cost.estimateReasons.map(reason => <li key={reason}>{t(estimateReasonKey(reason))}</li>)}
+                </ul>
+              )}
+            </>
+          ) : (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{"\u2014"}</span>
+              <span className="muted">{t("logs.detail.unavailableReason")}</span>
+              <span>{cost?.kind === "unavailable" ? t(metricReasonKey(cost.reason)) : t("logs.detail.reason.usage_missing")}</span>
+            </div>
+          )}
+        </section>
+
+        {detail.attempts?.length ? (
+          <section className="log-detail-section" aria-labelledby="log-detail-attempts">
+            <h4 id="log-detail-attempts" className="log-detail-section-title">{t("logs.detail.section.attempts")}</h4>
+            <p className="log-detail-notes-line muted">{t("logs.detail.attempt.e2eNote")}</p>
+            <div className="log-detail-attempts-wrap">
+              <table className="tbl log-detail-attempts">
+                <thead><tr>
+                  <th className="num">#</th>
+                  <th>{t("logs.detail.attempt.target")}</th>
+                  <th className="num">{t("logs.col.duration")}</th>
+                  <th className="num">{t("logs.col.tokPerSec")}</th>
+                  <th className="num">{t("logs.col.estimatedCost")}</th>
+                  <th>{t("logs.detail.attempt.reason")}</th>
+                </tr></thead>
+                <tbody>{[...detail.attempts].sort((a, b) => a.ordinal - b.ordinal).map(attempt => {
+                  const attemptCost = attempt.displayMetrics?.cost;
+                  const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
+                  const reason = attempt.errorCode
+                    ?? (attempt.recoveryKinds.length ? attempt.recoveryKinds.join(", ") : undefined)
+                    ?? (attemptCost?.kind === "unavailable" ? t(metricReasonKey(attemptCost.reason)) : t("logs.detail.attempt.completed"));
+                  return (
+                    <tr key={`${attempt.ordinal}-${attempt.provider}-${attempt.model}`}>
+                      <td className="num mono">{attempt.ordinal}</td>
+                      <td>
+                        <span>{attempt.provider}</span><br />
+                        <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {matched && (
+                          <>
+                            <br />
+                            <span className="muted text-caption log-detail-break">
+                              {matched.jawcodeProvider ?? matched.provider}/{matched.modelId} · {t(`logs.detail.source.${matched.source}`)} · {t(verificationKey(matched.status))}
+                            </span>
+                          </>
+                        )}
+                      </td>
+                      <td className="num mono">{attempt.durationMs}ms</td>
+                      <td className="num mono">{formatTokPerSecond(attempt.displayMetrics?.tokPerSecond, localeTag)}</td>
+                      <td className="num mono">{formatEstimatedUsd(attemptCost, localeTag)}</td>
+                      <td className="log-detail-break">{reason}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="log-detail-section" aria-labelledby="log-detail-usage">
+          <h4 id="log-detail-usage" className="log-detail-section-title">{t("logs.detail.section.usage")}</h4>
+          <div className="log-detail-grid">
+            <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{detail.usage ? formatTokens(detail.usage.inputTokens, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{detail.usage ? formatTokens(detail.usage.outputTokens, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{tokenSplit.read !== undefined ? formatTokens(tokenSplit.read, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{tokenSplit.write !== undefined ? formatTokens(tokenSplit.write, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.tokens.reasoning")}</span><span className="mono">{detail.usage?.reasoningOutputTokens !== undefined ? formatTokens(detail.usage.reasoningOutputTokens, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayTokenTotal(detail) !== undefined ? formatTokens(displayTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+          </div>
+          {detail.usageStatus === "estimated" && (
+            <p className="log-detail-notes-line muted">{t("logs.tokens.estimatedNote")}</p>
+          )}
+        </section>
+
+        <details className="log-detail-raw">
+          <summary>{t("logs.detailRaw")}</summary>
+          <pre className="log-detail-json">{JSON.stringify(detail, null, 2)}</pre>
+        </details>
       </div>
     </dialog>
   );

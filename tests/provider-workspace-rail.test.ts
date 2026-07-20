@@ -7,6 +7,7 @@ const t = ((key: string) => ({
   "prov.disabledBadge": "Disabled",
   "pws.status.ready": "Ready",
   "pws.status.needsSetup": "Needs setup",
+  "pws.status.needsAttention": "Needs attention",
 }[key] ?? key)) as TFn;
 
 function item(overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
@@ -28,6 +29,13 @@ describe("provider rail status semantics", () => {
     expect(railStatusCls(item({ hasApiKey: false }))).toContain("--warning");
     expect(statusLabel(item({ disabled: true }), t)).toBe("Disabled");
     expect(railStatusCls(item({ disabled: true }))).toContain("--inactive");
+  });
+
+  test("oauth config-ready with activeNeedsReauth shows amber needs-attention rail status", () => {
+    const reauth = item({ authMode: "oauth", activeNeedsReauth: true });
+    expect(statusLabel(reauth, t)).toBe("Needs attention");
+    expect(railStatusCls(reauth)).toContain("--warning");
+    expect(railStatusCls(reauth)).not.toContain("--active");
   });
 });
 

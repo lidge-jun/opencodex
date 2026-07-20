@@ -743,15 +743,94 @@ describe("server local API auth", () => {
       });
 
       expect(response.status).toBe(400);
-      expect(await response.json()).toMatchObject({
-        error: expect.stringContaining("metadata"),
+     expect(await response.json()).toMatchObject({
+       error: expect.stringContaining("metadata"),
+     });
+   } finally {
+     await server.stop(true);
+   }
+ });
+
+  test("provider PATCH can enable allowPrivateNetwork and then change baseUrl to localhost", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      // Step 1: create a provider with a public URL
+      const createRes = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "patch-test",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.com/v1" },
+        }),
+      });
+      expect(createRes.status).toBe(200);
+
+      // Step 2: PATCH allowPrivateNetwork to true
+      const patchRes = await fetch(new URL("/api/providers?name=patch-test", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ allowPrivateNetwork: true }),
+      });
+      expect(patchRes.status).toBe(200);
+
+      // Step 3: PATCH baseUrl to localhost — should succeed because flag is now true
+      const urlRes = await fetch(new URL("/api/providers?name=patch-test", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseUrl: "http://127.0.0.1:11434/v1" }),
+      });
+      expect(urlRes.status).toBe(200);
+
+      // Verify the persisted state
+      const saved = await fetch(new URL("/api/config", server.url)).then(r => r.json()) as {
+        providers: Record<string, { allowPrivateNetwork?: boolean; baseUrl?: string }>;
+      };
+      expect(saved.providers["patch-test"].allowPrivateNetwork).toBe(true);
+      expect(saved.providers["patch-test"].baseUrl).toContain("127.0.0.1");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider PATCH rejects disabling allowPrivateNetwork while baseUrl is private", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      // Create a localhost provider with opt-in
+      await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "private-toggle",
+          provider: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:8080/v1", allowPrivateNetwork: true },
+        }),
+      });
+
+      // Try to disable the flag while keeping the private baseUrl — should be rejected
+      const patchRes = await fetch(new URL("/api/providers?name=private-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ allowPrivateNetwork: false }),
+      });
+      expect(patchRes.status).toBe(400);
+      expect(await patchRes.json()).toMatchObject({
+        error: expect.stringContaining("allowPrivateNetwork"),
       });
     } finally {
       await server.stop(true);
     }
   });
 
-  test("provider management rejects sensitive or injectable provider headers", async () => {
+ test("provider management rejects sensitive or injectable provider headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;

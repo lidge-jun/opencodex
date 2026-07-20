@@ -2,6 +2,7 @@ import type { AdapterEvent, OcxUsage } from "./types";
 import { adapterFailureFromMessage, classifyError, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
+import { resolveStallTimeoutSec } from "./stall-timeout";
 import { usageDisplayTotalTokens } from "./usage/totals";
 
 function uuid(): string {
@@ -81,6 +82,8 @@ export function bridgeToResponsesSSE(
      * response.completed — codex-rs collect_compaction_output requires exactly one.
      */
     compaction?: boolean;
+    /** One-shot: first non-empty text/thinking/raw-reasoning delta observed (WP4 TTFT). */
+    onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
     onCompletedResponse?: (response: Record<string, unknown>) => void;
   },
@@ -181,7 +184,7 @@ export function bridgeToResponsesSSE(
       // whenever a real event was emitted since the last tick, so it only fires on a genuine stall.
       const heartbeatFrame = encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
-      const stallSec = Math.max(1, options?.stallTimeoutSec ?? 90);
+      const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
       beat = setInterval(() => {
         if (closed) return;
@@ -401,6 +404,20 @@ export function bridgeToResponsesSSE(
       // we synthesize response.completed below, so Codex never hits the parser's
       // "stream closed before response.completed" (responses.rs) -> ApiError::Stream.
       let terminated = false;
+      let firstOutputReported = false;
+      const reportFirstOutput = (event: AdapterEvent): void => {
+        if (firstOutputReported) return;
+        const nonEmpty = event.type === "text_delta"
+          ? event.text.length > 0
+          : event.type === "thinking_delta"
+            ? event.thinking.length > 0
+            : event.type === "reasoning_raw_delta"
+              ? event.text.length > 0
+              : false;
+        if (!nonEmpty) return;
+        firstOutputReported = true;
+        try { options?.onFirstOutput?.(); } catch { /* metrics must not break the stream */ }
+      };
       let macrotaskFired = true;
       let macrotaskTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -416,6 +433,7 @@ export function bridgeToResponsesSSE(
           macrotaskTimer = setTimeout(() => { macrotaskFired = true; macrotaskTimer = undefined; }, 0);
           activity = true;
           stallTicks = 0;
+          reportFirstOutput(event);
           // Compaction turns emit ONLY the synthetic compaction item + response.completed. The
           // summary text is accumulated silently: emitting it as a normal assistant message would
           // duplicate the summary if this response is ever replayed via previous_response_id

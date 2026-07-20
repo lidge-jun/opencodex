@@ -378,6 +378,57 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("streaming failover records request-relative parent TTFT and attempt-relative attempt TTFT", async () => {
+    // A fails after a real delay so parent TTFT (request-relative) must exceed
+    // the successful B attempt's own TTFT (attempt-relative) — WP4 separation.
+    const A_DELAY_MS = 120;
+    const a = serve(async () => {
+      await new Promise(resolve => setTimeout(resolve, A_DELAY_MS));
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(() => chatStream("ttft backup"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      const parentTtft = receipt.firstOutputMs as number;
+      expect(typeof parentTtft).toBe("number");
+      expect(parentTtft).toBeGreaterThanOrEqual(A_DELAY_MS);
+      const attempts = receipt.attempts as Array<Record<string, unknown>>;
+      expect(attempts).toHaveLength(2);
+      // failed attempt A produced no output: unset
+      expect(attempts[0]).not.toHaveProperty("firstOutputMs");
+      // successful attempt B: attempt-relative, strictly smaller than the parent value
+      const attemptTtft = attempts[1]!.firstOutputMs as number;
+      expect(typeof attemptTtft).toBe("number");
+      expect(attemptTtft).toBeGreaterThanOrEqual(0);
+      expect(attemptTtft).toBeLessThan(parentTtft);
+    }
+  });
+
+  test("non-streaming failover leaves firstOutputMs unset", async () => {
+    const a = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const b = serve(() => chatSuccess("json backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).not.toHaveProperty("firstOutputMs");
+      const attempts = receipt.attempts as Array<Record<string, unknown>>;
+      for (const attempt of attempts) expect(attempt).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
   test("seals a Codex pool child to its safe account label and final wire adapter", async () => {
     const rawAccountId = "raw-pool-account-id";
     const config = comboConfig({

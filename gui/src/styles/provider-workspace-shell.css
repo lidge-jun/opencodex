@@ -558,6 +558,30 @@
   font-size: 0.88rem;
 }
 
+.pws-auth-summary--warn {
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--yellow, #eab308) 45%, transparent);
+  background: color-mix(in srgb, var(--yellow, #eab308) 12%, transparent);
+  color: inherit;
+}
+
+.pws-auth-summary-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.pws-auth-summary--warn svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--yellow, #eab308);
+}
+
 .pws-auth-dot {
   width: 8px;
   height: 8px;

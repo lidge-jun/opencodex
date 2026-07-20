@@ -27,6 +27,10 @@ export interface CatalogPreset {
   keyOptional?: boolean;
   /** Free pricing — may still require an API key (e.g. NVIDIA NIM). */
   freeTier?: boolean;
+  /**
+   * Endpoint picker (e.g. Qwen Cloud). Choice without `baseUrl` = Custom (show text field).
+   */
+  baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   codexAccountMode?: "direct" | "pool";
   provider?: ProviderPayload;
 }

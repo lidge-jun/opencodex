@@ -87,8 +87,9 @@ describe("Responses parser agent_message boundaries", () => {
       id: "call_after_agent",
       name: "shell_command",
       arguments: { command: "echo ok" },
-      thoughtSignature: "fc_after_agent",
     });
+    // Responses item ids must not be copied onto thoughtSignature (Antigravity rejects them).
+    expect((secondAssistant.content[1] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
 
     expect(messages[2]).toMatchObject({
       role: "toolResult",

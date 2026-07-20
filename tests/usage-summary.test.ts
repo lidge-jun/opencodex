@@ -53,6 +53,44 @@ describe("parseUsageSurface", () => {
 });
 
 describe("summarizeUsage", () => {
+  test("aggregates estimated cost via model-level prices and counts unpriced rows", () => {
+    const entries: PersistedUsageEntry[] = [
+      // priced via openai bundle model-level price (5/30): cost = (100*5 + 10*30)/1e6 = 0.0008
+      entry({
+        ts: FIXED_NOW - 1000,
+        provider: "openai",
+        model: "gpt-5.5",
+        usageStatus: "reported",
+        usage: { inputTokens: 100, outputTokens: 10 },
+      }),
+      // priced via anthropic exact bundle (fable-5: 10/50/1/12.5)
+      entry({
+        ts: FIXED_NOW - 2000,
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usageStatus: "reported",
+        usage: { inputTokens: 200, outputTokens: 20 },
+      }),
+      // unpriced: no price anywhere
+      entry({
+        ts: FIXED_NOW - 3000,
+        provider: "nope",
+        model: "nope-model",
+        usageStatus: "reported",
+        usage: { inputTokens: 5, outputTokens: 1 },
+      }),
+    ];
+    const all = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(all.summary.pricedRequests).toBe(2);
+    expect(all.summary.unpricedRequests).toBe(1);
+    const expected = (100 * 5 + 10 * 30) / 1e6 + (200 * 10 + 20 * 50) / 1e6;
+    expect(all.summary.estimatedCostUsd).toBeCloseTo(expected, 9);
+    // range filtering also applies to the cost sum
+    const none = summarizeUsage(entries, "7d", FIXED_NOW + 8 * 86_400_000);
+    expect(none.summary.estimatedCostUsd).toBe(0);
+    expect(none.summary.pricedRequests).toBe(0);
+  });
+
   test("filters totals, days, models, and providers by persisted request surface", () => {
     const entries: PersistedUsageEntry[] = [
       entry({

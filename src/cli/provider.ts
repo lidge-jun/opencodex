@@ -124,7 +124,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--default-model <model>] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -138,12 +138,13 @@ async function handleAdd(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const restArgs = args.slice(1);
-  const force = consumeFlag(restArgs, "--force");
-  const setDefault = consumeFlag(restArgs, "--set-default");
-  const wantsJson = consumeFlag(restArgs, "--json");
-  const wantsSync = consumeFlag(restArgs, "--sync");
-  const apiKey = consumeFlagValue(restArgs, "--api-key");
+ const restArgs = args.slice(1);
+ const force = consumeFlag(restArgs, "--force");
+ const setDefault = consumeFlag(restArgs, "--set-default");
+ const wantsJson = consumeFlag(restArgs, "--json");
+ const wantsSync = consumeFlag(restArgs, "--sync");
+  const allowPrivateNetwork = consumeFlag(restArgs, "--allow-private-network");
+ const apiKey = consumeFlagValue(restArgs, "--api-key");
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
@@ -187,8 +188,9 @@ async function handleAdd(args: string[]): Promise<void> {
     };
   }
 
-  config.providers[name] = provConfig;
-  if (setDefault) config.defaultProvider = name;
+ config.providers[name] = provConfig;
+  if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
+ if (setDefault) config.defaultProvider = name;
 
   validateAndSave(config);
 

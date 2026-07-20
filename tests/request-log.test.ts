@@ -14,7 +14,9 @@ import {
   beginRequestAttempt,
   finishRequestAttempt,
   noteAttemptSend,
+  recordFirstOutput,
   sealRequestAttemptIdentity,
+  type RequestLogContext,
 } from "../src/server/request-log";
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
@@ -31,6 +33,36 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
+    const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
+    const logCtx: RequestLogContext = {
+      model: "m1",
+      provider: "a",
+      activeAttempt: attempt,
+      activeAttemptStartedAt: 1_000,
+    };
+    recordFirstOutput(logCtx, 500, 1_250);
+    expect(logCtx.firstOutputMs).toBe(750);   // request-relative
+    expect(attempt.firstOutputMs).toBe(250);  // attempt-relative
+    // second call is a no-op
+    recordFirstOutput(logCtx, 500, 9_999);
+    expect(logCtx.firstOutputMs).toBe(750);
+    expect(attempt.firstOutputMs).toBe(250);
+    // invalid clock inputs never record
+    const fresh: RequestLogContext = { model: "m", provider: "p" };
+    recordFirstOutput(fresh, Number.NaN, 100);
+    expect(fresh.firstOutputMs).toBeUndefined();
+  });
+
+  test("addFinalRequestLog preserves firstOutputMs; unset stays absent", () => {
+    const captured: RequestLogEntry[] = [];
+    addFinalRequestLog("ocx-ttft", 0, { model: "m", provider: "p", firstOutputMs: 12 }, 200, undefined, entry => captured.push(entry));
+    expect(captured[0]?.firstOutputMs).toBe(12);
+    const captured2: RequestLogEntry[] = [];
+    addFinalRequestLog("ocx-nostream", 0, { model: "m", provider: "p" }, 200, undefined, entry => captured2.push(entry));
+    expect(captured2[0]).not.toHaveProperty("firstOutputMs");
+  });
+
   test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
     const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
     noteAttemptSend(a, 100);

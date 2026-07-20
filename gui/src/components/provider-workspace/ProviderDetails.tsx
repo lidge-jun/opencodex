@@ -43,6 +43,7 @@ export default function ProviderDetails({
   busyProvider,
   loginHint,
   authHandlers,
+  onCodexActiveNeedsReauthChange,
   onUpdateProvider,
   isDefault,
   onRemoveProvider,
@@ -67,6 +68,7 @@ export default function ProviderDetails({
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
+  onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
@@ -202,6 +204,23 @@ export default function ProviderDetails({
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}
             onUpdateProvider={onUpdateProvider}
+            reauthBusy={busyProvider === item.name}
+            onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(item.name) : undefined}
+            onReauthenticate={
+              item.activeNeedsReauth
+                ? () => {
+                    if (item.authMode === "oauth") {
+                      const rows = accounts ?? [];
+                      const active = rows.find(a => a.active && a.needsReauth)
+                        ?? rows.find(a => a.needsReauth);
+                      void authHandlers?.onReauth(item.name, active?.id);
+                      return;
+                    }
+                    // Codex / forward: Accounts tab owns the pool reauth CTA.
+                    switchTab("accounts");
+                  }
+                : undefined
+            }
           />
         )}
         {tab === "models" && (
@@ -234,11 +253,14 @@ export default function ProviderDetails({
             busy={busyProvider === item.name}
             loginHint={loginHint}
             authHandlers={authHandlers}
+            onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
           />
         )}
         {tab === "settings" && (
           <ProviderSettings
+            key={item.name}
             item={item}
+            apiBase={apiBase}
             availableModels={availableModels}
             onUpdateProvider={onUpdateProvider}
             onDirtyChange={setSettingsDirty}

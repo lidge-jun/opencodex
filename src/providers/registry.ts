@@ -1,6 +1,8 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS } from "./antigravity-models";
+import type { ProviderBaseUrlChoice } from "./base-url-choices";
+import { QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -29,6 +31,12 @@ export interface ProviderRegistryEntry {
    */
   freeTier?: boolean;
   allowBaseUrlOverride?: boolean;
+  /**
+   * Optional endpoint picker for providers with multiple official hosts
+   * (e.g. Qwen Cloud token plan vs pay-as-you-go). Requires `allowBaseUrlOverride`
+   * so the selected URL is honored at route time. A choice without `baseUrl` is "Custom".
+   */
+  baseUrlChoices?: readonly ProviderBaseUrlChoice[];
   /** Static headers merged into every upstream request for this provider. */
   staticHeaders?: Record<string, string>;
   modelSuffixBracketStrip?: boolean;
@@ -662,8 +670,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
-  // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
-  { id: "qwen-portal", label: "Qwen Portal", baseUrl: "https://portal.qwen.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://portal.qwen.ai" },
+  // Qwen Cloud: token plan is the preset default; GUI offers pay-as-you-go + custom via baseUrlChoices.
+  // Formerly `qwen-portal` / portal.qwen.ai — that host is outdated.
+  {
+    id: "qwen-cloud",
+    label: "Qwen Cloud",
+    baseUrl: QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
+    adapter: "openai-chat",
+    authKind: "key",
+    allowBaseUrlOverride: true,
+    baseUrlChoices: QWEN_CLOUD_BASE_URL_CHOICES,
+    dashboardUrl: "https://docs.qwencloud.com",
+    note: "Pick token plan, pay as you go, or a custom compatible-mode base URL",
+  },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.

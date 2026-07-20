@@ -1,6 +1,6 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.7.27",
+  "version": "2.7.28",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -46,7 +46,8 @@
     "prepublishOnly": "bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
-    "prepush": "bun run typecheck && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
+    "prepush": "bun run typecheck && bun run lint:gui && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
+    "lint:gui": "cd gui && bun run lint",
     "doctor:gui": "cd gui && bun run doctor",
     "doctor:gui:full": "cd gui && bun run doctor:full",
     "doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts",

@@ -22,6 +22,10 @@ interface UsageSummaryTotals {
   reasoningOutputTokens: number;
   totalTokens: number;
   coverageRatio: number;
+  estimatedCostUsd?: number;
+  pricedRequests?: number;
+  unpricedRequests?: number;
+  unmeteredRequests?: number;
 }
 
 interface UsageDay {
@@ -78,6 +82,14 @@ interface UsageResponse {
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+function formatEstimatedUsdValue(value: number, locale: Locale): string {
+  if (!Number.isFinite(value) || value < 0) return "\u2014";
+  return `~$${new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value)}`;
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -259,6 +271,7 @@ function UsageSummaryCards({
   t: TFn;
 }) {
   return (
+    <>
     <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
       <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
@@ -275,6 +288,20 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
     </div>
+      {summary.estimatedCostUsd !== undefined && (
+        <div className="usage-cost-row" role="note">
+          <span className="muted">{t("usage.cost.total")}</span>
+          <span className="stat-value mono usage-cost-value">
+            {formatEstimatedUsdValue(summary.estimatedCostUsd, locale)}
+          </span>
+          {((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)) > 0 && (
+            <span className="muted text-caption">
+              {t("usage.cost.unpricedNote").replace("{count}", String((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)))}
+            </span>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
