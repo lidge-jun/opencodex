@@ -194,8 +194,9 @@ export default function ProviderDetails({
               item.activeNeedsReauth
                 ? () => {
                     if (item.authMode === "oauth") {
-                      const active = accounts.find(a => a.active && a.needsReauth)
-                        ?? accounts.find(a => a.needsReauth);
+                      const rows = accounts ?? [];
+                      const active = rows.find(a => a.active && a.needsReauth)
+                        ?? rows.find(a => a.needsReauth);
                       void authHandlers?.onReauth(item.name, active?.id);
                       return;
                     }
