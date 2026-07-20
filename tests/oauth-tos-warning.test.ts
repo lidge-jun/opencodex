@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { oauthTosRisk } from "../gui/src/oauth-tos-risk";
+import {
+  oauthTosRisk,
+  oauthTosRiskBodyKey,
+  oauthTosRiskTitleKey,
+} from "../gui/src/oauth-tos-risk";
 
 describe("oauth ToS risk map", () => {
   test("flags high-risk subscription OAuth providers", () => {
     expect(oauthTosRisk("anthropic")).toBe("high");
     expect(oauthTosRisk("google-antigravity")).toBe("high");
     expect(oauthTosRisk("Anthropic")).toBe("high");
+    expect(oauthTosRisk("  anthropic  ")).toBe("high");
   });
 
   test("flags elevated unofficial bridges", () => {
@@ -17,6 +22,15 @@ describe("oauth ToS risk map", () => {
     expect(oauthTosRisk("xai")).toBeNull();
     expect(oauthTosRisk("kimi")).toBeNull();
     expect(oauthTosRisk("kiro")).toBeNull();
+    expect(oauthTosRisk("")).toBeNull();
+    expect(oauthTosRisk("   ")).toBeNull();
+  });
+
+  test("maps risk levels to distinct i18n keys", () => {
+    expect(oauthTosRiskTitleKey("high")).toBe("oauthTos.highTitle");
+    expect(oauthTosRiskTitleKey("elevated")).toBe("oauthTos.elevatedTitle");
+    expect(oauthTosRiskBodyKey("high")).toBe("oauthTos.highBody");
+    expect(oauthTosRiskBodyKey("elevated")).toBe("oauthTos.elevatedBody");
   });
 });
 
@@ -34,9 +48,34 @@ describe("oauth ToS warning UI seam", () => {
     expect(page).toContain("OAuthTosWarningModal");
     expect(page).toContain("requestLoginOAuth");
     expect(page).toContain("oauthTosRisk(provider)");
+    expect(page).toContain("if (busy === provider) return");
     expect(modal).toContain("OAuthTosWarningModal");
     expect(modal).toContain("requestLoginOAuth");
+    expect(modal).toContain("if (oauthBusy) return");
+    expect(modal).toContain("!oauthTosPending");
     expect(warn).toContain("oauthTos.acknowledge");
-    expect(warn).toContain("disabled={!acknowledged}");
+    expect(warn).toContain("disabled={!acknowledged || submitted}");
+    expect(warn).toContain("stopImmediatePropagation");
+    expect(warn).toContain("addEventListener(\"keydown\", onKey, true)");
+    expect(warn).toContain("zIndex: 60");
+    expect(warn).not.toContain('?? "elevated"');
+  });
+
+  test("i18n locales define oauthTos keys", async () => {
+    const keys = [
+      "oauthTos.highTitle",
+      "oauthTos.elevatedTitle",
+      "oauthTos.highBody",
+      "oauthTos.elevatedBody",
+      "oauthTos.saferPath",
+      "oauthTos.acknowledge",
+      "oauthTos.continue",
+    ];
+    for (const locale of ["en", "de", "ko", "zh"]) {
+      const text = await Bun.file(`gui/src/i18n/${locale}.ts`).text();
+      for (const key of keys) {
+        expect(text).toContain(`"${key}"`);
+      }
+    }
   });
 });

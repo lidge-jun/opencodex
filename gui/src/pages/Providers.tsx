@@ -387,6 +387,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   };
 
   const requestLoginOAuth = (provider: string, addAccount = false) => {
+    if (busy === provider) return;
     if (oauthTosRisk(provider)) {
       setOauthTosPending({ provider, addAccount });
       return;
@@ -928,11 +929,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       )}
       {oauthTosPending && (
         <OAuthTosWarningModal
+          key={`${oauthTosPending.provider}:${oauthTosPending.addAccount ? "add" : "login"}`}
           providerId={oauthTosPending.provider}
           providerLabel={oauthLabel(oauthTosPending.provider)}
           onCancel={() => setOauthTosPending(null)}
           onContinue={() => {
             const pending = oauthTosPending;
+            if (!pending) return;
             setOauthTosPending(null);
             void loginOAuth(pending.provider, pending.addAccount);
           }}

@@ -80,10 +80,13 @@ export default function AddProviderModal({
     };
   }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      // Child ToS warning owns Escape while it is open.
+      if (e.key === "Escape" && !oauthTosPending) onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, oauthTosPending]);
   useEffect(() => {
     fetch(`${apiBase}/api/oauth/providers`).then(r => r.json()).then(d => setOauthSupported(d.providers ?? [])).catch(() => {});
   }, [apiBase]);
@@ -231,6 +234,7 @@ export default function AddProviderModal({
   };
 
   const requestLoginOAuth = (providerId: string) => {
+    if (oauthBusy) return;
     if (oauthTosRisk(providerId)) {
       setOauthTosPending(providerId);
       return;
@@ -444,11 +448,13 @@ export default function AddProviderModal({
     </div>
     {oauthTosPending && (
       <OAuthTosWarningModal
+        key={oauthTosPending}
         providerId={oauthTosPending}
         providerLabel={preset?.label ?? oauthTosPending}
         onCancel={() => setOauthTosPending(null)}
         onContinue={() => {
           const id = oauthTosPending;
+          if (!id) return;
           setOauthTosPending(null);
           void loginOAuth(id);
         }}

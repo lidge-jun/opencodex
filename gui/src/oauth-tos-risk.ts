@@ -18,9 +18,27 @@ export function oauthTosRisk(providerId: string): OAuthTosRiskLevel | null {
 }
 
 export function oauthTosRiskTitleKey(level: OAuthTosRiskLevel): "oauthTos.highTitle" | "oauthTos.elevatedTitle" {
-  return level === "high" ? "oauthTos.highTitle" : "oauthTos.elevatedTitle";
+  switch (level) {
+    case "high":
+      return "oauthTos.highTitle";
+    case "elevated":
+      return "oauthTos.elevatedTitle";
+    default: {
+      const _exhaustive: never = level;
+      return _exhaustive;
+    }
+  }
 }
 
 export function oauthTosRiskBodyKey(level: OAuthTosRiskLevel): "oauthTos.highBody" | "oauthTos.elevatedBody" {
-  return level === "high" ? "oauthTos.highBody" : "oauthTos.elevatedBody";
+  switch (level) {
+    case "high":
+      return "oauthTos.highBody";
+    case "elevated":
+      return "oauthTos.elevatedBody";
+    default: {
+      const _exhaustive: never = level;
+      return _exhaustive;
+    }
+  }
 }
