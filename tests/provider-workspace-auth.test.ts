@@ -112,4 +112,54 @@ describe("workspace account integration seam", () => {
     expect(source).not.toContain('onClick={() => !a.needsReauth && setConfirm(a)}');
     expect(source).not.toContain('onClick={() => !isMainActive ? setConfirm');
   });
+
+  test("wires active reauth health into workspace rail status", async () => {
+    const [shell, page] = await Promise.all([
+      Bun.file("gui/src/components/provider-workspace/ProviderWorkspaceShell.tsx").text(),
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+    ]);
+    expect(shell).toContain("applyActiveAccountReauth");
+    expect(shell).toContain("activeAccountNeedsReauth");
+    expect(page).toContain("activeAccountNeedsReauth");
+    expect(page).toContain("activeAccountNeedsReauth={activeAccountNeedsReauth}");
+  });
+
+  test("wires OAuth re-authenticate handlers in classic and workspace", async () => {
+    const [page, panel] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+    ]);
+    expect(page).toContain("onReauth:");
+    expect(page).toContain("loginOAuth(provider, true)");
+    // Classic provider-level CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
+    expect(page).toContain('activeAccountNeedsReauth[name] && prov.authMode === "oauth"');
+    expect(page).toContain('activeAccountNeedsReauth[name] && name === "openai"');
+    expect(page).toContain('href="#codex-auth"');
+    expect(panel).toContain("onReauth");
+    expect(panel).toContain("pws.reauthenticate");
+  });
+
+  test("wires Codex active reauth health into openai rail status", async () => {
+    const [page, pool, panel, modal] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
+      Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/AddCodexAccountModal.tsx").text(),
+    ]);
+    expect(page).toContain("codexActiveNeedsReauth");
+    expect(page).toContain("map.openai = true");
+    expect(page).toContain("onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}");
+    expect(pool).toContain("onActiveNeedsReauthChange");
+    expect(modal).toContain("reauth: true");
+    expect(pool).toContain("codexAuth.reauthenticate");
+    expect(panel).toContain("onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}");
+  });
+
+  test("keeps classic stale-account reauth and remove outside disabled row shell", async () => {
+    const page = await Bun.file("gui/src/pages/Providers.tsx").text();
+    expect(page).toContain('className="prov-account-row-main"');
+    expect(page).toContain('className="prov-account-reauth"');
+    expect(page).toContain("disabled={busy === name}");
+    expect(page).toMatch(/<div[\s\S]*?className=\{`prov-account-row\$\{account\.active/);
+  });
 });

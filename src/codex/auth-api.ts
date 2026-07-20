@@ -564,15 +564,23 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/login" && req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as { id?: string };
+    const body = (await req.json().catch(() => ({}))) as { id?: string; reauth?: boolean };
     const requestedAccountId = body.id?.trim();
+    const reauth = body.reauth === true;
     if (requestedAccountId && !ACCOUNT_ID_RE.test(requestedAccountId)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
     const runtimeConfig = getRuntimeConfig(config);
-    if ((runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || getCodexAccountCredential(accountId)) {
+    const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || Boolean(getCodexAccountCredential(accountId));
+    if (exists && !reauth) {
       return jsonResponse({ error: `Account id already exists: ${accountId}` }, 400);
+    }
+    if (reauth) {
+      if (!requestedAccountId) return jsonResponse({ error: "id required for reauth" }, 400);
+      if (!configuredPoolAccount(runtimeConfig, accountId)) {
+        return jsonResponse({ error: "Unknown pool account for reauth" }, 404);
+      }
     }
     const flowId = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -623,7 +631,7 @@ export async function handleCodexAuthAPI(
                 }
               } catch { /* wham fetch is non-blocking */ }
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
-              const collision = checkAccountIdCollision(oauthAccountId, email, plan);
+              const collision = checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
               if (collision.collision) {
                 codexAuthLoginState.set(flowId, {
                   status: "error", error: collision.reason, doneAt: Date.now(),

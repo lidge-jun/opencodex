@@ -15,6 +15,9 @@
  *  7. hasApiKey === true             -> ready  (key-auth with credential present)
  *  8. everything else                -> needsSetup
  *
+ * Live-auth overlay: `applyActiveAccountReauth` may demote ready → needs-setup
+ * when the active account needs reauth (config binning rules above unchanged).
+ *
  * Tiers (three-way, interview 2026-07-17): "accounts" (the canonical OpenAI forward
  * provider), "free" (free pricing), "paid" (everything else). Accounts wins
  * over free.
@@ -49,6 +52,8 @@ export interface WorkspaceItem extends WorkspaceProvider {
   name: string;
   /** Present on ready items; needsSetup/disabled rows omit it. */
   tier?: ProviderTier;
+  /** Set by `applyActiveAccountReauth` when live auth health overrides config readiness. */
+  activeNeedsReauth?: boolean;
 }
 
 /** The three sections rendered in the Providers workspace. */
@@ -210,15 +215,46 @@ export function buildProviderWorkspace(
   return { ready, needsSetup, disabled };
 }
 
-/** Canonical status string for a single provider — no network, pure config. */
+/**
+ * Live-auth overlay: when the active account for a provider needs reauth,
+ * demote that provider from ready → needs-setup. Inactive-only reauth is
+ * ignored (caller must only set true for the active account).
+ */
+export function applyActiveAccountReauth(
+  sections: WorkspaceSections,
+  activeNeedsReauth: Readonly<Record<string, boolean>>,
+): WorkspaceSections {
+  const demote = new Set(
+    Object.entries(activeNeedsReauth)
+      .filter(([, needs]) => needs)
+      .map(([name]) => name),
+  );
+  if (demote.size === 0) return sections;
+
+  const stillReady: WorkspaceItem[] = [];
+  const needsSetup = [...sections.needsSetup];
+  for (const item of sections.ready) {
+    if (demote.has(item.name)) {
+      const { tier: _tier, ...rest } = item;
+      needsSetup.push({ ...rest, activeNeedsReauth: true });
+    } else {
+      stillReady.push(item);
+    }
+  }
+  return { ready: stillReady, needsSetup, disabled: sections.disabled };
+}
+
+/** Canonical status string for a single provider — config plus optional live-auth overlay. */
 export type ProviderStatus = "ready" | "needs-setup" | "disabled";
 
 /**
  * Returns the canonical status for a single WorkspaceProvider (or WorkspaceItem).
- * Applies the same priority rules as buildProviderWorkspace.
+ * Applies the same priority rules as buildProviderWorkspace, with an optional
+ * live-auth overlay when `activeNeedsReauth` is set on a WorkspaceItem.
  */
-export function binProviderStatus(p: WorkspaceProvider): ProviderStatus {
+export function binProviderStatus(p: WorkspaceProvider | WorkspaceItem): ProviderStatus {
   if (p.disabled) return "disabled";
+  if ("activeNeedsReauth" in p && p.activeNeedsReauth) return "needs-setup";
   if (isConfigurationReady(p)) return "ready";
   return "needs-setup";
 }

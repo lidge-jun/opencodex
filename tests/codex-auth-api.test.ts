@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -864,6 +864,106 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(400);
     const data = await resp!.json() as { error: string };
     expect(data.error).toContain("Account id already exists");
+  });
+
+  test("POST /api/codex-auth/login without reauth still rejects existing account id", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "pool-no-reauth", email: "pool-no-reauth@example.test", isMain: false }],
+    });
+    saveCodexAccountCredential("pool-no-reauth", {
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acc-pool-no-reauth",
+    });
+
+    const req = new Request("http://localhost/api/codex-auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "pool-no-reauth" }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(400);
+    const data = await resp!.json() as { error: string };
+    expect(data.error).toContain("Account id already exists");
+  });
+
+  test("POST /api/codex-auth/login with reauth requires id", async () => {
+    const req = new Request("http://localhost/api/codex-auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reauth: true }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    expect(resp!.status).toBe(400);
+    const data = await resp!.json() as { error: string };
+    expect(data.error).toBe("id required for reauth");
+  });
+
+  test("POST /api/codex-auth/login with reauth rejects unknown pool account", async () => {
+    saveCodexAccountCredential("cred-only", {
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acc-cred-only",
+    });
+
+    const req = new Request("http://localhost/api/codex-auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "cred-only", reauth: true }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    expect(resp!.status).toBe(404);
+    const data = await resp!.json() as { error: string };
+    expect(data.error).toBe("Unknown pool account for reauth");
+    expect(data.error).not.toContain("already exists");
+  });
+
+  test("POST /api/codex-auth/login with reauth does not reject existing pool account id", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "pool-reauth", email: "pool-reauth@example.test", isMain: false }],
+    });
+    saveCodexAccountCredential("pool-reauth", {
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acc-pool-reauth",
+    });
+
+    const oauth = await import("../src/oauth");
+    const openUrlMod = await import("../src/lib/open-url");
+    const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "https://example.test/oauth" });
+    const statusSpy = spyOn(oauth, "getLoginStatus").mockReturnValue({
+      done: true,
+      loggedIn: false,
+      error: "test-stop",
+    } as ReturnType<typeof oauth.getLoginStatus>);
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+
+    try {
+      const req = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "pool-reauth", reauth: true }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).not.toBe(400);
+      const data = await resp!.json() as { ok?: boolean; flowId?: string; error?: string };
+      expect(data.error ?? "").not.toContain("already exists");
+      expect(data.ok).toBe(true);
+      expect(data.flowId).toBeTruthy();
+      expect(startSpy).toHaveBeenCalled();
+    } finally {
+      startSpy.mockRestore();
+      statusSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
+  test("OAuth pool login excludes self from collision check when reauth", async () => {
+    const source = await Bun.file("src/codex/auth-api.ts").text();
+    expect(source).toContain("checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined)");
   });
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {

@@ -754,14 +754,29 @@ dialog.modal-overlay::backdrop {
 .prov-accounts-toggle.open .chev svg { transform: rotate(-90deg); }
 .prov-accounts-list { border-top: 1px solid var(--border-soft); padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 2px; }
 .prov-account-row {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  background: none; border: none; border-radius: var(--radius-xs);
-  color: var(--text); font: inherit; font-size: var(--text-control); line-height: var(--leading-ui); padding: 6px 8px; cursor: pointer; min-height: 32px;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border-radius: var(--radius-xs); padding: 6px 8px; min-height: 32px;
 }
-.prov-account-row:hover { background: var(--raised); }
-.prov-account-row.active { cursor: default; }
+button.prov-account-row {
+  text-align: left; background: none; border: none; color: var(--text); font: inherit;
+  font-size: var(--text-control); line-height: var(--leading-ui); cursor: pointer;
+}
+button.prov-account-row:hover, .prov-account-row:hover { background: var(--raised); }
+button.prov-account-row.active { cursor: default; }
+.prov-account-row-main {
+  appearance: none; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0; border: 0; background: transparent; color: inherit; text-align: left;
+  cursor: pointer; font: inherit; font-size: var(--text-control); line-height: var(--leading-ui);
+}
+.prov-account-row-main:disabled { cursor: default; opacity: 0.72; }
 .prov-account-row .prov-account-email { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prov-account-row .badge { flex: 0 0 auto; }
+.prov-account-reauth {
+  flex: 0 0 auto; background: none; border: none; color: var(--accent); cursor: pointer;
+  font: inherit; font-size: var(--text-label); padding: 4px 6px; border-radius: var(--radius-xs);
+}
+.prov-account-reauth:hover:not(:disabled) { color: var(--accent-hover); background: var(--raised); }
+.prov-account-reauth:disabled { opacity: 0.6; cursor: default; }
 .prov-account-remove { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: var(--radius-xs); }
 .prov-account-remove:hover { color: var(--red); background: var(--red-soft); }
 .prov-account-add { color: var(--muted); font-size: var(--text-label); }

@@ -29,6 +29,13 @@ describe("provider rail status semantics", () => {
     expect(statusLabel(item({ disabled: true }), t)).toBe("Disabled");
     expect(railStatusCls(item({ disabled: true }))).toContain("--inactive");
   });
+
+  test("oauth config-ready with activeNeedsReauth shows amber needs-setup rail status", () => {
+    const reauth = item({ authMode: "oauth", activeNeedsReauth: true });
+    expect(statusLabel(reauth, t)).toBe("Needs setup");
+    expect(railStatusCls(reauth)).toContain("--warning");
+    expect(railStatusCls(reauth)).not.toContain("--active");
+  });
 });
 
 describe("provider rail source contract", () => {

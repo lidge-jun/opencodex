@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useT } from "../../i18n";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey } from "../../icons";
 import {
+  applyActiveAccountReauth,
   buildProviderWorkspace,
   hideRedundantChatGptForwardProviders,
   isFreeProvider,
@@ -52,6 +53,7 @@ export default function ProviderWorkspaceShell({
   selectedName,
   onSelect,
   onAddProvider,
+  activeAccountNeedsReauth,
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -60,6 +62,7 @@ export default function ProviderWorkspaceShell({
   selectedName: string | null;
   onSelect: (name: string | null) => void;
   onAddProvider: (intent?: AddProviderIntent) => void;
+  activeAccountNeedsReauth?: Record<string, boolean>;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
 }) {
@@ -80,10 +83,10 @@ export default function ProviderWorkspaceShell({
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>({});
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
-  const sections = useMemo(
-    () => buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers)),
-    [providers],
-  );
+  const sections = useMemo(() => {
+    const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));
+    return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
+  }, [providers, activeAccountNeedsReauth]);
 
   useEffect(() => {
     let cancelled = false;

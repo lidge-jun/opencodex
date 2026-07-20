@@ -13,7 +13,7 @@ import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderA
 
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = [], keys = [], accountLoadState = "ready",
-  switchingAccountId = null, busy = false, loginHint, authHandlers,
+  switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
 }: {
   item: WorkspaceItem;
   apiBase: string;
@@ -25,6 +25,7 @@ export default function ProviderAuthPanel({
   busy?: boolean;
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
+  onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
 }) {
   const t = useT();
   const [addingKey, setAddingKey] = useState(false);
@@ -40,7 +41,7 @@ export default function ProviderAuthPanel({
       <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
         <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
         <div className="pwi-auth-body">
-          <CodexAccountPool apiBase={apiBase} embedded />
+          <CodexAccountPool apiBase={apiBase} embedded onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange} />
         </div>
       </section>
     );
@@ -50,6 +51,8 @@ export default function ProviderAuthPanel({
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
+  const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
+  const activeNeedsReauth = Boolean(activeReauthAccount);
 
   const submitKey = async () => {
     const key = newKey.trim();
@@ -67,13 +70,18 @@ export default function ProviderAuthPanel({
         {isOauth && (
           <>
             <div className="pwi-auth-status-row">
-              <span className={`pwi-auth-dot ${loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+              <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">
                 {loggedIn
                   ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
                   : (oauth?.error || t("pws.notLoggedInTitle"))}
               </span>
               <span className="pwi-auth-actions">
+                {activeReauthAccount && (
+                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onReauth(item.name, activeReauthAccount.id)}>
+                    {t("pws.reauthenticate")}
+                  </button>
+                )}
                 {loggedIn ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
                 ) : (
@@ -131,6 +139,16 @@ export default function ProviderAuthPanel({
                       {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                       {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
+                    {account.needsReauth && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={busy || Boolean(switchingAccountId)}
+                        onClick={() => void authHandlers.onReauth(item.name, account.id)}
+                      >
+                        {t("pws.reauthenticate")}
+                      </button>
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
                       aria-label={`${t("common.remove")} — ${label}`}
                       title={`${t("common.remove")} — ${label}`}

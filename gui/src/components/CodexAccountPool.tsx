@@ -21,11 +21,12 @@ export interface CodexAccountEntry {
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * chrome — currently a no-op stub reserved for the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false }: {
+export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange }: {
   apiBase: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
   embedded?: boolean;
+  onActiveNeedsReauthChange?: (needs: boolean) => void;
 }) {
   const t = useT();
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>([]);
@@ -33,6 +34,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [autoThreshold, setAutoThreshold] = useState(80);
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [reauthId, setReauthId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [toastError, setToastError] = useState(false);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
@@ -78,6 +80,27 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       window.clearInterval(iv);
     };
   }, [load]);
+
+  const activePoolAccount = activeId && activeId !== "__main__"
+    ? accounts.find(a => a.id === activeId)
+    : null;
+  const activeNeedsReauth = activePoolAccount
+    ? Boolean(activePoolAccount.needsReauth)
+    : Boolean(accounts.find(a => a.isMain)?.needsReauth);
+
+  useEffect(() => {
+    onActiveNeedsReauthChange?.(activeNeedsReauth);
+  }, [activeNeedsReauth, onActiveNeedsReauthChange]);
+
+  const openReauth = (id: string) => {
+    setReauthId(id);
+    setShowAdd(true);
+  };
+
+  const closeAddModal = () => {
+    setShowAdd(false);
+    setReauthId(null);
+  };
 
   const setActive = async (id: string | null) => {
     if (switchingId) return;
@@ -265,6 +288,15 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         </button>
       </div>
 
+      {activePoolAccount?.needsReauth && (
+        <div className="notice-warn" style={{ marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <span><IconAlert width={14} /> {t("codexAuth.tokenExpired")}</span>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => openReauth(activePoolAccount.id)}>
+            {t("codexAuth.reauthenticate")}
+          </button>
+        </div>
+      )}
+
       {pool.length === 0 && <EmptyState title={t("codexAuth.noPool")} />}
 
       {pool.map(a => (
@@ -285,6 +317,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             {!isNext(a.id) && !a.needsReauth && (
               <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => setConfirm(a)}>
                 {switchActionLabel}
+              </button>
+            )}
+            {a.needsReauth && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => openReauth(a.id)}>
+                {t("codexAuth.reauthenticate")}
               </button>
             )}
             <button
@@ -402,8 +439,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       {showAdd && (
         <AddCodexAccountModal
           apiBase={apiBase}
-          onClose={() => setShowAdd(false)}
-          onAdded={() => { load(); setToast(t("codexAuth.accountAdded")); setTimeout(() => setToast(""), 5000); }}
+          reauthAccountId={reauthId ?? undefined}
+          onClose={closeAddModal}
+          onAdded={() => { load(); setToast(t("codexAuth.accountAdded")); setTimeout(() => setToast(""), 5000); closeAddModal(); }}
         />
       )}
     </div>

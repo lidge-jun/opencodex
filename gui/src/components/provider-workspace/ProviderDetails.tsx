@@ -42,6 +42,7 @@ export default function ProviderDetails({
   busyProvider,
   loginHint,
   authHandlers,
+  onCodexActiveNeedsReauthChange,
   onUpdateProvider,
   isDefault,
   onRemoveProvider,
@@ -66,6 +67,7 @@ export default function ProviderDetails({
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
+  onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
@@ -213,6 +215,7 @@ export default function ProviderDetails({
             busy={busyProvider === item.name}
             loginHint={loginHint}
             authHandlers={authHandlers}
+            onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
           />
         )}
         {tab === "settings" && (

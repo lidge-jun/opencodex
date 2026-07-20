@@ -66,6 +66,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [workspaceView, setWorkspaceView] = useState(() => location.hash.replace(/^#\/?/, "") === "providers/workspace");
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
+  const [codexActiveNeedsReauth, setCodexActiveNeedsReauth] = useState(false);
   const aliveRef = useRef(true);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
@@ -114,6 +115,27 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     } catch {
       setQuotaReports({});
     }
+  }, [apiBase]);
+
+  const fetchCodexActiveReauth = useCallback(async () => {
+    try {
+      const [accountsRes, activeRes] = await Promise.all([
+        fetch(`${apiBase}/api/codex-auth/accounts`),
+        fetch(`${apiBase}/api/codex-auth/active`),
+      ]);
+      if (!accountsRes.ok || !activeRes.ok) return;
+      const accts = await accountsRes.json() as { accounts?: Array<{ id: string; isMain?: boolean; needsReauth?: boolean }> };
+      const active = await activeRes.json() as { activeCodexAccountId?: string | null };
+      const accounts = accts.accounts ?? [];
+      const activeId = active.activeCodexAccountId ?? null;
+      const activePoolAccount = activeId && activeId !== "__main__"
+        ? accounts.find(a => a.id === activeId)
+        : null;
+      const needs = activePoolAccount
+        ? Boolean(activePoolAccount.needsReauth)
+        : Boolean(accounts.find(a => a.isMain)?.needsReauth);
+      if (aliveRef.current) setCodexActiveNeedsReauth(needs);
+    } catch { /* ignore */ }
   }, [apiBase]);
 
   // Multiauth: per-provider logged-in account lists for the card dropdowns (oauth cards only;
@@ -273,9 +295,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       void fetchConfig();
       void fetchOauth();
       void fetchProviderQuotas();
+      void fetchCodexActiveReauth();
     }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [fetchConfig, fetchOauth, fetchProviderQuotas]);
+    const iv = window.setInterval(() => { void fetchCodexActiveReauth(); }, 30_000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(iv);
+    };
+  }, [fetchConfig, fetchOauth, fetchProviderQuotas, fetchCodexActiveReauth]);
 
   // Load account sets once config tells us which providers are oauth-backed.
   const oauthCardProviders = useMemo(
@@ -299,6 +326,16 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       : [],
     [config],
   );
+
+  const activeAccountNeedsReauth = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    for (const [provider, set] of Object.entries(accountSets)) {
+      const active = set.accounts.find(a => a.active) ?? set.accounts.find(a => a.id === set.activeAccountId);
+      if (active?.needsReauth) map[provider] = true;
+    }
+    if (codexActiveNeedsReauth) map.openai = true;
+    return map;
+  }, [accountSets, codexActiveNeedsReauth]);
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
     const timeout = window.setTimeout(() => {
@@ -533,6 +570,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           selectedName={workspaceSelected}
           onSelect={setWorkspaceSelected}
           onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
+          activeAccountNeedsReauth={activeAccountNeedsReauth}
           detail={(item, data) => (
             <ProviderDetails
               key={item.name}
@@ -556,6 +594,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               authHandlers={{
                 onLogin: loginOAuth,
                 onLogout: logoutOAuth,
+                onReauth: provider => loginOAuth(provider, true),
                 onSwitchAccount: switchAccount,
                 onRemoveAccount: removeAccount,
                 onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
@@ -567,6 +606,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onRemoveProvider={removeProvider}
               onSetDisabled={setProviderDisabled}
               onUpdateProvider={updateProvider}
+              onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}
             />
           )}
         />
@@ -754,7 +794,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                       <div className="prov-title">
                         <span className="font-semibold">{name}</span>
                         {isDefault && <span className="badge badge-primary">{t("prov.defaultBadge")}</span>}
-                        {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
+                        {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : activeAccountNeedsReauth[name] ? <span className="badge badge-amber">{t("pws.reauth")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
                         {openAiMode === "direct" && <span className="badge badge-green">{t("prov.openaiModeDirect")}</span>}
                         {openAiMode === "pool" && <span className="badge badge-accent">{t("prov.openaiModePool")}</span>}
@@ -798,6 +838,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </div>
                   </div>
                   <div className="provider-actions">
+                    {activeAccountNeedsReauth[name] && prov.authMode === "oauth" && (
+                      <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(name, true)} disabled={busy === name}>
+                        {t("prov.reauthenticate")}
+                      </button>
+                    )}
+                    {activeAccountNeedsReauth[name] && name === "openai" && (
+                      <a className="btn btn-primary btn-sm" href="#codex-auth">{t("prov.reauthenticate")}</a>
+                    )}
                     <button
                       className={`btn ${isDisabled ? "btn-primary" : "btn-ghost"} btn-sm`}
                       onClick={() => setProviderDisabled(name, !isDisabled)}
@@ -828,25 +876,41 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {(accountSet?.accounts ?? []).map(account => {
                           const accountLabel = oauthAccountDisplayLabel(accountSet?.accounts ?? [account], account, t);
                           return (
-                          <button
+                          <div
                             key={account.id}
                             className={`prov-account-row${account.active ? " active" : ""}`}
-                            onClick={() => switchAccount(name, account)}
-                            title={account.active ? undefined : t("prov.accountSwitchTitle")}
                           >
-                            <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
-                            <span className="prov-account-email">{accountLabel}</span>
-                            {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
-                            {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                            <span
+                            <button
+                              type="button"
+                              className="prov-account-row-main"
+                              onClick={() => { if (!account.needsReauth) void switchAccount(name, account); }}
+                              title={account.active || account.needsReauth ? undefined : t("prov.accountSwitchTitle")}
+                              disabled={Boolean(account.needsReauth)}
+                            >
+                              <span className={`dot ${account.needsReauth ? "dot-amber" : account.active ? "dot-green" : "dot-muted"}`} />
+                              <span className="prov-account-email">{accountLabel}</span>
+                              {account.needsReauth && <span className="badge badge-amber">{t("prov.accountReauth")}</span>}
+                              {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                            </button>
+                            {account.needsReauth && (
+                              <button
+                                type="button"
+                                className="prov-account-reauth"
+                                disabled={busy === name}
+                                onClick={e => { e.stopPropagation(); void loginOAuth(name, true); }}
+                              >
+                                {t("prov.reauthenticate")}
+                              </button>
+                            )}
+                            <button
+                              type="button"
                               className="prov-account-remove"
-                              role="button"
                               aria-label={t("prov.accountRemoveAria", { email: accountLabel })}
                               onClick={e => { e.stopPropagation(); removeAccount(name, account); }}
                             >
                               <IconTrash style={{ width: 13, height: 13 }} />
-                            </span>
-                          </button>
+                            </button>
+                          </div>
                           );
                         })}
                         {keyPool.map(entry => (

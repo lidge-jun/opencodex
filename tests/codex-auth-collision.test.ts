@@ -99,4 +99,21 @@ describe("codex auth account collision", () => {
     const result = checkAccountIdCollision("main-chatgpt-account", "main@example.test", "business");
     expect(result).toEqual({ collision: false });
   });
+
+  test("excludeAccountId skips self so reauth of the same pool row is not a collision", () => {
+    seedAccount("pool-reauth", "member-a@example.test", "chatgpt-reauth-acct");
+
+    const withoutExclude = checkAccountIdCollision("chatgpt-reauth-acct", "member-a@example.test");
+    expect(withoutExclude.collision).toBe(true);
+    if (withoutExclude.collision) {
+      expect(withoutExclude.reason).toContain("Account is already in the pool");
+    }
+
+    expect(checkAccountIdCollision(
+      "chatgpt-reauth-acct",
+      "member-a@example.test",
+      undefined,
+      "pool-reauth",
+    )).toEqual({ collision: false });
+  });
 });

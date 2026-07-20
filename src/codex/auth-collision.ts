@@ -44,10 +44,12 @@ export function checkAccountIdCollision(
   chatgptAccountId: string,
   email?: string | null,
   plan?: string | null,
+  excludeAccountId?: string | null,
 ): { collision: true; reason: string } | { collision: false } {
   const candidateEmail = normalizedEmail(email);
   const candidateWorkspace = isWorkspacePlan(plan);
   for (const account of loadConfig().codexAccounts ?? []) {
+    if (excludeAccountId && account.id === excludeAccountId) continue;
     if (account.isMain) continue;
     if (isWorkspacePlan(account.plan) !== candidateWorkspace) continue;
     const cred = getCodexAccountCredential(account.id);

@@ -51,6 +51,7 @@ export interface ProviderAuthHandlers {
   onLogin: (provider: string, addAccount?: boolean) => void | Promise<void>;
   onCancelLogin?: (provider: string) => void;
   onLogout: (provider: string) => void | Promise<void>;
+  onReauth: (provider: string, accountId?: string) => void | Promise<void>;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
   onRemoveAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
   onRetryAccounts?: (provider: string) => void | Promise<void>;
