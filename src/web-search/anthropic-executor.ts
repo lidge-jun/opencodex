@@ -4,7 +4,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/a
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
+import { fetchWithResetRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import type { WebSearchSource } from "./parse";
 import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarSettings } from "./executor";
 
@@ -162,12 +162,12 @@ export async function runAnthropicWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      recovery => fetch(url, {
+      recovery => fetch(url, applyUpstreamRecoveryInit({
         method: "POST",
-        headers: applyUpstreamRecoveryHeaders(headers, recovery),
+        headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar-anthropic" },
     );
     if (!res.ok) {

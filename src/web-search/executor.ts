@@ -2,7 +2,7 @@ import type { OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
+import { fetchWithResetRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
 
@@ -72,12 +72,12 @@ export async function runWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      recovery => fetch(url, {
+      recovery => fetch(url, applyUpstreamRecoveryInit({
         method: "POST",
-        headers: applyUpstreamRecoveryHeaders(headers, recovery),
+        headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
     );
     recordOutcome?.(res.status);

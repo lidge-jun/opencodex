@@ -6,7 +6,7 @@ import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type Si
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { clearableDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { fetchWithResetRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
+import { fetchWithResetRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import { formatWebSearchResults } from "./format-result";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
@@ -277,14 +277,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             })
           : await fetchWithResetRetry(
               recovery => {
-                const h = applyUpstreamRecoveryHeaders(request.headers, recovery);
-                if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-                return fetch(request.url, {
+                const init = applyUpstreamRecoveryInit({
                   method: request.method,
-                  headers: h,
+                  headers: request.headers,
                   body: request.body,
                   signal: headerDeadline.signal,
-                });
+                }, recovery);
+                const h = new Headers(init.headers);
+                if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
+                return fetch(request.url, { ...init, headers: h });
               },
               { abortSignal: headerDeadline.signal, label: "web-search-loop" },
             );

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   fetchWithResetRetry,
+  applyUpstreamRecoveryInit,
   applyUpstreamRecoveryHeaders,
   isConnectionResetError,
   retryBackoffDelayMs,
@@ -33,13 +34,23 @@ afterEach(() => {
   for (const spy of warnSpies.splice(0)) spy.mockRestore();
 });
 
-describe("applyUpstreamRecoveryHeaders", () => {
-  test("sets Connection: close only on connection-reset recovery", () => {
+describe("applyUpstreamRecoveryInit", () => {
+  test("sets keepalive:false and Connection: close only on connection-reset recovery", () => {
+    const base = { headers: { authorization: "Bearer x" } };
+    expect(applyUpstreamRecoveryInit(base).keepalive).toBeUndefined();
+    expect(applyUpstreamRecoveryInit(base, "transient-5xx").keepalive).toBeUndefined();
+    expect(new Headers(applyUpstreamRecoveryInit(base, "transient-5xx").headers).get("connection")).toBeNull();
+
+    const reset = applyUpstreamRecoveryInit(base, "connection-reset");
+    expect(reset.keepalive).toBe(false);
+    expect(new Headers(reset.headers).get("connection")).toBe("close");
+    expect(new Headers(reset.headers).get("authorization")).toBe("Bearer x");
+  });
+
+  test("legacy applyUpstreamRecoveryHeaders still sets Connection: close", () => {
     const base = new Headers({ authorization: "Bearer x" });
     expect(applyUpstreamRecoveryHeaders(base)?.get("connection")).toBeNull();
-    expect(applyUpstreamRecoveryHeaders(base, "transient-5xx").get("connection")).toBeNull();
     expect(applyUpstreamRecoveryHeaders(base, "connection-reset").get("connection")).toBe("close");
-    expect(applyUpstreamRecoveryHeaders(base, "connection-reset").get("authorization")).toBe("Bearer x");
   });
 });
 

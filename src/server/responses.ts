@@ -55,7 +55,7 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../codex/routing";
-import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
+import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
@@ -1102,11 +1102,11 @@ export async function handleResponses(
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
-          return fetchWithHeaderTimeout(request.url, {
+          return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,
-            headers: applyUpstreamRecoveryHeaders(request.headers, recovery),
+            headers: request.headers,
             body: request.body,
-          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
@@ -1410,11 +1410,11 @@ export async function handleResponses(
       upstreamResponse = await fetchWithResetRetry(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
-          return fetchWithHeaderTimeout(request.url, {
+          return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,
-            headers: applyUpstreamRecoveryHeaders(request.headers, recovery),
+            headers: request.headers,
             body: request.body,
-          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
@@ -1784,11 +1784,11 @@ export async function handleResponsesCompact(
       upstream = await fetchWithTransientRetry(
         recovery => fetchWithHeaderTimeout(
           compactUrl,
-          {
+          applyUpstreamRecoveryInit({
             method: "POST",
-            headers: applyUpstreamRecoveryHeaders(headers, recovery),
+            headers,
             body: JSON.stringify({ ...compactBody, model: route.modelId }),
-          },
+          }, recovery),
           req.signal,
           connectMs,
           false,

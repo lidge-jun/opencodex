@@ -149,18 +149,32 @@ export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
- * On connection-reset retries, force Connection: close so Bun does not reuse the
- * same half-closed keep-alive socket that just failed (chatgpt.com/Cloudflare).
+ * Opt out of Bun's keep-alive pool after a connection-reset retry.
+ *
+ * Prefer the Bun fetch extension `keepalive: false` (transport-level) over
+ * relying on the hop-by-hop `Connection: close` header alone — Bun has ignored
+ * that header in past releases (oven-sh/bun#20492), so a header-only retry can
+ * still reuse the same half-closed pooled socket. Still set Connection: close
+ * as a belt-and-suspenders signal for intermediaries that honor it.
  */
+export function applyUpstreamRecoveryInit<T extends RequestInit>(
+  init: T,
+  recovery?: UpstreamSendRecovery,
+): T & { headers: Headers } {
+  const headers = new Headers(init.headers);
+  if (recovery !== "connection-reset") {
+    return { ...init, headers };
+  }
+  headers.set("connection", "close");
+  return { ...init, headers, keepalive: false };
+}
+
+/** @deprecated Prefer {@link applyUpstreamRecoveryInit} so keepalive:false is applied. */
 export function applyUpstreamRecoveryHeaders(
   headers: HeadersInit | undefined,
   recovery?: UpstreamSendRecovery,
 ): Headers {
-  const next = new Headers(headers);
-  if (recovery === "connection-reset") {
-    next.set("connection", "close");
-  }
-  return next;
+  return applyUpstreamRecoveryInit({ headers }, recovery).headers;
 }
 
 /**
