@@ -430,7 +430,10 @@ export interface OcxConfig {
    * those are unset — Bun's fetch honors them for all outbound calls; localhost is excluded.
    */
   proxy?: string;
-  /** Upstream stall timeout (seconds). After this many seconds of no upstream data, emits response.incomplete. Default 90. Min 1. */
+  /**
+   * Upstream stall timeout (seconds). After this many seconds of no upstream data, emits
+   * response.incomplete. Default 300. Min 1.
+   */
   stallTimeoutSec?: number;
   /** Connect timeout (ms) for upstream fetch — covers DNS, TCP, TLS, and response header. Default 200000. */
   connectTimeoutMs?: number;

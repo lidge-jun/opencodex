@@ -41,7 +41,7 @@ namespaced selected id를 bare id로 바꿉니다.
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 3단계 multi-agent surface override. `"v1"`은 업스트림 pin보다 우선해 모든 모델을 v1로, `"default"`는 업스트림 model pin(sol/terra=v2, luna=v1)을 따르고, `"v2"`는 모두 v2로 강제합니다. 대시보드 Models 페이지나 `ocx v2 mode`에서 설정합니다. |
 | `providerContextCaps?` | `Record<string,number>` | `{}` | 프로바이더별 Codex 표시 context cap. 알려진 context window를 낮추기만 합니다. |
 | `contextCapValue?` | `number` | `350000` | 대시보드 context-cap control에서 쓸 값. 바꾸면 `providerContextCaps`에서 활성화된 모든 항목을 갱신합니다. |
-| `stallTimeoutSec?` | `number` | `90` | 업스트림 데이터가 오지 않을 때 bridge가 중단하고 `response.incomplete`를 내보내기까지의 초. 최소 1. |
+| `stallTimeoutSec?` | `number` | `300` | 업스트림 데이터가 오지 않을 때 bridge가 중단하고 `response.incomplete`를 내보내기까지의 초. 최소 1. |
 | `connectTimeoutMs?` | `number` | `200000` | DNS/TCP/TLS와 최종 응답 헤더만 기다리는 시도별 deadline. 응답 body 생성 전 종료됩니다. |
 | `shutdownTimeoutMs?` | `number` | `5000` | 진행 중인 turn을 중단하기 전 graceful drain deadline. |
 | `websockets?` | `boolean` | `false` | `supports_websockets`를 알려 Codex가 Responses WebSocket 경로를 쓰게 합니다. 생략하거나 `false`이면 HTTP/SSE를 유지합니다. |

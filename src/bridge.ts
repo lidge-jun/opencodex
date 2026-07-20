@@ -2,6 +2,7 @@ import type { AdapterEvent, OcxUsage } from "./types";
 import { adapterFailureFromMessage, classifyError, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
+import { resolveStallTimeoutSec } from "./stall-timeout";
 import { usageDisplayTotalTokens } from "./usage/totals";
 
 function uuid(): string {
@@ -181,7 +182,7 @@ export function bridgeToResponsesSSE(
       // whenever a real event was emitted since the last tick, so it only fires on a genuine stall.
       const heartbeatFrame = encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
-      const stallSec = Math.max(1, options?.stallTimeoutSec ?? 90);
+      const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
       beat = setInterval(() => {
         if (closed) return;

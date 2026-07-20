@@ -1101,25 +1101,25 @@ describe("web-search stall deadline", () => {
   test("planWebSearch computes the effective stall deadline covering bounded silent units", () => {
     const parsed = parsedWithWebSearch();
     const auth = new Headers({ authorization: "Bearer chatgpt" });
-    // defaults: max(90, connect 200s, sidecar 200s) + 30 margin
-    expect(planWebSearch(config(), parsed, false, auth, routedProvider, "model")?.stallTimeoutSec).toBe(230);
+    // defaults: max(300 bridge, connect 200s, sidecar 200s) + 30 margin
+    expect(planWebSearch(config(), parsed, false, auth, routedProvider, "model")?.stallTimeoutSec).toBe(330);
     // a larger user-configured stallTimeoutSec dominates
     expect(planWebSearch(config({ stallTimeoutSec: 600 }), parsed, false, auth, routedProvider, "model")?.stallTimeoutSec).toBe(630);
-    // small unit budgets -> the bridge's 90s default dominates
+    // small unit budgets -> the bridge's 300s default dominates
     expect(planWebSearch(
       config({
         connectTimeoutMs: 30_000,
         webSearchSidecar: { timeoutMs: 30_000, routedModelStallTimeoutMs: 30_000 },
       }),
       parsed, false, auth, routedProvider, "model",
-    )?.stallTimeoutSec).toBe(120);
+    )?.stallTimeoutSec).toBe(330);
   });
 
   test("webSearchStallTimeoutSec helper covers the largest bounded unit plus margin", () => {
-    expect(webSearchStallTimeoutSec(undefined, undefined, 200_000)).toBe(230);
+    expect(webSearchStallTimeoutSec(undefined, undefined, 200_000)).toBe(330);
     expect(webSearchStallTimeoutSec(90, 200_000, 200_000)).toBe(230);
     expect(webSearchStallTimeoutSec(600, 200_000, 200_000)).toBe(630);
-    expect(webSearchStallTimeoutSec(undefined, 30_000, 30_000)).toBe(120);
+    expect(webSearchStallTimeoutSec(undefined, 30_000, 30_000)).toBe(330);
   });
 
   test("threaded stallTimeoutSec reaches the bridge: a hung sidecar trips upstream_stall_timeout", async () => {

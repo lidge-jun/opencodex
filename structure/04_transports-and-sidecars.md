@@ -60,7 +60,7 @@ frame rather than always emitting `response.completed`. If the response status i
 The HTTP/SSE bridge emits `response.heartbeat` events during upstream silence to re-arm Codex's idle
 timer (Codex's default `stream_idle_timeout` is 300 s and ANY SSE event re-arms it). Those
 bridge-enqueued keepalive frames do NOT count as activity for the bridge's own watchdog: a bounded
-stall deadline (default 90 s, configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick)
+stall deadline (default 300 s, configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick)
 closes the stream with `response.incomplete` / `upstream_stall_timeout` and cancels the upstream
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
