@@ -2,7 +2,7 @@ import type { OcxProviderConfig } from "../types";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { fetchWithResetRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
 import { getValidAccessToken } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import type { DescribeOutcome, VisionSettings } from "./describe";
@@ -155,9 +155,9 @@ export async function describeImageAnthropic(
   const startedAt = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${base}/v1/messages`, {
+      recovery => fetch(`${base}/v1/messages`, {
         method: "POST",
-        headers,
+        headers: applyUpstreamRecoveryHeaders(headers, recovery),
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
       }),

@@ -149,6 +149,21 @@ export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
+ * On connection-reset retries, force Connection: close so Bun does not reuse the
+ * same half-closed keep-alive socket that just failed (chatgpt.com/Cloudflare).
+ */
+export function applyUpstreamRecoveryHeaders(
+  headers: HeadersInit | undefined,
+  recovery?: UpstreamSendRecovery,
+): Headers {
+  const next = new Headers(headers);
+  if (recovery === "connection-reset") {
+    next.set("connection", "close");
+  }
+  return next;
+}
+
+/**
  * Run `doFetch`, retrying only connection-reset-shaped rejections (see
  * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
  * (string body); every retry is logged so persistent resets stay visible.

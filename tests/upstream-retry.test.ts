@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   fetchWithResetRetry,
+  applyUpstreamRecoveryHeaders,
   isConnectionResetError,
   retryBackoffDelayMs,
 } from "../src/lib/upstream-retry";
@@ -30,6 +31,16 @@ function silenceWarn(): void {
 
 afterEach(() => {
   for (const spy of warnSpies.splice(0)) spy.mockRestore();
+});
+
+describe("applyUpstreamRecoveryHeaders", () => {
+  test("sets Connection: close only on connection-reset recovery", () => {
+    const base = new Headers({ authorization: "Bearer x" });
+    expect(applyUpstreamRecoveryHeaders(base)?.get("connection")).toBeNull();
+    expect(applyUpstreamRecoveryHeaders(base, "transient-5xx").get("connection")).toBeNull();
+    expect(applyUpstreamRecoveryHeaders(base, "connection-reset").get("connection")).toBe("close");
+    expect(applyUpstreamRecoveryHeaders(base, "connection-reset").get("authorization")).toBe("Bearer x");
+  });
 });
 
 describe("isConnectionResetError", () => {
@@ -138,6 +149,18 @@ describe("fetchWithResetRetry", () => {
       throw bunResetError();
     };
     await expect(fetchWithResetRetry(doFetch, { abortSignal: ac.signal })).rejects.toThrow("socket connection was closed unexpectedly");
+  });
+  test("passes connection-reset recovery into the retry thunk", async () => {
+    silenceWarn();
+    const recoveries: Array<string | undefined> = [];
+    let attempt = 0;
+    const res = await fetchWithResetRetry(async recovery => {
+      recoveries.push(recovery);
+      if (attempt++ === 0) throw bunResetError();
+      return new Response("ok", { status: 200 });
+    });
+    expect(res.status).toBe(200);
+    expect(recoveries).toEqual([undefined, "connection-reset"]);
   });
 });
 

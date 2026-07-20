@@ -55,7 +55,7 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../codex/routing";
-import { fetchWithResetRetry, fetchWithTransientRetry } from "../lib/upstream-retry";
+import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryHeaders } from "../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
@@ -395,9 +395,13 @@ export function sanitizeEncryptedContentInPlace(input: unknown): number {
   return rewritten;
 }
 
-export function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthContext): ((outcome: CodexUpstreamOutcome) => void) | undefined {
+export function sidecarOutcomeRecorder(
+  config: OcxConfig,
+  authCtx: CodexAuthContext,
+  threadId?: string | null,
+): ((outcome: CodexUpstreamOutcome) => void) | undefined {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
-    ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome)
+    ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, { threadId })
     : undefined;
 }
 
@@ -418,9 +422,15 @@ export function codexForwardTerminalOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
   provider: OcxProviderConfig,
+  threadId?: string | null,
 ): ((status: ResponsesTerminalStatus) => void) | undefined {
   if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
-  return status => recordCodexUpstreamOutcome(config, authCtx.accountId, status === "completed" ? 200 : 502);
+  return status => recordCodexUpstreamOutcome(
+    config,
+    authCtx.accountId,
+    status === "completed" ? 200 : 502,
+    { threadId },
+  );
 }
 
 /**
@@ -1094,7 +1104,7 @@ export async function handleResponses(
           noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, {
             method: request.method,
-            headers: request.headers,
+            headers: applyUpstreamRecoveryHeaders(request.headers, recovery),
             body: request.body,
           }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
         },
@@ -1104,7 +1114,11 @@ export async function handleResponses(
       upstream.abort();
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-      if (usesCodexForwardPoolAuth(authCtx, route.provider)) recordCodexUpstreamOutcome(config, authCtx.accountId, outcome);
+      if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+        recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+          threadId: req.headers.get("x-codex-parent-thread-id"),
+        });
+      }
       const msg = outcome === "timeout"
         ? `Provider connect timeout after ${connectMs}ms`
         : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
@@ -1122,7 +1136,12 @@ export async function handleResponses(
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
-    const terminalRecorder = codexForwardTerminalOutcomeRecorder(config, authCtx, route.provider);
+    const terminalRecorder = codexForwardTerminalOutcomeRecorder(
+      config,
+      authCtx,
+      route.provider,
+      req.headers.get("x-codex-parent-thread-id"),
+    );
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
@@ -1156,6 +1175,7 @@ export async function handleResponses(
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
         retryAfter: retryAfterRaw,
          resetAt: [primaryResetRaw, secondaryResetRaw, monthlyResetRaw].filter(Boolean),
+         threadId: req.headers.get("x-codex-parent-thread-id"),
         });
       }
     }
@@ -1391,7 +1411,9 @@ export async function handleResponses(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, {
-            method: request.method, headers: request.headers, body: request.body,
+            method: request.method,
+            headers: applyUpstreamRecoveryHeaders(request.headers, recovery),
+            body: request.body,
           }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
