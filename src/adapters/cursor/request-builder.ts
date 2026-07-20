@@ -10,6 +10,66 @@ import { namespacedToolName } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
 import { cursorCodexToWireModelId } from "./discovery";
 import { cursorEffortSuffix } from "./effort-map";
+import type { OcxTool } from "../../types";
+
+/**
+ * Maximum number of tools (native + namespace-inner) that the Cursor Connect
+ * transport can register per session before returning `resource_exhausted`.
+ * Empirically determined: 230 works, 340 fails. 200 provides safe margin.
+ * See https://github.com/lidge-jun/opencodex/issues/190
+ */
+const CURSOR_TOOL_BUDGET = 200;
+
+const CURSOR_DEFERRED_TOOLS_NOTE = [
+  "[opencodex] Not all tools could be advertised to Cursor due to a transport limit.",
+  "Additional MCP/app tools are available via `tool_search` — use it to discover",
+  "and load tools by keyword when the task requires them.",
+].join(" ");
+
+/**
+ * Enforce a tool budget for the Cursor transport. Native (non-namespace) tools
+ * are always kept. Namespaces are added smallest-first until the budget is full;
+ * remaining namespaces are dropped (the model can still discover them via
+ * tool_search). Returns the filtered tool list and whether any trimming occurred.
+ */
+function enforceCursorToolBudget(tools: readonly OcxTool[]): { tools: OcxTool[]; trimmed: boolean } {
+  if (tools.length <= CURSOR_TOOL_BUDGET) return { tools: [...tools], trimmed: false };
+
+  const native: OcxTool[] = [];
+  const namespaceGroups = new Map<string, OcxTool[]>();
+  for (const tool of tools) {
+    if (tool.namespace) {
+      const group = namespaceGroups.get(tool.namespace) ?? [];
+      group.push(tool);
+      namespaceGroups.set(tool.namespace, group);
+    } else {
+      native.push(tool);
+    }
+  }
+
+  // Sort namespaces smallest-first to maximise the number of namespaces that fit.
+  const sorted = [...namespaceGroups.entries()].sort((a, b) => a[1].length - b[1].length);
+
+  let remaining = CURSOR_TOOL_BUDGET - native.length;
+  const kept: OcxTool[] = [...native];
+  let trimmed = false;
+
+  for (const [, group] of sorted) {
+    if (group.length <= remaining) {
+      kept.push(...group);
+      remaining -= group.length;
+    } else {
+      trimmed = true;
+      // Stop — no more namespaces fit.
+      break;
+    }
+  }
+
+  // If we broke early, all subsequent namespaces are also trimmed.
+  if (kept.length < tools.length) trimmed = true;
+
+  return { tools: kept, trimmed };
+}
 
 /**
  * Resolve a `cursor/<model>` selection + Codex reasoning effort to the actual Cursor model id. Cursor
@@ -80,6 +140,9 @@ export function generatedCursorConversationId(): string {
 }
 
 export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest {
+  const rawTools = parsed.context.tools ?? [];
+  const { tools: budgetedTools, trimmed } = enforceCursorToolBudget(rawTools);
+
   return {
     modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
     // The Cursor conversation id comes ONLY from remembered state (_cursorConversationId). Do NOT fall
@@ -87,12 +150,15 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
     // different namespace and would start an unrelated Cursor conversation, breaking tool-result
     // continuation. If we have no remembered Cursor conversation, start a fresh one.
     conversationId: parsed._cursorConversationId ?? generatedCursorConversationId(),
-    system: [...(parsed.context.systemPrompt ?? [])],
+    system: [
+      ...(parsed.context.systemPrompt ?? []),
+      ...(trimmed ? [CURSOR_DEFERRED_TOOLS_NOTE] : []),
+    ],
     messages: parsed.context.messages
       .map(requestMessage)
       .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0),
     rawMessages: parsed.context.messages,
-    ...(parsed.context.tools?.length ? { tools: parsed.context.tools } : {}),
+    ...(budgetedTools.length ? { tools: budgetedTools } : {}),
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };

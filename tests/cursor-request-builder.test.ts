@@ -142,7 +142,101 @@ describe("Cursor request builder", () => {
     });
     const request = createCursorRequest(parsed);
 
-    expect(request.toolChoice).toEqual({ mode: "required", allowedTools: ["read_file"] });
-    expect(request.parallelToolCalls).toBe(false);
+   expect(request.toolChoice).toEqual({ mode: "required", allowedTools: ["read_file"] });
+   expect(request.parallelToolCalls).toBe(false);
+ });
+
+  test("enforces a Cursor tool budget — keeps native tools and trims namespaces when over limit", () => {
+    // Build a realistic catalog: 11 native tools + 4 namespaces totalling 340 inner tools.
+    const nativeTools = Array.from({ length: 11 }, (_, i) => ({
+      name: `native_${i}`,
+      description: `Native tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const namespaces = [
+      { name: "ns_small", innerCount: 5 },
+      { name: "ns_medium", innerCount: 30 },
+      { name: "ns_large", innerCount: 89 },
+      { name: "ns_huge", innerCount: 216 },
+    ];
+    const namespaceTools = namespaces.flatMap(ns =>
+      Array.from({ length: ns.innerCount }, (_, i) => ({
+        name: `tool_${i}`,
+        namespace: ns.name,
+        description: `${ns.name} tool ${i}`,
+        parameters: { type: "object" as const, properties: {} },
+      })),
+    );
+
+    const allTools = [...nativeTools, ...namespaceTools]; // 11 + 340 = 351
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: allTools,
+      },
+    });
+
+    // Budget is 200 total tools. Native (11) always kept.
+    // Remaining budget: 189. ns_small(5) + ns_medium(30) + ns_large(89) = 124 ≤ 189.
+    // ns_huge(216) would push to 340 > 189, so it's cut.
+    const kept = request.tools ?? [];
+    const keptNamespaces = new Set(kept.filter(t => t.namespace).map(t => t.namespace));
+    expect(keptNamespaces.has("ns_small")).toBe(true);
+    expect(keptNamespaces.has("ns_medium")).toBe(true);
+    expect(keptNamespaces.has("ns_large")).toBe(true);
+    expect(keptNamespaces.has("ns_huge")).toBe(false);
+    expect(kept.length).toBe(11 + 5 + 30 + 89); // 135
+    expect(kept.length).toBeLessThanOrEqual(200);
+  });
+
+  test("does not trim when catalog is under the Cursor tool budget", () => {
+    const tools = [
+      { name: "exec_command", description: "Run", parameters: {} },
+      { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
+      { name: "write_file", namespace: "mcp__fs", description: "Write", parameters: {} },
+    ];
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    expect(request.tools).toEqual(tools);
+  });
+
+  test("adds deferred-tools system note when namespaces are trimmed", () => {
+    const nativeTools = Array.from({ length: 11 }, (_, i) => ({
+      name: `native_${i}`,
+      description: `Native tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const namespaceTools = Array.from({ length: 340 }, (_, i) => ({
+      name: `tool_${i}`,
+      namespace: `ns_${Math.floor(i / 50)}`,
+      description: `NS tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: [...nativeTools, ...namespaceTools],
+      },
+    });
+    const systemText = (request.system ?? []).join("\n");
+    expect(systemText).toContain("tool_search");
+    expect(systemText).toContain("Not all tools could be advertised");
+  });
+
+  test("does not add deferred-tools note when nothing is trimmed", () => {
+    const tools = [
+      { name: "exec_command", description: "Run", parameters: {} },
+      { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
+    ];
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    const systemText = (request.system ?? []).join("\n");
+    expect(systemText).not.toContain("Not all tools could be advertised");
   });
 });
