@@ -30,6 +30,8 @@ import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { clearThreadAccountMap } from "../codex/routing";
 import { primeCodexPoolQuotas } from "../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../providers/context-cap";
+import { resolveCodexHomeDir } from "../codex/home";
+import { scanStorage } from "../storage/scanner";
 import { readUsageEntries } from "../usage/log";
 import { getUsageDebugLogEntries } from "../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../usage/summary";
@@ -396,6 +398,20 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         models: [],
         providers: [],
         error: "read_failed",
+      });
+    }
+  }
+
+  if (url.pathname === "/api/storage" && req.method === "GET") {
+    try {
+      return jsonResponse(scanStorage());
+    } catch {
+      return jsonResponse({
+        codexHome: resolveCodexHomeDir(),
+        generatedAt: Date.now(),
+        total: { bytes: 0, fileCount: 0 },
+        buckets: [],
+        error: "scan_failed",
       });
     }
   }
