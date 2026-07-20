@@ -12,12 +12,17 @@ import {
 import {
   aggregateAttemptUsage,
   beginRequestAttempt,
+  clearRequestLogsForTests,
   finishRequestAttempt,
+  getRequestLogEntries,
+  hydrateRequestLogsFromDisk,
   noteAttemptSend,
   recordFirstOutput,
+  requestLogEntryFromPersistedUsage,
   sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "../src/server/request-log";
+import type { PersistedUsageEntry } from "../src/usage/log";
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {
@@ -817,5 +822,100 @@ describe("request log metadata", () => {
     });
     expect(entries[0].upstreamError).toContain("adapter_eof");
     expect(entries[0].upstreamError).toContain("ended unexpectedly");
+  });
+});
+
+describe("request log restart hydrate", () => {
+  test("projects persisted usage rows into /api/logs entries", () => {
+    const persisted: PersistedUsageEntry = {
+      requestId: "ocx-revive",
+      timestamp: 1_800_000_000_000,
+      provider: "chatgpt-pabcdef",
+      model: "gpt-5.6-sol",
+      requestedModel: "gpt-5.6-sol",
+      status: 502,
+      durationMs: 42,
+      usageStatus: "unreported",
+      errorCode: "upstream_server_error",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "socket connection was closed unexpectedly",
+    };
+    expect(requestLogEntryFromPersistedUsage(persisted)).toEqual({
+      requestId: "ocx-revive",
+      timestamp: 1_800_000_000_000,
+      provider: "chatgpt-pabcdef",
+      model: "gpt-5.6-sol",
+      requestedModel: "gpt-5.6-sol",
+      status: 502,
+      durationMs: 42,
+      usageStatus: "unreported",
+      errorCode: "upstream_server_error",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "socket connection was closed unexpectedly",
+    });
+  });
+
+  test("hydrateRequestLogsFromDisk restores the last ring of usage.jsonl after a process wipe", () => {
+    clearRequestLogsForTests();
+    expect(getRequestLogEntries()).toHaveLength(0);
+
+    const persisted: PersistedUsageEntry[] = [
+      {
+        requestId: "ocx-old",
+        timestamp: 1,
+        provider: "openai",
+        model: "gpt-a",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "reported",
+        usage: { inputTokens: 1, outputTokens: 1 },
+        totalTokens: 2,
+      },
+      {
+        requestId: "ocx-sticky-502",
+        timestamp: 2,
+        provider: "openai",
+        model: "gpt-b",
+        status: 502,
+        durationMs: 9,
+        usageStatus: "unreported",
+        errorCode: "upstream_server_error",
+        terminalStatus: "failed",
+        closeReason: "terminal",
+        upstreamError: "Provider unreachable",
+      },
+    ];
+
+    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(2);
+    expect(getRequestLogEntries().map(e => e.requestId)).toEqual(["ocx-old", "ocx-sticky-502"]);
+    expect(getRequestLogEntries()[1]).toMatchObject({
+      requestId: "ocx-sticky-502",
+      status: 502,
+      errorCode: "upstream_server_error",
+      upstreamError: "Provider unreachable",
+    });
+
+    // Idempotent: a second start in the same process must not duplicate.
+    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(0);
+    expect(getRequestLogEntries()).toHaveLength(2);
+  });
+
+  test("hydrate keeps only the newest MAX_LOG_SIZE rows from a long usage.jsonl", () => {
+    clearRequestLogsForTests();
+    const persisted: PersistedUsageEntry[] = Array.from({ length: 205 }, (_, i) => ({
+      requestId: `ocx-${i}`,
+      timestamp: i,
+      provider: "openai",
+      model: "gpt",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported" as const,
+    }));
+    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(200);
+    const ids = getRequestLogEntries().map(e => e.requestId);
+    expect(ids[0]).toBe("ocx-5");
+    expect(ids.at(-1)).toBe("ocx-204");
   });
 });
