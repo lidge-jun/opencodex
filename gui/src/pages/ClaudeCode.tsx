@@ -4,9 +4,7 @@ import { IconPlus, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { useT } from "../i18n/shared";
 import { modelLabel } from "../model-display";
-
-type SidecarBackend = "openai" | "anthropic";
-interface SidecarOverride { backend?: SidecarBackend; model?: string }
+import { buildManualEnv, type SidecarBackend, type SidecarOverride } from "./claude-manual-env";
 
 interface ClaudeCodeState {
   enabled: boolean;
@@ -29,35 +27,8 @@ interface ClaudeCodeState {
 
 interface MapRow { from: string; to: string }
 
-const MODEL_ENV_NAMES = [
-  "ANTHROPIC_MODEL",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-  "ANTHROPIC_DEFAULT_FABLE_MODEL",
-] as const;
-
 function formatCompactWindow(value: number): string {
   return value >= 1_000_000 ? "1M" : `${Math.round(value / 1_000)}k`;
-}
-
-function buildManualEnv(state: ClaudeCodeState): string {
-  const baseUrl = `http://127.0.0.1:${state.port}`;
-  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
-  const modelEnvExports = MODEL_ENV_NAMES
-    .filter(name => state.effectiveModelEnv[name])
-    .map(name => `export ${name}=${state.effectiveModelEnv[name]}`);
-
-  return [
-    `export ANTHROPIC_BASE_URL=${baseUrl}`,
-    ...(state.authMode === "proxy"
-      ? ["export ANTHROPIC_AUTH_TOKEN=opencodex-proxy"]
-      : ["# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active"]),
-    "export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
-    ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? 350000}`] : []),
-    ...modelEnvExports,
-    "claude",
-  ].join("\n");
 }
 
 function SettingToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {

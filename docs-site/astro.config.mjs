@@ -124,6 +124,19 @@ export default defineConfig({
           ],
         },
         {
+          label: "Benchmarks",
+          translations: { ko: "벤치마크", "zh-CN": "基准测试" },
+          collapsed: true,
+          items: [
+            { label: "Overview", translations: { ko: "개요", "zh-CN": "概览" }, slug: "benchmarks" },
+            { label: "Coding", translations: { ko: "코딩", "zh-CN": "编程" }, slug: "benchmarks/coding" },
+            { label: "Frontend", translations: { ko: "프론트엔드", "zh-CN": "前端" }, slug: "benchmarks/frontend" },
+            { label: "Terminal", translations: { ko: "터미널", "zh-CN": "终端" }, slug: "benchmarks/terminal" },
+            { label: "Security", translations: { ko: "보안", "zh-CN": "安全" }, slug: "benchmarks/security" },
+            { label: "Intelligence", translations: { ko: "인텔리전스", "zh-CN": "智能" }, slug: "benchmarks/intelligence" },
+          ],
+        },
+        {
           label: "Reference",
           translations: { ko: "레퍼런스", "zh-CN": "参考" },
           items: [

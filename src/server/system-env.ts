@@ -242,6 +242,17 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
       inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
     } else if (config.claudeCode?.authMode === "proxy" && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
       inject("ANTHROPIC_AUTH_TOKEN", "opencodex-proxy");
+    } else if (config.claudeCode?.authMode !== "proxy"
+      && injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")
+      && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === "opencodex-proxy") {
+      // Subscription switch-back (devlog 260720_claude_authmode_persist): remove ONLY
+      // the opencodex-owned dummy token so a launchd-started Claude regains its own
+      // claude.ai OAuth. User-set tokens (not tracked in injectedKeys, or carrying a
+      // different value) are never touched.
+      unsetLaunchctlEnv("ANTHROPIC_AUTH_TOKEN");
+      const dummyIdx = injectedKeys.indexOf("ANTHROPIC_AUTH_TOKEN");
+      if (dummyIdx >= 0) injectedKeys.splice(dummyIdx, 1);
+      writeTracking(port, injectedKeys);
     }
     // Lever keys (devlog 136 B6): user-wins — skip any key the user already set in the
     // launchd domain, and track ONLY the keys we actually injected so revert cannot

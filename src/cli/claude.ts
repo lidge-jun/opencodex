@@ -65,6 +65,15 @@ export function buildClaudeEnv(config: OcxConfig, port: number, base: ClaudeLaun
   // Connectors still work because they check OAuth state ($o()), not base URL (Gd()).
   // Native /model picker discovery ("From gateway", Claude Code >= 2.1.129).
   setDefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
+  // Host-managed routing guard (devlog 260720_claude_authmode_persist/020): with
+  // this flag in the spawn env, Claude Code strips provider-managed vars
+  // (ANTHROPIC_BASE_URL/AUTH_TOKEN/API_KEY, model slots) from settings-sourced
+  // env (managedEnv.ts), so a leftover cc-switch/CCR ~/.claude/settings.json
+  // env block cannot silently hijack proxy routing away from opencodex.
+  // setDefault: an explicit user export (e.g. =0, isEnvTruthy-false) still wins.
+  // Intentional contract change: settings.env model slots are also stripped in
+  // ocx claude runs — use the top-level settings "model" field or opt out.
+  setDefault("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
   // Opt-in effort forcing (devlog 136 B6): opus-shaped aliases already carry
   // output_config.effort, so this is OFF unless the user enables it in config.
   if (config.claudeCode?.alwaysEnableEffort === true) {

@@ -992,6 +992,9 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const visionOverride = config.claudeCode?.visionSidecar;
     return jsonResponse({
       enabled: config.claudeCode?.enabled !== false,
+      // Round-trip contract with the GUI auth-mode select (devlog 260720_claude_authmode_persist):
+      // absent config key = subscription (OcxClaudeCodeConfig.authMode is typed `"proxy"` only).
+      authMode: config.claudeCode?.authMode === "proxy" ? "proxy" : "subscription",
       model: config.claudeCode?.model ?? "",
       smallFastModel: config.claudeCode?.smallFastModel ?? "",
       tierModels: config.claudeCode?.tierModels ?? {},
@@ -1032,7 +1035,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];
       if (section === undefined || section === null) continue;
@@ -1065,6 +1068,17 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
       next.enabled = body.enabled;
+    }
+    if (body.authMode !== undefined) {
+      // "proxy" stores the key; "subscription" (the default) deletes it —
+      // OcxClaudeCodeConfig.authMode is typed `"proxy"` only (src/types.ts).
+      // Previously this field was silently dropped, so the GUI select reverted to
+      // Subscription on every reload (devlog 260720_claude_authmode_persist).
+      if (body.authMode !== "proxy" && body.authMode !== "subscription") {
+        return jsonResponse({ error: "authMode must be \"proxy\" or \"subscription\"" }, 400);
+      }
+      if (body.authMode === "proxy") next.authMode = "proxy";
+      else delete next.authMode;
     }
     if (body.systemEnv !== undefined) {
       if (typeof body.systemEnv !== "boolean") return jsonResponse({ error: "systemEnv must be a boolean" }, 400);
@@ -1175,7 +1189,10 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const { saveConfig: save } = await import("../config");
     save(config);
     const warnings: string[] = [];
-    if (body.systemEnv !== undefined) {
+    // authMode changes must reconcile the injected system env too: switching back to
+    // Subscription has to remove the opencodex-owned dummy ANTHROPIC_AUTH_TOKEN
+    // (audit R1 blocker #1/#2, devlog 260720_claude_authmode_persist).
+    if (body.systemEnv !== undefined || body.authMode !== undefined) {
       try {
         await applySystemEnvToggle(config, config.port);
       } catch (err) {

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, normalizeServiceSubcommand, serviceLogPath, serviceStatusSummary } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -58,7 +58,9 @@ describe("systemd service unit", () => {
 
     const service = await readText("src/service.ts");
     const serviceCommand = service.slice(service.indexOf("export async function serviceCommand"));
-    expect(serviceCommand).toContain("const command = normalizeServiceSubcommand(sub);");
+    // Args flow through parseServiceArgs (which applies the install default) into the switch.
+    expect(serviceCommand).toContain("const parsed = parseServiceArgs(");
+    expect(serviceCommand).toContain("const command = parsed.sub;");
     expect(serviceCommand).toContain("switch (command)");
   });
 
@@ -185,7 +187,8 @@ describe("Windows service task", () => {
 
   test("builds service-like Task Scheduler XML settings", () => {
     const script = "C:\\Users\\a&b\\.opencodex\\opencodex-service.cmd";
-    const xml = buildWindowsTaskXml(script);
+    const launcher = "C:\\Users\\a&b\\.opencodex\\opencodex-service-launcher.vbs";
+    const xml = buildWindowsTaskXml(script, launcher);
 
     expect(xml).toContain('<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">');
     expect(xml).toContain("<LogonTrigger>");
@@ -197,7 +200,33 @@ describe("Windows service task", () => {
     expect(xml).toContain("<RestartOnFailure>");
     expect(xml).toContain("<Interval>PT1M</Interval>");
     expect(xml).toContain("<Count>3</Count>");
-    expect(xml).toContain("<Command>C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.cmd</Command>");
+    // The action is wscript running the hidden VBS launcher, never the console batch directly.
+    expect(xml).toMatch(/<Command>.*wscript\.exe<\/Command>/);
+    expect(xml).toContain('<Arguments>/b /nologo &quot;C:\\Users\\a&amp;b\\.opencodex\\opencodex-service-launcher.vbs&quot;</Arguments>');
+    expect(xml).not.toContain("<Command>C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.cmd</Command>");
+  });
+
+  test("hidden launcher VBS stays resident and escapes quotes in the wrapper path", () => {
+    const vbs = buildWindowsLauncherVbs('C:\\Users\\quo"te\\.opencodex\\opencodex-service.cmd');
+
+    // windowStyle 0 (hidden) + bWaitOnReturn True (resident, so IgnoreNew and /end keep working).
+    expect(vbs).toContain(", 0, True");
+    expect(vbs).toContain('shell.Run """C:\\Users\\quo""te\\.opencodex\\opencodex-service.cmd""", 0, True');
+    expect(vbs).toContain('CreateObject("WScript.Shell")');
+  });
+
+  test("hidden launcher VBS carries non-ASCII profile paths verbatim", () => {
+    const vbs = buildWindowsLauncherVbs("C:\\Users\\한글사용자\\.opencodex\\opencodex-service.cmd");
+
+    expect(vbs).toContain("C:\\Users\\한글사용자\\.opencodex\\opencodex-service.cmd");
+  });
+
+  test("writes the launcher VBS with a UTF-16 BOM so non-ASCII paths survive WSH decoding", async () => {
+    const service = await Bun.file(new URL("../src/service.ts", import.meta.url)).text();
+
+    expect(service).toContain('writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le")');
+    // Uninstall must clean the launcher asset alongside the script and task XML.
+    expect(service).toContain("if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());");
   });
 
   test("writes Task Scheduler XML with a UTF-16 BOM for schtasks", async () => {

@@ -39,6 +39,34 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ocx-123");
   });
 
+  // Host-managed routing guard (devlog 260720_claude_authmode_persist/020):
+  // defends the spawn env against leftover cc-switch/CCR settings.json env hijack.
+  test("sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 by default", () => {
+    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+  });
+
+  test("a user pre-export of the host-managed flag wins (opt-out preserved)", () => {
+    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "0",
+    });
+    // isEnvTruthy("0") is false inside Claude Code, so "0" disables the strip.
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("0");
+  });
+
+  test("model-slot injection is independent of the host-managed flag", () => {
+    // With no configured model, the flag rides along but no model slots appear —
+    // the intentional contract: settings.env slots are stripped by Claude Code,
+    // so users migrate to config model or the top-level settings "model" field.
+    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    // And with a configured model both coexist.
+    const withModel = buildClaudeEnv(cfg({ claudeCode: { model: "mock/test-model" } }), 10100, {});
+    expect(withModel.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(withModel.ANTHROPIC_MODEL).toBe("mock/test-model");
+  });
+
   test("lever env defaults OFF: no effort forcing, no context override (devlog 136 B6)", () => {
     const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBeUndefined();

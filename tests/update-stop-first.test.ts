@@ -5,6 +5,7 @@ import { join } from "node:path";
 const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
+const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 
 describe("update stops the running proxy before replacing files", () => {
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
@@ -38,10 +39,13 @@ describe("update stops the running proxy before replacing files", () => {
 
   test("both paths abort when the stop fails, and reinstall a managed service after success", () => {
     expect(updateSource).toContain("aborting the update");
-    expect(updateSource).toContain('[process.argv[1], "service", "install"]');
+    // The update path now uses serviceReinstallArgs() to preserve the chosen backend.
+    expect(updateSource).toContain("serviceReinstallArgs()");
     expect(launcherSource).toContain("aborting the update");
-    expect(launcherSource).toContain('[launcher, "service", "install"]');
-    expect(launcherSource).toContain('existsSync(join(configDir(), "service-state.json"))');
+    // The launcher reads service-state.json to preserve the backend choice on reinstall.
+    expect(launcherSource).toContain("serviceReinstallArgs");
+    // The launcher reads the state path for both service-installed detection and backend choice.
+    expect(launcherSource).toContain('"service-state.json"');
   });
 
   test("both update paths surface a skipped history restore after the stop", () => {
@@ -64,6 +68,39 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
     expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
     expect(launcherSource).toContain("stopRes.status !== 0 || stillHasRuntimeState");
+  });
+
+  test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {
+    expect(updateSource).toContain("function updateChildStdio()");
+    expect(updateSource).toContain('process.env.OCX_SERVICE === "1"');
+    expect(updateSource).toContain('return "pipe"');
+    // All three update children (stop, installer, service reinstall) go through it.
+    expect(updateSource).toContain("stdio: stopStdio");
+    expect(updateSource).toContain("stdio: installStdio");
+    expect(updateSource).toContain("stdio: svcStdio");
+    expect(updateSource).toContain("windowsHide: true");
+  });
+});
+
+describe("ocx update --help has no side effects (#168)", () => {
+  test("the Bun CLI short-circuits help before importing the update runner", () => {
+    const caseAt = cliSource.indexOf('case "update"');
+    const helpAt = cliSource.indexOf('printSubcommandUsage("update")');
+    const runAt = cliSource.indexOf("await runUpdate()");
+    expect(caseAt).toBeGreaterThan(-1);
+    expect(helpAt).toBeGreaterThan(caseAt);
+    expect(helpAt).toBeLessThan(runAt);
+  });
+
+  test("the npm launcher intercepts update --help before the self-update path", () => {
+    const helpAt = launcherSource.indexOf("updateHelpRequested");
+    const updateAt = launcherSource.indexOf("runNpmSelfUpdate();");
+    expect(helpAt).toBeGreaterThan(-1);
+    expect(launcherSource).toContain('process.argv[2] === "update" &&');
+    // The guard that CALLS the self-update must come after the help exit.
+    const guardAt = launcherSource.lastIndexOf('process.argv[2] === "update" && isNodeModulesInstall()');
+    expect(helpAt).toBeLessThan(guardAt);
+    expect(updateAt).toBeGreaterThan(guardAt);
   });
 });
 

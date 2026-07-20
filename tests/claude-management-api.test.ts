@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import * as systemEnv from "../src/server/system-env";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -97,6 +98,71 @@ test("PUT round-trips settings and persists to config", async () => {
     expect(after.claudeCode?.smallFastModel).toBe("mock/test-model");
     expect(after.claudeCode?.enabled).toBe(false);
   } finally {
+    server.stop(true);
+  }
+});
+
+test("PUT round-trips authMode (proxy persists, subscription clears — devlog 260720)", async () => {
+  const server = startServer(0);
+  try {
+    // Default: absent config key reads back as subscription.
+    let get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
+    expect(get.authMode).toBe("subscription");
+
+    // proxy persists to config and reads back.
+    const put = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authMode: "proxy" }),
+    });
+    expect(put.status).toBe(200);
+    get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
+    expect(get.authMode).toBe("proxy");
+    expect(loadConfig().claudeCode?.authMode).toBe("proxy");
+
+    // subscription clears the stored key (type only allows "proxy").
+    const back = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authMode: "subscription" }),
+    });
+    expect(back.status).toBe(200);
+    expect(loadConfig().claudeCode?.authMode).toBeUndefined();
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("PUT rejects invalid authMode values (invalid string + non-string)", async () => {
+  const server = startServer(0);
+  try {
+    for (const bad of ["x", 42]) {
+      const r = await fetch(new URL("/api/claude-code", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authMode: bad }),
+      });
+      expect(r.status).toBe(400);
+    }
+    expect(loadConfig().claudeCode?.authMode).toBeUndefined();
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("authMode-only PUT triggers system-env reconciliation (audit R2 #1)", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
+  const server = startServer(0);
+  try {
+    const r = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authMode: "proxy" }), // no systemEnv field in the body
+    });
+    expect(r.status).toBe(200);
+    expect(applySpy).toHaveBeenCalled();
+  } finally {
+    applySpy.mockRestore();
     server.stop(true);
   }
 });

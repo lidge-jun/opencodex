@@ -113,7 +113,16 @@ function runNpmSelfUpdate() {
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it permanently, so a successful update must reinstall it afterwards.
-  const serviceWasInstalled = existsSync(join(configDir(), "service-state.json"));
+  const serviceStatePath = join(configDir(), "service-state.json");
+  const serviceWasInstalled = existsSync(serviceStatePath);
+  /** Read the backend from service-state.json so the update reinstalls the same one. */
+  function serviceReinstallArgs() {
+    try {
+      const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
+      if (state.backend === "native") return [launcher, "service", "install", "--native"];
+    } catch { /* missing or corrupt — fall through to default */ }
+    return [launcher, "service", "install"];
+  }
 
   // Never replace package files under a live proxy — stop it first (full `ocx stop`
   // semantics: graceful drain, service stop, native Codex restore). Gate on the service
@@ -154,7 +163,8 @@ function runNpmSelfUpdate() {
     // launcher so the new files write the baked paths and the service restarts.
     if (serviceWasInstalled) {
       console.log("Reinstalling the background service with the updated files...");
-      const svc = spawnSync(process.execPath, [launcher, "service", "install"], { stdio: "inherit", windowsHide: true });
+      const svcArgs = serviceReinstallArgs();
+      const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
       if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
     } else {
       console.log("Restart the proxy:  ocx start");
@@ -220,6 +230,17 @@ function resolveBun() {
   }
   if (!bin) fail("Bun binary missing after install attempt.");
   return bin;
+}
+
+// `ocx update --help` prints usage and exits WITHOUT side effects. The npm launcher
+// intercepts `update` before the Bun CLI starts, so the help short-circuit must live
+// here too — otherwise --help runs the real self-update, stops the proxy, and drops
+// in-flight routed streams (issue #168).
+const updateHelpRequested = process.argv[2] === "update" &&
+  process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
+if (updateHelpRequested) {
+  console.log("Usage: ocx update [--tag latest|preview]\n\nUpdate opencodex. Preview installs stay on the preview tag unless overridden.");
+  process.exit(0);
 }
 
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {

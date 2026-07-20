@@ -62,7 +62,7 @@ flowchart LR
 |---|---|---|
 | macOS (arm64 / x64) | Fully supported | launchd |
 | Linux (x64 / arm64) | Fully supported | systemd (user unit) |
-| Windows (x64) | Fully supported | Task Scheduler |
+| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
 
 Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled automatically on `npm install` — no separate Bun install needed. All three platforms work natively (no WSL needed on Windows).
 
@@ -234,7 +234,7 @@ next Codex session. opencodex keeps these behaviors:
 - **Give any model superpowers.** Non-OpenAI models get real web search and image understanding via a `gpt-5.4-mini` sidecar over your ChatGPT login.
 - **Generate images natively.** Codex's standalone `image_gen` tool uses `POST /v1/images/generations` for generation and `POST /v1/images/edits` for edits; it is separate from the hosted Responses `image_generation` tool.
 - **See what's happening.** The web dashboard shows providers, OAuth status, model selection, and a live request log, including cached/cache-write token counts when upstream reports them — no more guessing why a request failed.
-- **Runs in the background.** Install as a system service (launchd / systemd / Task Scheduler) and forget about it. The proxy starts on boot and stays out of your way.
+- **Runs in the background.** Install as a system service (launchd / systemd / Task Scheduler) and forget about it. On macOS/Linux the proxy starts at login; on Windows the default Task Scheduler backend starts at logon (windowless), or use `ocx service install --native` for a real Windows service that starts at boot.
 - **Clean exit, zero residue.** `ocx stop` (or the dashboard's Stop button) shuts down the proxy, stops the background service if one is installed, and restores Codex to its original configuration. Plain `codex` works exactly as it did before — no leftover config, no orphaned processes.
 
 ## Providers & adapters

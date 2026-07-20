@@ -25,6 +25,7 @@ import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./h
 import { findAvailablePort, isAddrInUse, shouldPersistSelectedPort } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { stopProxy } from "../lib/process-control";
+import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { drainAndShutdown, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
@@ -104,6 +105,11 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  // Native (WinSW) service mode has no batch wrapper to read the service token file
+  // into the environment, so the app loads it here before the server binds. The server
+  // auth path reads OPENCODEX_API_AUTH_TOKEN from the environment.
+  const serviceToken = loadServiceTokenFromFile(process.env);
+  if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   const requestedPort = parsePortOption();
   reconcileJournal();
   const existingPid = readPid();
@@ -550,7 +556,7 @@ switch (command) {
     break;
   }
   case "service":
-    await serviceCommand(args[1]);
+    await serviceCommand(...args.slice(1));
     break;
   case "codex-shim": {
     const { codexShimStatus, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
@@ -576,6 +582,12 @@ switch (command) {
     break;
   }
   case "update": {
+    // `ocx update --help` must print usage and exit WITHOUT side effects — running the
+    // real self-update stops the proxy and drops in-flight routed streams (issue #168).
+    if (hasHelpFlag(args.slice(1))) {
+      printSubcommandUsage("update");
+      break;
+    }
     const { runUpdate } = await import("../update");
     await runUpdate();
     break;

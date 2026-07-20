@@ -1,0 +1,242 @@
+---
+/**
+ * Static benchmark boards (ported from PR #144's GUI Frontier page).
+ * Renders one section per board: provenance line, honesty note for non-measured
+ * cost figures, an ECharts cost-vs-score scatter (client-side, vanilla API), and
+ * a data table. Score-per-dollar columns appear ONLY when every row carries a
+ * source-measured cost (costKind honesty rule from the PR).
+ */
+import data from "../data/frontier-benchmarks.json";
+import { FRONTIER_STRINGS } from "../data/frontier-i18n";
+
+interface Props {
+  locale?: "en" | "ko" | "zh-cn";
+  /** Comma-separated board ids to render; omit for all boards. */
+  boards?: string;
+  /** Show the page-level subtitle (overview pages only). */
+  intro?: boolean;
+}
+
+const { locale = "en", boards: boardsProp, intro = false } = Astro.props;
+const include = boardsProp ? new Set(boardsProp.split(",").map(s => s.trim()).filter(Boolean)) : null;
+const strings = FRONTIER_STRINGS[locale] as Record<string, string>;
+const fallback = FRONTIER_STRINGS.en as Record<string, string>;
+const t = (key: string): string => strings[key] ?? fallback[key] ?? key;
+const fill = (key: string, vars: Record<string, string>): string =>
+  Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, v), t(key));
+
+// The PR i18n has no column-header key for "score" — keep a tiny local map.
+const SCORE_HEADER: Record<string, string> = { en: "Score", ko: "점수", "zh-cn": "得分" };
+/** Dataset tags are kebab-case; i18n keys are camelCase (cheap-subagent → cheapSubagent). */
+const tagKey = (tag: string): string => tag.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+
+const boards = data.benchmarks.filter(board => !include || include.has(board.id)).map(board => {
+  const allMeasured = board.rows.every(row => row.costKind === "measured");
+  const bestValue = allMeasured
+    ? board.rows.reduce((best, row) => (row.score / row.avgCostUsd > best.score / best.avgCostUsd ? row : best), board.rows[0])
+    : null;
+  const chart = {
+    id: board.id,
+    xLabel: t(`frontier.board.${board.id}.xLabel`),
+    yLabel: t(`frontier.board.${board.id}.yLabel`),
+    xUnit: board.axes.xUnit,
+    yUnit: board.axes.yUnit,
+    rows: board.rows.map(row => ({
+      model: row.model,
+      family: row.family,
+      effort: row.effort ?? null,
+      score: row.score,
+      cost: row.avgCostUsd,
+    })),
+  };
+  return { ...board, allMeasured, bestValue, chart };
+});
+---
+
+<div class="frontier-root">
+  {intro && <p class="frontier-subtitle">{t("frontier.subtitle")}</p>}
+  {
+    boards.map(board => (
+      <section class="frontier-board" aria-label={t(`frontier.board.${board.id}.title`)}>
+        <h3 id={`board-${board.id}`}>{t(`frontier.board.${board.id}.title`)}</h3>
+        <p class="frontier-meta">
+          {fill("frontier.updated", { date: board.updated })}
+          {" · "}
+          {fill("frontier.tasks", { count: String(board.taskCount) })}
+          {" · "}
+          <a href={board.provenance.url}>{t("frontier.sourceLink")}</a>
+          {board.provenance.license && <span class="frontier-license"> · {board.provenance.license}</span>}
+        </p>
+        <p class="frontier-note">{t(`frontier.board.${board.id}.sourceNote`)}</p>
+        {!board.allMeasured && <p class="frontier-honesty">{t("frontier.costKindEstimated")}</p>}
+        <div class="frontier-chart" role="img" aria-label={t("frontier.chartAria")} data-chart={JSON.stringify(board.chart)} />
+        <table>
+          <thead>
+            <tr>
+              <th>{t("frontier.col.model")}</th>
+              <th>{t("frontier.col.effort")}</th>
+              <th>{SCORE_HEADER[locale] ?? SCORE_HEADER.en}</th>
+              <th>{t("frontier.col.cost")}</th>
+              {board.allMeasured && <th>{t("frontier.col.efficiency")}</th>}
+              <th>{t("frontier.col.tags")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {board.rows.map(row => (
+              <tr class={board.bestValue && row.id === board.bestValue.id ? "frontier-best" : undefined}>
+                <td>
+                  {row.model}
+                  {board.bestValue && row.id === board.bestValue.id && (
+                    <span class="frontier-best-badge">{t("frontier.bestValue")}</span>
+                  )}
+                </td>
+                <td>{row.effort ?? "—"}</td>
+                <td>
+                  {row.score}
+                  {board.axes.yUnit === "%" ? "%" : ""}
+                  {row.scoreCi ? ` ±${row.scoreCi}` : ""}
+                </td>
+                <td>${row.avgCostUsd}</td>
+                {board.allMeasured && <td>{(row.score / row.avgCostUsd).toFixed(1)}</td>}
+                <td>{(row.tags ?? []).map(tag => t(`frontier.tag.${tagKey(tag)}`)).join(", ") || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    ))
+  }
+</div>
+
+<style>
+  .frontier-root .frontier-subtitle {
+    color: var(--sl-color-gray-3);
+  }
+  .frontier-board {
+    margin-top: 2.5rem;
+  }
+  .frontier-meta,
+  .frontier-note {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+    margin: 0.25rem 0;
+  }
+  .frontier-honesty {
+    font-size: var(--sl-text-sm);
+    border-left: 3px solid var(--sl-color-orange);
+    padding-left: 0.75rem;
+    color: var(--sl-color-gray-2);
+  }
+  .frontier-chart {
+    width: 100%;
+    height: 340px;
+    margin: 1rem 0;
+  }
+  .frontier-best td {
+    font-weight: 600;
+  }
+  .frontier-best-badge {
+    margin-left: 0.5rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    color: var(--sl-color-accent);
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 999px;
+    padding: 0 0.5rem;
+  }
+</style>
+
+<script>
+  import * as echarts from "echarts";
+
+  const FAMILY_COLORS: Record<string, string> = {
+    openai: "#10a37f",
+    anthropic: "#d97757",
+    xai: "#1da1f2",
+    google: "#4285f4",
+    moonshot: "#7c3aed",
+    zhipu: "#0ea5e9",
+    cursor: "#f59e0b",
+    deepseek: "#2563eb",
+    other: "#6b7280",
+  };
+
+  interface ChartRow {
+    model: string;
+    family: string;
+    effort: string | null;
+    score: number;
+    cost: number;
+  }
+  interface ChartConfig {
+    id: string;
+    xLabel: string;
+    yLabel: string;
+    xUnit: string;
+    yUnit: string;
+    rows: ChartRow[];
+  }
+
+  const charts: echarts.ECharts[] = [];
+
+  function renderAll(): void {
+    const textColor = getComputedStyle(document.body).color;
+    document.querySelectorAll<HTMLElement>(".frontier-chart").forEach(el => {
+      const cfg = JSON.parse(el.dataset.chart ?? "{}") as ChartConfig;
+      const families = [...new Set(cfg.rows.map(r => r.family))];
+      let chart = echarts.getInstanceByDom(el);
+      if (!chart) {
+        chart = echarts.init(el);
+        charts.push(chart);
+      }
+      chart.setOption(
+        {
+          textStyle: { color: textColor },
+          grid: { left: 56, right: 24, top: 32, bottom: 48 },
+          legend: { top: 0, textStyle: { color: textColor } },
+          tooltip: {
+            trigger: "item",
+            formatter: (p: { data: [number, number, string, string, string | null] }) =>
+              `${p.data[3]}${p.data[4] ? ` (${p.data[4]})` : ""}<br/>` +
+              `${cfg.yLabel}: ${p.data[1]}${cfg.yUnit === "%" ? "%" : ""}<br/>` +
+              `${cfg.xLabel}: $${p.data[0]}`,
+          },
+          xAxis: {
+            type: "value",
+            scale: true,
+            name: cfg.xLabel,
+            nameLocation: "middle",
+            nameGap: 30,
+            axisLabel: { color: textColor },
+            nameTextStyle: { color: textColor },
+          },
+          yAxis: {
+            type: "value",
+            scale: true,
+            name: cfg.yLabel,
+            axisLabel: { color: textColor },
+            nameTextStyle: { color: textColor },
+          },
+          series: families.map(family => ({
+            name: family,
+            type: "scatter",
+            symbolSize: 11,
+            itemStyle: { color: FAMILY_COLORS[family] ?? FAMILY_COLORS.other },
+            data: cfg.rows
+              .filter(r => r.family === family)
+              .map(r => [r.cost, r.score, r.family, r.model, r.effort]),
+          })),
+        },
+        { notMerge: true },
+      );
+    });
+  }
+
+  renderAll();
+  window.addEventListener("resize", () => charts.forEach(c => c.resize()));
+  // Starlight flips data-theme on <html> — re-render so axis/legend colors follow.
+  new MutationObserver(() => renderAll()).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+</script>

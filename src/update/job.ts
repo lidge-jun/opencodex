@@ -160,22 +160,24 @@ export function restartCommand(
   installer: Installer,
   launcher = packageLauncherPath(),
   port?: number,
+  serviceArgs?: string[],
 ): { mode: "service" | "proxy"; bin: string; args: string[]; display: string } {
   const mode = serviceInstalled ? "service" : "proxy";
   const pinPort = !serviceInstalled && typeof port === "number" && Number.isFinite(port) && port > 0;
   const startArgs = pinPort
     ? [launcher, "start", "--port", String(Math.trunc(port))]
     : [launcher, "start"];
+  const svcArgs = serviceInstalled ? [launcher, ...(serviceArgs ?? ["service", "install"])] : startArgs;
   if (installer === "npm") {
     const bin = nodeBin();
-    const args = serviceInstalled ? [launcher, "service", "install"] : startArgs;
+    const args = svcArgs;
     return { mode, bin, args, display: formatCommand(bin, args) };
   }
   // bun/source installs: restart via the current runtime executable + package launcher (both real
   // .exe files), NOT the `ocx.cmd` shim. Spawning a `.cmd` shell-less throws EINVAL on Windows
   // Node/Bun ≥18.20/20.12 (CVE-2024-27980 hardening) — the same class the npm path (nodeBin) avoids.
   const bin = process.execPath;
-  const args = serviceInstalled ? [launcher, "service", "install"] : startArgs;
+  const args = svcArgs;
   return { mode, bin, args, display: formatCommand(bin, args) };
 }
 
@@ -303,7 +305,14 @@ async function restartAfterUpdate(
   // port to wait on; config is only the cold-start fallback.
   const port = captured?.port ?? config.port ?? 10100;
   const hostname = captured?.hostname ?? config.hostname ?? "127.0.0.1";
-  const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port);
+  let svcArgs: string[] | undefined;
+  if (serviceInstalled) {
+    try {
+      const { serviceReinstallArgs } = await import("../service");
+      svcArgs = serviceReinstallArgs();
+    } catch { /* fallback to default service install */ }
+  }
+  const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port, svcArgs);
   if (serviceInstalled) {
     const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
     if (result.status !== 0) {

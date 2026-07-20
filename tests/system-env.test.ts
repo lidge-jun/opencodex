@@ -131,6 +131,50 @@ describe("system environment injection", () => {
       "launchctl setenv ANTHROPIC_AUTH_TOKEN 'secret token'\\''quoted'",
     );
   });
+
+  // Subscription switch-back cleanup (devlog 260720_claude_authmode_persist, audit R1 #1):
+  // re-injecting without proxy mode must unset ONLY the opencodex-owned dummy token.
+  function trackingWithToken(port = 4567, keys: string[] = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"]): string {
+    return JSON.stringify({ pid: 123, port, injectedAt: "2026-07-11T00:00:00.000Z", injectedKeys: keys });
+  }
+
+  function mockAuthTokenGetenv(value: string | undefined): void {
+    execSpy.mockImplementation(((command: string) => {
+      if (command === "launchctl getenv ANTHROPIC_BASE_URL") return launchctlBaseUrl ?? "";
+      if (command === "launchctl getenv ANTHROPIC_AUTH_TOKEN") return value ?? "";
+      return Buffer.alloc(0);
+    }) as typeof childProcess.execSync);
+  }
+
+  test("re-inject after switching back to subscription unsets the owned dummy token", async () => {
+    trackingFile = trackingWithToken();
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    mockAuthTokenGetenv("opencodex-proxy");
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(execSpy.mock.calls.map(call => call[0])).toContain("launchctl unsetenv ANTHROPIC_AUTH_TOKEN");
+    expect(JSON.parse(trackingFile!).injectedKeys).not.toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  test("re-inject preserves a tracked token whose value is not the opencodex dummy", async () => {
+    trackingFile = trackingWithToken();
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    mockAuthTokenGetenv("sk-user-real-token");
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(execSpy.mock.calls.map(call => call[0])).not.toContain("launchctl unsetenv ANTHROPIC_AUTH_TOKEN");
+  });
+
+  test("re-inject preserves an untracked dummy-valued token it does not own", async () => {
+    // Ownership guard independent of the value guard (audit R2 #1): the launchd domain
+    // carries "opencodex-proxy" but WE never injected it (not in injectedKeys).
+    trackingFile = trackingWithToken(4567, ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]);
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    mockAuthTokenGetenv("opencodex-proxy");
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(execSpy.mock.calls.map(call => call[0])).not.toContain("launchctl unsetenv ANTHROPIC_AUTH_TOKEN");
+  });
 });
 
 describe("system environment cleanup", () => {

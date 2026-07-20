@@ -1,0 +1,2665 @@
+{
+  "version": 3,
+  "benchmarks": [
+    {
+      "id": "deepswe",
+      "title": "DeepSWE",
+      "sourceNote": "Illustrative snapshot from the public DeepSWE leaderboard (mini-swe-agent). Scores and costs are not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "taskCount": 113,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Avg cost per task (USD)",
+        "yLabel": "Pass@1",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "deepswe-gpt-5.6-sol-max",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "max",
+          "score": 73,
+          "scoreCi": 3,
+          "avgCostUsd": 8.39,
+          "outTokens": 60000,
+          "steps": 61,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-claude-fable-5-max",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 70,
+          "scoreCi": 4,
+          "avgCostUsd": 21.63,
+          "outTokens": 119000,
+          "steps": 88,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gpt-5.6-terra-max",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "effort": "max",
+          "score": 70,
+          "scoreCi": 3,
+          "avgCostUsd": 4.95,
+          "outTokens": 72000,
+          "steps": 76,
+          "tags": [
+            "workhorse",
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gpt-5.6-luna-max",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "effort": "max",
+          "score": 67,
+          "scoreCi": 4,
+          "avgCostUsd": 3.03,
+          "outTokens": 73000,
+          "steps": 102,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gpt-5.5-xhigh",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 67,
+          "scoreCi": 6,
+          "avgCostUsd": 7.23,
+          "outTokens": 46000,
+          "steps": 82,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-claude-opus-4.8-max",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 59,
+          "scoreCi": 2,
+          "avgCostUsd": 13.22,
+          "outTokens": 135000,
+          "steps": 120,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-claude-sonnet-5-max",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 54,
+          "scoreCi": 4,
+          "avgCostUsd": 26.4,
+          "outTokens": 214000,
+          "steps": 268,
+          "tags": [
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-grok-4.5-high",
+          "model": "grok-4.5",
+          "family": "xai",
+          "effort": "high",
+          "score": 54,
+          "scoreCi": 2,
+          "avgCostUsd": 2.42,
+          "outTokens": 36000,
+          "steps": 61,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-muse-spark-1.1-xhigh",
+          "model": "muse-spark-1.1",
+          "family": "other",
+          "effort": "xhigh",
+          "score": 53,
+          "scoreCi": 3,
+          "avgCostUsd": 2.36,
+          "outTokens": 74000,
+          "steps": 96,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gpt-5.4-xhigh",
+          "model": "gpt-5.4",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 52,
+          "scoreCi": 2,
+          "avgCostUsd": 5.65,
+          "outTokens": 71000,
+          "steps": 70,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-glm-5.2-max",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "max",
+          "score": 44,
+          "scoreCi": 2,
+          "avgCostUsd": 3.92,
+          "outTokens": 78000,
+          "steps": 129,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gemini-3.5-flash-medium",
+          "model": "gemini-3.5-flash",
+          "family": "google",
+          "effort": "medium",
+          "score": 37,
+          "scoreCi": 2,
+          "avgCostUsd": 7.34,
+          "outTokens": 276000,
+          "steps": 86,
+          "tags": [
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-kimi-k2.7-code",
+          "model": "kimi-k2.7-code",
+          "family": "moonshot",
+          "score": 31,
+          "scoreCi": 1,
+          "avgCostUsd": 2.82,
+          "outTokens": 59000,
+          "steps": 149,
+          "tags": [
+            "cheap-subagent",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-claude-sonnet-4.6-high",
+          "model": "claude-sonnet-4.6",
+          "family": "anthropic",
+          "effort": "high",
+          "score": 30,
+          "scoreCi": 4,
+          "avgCostUsd": 5.52,
+          "outTokens": 76000,
+          "steps": 134,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "deepswe-gemini-3.1-pro-high",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "high",
+          "score": 12,
+          "scoreCi": 2,
+          "avgCostUsd": 9.48,
+          "outTokens": 196000,
+          "steps": 81,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "measured"
+        }
+      ],
+      "provenance": {
+        "url": "https://www.deepwiki.com/deepswe",
+        "capturedAt": "2026-07-16",
+        "license": "Public leaderboard snapshot; verify current rankings on the source before citing."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "aa-coding-agent",
+      "title": "AA Coding Agent",
+      "sourceNote": "Artificial Analysis Coding Agent Index snapshot (post GPT-5.6 GA, 2026-07-09). See provenance.url. Not live OpenCodex metering.",
+      "updated": "2026-07-09",
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Cost per task (USD)",
+        "yLabel": "Coding Agent Index",
+        "xUnit": "USD",
+        "yUnit": "index"
+      },
+      "rows": [
+        {
+          "id": "aa-composer-2.5-std",
+          "model": "composer-2.5",
+          "family": "cursor",
+          "effort": "std",
+          "score": 62,
+          "avgCostUsd": 0.07,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-composer-2.5-fast",
+          "model": "composer-2.5",
+          "family": "cursor",
+          "effort": "fast",
+          "score": 62,
+          "avgCostUsd": 0.44,
+          "tags": [
+            "workhorse",
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 66,
+          "avgCostUsd": 4.1,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-gpt-5.5",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 65,
+          "avgCostUsd": 4.82,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-gpt-5.6-luna",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "effort": "max",
+          "score": 75,
+          "avgCostUsd": 1.55,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-gpt-5.6-terra",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "effort": "max",
+          "score": 77,
+          "avgCostUsd": 2.4,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-gpt-5.6-sol",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "max",
+          "score": 80,
+          "avgCostUsd": 3.9,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-grok-4.5",
+          "model": "grok-4.5",
+          "family": "xai",
+          "effort": "high",
+          "score": 76,
+          "avgCostUsd": 2.54,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-claude-sonnet-4.6",
+          "model": "claude-sonnet-4.6",
+          "family": "anthropic",
+          "effort": "high",
+          "score": 58,
+          "avgCostUsd": 2.8,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "aa-claude-fable-5",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "high",
+          "score": 64,
+          "avgCostUsd": 9.5,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "measured"
+        }
+      ],
+      "provenance": {
+        "url": "https://artificialanalysis.ai/agents/coding-agents",
+        "capturedAt": "2026-07-09",
+        "version": "Coding Agent Index (post GPT-5.6 GA)",
+        "license": "Figures from Artificial Analysis public pages; not affiliated with AA."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "aa-intelligence-index",
+      "title": "AA Intelligence Index",
+      "sourceNote": "Illustrative snapshot inspired by Artificial Analysis Intelligence Index cost-per-task (Answer / Reasoning / Cache write / Cache hit / Input). Totals match published headline figures where noted; segment splits are approximate for charting. Not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Cost per Intelligence Index task (USD)",
+        "yLabel": "Intelligence Index",
+        "xUnit": "USD",
+        "yUnit": "index"
+      },
+      "rows": [
+        {
+          "id": "ii-claude-fable-5-max",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 60,
+          "avgCostUsd": 3.25,
+          "costParts": {
+            "answer": 0.28,
+            "reasoning": 1.72,
+            "cacheWrite": 0.52,
+            "cacheHit": 0.38,
+            "input": 0.35
+          },
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gpt-5.6-sol-max",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "max",
+          "score": 59,
+          "avgCostUsd": 1.04,
+          "costParts": {
+            "answer": 0.12,
+            "reasoning": 0.58,
+            "cacheWrite": 0.14,
+            "cacheHit": 0.1,
+            "input": 0.1
+          },
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gpt-5.6-sol-xhigh",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 58,
+          "avgCostUsd": 0.88,
+          "costParts": {
+            "answer": 0.1,
+            "reasoning": 0.48,
+            "cacheWrite": 0.12,
+            "cacheHit": 0.09,
+            "input": 0.09
+          },
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-claude-opus-4.8-max",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 57,
+          "avgCostUsd": 1.78,
+          "costParts": {
+            "answer": 0.16,
+            "reasoning": 0.92,
+            "cacheWrite": 0.3,
+            "cacheHit": 0.22,
+            "input": 0.18
+          },
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gpt-5.5-xhigh",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 56,
+          "avgCostUsd": 0.99,
+          "costParts": {
+            "answer": 0.11,
+            "reasoning": 0.54,
+            "cacheWrite": 0.08,
+            "cacheHit": 0.14,
+            "input": 0.12
+          },
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gpt-5.6-terra-max",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "effort": "max",
+          "score": 55,
+          "avgCostUsd": 0.55,
+          "costParts": {
+            "answer": 0.06,
+            "reasoning": 0.3,
+            "cacheWrite": 0.07,
+            "cacheHit": 0.06,
+            "input": 0.06
+          },
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gpt-5.6-luna-max",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "effort": "max",
+          "score": 51,
+          "avgCostUsd": 0.21,
+          "costParts": {
+            "answer": 0.025,
+            "reasoning": 0.11,
+            "cacheWrite": 0.03,
+            "cacheHit": 0.025,
+            "input": 0.02
+          },
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-gemini-3.1-pro",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "preview",
+          "score": 46,
+          "avgCostUsd": 0.32,
+          "costParts": {
+            "answer": 0.04,
+            "reasoning": 0.14,
+            "cacheWrite": 0.02,
+            "cacheHit": 0.06,
+            "input": 0.06
+          },
+          "tags": [
+            "frontier",
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-deepseek-v4-pro-max",
+          "model": "deepseek-v4-pro",
+          "family": "deepseek",
+          "effort": "max",
+          "score": 44,
+          "avgCostUsd": 0.04,
+          "costParts": {
+            "answer": 0.004,
+            "reasoning": 0.018,
+            "cacheWrite": 0.003,
+            "cacheHit": 0.008,
+            "input": 0.007
+          },
+          "tags": [
+            "cheap-subagent",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-grok-4.3-high",
+          "model": "grok-4.3",
+          "family": "xai",
+          "effort": "high",
+          "score": 48,
+          "avgCostUsd": 0.28,
+          "costParts": {
+            "answer": 0.04,
+            "reasoning": 0.14,
+            "cacheWrite": 0.02,
+            "cacheHit": 0.04,
+            "input": 0.04
+          },
+          "tags": [
+            "workhorse",
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-glm-5.2-max",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "max",
+          "score": 42,
+          "avgCostUsd": 0.12,
+          "costParts": {
+            "answer": 0.015,
+            "reasoning": 0.055,
+            "cacheWrite": 0.015,
+            "cacheHit": 0.02,
+            "input": 0.015
+          },
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "ii-claude-sonnet-4.6-max",
+          "model": "claude-sonnet-4.6",
+          "family": "anthropic",
+          "effort": "max",
+          "score": 49,
+          "avgCostUsd": 1.15,
+          "costParts": {
+            "answer": 0.1,
+            "reasoning": 0.55,
+            "cacheWrite": 0.22,
+            "cacheHit": 0.16,
+            "input": 0.12
+          },
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        }
+      ],
+      "provenance": {
+        "url": "https://artificialanalysis.ai/leaderboards/models",
+        "capturedAt": "2026-07-16",
+        "license": "Figures from Artificial Analysis public pages; not affiliated with AA."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "frontiercode",
+      "title": "FrontierCode",
+      "sourceNote": "Illustrative snapshot from cognition.com/frontiercode (FrontierCode 1.1 Main, Jul 2026). Score = mergeability rubric; cost = mean USD per rollout. Best vs all reasoning modes match Cognition’s leaderboard toggle. Not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "taskCount": 100,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Avg cost per rollout (USD)",
+        "yLabel": "Mergeability score",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "fc-claude-fable-5-xhigh",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 53.5,
+          "avgCostUsd": 13.09,
+          "outTokens": 58600,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-fable-5-high",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 52.7,
+          "avgCostUsd": 9.48,
+          "outTokens": 43500,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-fable-5-max",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 51.6,
+          "avgCostUsd": 19.07,
+          "outTokens": 80800,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-fable-5-medium",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 49.8,
+          "avgCostUsd": 7.15,
+          "outTokens": 33200,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-fable-5-low",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 48,
+          "avgCostUsd": 4.92,
+          "outTokens": 23600,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-sol-max",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "score": 47.5,
+          "avgCostUsd": 6.3,
+          "outTokens": 33200,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-sol-xhigh",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "score": 46.8,
+          "avgCostUsd": 5,
+          "outTokens": 26300,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.8-max",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 46.5,
+          "avgCostUsd": 9.62,
+          "outTokens": 95900,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.8-xhigh",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 45.5,
+          "avgCostUsd": 6.78,
+          "outTokens": 65700,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-sol-high",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "score": 45.1,
+          "avgCostUsd": 4.1,
+          "outTokens": 21900,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.5-xhigh",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "score": 43,
+          "avgCostUsd": 4.03,
+          "outTokens": 25000,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-sonnet-5-xhigh",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "score": 42.7,
+          "avgCostUsd": 9.06,
+          "outTokens": 87900,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-grok-4.5-high",
+          "model": "grok-4.5",
+          "family": "xai",
+          "score": 42.4,
+          "avgCostUsd": 1.3,
+          "outTokens": 15300,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-sonnet-5-max",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "score": 42.4,
+          "avgCostUsd": 15.4,
+          "outTokens": 142600,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-swe-1.7",
+          "model": "swe-1.7",
+          "family": "other",
+          "score": 42.3,
+          "avgCostUsd": 1.97,
+          "outTokens": 64800,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-grok-4.5-medium",
+          "model": "grok-4.5",
+          "family": "xai",
+          "score": 41.9,
+          "avgCostUsd": 1.2,
+          "outTokens": 14900,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-terra-max",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "score": 41.3,
+          "avgCostUsd": 2.3,
+          "outTokens": 40500,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.8-high",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 41,
+          "avgCostUsd": 4.28,
+          "outTokens": 41300,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.5-high",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "score": 40.6,
+          "avgCostUsd": 3.12,
+          "outTokens": 18400,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.8-medium",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 40.5,
+          "avgCostUsd": 3.7,
+          "outTokens": 34900,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-sol-medium",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "score": 39.9,
+          "avgCostUsd": 3.1,
+          "outTokens": 17000,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-luna-max",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "score": 39.8,
+          "avgCostUsd": 1.8,
+          "outTokens": 37400,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-sonnet-5-high",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "score": 39.4,
+          "avgCostUsd": 5.49,
+          "outTokens": 57700,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-luna-xhigh",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "score": 38.9,
+          "avgCostUsd": 1.5,
+          "outTokens": 31200,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-terra-xhigh",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "score": 38.7,
+          "avgCostUsd": 1.6,
+          "outTokens": 30700,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.7-max",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 38.5,
+          "avgCostUsd": 9.09,
+          "outTokens": 49100,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "max",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-grok-4.5-low",
+          "model": "grok-4.5",
+          "family": "xai",
+          "score": 37.9,
+          "avgCostUsd": 0.8,
+          "outTokens": 11900,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-terra-high",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "score": 36.9,
+          "avgCostUsd": 1.4,
+          "outTokens": 25300,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.5-medium",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "score": 36.6,
+          "avgCostUsd": 2.35,
+          "outTokens": 13700,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-luna-high",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "score": 35.9,
+          "avgCostUsd": 1.1,
+          "outTokens": 23200,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-sol-low",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "score": 35.4,
+          "avgCostUsd": 2.1,
+          "outTokens": 12000,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-sonnet-5-medium",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "score": 35.2,
+          "avgCostUsd": 3.43,
+          "outTokens": 38300,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.7-high",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 35.2,
+          "avgCostUsd": 5.03,
+          "outTokens": 30100,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "high",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.8-low",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 35.1,
+          "avgCostUsd": 2.68,
+          "outTokens": 25200,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "planner"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.7-xhigh",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 34.9,
+          "avgCostUsd": 6.87,
+          "outTokens": 38400,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "xhigh",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-terra-medium",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "score": 33.9,
+          "avgCostUsd": 0.9,
+          "outTokens": 16300,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.5-low",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "score": 30.6,
+          "avgCostUsd": 1.65,
+          "outTokens": 8900,
+          "tags": [
+            "frontier",
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-kimi-k2.7",
+          "model": "kimi-k2.7",
+          "family": "moonshot",
+          "score": 30.1,
+          "avgCostUsd": 3.01,
+          "outTokens": 43900,
+          "tags": [],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.7-medium",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 28.9,
+          "avgCostUsd": 3.22,
+          "outTokens": 21900,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-sonnet-5-low",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "score": 28.7,
+          "avgCostUsd": 2.15,
+          "outTokens": 24800,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-claude-opus-4.7-low",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 27.6,
+          "avgCostUsd": 2.47,
+          "outTokens": 17900,
+          "tags": [
+            "workhorse"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-luna-medium",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "score": 25.7,
+          "avgCostUsd": 0.6,
+          "outTokens": 12900,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "medium",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-composer-2.5",
+          "model": "composer-2.5",
+          "family": "cursor",
+          "score": 25.6,
+          "avgCostUsd": 3.09,
+          "outTokens": 16000,
+          "tags": [],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-glm-5.2",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "score": 24.5,
+          "avgCostUsd": 2.47,
+          "outTokens": 17800,
+          "tags": [],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-terra-low",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "score": 24.1,
+          "avgCostUsd": 0.5,
+          "outTokens": 9200,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-deepseek-v4-pro",
+          "model": "deepseek-v4-pro",
+          "family": "deepseek",
+          "score": 17.6,
+          "avgCostUsd": 1.6,
+          "outTokens": 28800,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-gpt-5.6-luna-low",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "score": 15.4,
+          "avgCostUsd": 0.2,
+          "outTokens": 6800,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "effort": "low",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-minimax-m3",
+          "model": "minimax-m3",
+          "family": "other",
+          "score": 14.7,
+          "avgCostUsd": 0.7,
+          "outTokens": 34000,
+          "tags": [
+            "cheap-subagent",
+            "fast"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-inkling-0.99",
+          "model": "inkling",
+          "family": "other",
+          "score": 14,
+          "avgCostUsd": 3.6,
+          "outTokens": 33600,
+          "tags": [],
+          "effort": "0.99",
+          "costKind": "measured"
+        },
+        {
+          "id": "fc-qwen-3.7-plus",
+          "model": "qwen-3.7-plus",
+          "family": "other",
+          "score": 10.2,
+          "avgCostUsd": 0.2,
+          "outTokens": 45300,
+          "tags": [
+            "cheap-subagent",
+            "fast"
+          ],
+          "costKind": "measured"
+        }
+      ],
+      "provenance": {
+        "url": "https://cognition.com/frontiercode",
+        "capturedAt": "2026-07-16",
+        "license": "Public FrontierCode snapshot; verify on cognition.com before citing."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "frontierswe",
+      "title": "FrontierSWE",
+      "sourceNote": "Illustrative snapshot from frontierswe.com (Mean@5 dominance). X-axis uses blended public API $/MTok as a relative cost proxy — not measured $/task. Not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Relative API cost (blended $/MTok)",
+        "yLabel": "Dominance",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "fswe-claude-fable-5",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 89,
+          "avgCostUsd": 30,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-grok-4.5",
+          "model": "grok-4.5",
+          "family": "xai",
+          "effort": "grok-cli",
+          "score": 78,
+          "avgCostUsd": 4,
+          "tags": [
+            "workhorse",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-claude-opus-4.8",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 73,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-glm-5.2",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "claude-code",
+          "score": 72,
+          "avgCostUsd": 1.98,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-gpt-5.5",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "codex",
+          "score": 70,
+          "avgCostUsd": 17.5,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 61,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-claude-opus-4.6",
+          "model": "claude-opus-4.6",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 53,
+          "avgCostUsd": 15,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-gpt-5.4",
+          "model": "gpt-5.4",
+          "family": "openai",
+          "effort": "codex",
+          "score": 51,
+          "avgCostUsd": 8.75,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-composer-2.5",
+          "model": "composer-2.5",
+          "family": "cursor",
+          "effort": "cursor-cli",
+          "score": 38,
+          "avgCostUsd": 1,
+          "tags": [
+            "workhorse",
+            "cheap-subagent",
+            "fast"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-gemini-3.1-pro",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "gemini-cli",
+          "score": 37,
+          "avgCostUsd": 8.75,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-glm-5.1",
+          "model": "glm-5.1",
+          "family": "zhipu",
+          "effort": "claude-code",
+          "score": 29,
+          "avgCostUsd": 2.9,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-deepseek-v4-pro",
+          "model": "deepseek-v4-pro",
+          "family": "deepseek",
+          "effort": "claude-code",
+          "score": 27,
+          "avgCostUsd": 2.4,
+          "tags": [
+            "cheap-subagent",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-kimi-k2.6",
+          "model": "kimi-k2.6",
+          "family": "moonshot",
+          "effort": "kimi-cli",
+          "score": 25,
+          "avgCostUsd": 2.13,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-kimi-k2.5",
+          "model": "kimi-k2.5",
+          "family": "moonshot",
+          "effort": "kimi-cli",
+          "score": 25,
+          "avgCostUsd": 2.13,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fswe-qwen3.6-plus",
+          "model": "qwen3.6-plus",
+          "family": "other",
+          "effort": "qwen-code",
+          "score": 21,
+          "avgCostUsd": 1.75,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        }
+      ],
+      "provenance": {
+        "url": "https://frontierswe.com",
+        "capturedAt": "2026-07-16",
+        "license": "Scores from FrontierSWE; costs are illustrative API/relative blends, not measured $/task."
+      },
+      "modeKind": "harness"
+    },
+    {
+      "id": "terminal-bench-2.1",
+      "title": "Terminal Bench 2.1",
+      "sourceNote": "Illustrative mix of Snorkel-verified Terminal-Bench 2.1 rows + published GPT-5.6 figures. Costs are approximate proxies (DeepSWE overlap or API-tier estimates). Not live OpenCodex metering.",
+      "updated": "2026-07-11",
+      "taskCount": 89,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Estimated cost (USD, illustrative)",
+        "yLabel": "Accuracy",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "tb21-gpt-5.6-sol",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 88.8,
+          "avgCostUsd": 8.39,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-gpt-5.6-terra",
+          "model": "gpt-5.6-terra",
+          "family": "openai",
+          "effort": "codex",
+          "score": 78.4,
+          "scoreCi": 1.3,
+          "avgCostUsd": 4.95,
+          "tags": [
+            "workhorse",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-gpt-5.6-luna",
+          "model": "gpt-5.6-luna",
+          "family": "openai",
+          "effort": "codex",
+          "score": 75.7,
+          "scoreCi": 1.3,
+          "avgCostUsd": 3.03,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-claude-fable-5-cc",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 83.8,
+          "scoreCi": 1.2,
+          "avgCostUsd": 21.63,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-gpt-5.5-codex",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "codex",
+          "score": 83.1,
+          "scoreCi": 1.1,
+          "avgCostUsd": 7.23,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-grok-4.5-cursor",
+          "model": "grok-4.5",
+          "family": "xai",
+          "effort": "cursor-cli",
+          "score": 79.3,
+          "scoreCi": 1.5,
+          "avgCostUsd": 2.42,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-claude-opus-4.8",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 78.9,
+          "scoreCi": 1.3,
+          "avgCostUsd": 13.22,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-muse-spark-1.1",
+          "model": "muse-spark-1.1",
+          "family": "other",
+          "effort": "mini-swe-agent",
+          "score": 76.2,
+          "scoreCi": 1.2,
+          "avgCostUsd": 2.36,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-claude-sonnet-5",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 74.6,
+          "scoreCi": 1.6,
+          "avgCostUsd": 12,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-glm-5.2",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "claude-code",
+          "score": 82.7,
+          "avgCostUsd": 3.92,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 68.9,
+          "scoreCi": 1.4,
+          "avgCostUsd": 10,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-gemini-3.1-pro",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "gemini-cli",
+          "score": 65.8,
+          "scoreCi": 1.7,
+          "avgCostUsd": 9.48,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-kimi-k3",
+          "model": "kimi-k3",
+          "family": "moonshot",
+          "score": 88.3,
+          "avgCostUsd": 5,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-hy3",
+          "model": "hy3",
+          "family": "other",
+          "score": 71.7,
+          "avgCostUsd": 2,
+          "tags": [
+            "cheap-subagent",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "tb21-minimax-m3",
+          "model": "minimax-m3",
+          "family": "other",
+          "score": 66,
+          "avgCostUsd": 1.5,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        }
+      ],
+      "provenance": {
+        "url": "https://www.tbench.ai",
+        "capturedAt": "2026-07-11",
+        "license": "Harness results from Terminal-Bench; costs are estimates / API blends."
+      },
+      "modeKind": "harness"
+    },
+    {
+      "id": "program-bench",
+      "title": "Program Bench",
+      "sourceNote": "Snapshot from programbench.com extended leaderboard (mini-SWE-agent, 200 tasks). Score = almost-resolved (≥95% tests). Costs = published average API $/task. Not live OpenCodex metering.",
+      "updated": "2026-06-23",
+      "taskCount": 200,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Avg cost per task (USD)",
+        "yLabel": "Almost resolved",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "pb-gpt-5.5-xhigh",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 13.5,
+          "avgCostUsd": 8.85,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gpt-5.5-high",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "high",
+          "score": 5,
+          "avgCostUsd": 3.65,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-claude-opus-4.7-xhigh",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "xhigh",
+          "score": 4.5,
+          "avgCostUsd": 10.96,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 3,
+          "avgCostUsd": 3.81,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-claude-opus-4.6",
+          "model": "claude-opus-4.6",
+          "family": "anthropic",
+          "score": 2.5,
+          "avgCostUsd": 11.38,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gpt-5.5-default",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "score": 1.5,
+          "avgCostUsd": 1.21,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-claude-sonnet-4.6",
+          "model": "claude-sonnet-4.6",
+          "family": "anthropic",
+          "score": 1,
+          "avgCostUsd": 26.73,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gpt-5.4",
+          "model": "gpt-5.4",
+          "family": "openai",
+          "score": 0,
+          "avgCostUsd": 0.33,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gemini-3.1-pro",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "score": 0,
+          "avgCostUsd": 1.51,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gemini-3-flash",
+          "model": "gemini-3-flash",
+          "family": "google",
+          "score": 0,
+          "avgCostUsd": 0.3,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-claude-haiku-4.5",
+          "model": "claude-haiku-4.5",
+          "family": "anthropic",
+          "score": 0,
+          "avgCostUsd": 0.8,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gpt-5.4-mini",
+          "model": "gpt-5.4-mini",
+          "family": "openai",
+          "score": 0,
+          "avgCostUsd": 0.04,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        },
+        {
+          "id": "pb-gpt-5-mini",
+          "model": "gpt-5-mini",
+          "family": "openai",
+          "score": 0,
+          "avgCostUsd": 0.03,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "measured"
+        }
+      ],
+      "provenance": {
+        "url": "https://programbench.com/extended/",
+        "capturedAt": "2026-06-23",
+        "license": "Scores and average API costs from ProgramBench extended leaderboard."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "swe-marathon",
+      "title": "SWE Marathon",
+      "sourceNote": "Illustrative snapshot from swe-marathon.org (pass@1 on 20 ultra-long-horizon tasks). Cost axis is an estimated relative run cost (long trajectories); not published $/task. Not live OpenCodex metering.",
+      "updated": "2026-07-09",
+      "taskCount": 20,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Est. relative run cost (USD)",
+        "yLabel": "Resolution rate",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "swem-grok-4.5",
+          "model": "grok-4.5",
+          "family": "xai",
+          "effort": "grok-build",
+          "score": 29,
+          "avgCostUsd": 8,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-claude-opus-4.8",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 26,
+          "avgCostUsd": 28,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-claude-fable-5",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 24,
+          "avgCostUsd": 45,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-claude-opus-4.7-cc",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "claude-code",
+          "score": 16,
+          "avgCostUsd": 22,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-glm-5.2",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "claude-code",
+          "score": 13,
+          "avgCostUsd": 6,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-gpt-5.5-codex",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "codex",
+          "score": 12,
+          "avgCostUsd": 18,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-claude-opus-4.7-terminus",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "terminus-2",
+          "score": 11,
+          "avgCostUsd": 20,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-gemini-3.5-flash",
+          "model": "gemini-3.5-flash",
+          "family": "google",
+          "effort": "gemini-cli",
+          "score": 7,
+          "avgCostUsd": 5,
+          "tags": [
+            "fast"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-gpt-5.5-terminus",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "terminus-2",
+          "score": 6,
+          "avgCostUsd": 16,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-gemini-3.1-pro-terminus",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "terminus-2",
+          "score": 4,
+          "avgCostUsd": 12,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-deepseek-v4-pro",
+          "model": "deepseek-v4-pro",
+          "family": "deepseek",
+          "effort": "terminus-2",
+          "score": 4,
+          "avgCostUsd": 7,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-gemini-3.1-pro-cli",
+          "model": "gemini-3.1-pro",
+          "family": "google",
+          "effort": "gemini-cli",
+          "score": 2,
+          "avgCostUsd": 12,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-glm-5.1",
+          "model": "glm-5.1",
+          "family": "zhipu",
+          "effort": "terminus-2",
+          "score": 1,
+          "avgCostUsd": 5,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-minimax-m2.7",
+          "model": "minimax-m2.7",
+          "family": "other",
+          "effort": "terminus-2",
+          "score": 0,
+          "avgCostUsd": 3,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "swem-kimi-k2.6",
+          "model": "kimi-k2.6",
+          "family": "moonshot",
+          "effort": "kimi-cli",
+          "score": 0,
+          "avgCostUsd": 4,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        }
+      ],
+      "provenance": {
+        "url": "https://swe-marathon.org",
+        "capturedAt": "2026-07-09",
+        "license": "Scores from SWE-Marathon; costs are estimates."
+      },
+      "modeKind": "harness"
+    },
+    {
+      "id": "frontend-code-arena",
+      "title": "Frontend Code Arena",
+      "sourceNote": "Illustrative snapshot from arena.ai Code Arena | WebDev (Elo from blind human votes on frontend tasks, Jul 16 2026). X-axis is blended public API $/MTok — preference Elo has no $/task. Not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Relative API cost (blended $/MTok)",
+        "yLabel": "Arena Elo",
+        "xUnit": "USD",
+        "yUnit": "index"
+      },
+      "rows": [
+        {
+          "id": "fca-kimi-k3",
+          "model": "kimi-k3",
+          "family": "moonshot",
+          "score": 1679,
+          "scoreCi": 17,
+          "avgCostUsd": 9,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-fable-5",
+          "model": "claude-fable-5",
+          "family": "anthropic",
+          "score": 1631,
+          "scoreCi": 13,
+          "avgCostUsd": 30,
+          "tags": [
+            "planner",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-gpt-5.6-sol-xhigh",
+          "model": "gpt-5.6-sol",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 1618,
+          "scoreCi": 13,
+          "avgCostUsd": 17.5,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-glm-5.2-max",
+          "model": "glm-5.2",
+          "family": "zhipu",
+          "effort": "max",
+          "score": 1587,
+          "scoreCi": 10,
+          "avgCostUsd": 2.9,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.8-thinking",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "effort": "thinking",
+          "score": 1562,
+          "scoreCi": 9,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-grok-4.5",
+          "model": "grok-4.5",
+          "family": "xai",
+          "score": 1558,
+          "scoreCi": 13,
+          "avgCostUsd": 4,
+          "tags": [
+            "workhorse",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.7-thinking",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "effort": "thinking",
+          "score": 1558,
+          "scoreCi": 7,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 1555,
+          "scoreCi": 7,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.6-thinking",
+          "model": "claude-opus-4.6",
+          "family": "anthropic",
+          "effort": "thinking",
+          "score": 1542,
+          "scoreCi": 6,
+          "avgCostUsd": 15,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-sonnet-5-high",
+          "model": "claude-sonnet-5",
+          "family": "anthropic",
+          "effort": "high",
+          "score": 1542,
+          "scoreCi": 12,
+          "avgCostUsd": 6,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.6",
+          "model": "claude-opus-4.6",
+          "family": "anthropic",
+          "score": 1536,
+          "scoreCi": 6,
+          "avgCostUsd": 15,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-opus-4.8",
+          "model": "claude-opus-4.8",
+          "family": "anthropic",
+          "score": 1534,
+          "scoreCi": 9,
+          "avgCostUsd": 15,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-glm-5.1",
+          "model": "glm-5.1",
+          "family": "zhipu",
+          "score": 1526,
+          "scoreCi": 9,
+          "avgCostUsd": 2.9,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-claude-sonnet-4.6",
+          "model": "claude-sonnet-4.6",
+          "family": "anthropic",
+          "score": 1522,
+          "scoreCi": 6,
+          "avgCostUsd": 9,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-kimi-k2.6",
+          "model": "kimi-k2.6",
+          "family": "moonshot",
+          "score": 1515,
+          "avgCostUsd": 2.13,
+          "tags": [
+            "cheap-subagent",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-gpt-5.5-xhigh",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "xhigh",
+          "score": 1504,
+          "scoreCi": 7,
+          "avgCostUsd": 17.5,
+          "tags": [
+            "frontier",
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-gpt-5.5-high",
+          "model": "gpt-5.5",
+          "family": "openai",
+          "effort": "high",
+          "score": 1482,
+          "scoreCi": 7,
+          "avgCostUsd": 17.5,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "fca-gpt-5.4-high",
+          "model": "gpt-5.4",
+          "family": "openai",
+          "effort": "high",
+          "score": 1457,
+          "scoreCi": 17,
+          "avgCostUsd": 8.75,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        }
+      ],
+      "provenance": {
+        "url": "https://arena.ai",
+        "capturedAt": "2026-07-16",
+        "license": "Elo/scores from Code Arena; costs are estimates."
+      },
+      "modeKind": "effort"
+    },
+    {
+      "id": "cybench",
+      "title": "Cybench",
+      "sourceNote": "Illustrative snapshot from cybench.github.io (unguided % solved on professional CTF tasks). Many rows are system-card / subset results, not one uniform full-suite run. Costs are relative agent-run estimates — Cybench does not publish $/task. Not live OpenCodex metering.",
+      "updated": "2026-07-16",
+      "taskCount": 40,
+      "axes": {
+        "xKey": "avgCostUsd",
+        "yKey": "score",
+        "xLabel": "Est. relative run cost (USD)",
+        "yLabel": "Unguided % solved",
+        "xUnit": "USD",
+        "yUnit": "%"
+      },
+      "rows": [
+        {
+          "id": "cyb-claude-mythos-preview",
+          "model": "claude-mythos-preview",
+          "family": "anthropic",
+          "score": 100,
+          "avgCostUsd": 18,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-opus-4.7",
+          "model": "claude-opus-4.7",
+          "family": "anthropic",
+          "score": 96,
+          "avgCostUsd": 14,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-opus-4.6",
+          "model": "claude-opus-4.6",
+          "family": "anthropic",
+          "score": 93,
+          "avgCostUsd": 12,
+          "tags": [
+            "frontier",
+            "planner"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-opus-4.5",
+          "model": "claude-opus-4.5",
+          "family": "anthropic",
+          "score": 82,
+          "avgCostUsd": 11,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-muse-spark",
+          "model": "muse-spark",
+          "family": "other",
+          "score": 65.4,
+          "avgCostUsd": 3.2,
+          "tags": [
+            "workhorse",
+            "frontier"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-sonnet-4.5",
+          "model": "claude-sonnet-4.5",
+          "family": "anthropic",
+          "score": 60,
+          "avgCostUsd": 5.5,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-grok-4",
+          "model": "grok-4",
+          "family": "xai",
+          "score": 43,
+          "avgCostUsd": 2.8,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-opus-4.1",
+          "model": "claude-opus-4.1",
+          "family": "anthropic",
+          "score": 42,
+          "avgCostUsd": 9,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-grok-4.1-thinking",
+          "model": "grok-4.1",
+          "family": "xai",
+          "effort": "thinking",
+          "score": 39,
+          "avgCostUsd": 2.4,
+          "tags": [
+            "workhorse",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-opus-4",
+          "model": "claude-opus-4",
+          "family": "anthropic",
+          "score": 38,
+          "avgCostUsd": 8,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-sonnet-4",
+          "model": "claude-sonnet-4",
+          "family": "anthropic",
+          "score": 35,
+          "avgCostUsd": 4.5,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-grok-4-fast",
+          "model": "grok-4",
+          "family": "xai",
+          "effort": "fast",
+          "score": 30,
+          "avgCostUsd": 1.2,
+          "tags": [
+            "fast",
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-o3-mini",
+          "model": "o3-mini",
+          "family": "openai",
+          "score": 22.5,
+          "avgCostUsd": 1.5,
+          "tags": [
+            "cheap-subagent"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-claude-3.7-sonnet",
+          "model": "claude-3.7-sonnet",
+          "family": "anthropic",
+          "score": 20,
+          "avgCostUsd": 3.5,
+          "tags": [
+            "workhorse"
+          ],
+          "costKind": "estimated"
+        },
+        {
+          "id": "cyb-gpt-4.5-preview",
+          "model": "gpt-4.5-preview",
+          "family": "openai",
+          "score": 17.5,
+          "avgCostUsd": 6,
+          "tags": [
+            "frontier"
+          ],
+          "costKind": "estimated"
+        }
+      ],
+      "provenance": {
+        "url": "https://cybench.github.io",
+        "capturedAt": "2026-07-16",
+        "license": "Please cite Cybench when republishing results (see cybench.github.io).",
+        "citation": "Cybench — https://cybench.github.io"
+      },
+      "modeKind": "effort"
+    }
+  ]
+}
