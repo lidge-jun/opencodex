@@ -194,7 +194,9 @@ export default function ProviderDetails({
               item.activeNeedsReauth
                 ? () => {
                     if (item.authMode === "oauth") {
-                      void authHandlers?.onReauth(item.name);
+                      const active = accounts.find(a => a.active && a.needsReauth)
+                        ?? accounts.find(a => a.needsReauth);
+                      void authHandlers?.onReauth(item.name, active?.id);
                       return;
                     }
                     // Codex / forward: Accounts tab owns the pool reauth CTA.

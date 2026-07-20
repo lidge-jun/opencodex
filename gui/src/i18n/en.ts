@@ -171,6 +171,8 @@ export const en = {
   "prov.accountActive": "Active",
   "prov.accountReauth": "Re-login",
   "prov.reauthenticate": "Re-authenticate",
+  "prov.reauthAccountMissing": "Selected account was not found after login",
+  "prov.reauthIdentityMismatch": "Signed-in account did not match the selected account",
   "prov.accountAdd": "Add account",
   "prov.accountNoLabel": "account {id}",
   "prov.accountSwitchTitle": "Use this account",

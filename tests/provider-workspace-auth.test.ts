@@ -133,7 +133,10 @@ describe("workspace account integration seam", () => {
     ]);
     expect(page).toContain("onReauth:");
     expect(page).toContain("onCancelLogin: cancelLoginOAuth");
-    expect(page).toContain("loginOAuth(provider, true)");
+    expect(page).toContain("loginOAuth(provider, true, accountId)");
+    expect(page).toContain("accountId: reauthTargetId, reauth: true");
+    expect(page).toContain("prov.reauthIdentityMismatch");
+    expect(page).toContain("loginOAuth(name, true, account.id)");
     expect(page).toContain("oauthLoginGenerationRef");
     expect(page).toContain("/api/oauth/login/cancel");
     // Classic provider-level CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
@@ -144,6 +147,7 @@ describe("workspace account integration seam", () => {
     expect(panel).toContain("pws.reauthenticate");
     expect(panel).toContain("onCancelLogin");
     expect(details).toContain("onReauthenticate=");
+    expect(details).toContain("authHandlers?.onReauth(item.name, active?.id)");
     expect(overview).toContain("onReauthenticate");
     expect(overview).toContain("pws.reauthenticate");
   });

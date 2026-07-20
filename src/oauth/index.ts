@@ -32,7 +32,7 @@ interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshInten
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 
-export interface LoginOpts { forceLogin?: boolean }
+export interface LoginOpts { forceLogin?: boolean; /** When set, persist into this account slot and require matching identity. */ reauthAccountId?: string }
 
 interface OAuthProviderDef {
   login(ctrl: OAuthController, opts?: LoginOpts): Promise<OAuthCredentials>;
@@ -452,7 +452,21 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const rawCred = await def.login(ctrl, opts);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
-  await saveCredential(provider, cred);
+  if (opts?.reauthAccountId) {
+    const existing = getAccountCredential(provider, opts.reauthAccountId);
+    if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
+    const expected = existing.accountId ?? existing.email;
+    const got = cred.accountId ?? cred.email;
+    if (!expected) {
+      throw new Error("Could not verify signed-in account identity for reauth.");
+    }
+    if (!got || expected !== got) {
+      throw new Error("Signed-in account does not match the selected account. Sign in with the same account.");
+    }
+    await saveAccountCredential(provider, opts.reauthAccountId, cred);
+  } else {
+    await saveCredential(provider, cred);
+  }
   if (provider === "chatgpt") return cred;
   const config = loadConfig();
   upsertOAuthProvider(config, provider);

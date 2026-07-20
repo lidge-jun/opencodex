@@ -166,6 +166,8 @@ export const ko: Record<TKey, string> = {
   "prov.accountActive": "활성",
   "prov.accountReauth": "재로그인",
   "prov.reauthenticate": "재인증",
+  "prov.reauthAccountMissing": "로그인 후 선택한 계정을 찾을 수 없습니다",
+  "prov.reauthIdentityMismatch": "로그인한 계정이 선택한 계정과 일치하지 않습니다",
   "prov.accountAdd": "계정 추가",
   "prov.accountNoLabel": "계정 {id}",
   "prov.accountSwitchTitle": "이 계정 사용",

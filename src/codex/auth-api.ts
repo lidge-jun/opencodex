@@ -634,10 +634,36 @@ export async function handleCodexAuthAPI(
               // Otherwise a different login would silently overwrite credentials under a trusted id.
               if (reauth) {
                 const existingCred = getCodexAccountCredential(accountId);
-                if (existingCred?.chatgptAccountId && existingCred.chatgptAccountId !== oauthAccountId) {
+                const poolAccount = configuredPoolAccount(getRuntimeConfig(config), accountId);
+                const expectedChatgptId = existingCred?.chatgptAccountId?.trim();
+                const expectedEmail = poolAccount?.email?.trim().toLowerCase();
+                const gotEmail = email.trim().toLowerCase();
+                if (expectedChatgptId) {
+                  if (expectedChatgptId !== oauthAccountId) {
+                    codexAuthLoginState.set(flowId, {
+                      status: "error",
+                      error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                      doneAt: Date.now(),
+                    });
+                    completed = true;
+                    break;
+                  }
+                } else if (expectedEmail) {
+                  if (!gotEmail || gotEmail !== expectedEmail) {
+                    codexAuthLoginState.set(flowId, {
+                      status: "error",
+                      error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                      doneAt: Date.now(),
+                    });
+                    completed = true;
+                    break;
+                  }
+                } else {
+                  // No chatgptAccountId and no pool email — refuse silent identity replacement
+                  // (including empty credential slots that still have a pool row).
                   codexAuthLoginState.set(flowId, {
                     status: "error",
-                    error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                    error: "Cannot verify account identity for reauth. Remove this account and add it again.",
                     doneAt: Date.now(),
                   });
                   completed = true;

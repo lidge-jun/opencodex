@@ -386,8 +386,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
   }, [apiBase, t]);
 
-  const loginOAuth = async (provider: string, addAccount = false) => {
+  const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
     const generation = ++oauthLoginGenerationRef.current;
+    const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
@@ -397,7 +398,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(addAccount ? { provider, addAccount: true } : { provider }),
+        body: JSON.stringify({
+          provider,
+          ...(addAccount || reauthTargetId ? { addAccount: true } : {}),
+          ...(reauthTargetId ? { accountId: reauthTargetId, reauth: true } : {}),
+        }),
       });
       const data = await res.json();
       if (oauthLoginGenerationRef.current !== generation || !aliveRef.current) return;
@@ -428,11 +433,26 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }
         // For add-account / reauth flows the provider may already be "logged in": wait for a
         // new slot OR flow completion (same-account re-login won't grow count).
-        const completed = addAccount
+        const completed = addAccount || reauthTargetId
           ? ((s.accounts?.length ?? 0) > baselineCount || s.done === true)
           : (s.loggedIn || s.done === true);
         if (completed) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
+          const target = reauthTargetId
+            ? s.accounts?.find(a => a.id === reauthTargetId)
+            : s.accounts?.find(a => a.active) ?? s.accounts?.find(a => a.id === s.activeAccountId);
+          if (reauthTargetId && !target) {
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthAccountMissing") }), false);
+            setLoginInfo(null);
+            finished = true;
+            break;
+          }
+          if (target?.needsReauth) {
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), false);
+            setLoginInfo(null);
+            finished = true;
+            break;
+          }
           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
           setLoginInfo(null);
           setManualCode("");
@@ -641,7 +661,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 onLogin: loginOAuth,
                 onCancelLogin: cancelLoginOAuth,
                 onLogout: logoutOAuth,
-                onReauth: provider => loginOAuth(provider, true),
+                onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
                 onSwitchAccount: switchAccount,
                 onRemoveAccount: removeAccount,
                 onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
@@ -891,7 +911,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                   </div>
                   <div className="provider-actions">
                     {activeAccountNeedsReauth[name] && prov.authMode === "oauth" && (
-                      <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(name, true)} disabled={busy === name}>
+                      <button className="btn btn-primary btn-sm" onClick={() => {
+                        const active = accountSets[name]?.accounts.find(a => a.active && a.needsReauth);
+                        void loginOAuth(name, true, active?.id);
+                      }} disabled={busy === name}>
                         {t("prov.reauthenticate")}
                       </button>
                     )}
@@ -949,7 +972,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                                 type="button"
                                 className="prov-account-reauth"
                                 disabled={busy === name}
-                                onClick={e => { e.stopPropagation(); void loginOAuth(name, true); }}
+                                onClick={e => { e.stopPropagation(); void loginOAuth(name, true, account.id); }}
                               >
                                 {t("prov.reauthenticate")}
                               </button>

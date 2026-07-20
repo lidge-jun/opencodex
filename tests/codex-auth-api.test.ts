@@ -985,8 +985,10 @@ describe("codex-auth API", () => {
 
   test("OAuth pool reauth binds ChatGPT identity to the existing pool slot", async () => {
     const source = await Bun.file("src/codex/auth-api.ts").text();
-    expect(source).toContain("existingCred?.chatgptAccountId && existingCred.chatgptAccountId !== oauthAccountId");
+    expect(source).toContain("expectedChatgptId");
+    expect(source).toContain("expectedEmail");
     expect(source).toContain("Signed-in ChatGPT account does not match this pool account");
+    expect(source).toContain("Cannot verify account identity for reauth. Remove this account and add it again.");
   });
 
   test("login-status reauth polling refuses credential-exists shortcut", async () => {

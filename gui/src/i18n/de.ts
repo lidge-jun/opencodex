@@ -160,6 +160,8 @@ export const de = {
   "prov.accountActive": "Aktiv",
   "prov.accountReauth": "Erneut anmelden",
   "prov.reauthenticate": "Erneut authentifizieren",
+  "prov.reauthAccountMissing": "Ausgewähltes Konto nach dem Login nicht gefunden",
+  "prov.reauthIdentityMismatch": "Angemeldetes Konto stimmt nicht mit dem ausgewählten Konto überein",
   "prov.accountAdd": "Konto hinzufügen",
   "prov.accountNoLabel": "Konto {id}",
   "prov.accountSwitchTitle": "Dieses Konto verwenden",

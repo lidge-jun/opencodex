@@ -1241,13 +1241,24 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { provider?: string; addAccount?: boolean };
+    const body = await req.json().catch(() => ({})) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const accountId = body.accountId?.trim();
+    const reauth = body.reauth === true || Boolean(accountId);
     try {
-      // addAccount forces a fresh browser identity (skips local-CLI token import) so a
-      // SECOND account can be added instead of re-importing the first one.
-      const { url: authUrl, instructions } = await startLoginFlow(provider, body.addAccount ? { forceLogin: true } : undefined);
+      if (accountId) {
+        const { getAccountSet } = await import("../oauth/store");
+        const set = getAccountSet(provider);
+        if (!set?.accounts.some(a => a.id === accountId)) {
+          return jsonResponse({ error: "Unknown account for reauth" }, 404);
+        }
+      }
+      // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
+      const { url: authUrl, instructions } = await startLoginFlow(provider, {
+        forceLogin: body.addAccount === true || reauth,
+        ...(accountId ? { reauthAccountId: accountId } : {}),
+      });
       upsertOAuthProvider(config, provider); // mutate LIVE config — routing sees it without restart
       if (authUrl) {
         // Open the browser server-side (the proxy runs on the user's machine) — the GUI's

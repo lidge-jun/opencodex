@@ -166,6 +166,8 @@ export const zh: Record<TKey, string> = {
   "prov.accountActive": "使用中",
   "prov.accountReauth": "需重新登录",
   "prov.reauthenticate": "重新认证",
+  "prov.reauthAccountMissing": "登录后未找到所选账号",
+  "prov.reauthIdentityMismatch": "登录账号与所选账号不匹配",
   "prov.accountAdd": "添加账户",
   "prov.accountNoLabel": "账户 {id}",
   "prov.accountSwitchTitle": "使用此账户",
