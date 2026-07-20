@@ -80,12 +80,16 @@ const helpEntries: Record<string, HelpEntry> = {
     ],
   },
   account: {
-    usage: "ocx account <list|current|use> [provider] [id] [--json] [--all]",
+    usage: "ocx account <list|current|use|refresh|auto-switch|remove|add-key> ...",
     summary: "List and switch provider accounts and API-key pools (GUI parity).",
     details: [
       "list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).",
       "current <provider>  Show the active account or key.",
       "use <provider> <id> Switch the active credential; 'main' selects the Codex App login.",
+      "refresh <provider>  Force-refresh Codex or provider quota reports.",
+      "auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.",
+      "remove <provider> <id> --yes  Remove a stored account or key after an existence check.",
+      "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "Codex pool switches apply to new sessions; running threads keep their account.",
     ],
   },
@@ -154,7 +158,7 @@ Usage:
   ocx restart                  Stop and restart the proxy
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
   ocx provider <sub>          Manage providers (list|add|remove|show|set-default)
-  ocx account <sub>           List/switch accounts and API keys (list|current|use)
+  ocx account <sub>           Accounts/keys (list|current|use|refresh|auto-switch|remove|add-key)
   ocx models [--json]         List available models from configured providers
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx help [command]          Show help

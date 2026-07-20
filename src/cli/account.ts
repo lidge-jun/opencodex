@@ -1,33 +1,13 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { loadConfig } from "../config";
-import { isPublicOAuthProvider } from "../oauth/index";
-import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
+import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
-import { apiError, apiJson, fetchRows, proxyUnreachable, resolveBaseUrl, type ApiResult }
+import { cmdAddKey, cmdAutoSwitch, cmdRefresh, cmdRemove } from "./account-extended";
+import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
-export type AccountType = "codex" | "oauth" | "api-key";
-
-export interface AccountRow {
-  provider: string;
-  type: AccountType;
-  id: string;
-  label?: string;
-  email?: string;
-  plan?: string;
-  masked?: string;
-  active: boolean;
-  needsReauth?: boolean;
-}
-
-export interface AccountDeps {
-  /** Test injection: skip findLiveProxy and call the API at this base URL. */
-  baseUrl?: string;
-  fetchImpl?: typeof fetch;
-  loadConfigImpl?: () => OcxConfig;
-}
-
-export type ClassifyResult = { type: AccountType } | { error: string };
+export { classifyAccount } from "./account-api";
+export type { AccountDeps, AccountRow, AccountType, ClassifyResult } from "./account-api";
 type TargetProvenance = "live-oauth-list" | "config" | "codex";
 
 const MAIN_ALIAS = "main";
@@ -39,6 +19,10 @@ const ACCOUNT_USAGE = `Usage:
   ocx account list [provider] [--json] [--all]
   ocx account current <provider> [--json]
   ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool.`;
@@ -57,25 +41,6 @@ function leftoverArgsError(args: string[]): string | null {
   return unknown.length > 0
     ? `Unknown flag(s): ${unknown.join(", ")}`
     : `Unexpected argument(s): ${args.join(", ")}`;
-}
-
-export function classifyAccount(config: OcxConfig, name: string): ClassifyResult {
-  const provider = config.providers?.[name];
-  if (providerCodexAccountMode(name, provider)) return { type: "codex" };
-  const entry = getProviderRegistryEntry(name);
-  if (entry?.authKind === "local") {
-    return { error: `provider "${name}" is a local provider and has no credentials` };
-  }
-  if (provider?.authMode === "forward") {
-    return { error: `provider "${name}" uses forward auth and has no switchable credentials` };
-  }
-  if (provider?.authMode === "key") return { type: "api-key" };
-  if (provider && !provider.authMode && (provider.apiKey || (provider.apiKeyPool?.length ?? 0) > 0)) {
-    return { type: "api-key" };
-  }
-  if (isPublicOAuthProvider(name)) return { type: "oauth" };
-  if (provider) return { type: "api-key" };
-  return { error: `unknown provider "${name}"` };
 }
 
 function candidateNames(config: OcxConfig): string {
@@ -287,6 +252,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "list") return await cmdList(rest, deps);
     if (sub === "current") return await cmdCurrent(rest, deps);
     if (sub === "use") return await cmdUse(rest, deps);
+    if (sub === "refresh") return await cmdRefresh(rest, deps);
+    if (sub === "auto-switch") return await cmdAutoSwitch(rest, deps);
+    if (sub === "remove") return await cmdRemove(rest, deps);
+    if (sub === "add-key") return await cmdAddKey(rest, deps);
     console.error(ACCOUNT_USAGE);
     return 1;
   } catch (err) {

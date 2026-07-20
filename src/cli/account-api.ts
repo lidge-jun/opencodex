@@ -5,7 +5,56 @@
  */
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
-import type { AccountDeps, AccountRow, AccountType } from "./account";
+import { isPublicOAuthProvider } from "../oauth/index";
+import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
+import type { OcxConfig } from "../types";
+
+export type AccountType = "codex" | "oauth" | "api-key";
+
+export interface AccountRow {
+  provider: string;
+  type: AccountType;
+  id: string;
+  label?: string;
+  email?: string;
+  plan?: string;
+  masked?: string;
+  active: boolean;
+  needsReauth?: boolean;
+  quota?: CodexQuotaDto | null;
+}
+
+export type ClassifyResult = { type: AccountType } | { error: string };
+
+export type AccountStdin = NodeJS.ReadableStream & { isTTY?: boolean };
+
+export interface AccountDeps {
+  /** Test injection: skip findLiveProxy and call the API at this base URL. */
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  loadConfigImpl?: () => OcxConfig;
+  stdinImpl?: AccountStdin;
+  stdinTimeoutMs?: number;
+}
+
+export function classifyAccount(config: OcxConfig, name: string): ClassifyResult {
+  const provider = config.providers?.[name];
+  if (providerCodexAccountMode(name, provider)) return { type: "codex" };
+  const entry = getProviderRegistryEntry(name);
+  if (entry?.authKind === "local") {
+    return { error: `provider "${name}" is a local provider and has no credentials` };
+  }
+  if (provider?.authMode === "forward") {
+    return { error: `provider "${name}" uses forward auth and has no switchable credentials` };
+  }
+  if (provider?.authMode === "key") return { type: "api-key" };
+  if (provider && !provider.authMode && (provider.apiKey || (provider.apiKeyPool?.length ?? 0) > 0)) {
+    return { type: "api-key" };
+  }
+  if (isPublicOAuthProvider(name)) return { type: "oauth" };
+  if (provider) return { type: "api-key" };
+  return { error: `unknown provider "${name}"` };
+}
 
 export interface ApiResult {
   /** 0 = network-level failure (proxy unreachable). */
@@ -16,7 +65,7 @@ export interface ApiResult {
 export async function apiJson(
   deps: AccountDeps,
   baseUrl: string,
-  method: "GET" | "PUT",
+  method: "GET" | "PUT" | "POST" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<ApiResult> {
@@ -63,17 +112,61 @@ export interface FamilyRows {
   networkDown?: boolean;
 }
 
+export interface CodexQuotaDto {
+  weeklyPercent?: number;
+  monthlyPercent?: number;
+  weeklyResetAt?: number;
+  monthlyResetAt?: number;
+}
+
+export interface ProviderQuotaWindowDto {
+  label: string;
+  percent: number;
+  resetAt?: number;
+}
+
+export interface ProviderQuotaDto extends CodexQuotaDto {
+  fiveHourPercent?: number;
+  fiveHourResetAt?: number;
+  customWindows?: ProviderQuotaWindowDto[];
+  updatedAt?: number;
+}
+
+export interface ProviderQuotaReportDto {
+  provider: string;
+  label?: string;
+  source?: string;
+  quota: ProviderQuotaDto;
+  updatedAt?: number;
+  reverseEngineered?: boolean;
+}
+
 interface CodexAccountDto {
   id: string;
   email?: string;
   plan?: string;
   isMain?: boolean;
   needsReauth?: boolean;
+  quota?: CodexQuotaDto | null;
 }
 
-async function fetchCodexRows(deps: AccountDeps, baseUrl: string): Promise<FamilyRows> {
+function projectQuota(quota: CodexQuotaDto | null | undefined): CodexQuotaDto | null {
+  if (!quota) return null;
+  const projected: CodexQuotaDto = {};
+  for (const key of ["weeklyPercent", "monthlyPercent", "weeklyResetAt", "monthlyResetAt"] as const) {
+    if (typeof quota[key] === "number" && Number.isFinite(quota[key])) projected[key] = quota[key];
+  }
+  return projected;
+}
+
+export async function fetchCodexRows(
+  deps: AccountDeps,
+  baseUrl: string,
+  forceRefresh = false,
+): Promise<FamilyRows> {
+  const accountsPath = `/api/codex-auth/accounts${forceRefresh ? "?refresh=1" : ""}`;
   const [accountsRes, activeRes] = await Promise.all([
-    apiJson(deps, baseUrl, "GET", "/api/codex-auth/accounts"),
+    apiJson(deps, baseUrl, "GET", accountsPath),
     apiJson(deps, baseUrl, "GET", "/api/codex-auth/active"),
   ]);
   if (accountsRes.status !== 0 && accountsRes.status !== 200) {
@@ -101,6 +194,7 @@ async function fetchCodexRows(deps: AccountDeps, baseUrl: string): Promise<Famil
     plan: a.plan,
     active: a.id === activeId,
     needsReauth: a.needsReauth,
+    ...(forceRefresh ? { quota: projectQuota(a.quota) } : {}),
   }));
   return { rows, activeId, autoSwitchThreshold, status: 200 };
 }
@@ -158,4 +252,15 @@ export function fetchRows(deps: AccountDeps, baseUrl: string, name: string, type
   if (type === "codex") return fetchCodexRows(deps, baseUrl);
   if (type === "oauth") return fetchOAuthRows(deps, baseUrl, name);
   return fetchKeyRows(deps, baseUrl, name);
+}
+
+export async function fetchProviderQuotaReport(
+  deps: AccountDeps,
+  baseUrl: string,
+  name: string,
+): Promise<{ status: number; report: ProviderQuotaReportDto | null; errorJson?: Record<string, unknown> }> {
+  const res = await apiJson(deps, baseUrl, "GET", "/api/provider-quotas?refresh=1");
+  if (res.status !== 200) return { status: res.status, report: null, errorJson: res.json };
+  const reports = Array.isArray(res.json.reports) ? res.json.reports as ProviderQuotaReportDto[] : [];
+  return { status: 200, report: reports.find(report => report?.provider === name) ?? null };
 }
