@@ -586,6 +586,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const oauth = await run(["refresh", "anthropic"]);
     const oauthJson = await run(["refresh", "anthropic", "--json"]);
     const keyPool = await run(["refresh", "openrouter"]);
+    const keyPoolJson = await run(["refresh", "openrouter", "--json"]);
 
     expect(oauth.code).toBe(0);
     expect(oauth.stdout).toContain("5h 31%");
@@ -602,9 +603,11 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
     expect(keyPool.code).toBe(0);
     expect(keyPool.stdout).toContain("no quota report available for openrouter");
+    expect(keyPoolJson.code).toBe(0);
+    expect(JSON.parse(keyPoolJson.stdout)).toEqual({ provider: "openrouter", report: null });
     expect(requests.filter(request =>
       request.path === "/api/provider-quotas" && request.search === "?refresh=1"
-    )).toHaveLength(3);
+    )).toHaveLength(4);
   });
 
   test("20: auto-switch on, off, threshold and status use the exact contracts", async () => {
