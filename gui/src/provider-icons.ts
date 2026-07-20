@@ -99,6 +99,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "google-vertex": "Google Vertex",
   "lm-studio": "LM Studio",
   huggingface: "Hugging Face",
+  "qwen-cloud": "Qwen Cloud",
   "vercel-ai-gateway": "Vercel AI Gateway",
   vllm: "vLLM",
   litellm: "LiteLLM",

@@ -4,19 +4,23 @@
  * onUpdateProvider prop; no direct fetch.
  */
 import { useEffect, useMemo, useState } from "react";
+import { baseUrlForChoice, matchChoiceId } from "../../base-url-choice";
 import { useT } from "../../i18n";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
+import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import type { WorkspaceItem, ProviderUpdatePatch } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 
 export default function ProviderSettings({
-  item, availableModels = [], onUpdateProvider, onDirtyChange,
+  item, availableModels = [], apiBase, onUpdateProvider, onDirtyChange,
 }: {
   item: WorkspaceItem;
   availableModels?: string[];
+  /** When set, load endpoint choices for catalog providers that expose baseUrlChoices. */
+  apiBase?: string;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -29,6 +33,8 @@ export default function ProviderSettings({
   const [note, setNote] = useState(item.note ?? "");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
+  const [endpointChoice, setEndpointChoice] = useState("custom");
 
   /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset on provider switch */
   useEffect(() => {
@@ -40,6 +46,27 @@ export default function ProviderSettings({
     setMsg(null);
   }, [item.name, item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!apiBase) {
+      setBaseUrlChoices(undefined);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${apiBase}/api/provider-presets`)
+      .then(r => r.json())
+      .then((d: { providers?: CatalogPreset[] }) => {
+        if (cancelled) return;
+        const preset = (d.providers ?? []).find(p => p.id === item.name);
+        const choices = preset?.baseUrlChoices;
+        setBaseUrlChoices(choices);
+        setEndpointChoice(matchChoiceId(choices, item.baseUrl));
+      })
+      .catch(() => {
+        if (!cancelled) setBaseUrlChoices(undefined);
+      });
+    return () => { cancelled = true; };
+  }, [apiBase, item.name, item.baseUrl]);
 
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
@@ -63,6 +90,8 @@ export default function ProviderSettings({
   }, [adapter]);
 
   const isPreset = isCatalogProviderId(item.name);
+  const hasEndpointPicker = !!(baseUrlChoices && baseUrlChoices.length > 0);
+  const baseUrlLocked = isPreset && !hasEndpointPicker;
 
   const save = async () => {
     if (!onUpdateProvider) { setMsg({ ok: false, text: t("pws.updatesUnavailable") }); return; }
@@ -78,6 +107,14 @@ export default function ProviderSettings({
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setNote(item.note ?? ""); setMsg(null);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
+  };
+
+  const endpointLabel = (id: string, fallback: string) => {
+    if (id === "token-plan") return t("modal.endpoint.tokenPlan");
+    if (id === "payg") return t("modal.endpoint.payAsYouGo");
+    if (id === "custom") return t("modal.endpoint.custom");
+    return fallback;
   };
 
   return (
@@ -94,10 +131,37 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
-      <label className="pwi-settings-field">
-        <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
-        <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={isPreset} disabled={isPreset} />
-      </label>
+      {hasEndpointPicker ? (
+        <>
+          <label className="pwi-settings-field">
+            <span className="pwi-settings-label">{t("modal.endpoint")}</span>
+            <select
+              className="input"
+              value={endpointChoice}
+              onChange={e => {
+                const id = e.target.value;
+                setEndpointChoice(id);
+                setBaseUrl(baseUrlForChoice(baseUrlChoices, id, baseUrl));
+              }}
+            >
+              {baseUrlChoices!.map(c => (
+                <option key={c.id} value={c.id}>{endpointLabel(c.id, c.label)}</option>
+              ))}
+            </select>
+          </label>
+          {endpointChoice === "custom" && (
+            <label className="pwi-settings-field">
+              <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
+              <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
+            </label>
+          )}
+        </>
+      ) : (
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
+          <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={baseUrlLocked} disabled={baseUrlLocked} />
+        </label>
+      )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
         {modelOptions.length > 0 ? (

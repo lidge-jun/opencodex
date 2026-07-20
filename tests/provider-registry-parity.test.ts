@@ -415,10 +415,10 @@ describe("provider registry parity", () => {
     expect(deriveProviderPresets().find(p => p.id === "venice")).not.toHaveProperty("freeTier");
   });
 
-  test("base URL override permission is registry-only and limited to local/self-hosted providers", () => {
+  test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

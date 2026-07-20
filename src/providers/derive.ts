@@ -58,6 +58,11 @@ export interface DerivedProviderPreset {
   keyOptional?: boolean;
   /** Free pricing (may still require a key). */
   freeTier?: boolean;
+  /**
+   * Endpoint picker rows (token plan / payg / custom). When present, the add-provider
+   * form shows a dropdown; `custom` reveals a free-text base URL field.
+   */
+  baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
   provider?: OcxProviderConfig;
 }
@@ -256,6 +261,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
+    ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
   };
 }
 
