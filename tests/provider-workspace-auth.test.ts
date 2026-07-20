@@ -149,9 +149,14 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("codexActiveNeedsReauth");
     expect(page).toContain("map.openai = true");
     expect(page).toContain("onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}");
+    expect(page).toContain("codexReauthGenerationRef");
     expect(pool).toContain("onActiveNeedsReauthChange");
+    expect(pool).toContain("if (showAdd)");
     expect(modal).toContain("reauth: true");
+    expect(modal).toContain("startedReauthRef");
+    expect(modal).toContain("&reauth=1");
     expect(pool).toContain("codexAuth.reauthenticate");
+    expect(pool).toContain("codexAuth.mainTokenExpired");
     expect(panel).toContain("onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}");
   });
 

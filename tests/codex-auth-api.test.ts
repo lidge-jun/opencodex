@@ -820,6 +820,23 @@ describe("codex-auth API", () => {
     expect(data).toEqual({ status: "done", accountId: "pool-login-recovery" });
   });
 
+  test("GET /api/codex-auth/login-status does not false-complete reauth from a stale credential", async () => {
+    saveCodexAccountCredential("pool-reauth-stale", {
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acc-pool-reauth-stale",
+    });
+
+    const req = new Request(
+      "http://localhost/api/codex-auth/login-status?flowId=missing&accountId=pool-reauth-stale&reauth=1",
+      { method: "GET" },
+    );
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
+    const data = await resp!.json() as { status: string; accountId?: string };
+    expect(data).toEqual({ status: "expired" });
+  });
+
   test("POST /api/codex-auth/login rejects invalid account id before OAuth starts", async () => {
     const req = new Request("http://localhost/api/codex-auth/login", {
       method: "POST",
@@ -964,6 +981,18 @@ describe("codex-auth API", () => {
   test("OAuth pool login excludes self from collision check when reauth", async () => {
     const source = await Bun.file("src/codex/auth-api.ts").text();
     expect(source).toContain("checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined)");
+  });
+
+  test("OAuth pool reauth binds ChatGPT identity to the existing pool slot", async () => {
+    const source = await Bun.file("src/codex/auth-api.ts").text();
+    expect(source).toContain("existingCred?.chatgptAccountId && existingCred.chatgptAccountId !== oauthAccountId");
+    expect(source).toContain("Signed-in ChatGPT account does not match this pool account");
+  });
+
+  test("login-status reauth polling refuses credential-exists shortcut", async () => {
+    const source = await Bun.file("src/codex/auth-api.ts").text();
+    expect(source).toContain('url.searchParams.get("reauth") === "1"');
+    expect(source).toContain("!st && accountId && !reauthStatus && getCodexAccountCredential(accountId)");
   });
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {

@@ -458,6 +458,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.needsReauth": "重新登录",
   "codexAuth.reauthenticate": "Re-authenticate",
   "codexAuth.tokenExpired": "令牌已过期 — 请重新认证此账号",
+  "codexAuth.mainTokenExpired": "令牌已过期 — 请通过 Codex 应用登录重新登录",
   "codexAuth.emailCollision": "此账号与您的主 Codex 登录相同。请使用其他账号。",
 
   "codexAuth.resetCreditsTitle": "重置额度",

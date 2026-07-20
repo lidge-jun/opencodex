@@ -15,20 +15,13 @@ export default function AddCodexAccountModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flowRef = useRef<string | null>(null);
-  useEffect(() => () => {
-    aliveRef.current = false;
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
-  }, []);
+  /** Ensures reauth auto-start runs once per account id, even if startOAuth identity changes. */
+  const startedReauthRef = useRef<string | null>(null);
+  const onAddedRef = useRef(onAdded);
+  const onCloseRef = useRef(onClose);
+  onAddedRef.current = onAdded;
+  onCloseRef.current = onClose;
 
-  const [step, setStep] = useState<"pick" | "oauth-waiting">(reauthAccountId ? "oauth-waiting" : "pick");
-  const [id, setId] = useState("");
-  const [error, setError] = useState("");
-  const [authUrl, setAuthUrl] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
   const stopPolling = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
@@ -47,10 +40,35 @@ export default function AddCodexAccountModal({
     }).catch(() => {});
   }, [apiBase, stopPolling]);
 
+  useEffect(() => () => {
+    aliveRef.current = false;
+    const flowId = flowRef.current;
+    flowRef.current = null;
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+    // Cancel in-flight OAuth so a remounted modal cannot race a stale chatgpt scratch slot.
+    if (flowId) {
+      void fetch(`${apiBase}/api/codex-auth/login/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flowId }),
+      }).catch(() => {});
+    }
+  }, [apiBase]);
+
+  const [step, setStep] = useState<"pick" | "oauth-waiting">(reauthAccountId ? "oauth-waiting" : "pick");
+  const [id, setId] = useState("");
+  const [error, setError] = useState("");
+  const [authUrl, setAuthUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   const closeModal = useCallback(() => {
     if (step === "oauth-waiting") void cancelLogin();
-    onClose();
-  }, [step, onClose, cancelLogin]);
+    onCloseRef.current();
+  }, [step, cancelLogin]);
 
   const startOAuth = useCallback(async (requestedId?: string) => {
     setError("");
@@ -76,8 +94,9 @@ export default function AddCodexAccountModal({
         setStep("oauth-waiting");
         stopPolling();
         const fid = data.flowId ?? "";
+        const reauthQuery = reauthAccountId ? "&reauth=1" : "";
         const statusUrl = fid
-          ? `${apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}`
+          ? `${apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${reauthQuery}`
           : `${apiBase}/api/codex-auth/login-status`;
         pollRef.current = setInterval(async () => {
           try {
@@ -85,8 +104,8 @@ export default function AddCodexAccountModal({
             if (st.status === "done") {
               stopPolling();
               flowRef.current = null;
-              onAdded();
-              onClose();
+              onAddedRef.current();
+              onCloseRef.current();
             } else if (st.status === "error" || st.status === "expired") {
               stopPolling();
               flowRef.current = null;
@@ -109,10 +128,16 @@ export default function AddCodexAccountModal({
       }
       if (data.error && !data.url) setError(data.error);
     } catch (e) { setError(String(e)); }
-  }, [apiBase, cancelLogin, onAdded, onClose, reauthAccountId, stopPolling, t]);
+  }, [apiBase, cancelLogin, reauthAccountId, stopPolling, t]);
 
   useEffect(() => {
-    if (reauthAccountId) void startOAuth();
+    if (!reauthAccountId) {
+      startedReauthRef.current = null;
+      return;
+    }
+    if (startedReauthRef.current === reauthAccountId) return;
+    startedReauthRef.current = reauthAccountId;
+    void startOAuth();
   }, [reauthAccountId, startOAuth]);
 
   const copyLoginLink = async () => {
@@ -123,8 +148,8 @@ export default function AddCodexAccountModal({
       } else {
         const input = document.createElement("textarea");
         input.value = authUrl;
-        input.style.position = "fixed";
         input.style.opacity = "0";
+        input.style.position = "fixed";
         document.body.appendChild(input);
         input.select();
         document.execCommand("copy");

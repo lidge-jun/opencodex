@@ -458,6 +458,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.needsReauth": "재로그인",
   "codexAuth.reauthenticate": "Re-authenticate",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
+  "codexAuth.mainTokenExpired": "토큰 만료 — Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.emailCollision": "이 계정은 메인 Codex 로그인과 동일합니다. 다른 계정을 사용하세요.",
 
   "codexAuth.resetCreditsTitle": "리셋 크레딧",

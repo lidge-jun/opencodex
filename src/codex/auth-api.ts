@@ -630,6 +630,21 @@ export async function handleCodexAuthAPI(
                   quota = parseUsageQuota(data);
                 }
               } catch { /* wham fetch is non-blocking */ }
+              // Reauth must refresh the same ChatGPT identity already bound to this pool slot.
+              // Otherwise a different login would silently overwrite credentials under a trusted id.
+              if (reauth) {
+                const existingCred = getCodexAccountCredential(accountId);
+                if (existingCred?.chatgptAccountId && existingCred.chatgptAccountId !== oauthAccountId) {
+                  codexAuthLoginState.set(flowId, {
+                    status: "error",
+                    error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
+                    doneAt: Date.now(),
+                  });
+                  completed = true;
+                  break;
+                }
+              }
+
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
               const collision = checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
               if (collision.collision) {
@@ -673,7 +688,18 @@ export async function handleCodexAuthAPI(
 
               const latestConfig = getRuntimeConfig(config);
               const accounts = latestConfig.codexAccounts ?? [];
-              if (!accounts.find(a => a.id === accountId)) {
+              const existingIdx = accounts.findIndex(a => a.id === accountId);
+              if (existingIdx >= 0) {
+                // Keep the pool id stable; refresh display metadata after a successful login/reauth.
+                accounts[existingIdx] = withCodexAccountLogLabel({
+                  ...accounts[existingIdx],
+                  email,
+                  plan,
+                  isMain: false,
+                }, accounts);
+                latestConfig.codexAccounts = accounts;
+                saveRuntimeConfig(config, latestConfig);
+              } else {
                 accounts.push(withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts));
                 latestConfig.codexAccounts = accounts;
                 saveRuntimeConfig(config, latestConfig);
@@ -722,9 +748,12 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/login-status" && req.method === "GET") {
     const flowId = url.searchParams.get("flowId");
     const accountId = url.searchParams.get("accountId")?.trim();
+    // Reauth always has a pre-existing credential; never treat "credential exists" as success
+    // when the flow map entry is gone (would false-complete on lost/expired flow state).
+    const reauthStatus = url.searchParams.get("reauth") === "1";
     if (flowId) {
       const st = codexAuthLoginState.get(flowId);
-      if (!st && accountId && getCodexAccountCredential(accountId)) {
+      if (!st && accountId && !reauthStatus && getCodexAccountCredential(accountId)) {
         return jsonResponse({ status: "done", accountId });
       }
       return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });

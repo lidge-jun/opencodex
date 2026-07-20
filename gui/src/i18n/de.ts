@@ -441,6 +441,7 @@ export const de = {
   "codexAuth.needsReauth": "Erneut anmelden",
   "codexAuth.reauthenticate": "Re-authenticate",
   "codexAuth.tokenExpired": "Token abgelaufen — dieses Konto erneut authentifizieren",
+  "codexAuth.mainTokenExpired": "Token abgelaufen — erneut über Codex-App-Login anmelden",
   "codexAuth.emailCollision": "Dieses Konto entspricht deinem Haupt-Codex-Login. Nutze ein anderes Konto.",
   "codexAuth.resetCreditsTitle": "Gutschriften zurücksetzen",
   "codexAuth.resetCreditsAvailable": "Du hast {count} Reset-Gutschrift(en) verfügbar.",

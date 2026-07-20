@@ -70,6 +70,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const aliveRef = useRef(true);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
+  const codexReauthGenerationRef = useRef(0);
 
   const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
 
@@ -118,6 +119,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, [apiBase]);
 
   const fetchCodexActiveReauth = useCallback(async () => {
+    const generation = ++codexReauthGenerationRef.current;
     try {
       const [accountsRes, activeRes] = await Promise.all([
         fetch(`${apiBase}/api/codex-auth/accounts`),
@@ -126,6 +128,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       if (!accountsRes.ok || !activeRes.ok) return;
       const accts = await accountsRes.json() as { accounts?: Array<{ id: string; isMain?: boolean; needsReauth?: boolean }> };
       const active = await activeRes.json() as { activeCodexAccountId?: string | null };
+      if (!aliveRef.current || codexReauthGenerationRef.current !== generation) return;
       const accounts = accts.accounts ?? [];
       const activeId = active.activeCodexAccountId ?? null;
       const activePoolAccount = activeId && activeId !== "__main__"
@@ -134,7 +137,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const needs = activePoolAccount
         ? Boolean(activePoolAccount.needsReauth)
         : Boolean(accounts.find(a => a.isMain)?.needsReauth);
-      if (aliveRef.current) setCodexActiveNeedsReauth(needs);
+      setCodexActiveNeedsReauth(needs);
     } catch { /* ignore */ }
   }, [apiBase]);
 

@@ -687,6 +687,7 @@ export const en = {
   "codexAuth.needsReauth": "Re-login",
   "codexAuth.reauthenticate": "Re-authenticate",
   "codexAuth.tokenExpired": "Token expired — re-authenticate this account",
+  "codexAuth.mainTokenExpired": "Token expired — sign in again via Codex App login",
   "codexAuth.emailCollision": "This account matches your main Codex login. Use a different account.",
 
   "codexAuth.resetCreditsTitle": "Reset Credits",

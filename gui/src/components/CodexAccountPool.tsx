@@ -72,6 +72,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const timeout = window.setTimeout(() => {
       void load();
     }, 0);
+    // Pause background refresh while an add/reauth modal is open so unstable
+    // parent re-renders cannot stack with a live OAuth flow.
+    if (showAdd) {
+      return () => window.clearTimeout(timeout);
+    }
     const iv = window.setInterval(() => {
       void load();
     }, 30_000);
@@ -79,28 +84,37 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       window.clearTimeout(timeout);
       window.clearInterval(iv);
     };
-  }, [load]);
+  }, [load, showAdd]);
 
   const activePoolAccount = activeId && activeId !== "__main__"
     ? accounts.find(a => a.id === activeId)
     : null;
+  const mainAccount = accounts.find(a => a.isMain);
   const activeNeedsReauth = activePoolAccount
     ? Boolean(activePoolAccount.needsReauth)
-    : Boolean(accounts.find(a => a.isMain)?.needsReauth);
+    : Boolean(mainAccount?.needsReauth);
 
   useEffect(() => {
     onActiveNeedsReauthChange?.(activeNeedsReauth);
   }, [activeNeedsReauth, onActiveNeedsReauthChange]);
 
-  const openReauth = (id: string) => {
+  const openReauth = useCallback((id: string) => {
     setReauthId(id);
     setShowAdd(true);
-  };
+  }, []);
 
-  const closeAddModal = () => {
+  const closeAddModal = useCallback(() => {
     setShowAdd(false);
     setReauthId(null);
-  };
+  }, []);
+
+  const handleAccountAdded = useCallback(() => {
+    void load();
+    setToast(t("codexAuth.accountAdded"));
+    setToastError(false);
+    setTimeout(() => setToast(""), 5000);
+    closeAddModal();
+  }, [closeAddModal, load, t]);
 
   const setActive = async (id: string | null) => {
     if (switchingId) return;
@@ -259,10 +273,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
       <div className={`card ${isMainActive ? "card-active" : ""}`} style={{ marginBottom: 12 }}>
         <div className="card-head">
-          <span className="dot dot-green" />
+          <span className={`dot ${main?.needsReauth ? "dot-amber" : "dot-green"}`} />
           <strong>{t("codexAuth.mainAccount")}</strong>
           <span className="card-badges">
             {main && <TicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => openResetPopup({ ...main, id: "__main__" } as CodexAccountEntry)} />}
+            {main?.needsReauth && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
             <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
               {isMainActive
                 ? t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")
@@ -277,7 +292,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
         </div>
         <div className="card-sub">{main?.email ?? "Codex App login"}{main?.plan ? ` · ${main.plan}` : ""}</div>
-        {main?.quota && <QuotaBars quota={main.quota} plan={main.plan} threshold={autoThreshold} t={t} />}
+        {main?.needsReauth
+          ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
+          : main?.quota && <QuotaBars quota={main.quota} plan={main.plan} threshold={autoThreshold} t={t} />}
       </div>
 
       <div className="section-sep">
@@ -441,7 +458,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           apiBase={apiBase}
           reauthAccountId={reauthId ?? undefined}
           onClose={closeAddModal}
-          onAdded={() => { load(); setToast(t("codexAuth.accountAdded")); setTimeout(() => setToast(""), 5000); closeAddModal(); }}
+          onAdded={handleAccountAdded}
         />
       )}
     </div>
