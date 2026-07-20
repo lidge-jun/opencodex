@@ -145,6 +145,7 @@ describe("GUI update execution decisions", () => {
 
   test("service restart waits on the captured port and clears OCX_BAKE_PORT after install", async () => {
     const waited: Array<{ port: number; hostname: string }> = [];
+    const bakeDuringInstall: string[] = [];
     const job: UpdateJobState = {
       id: "restart-svc",
       status: "restarting",
@@ -162,15 +163,20 @@ describe("GUI update execution decisions", () => {
     const prev = process.env.OCX_BAKE_PORT;
     delete process.env.OCX_BAKE_PORT;
     try {
-      await expect(restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
+      await restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
         serviceInstalledFn: () => true,
         waitForPort: async (port, hostname) => {
           waited.push({ port, hostname: hostname ?? "" });
           expect(process.env.OCX_BAKE_PORT).toBeUndefined();
           return true;
         },
-      })).rejects.toThrow(/service restart failed/);
+        runService: () => {
+          bakeDuringInstall.push(process.env.OCX_BAKE_PORT ?? "");
+          return { status: 0 };
+        },
+      });
       expect(waited).toEqual([{ port: 18765, hostname: "127.0.0.1" }]);
+      expect(bakeDuringInstall).toEqual(["18765"]);
       expect(process.env.OCX_BAKE_PORT).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.OCX_BAKE_PORT;

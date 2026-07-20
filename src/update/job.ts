@@ -291,6 +291,12 @@ export interface RestartIo {
   waitForPort?: typeof waitForPortAvailable;
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number) => void;
   serviceInstalledFn?: () => boolean;
+  /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
+  runService?: (
+    job: UpdateJobState,
+    bin: string,
+    args: string[],
+  ) => { status: number | null; signal?: NodeJS.Signals | null };
 }
 
 async function restartAfterUpdate(
@@ -325,7 +331,8 @@ async function restartAfterUpdate(
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(Math.trunc(port));
     try {
-      const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
+      const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
+      const result = run(job, cmd.bin, cmd.args);
       if (result.status !== 0) {
         throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
       }
