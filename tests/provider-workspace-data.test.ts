@@ -347,6 +347,19 @@ describe("usage: most-used and attention", () => {
     expect(items.some(i => i.name === "healthy")).toBe(false);
     expect(items.some(i => i.name === "silent")).toBe(false);
   });
+
+  test("buildAttentionItems: activeNeedsReauth uses reauth reason", () => {
+    const base = buildProviderWorkspace({
+      anthropic: prov({ authMode: "oauth" }),
+      missing: prov({ authMode: "key" }),
+    });
+    const sections = applyActiveAccountReauth(base, { anthropic: true });
+    const items = buildAttentionItems(sections, {});
+    expect(items).toEqual([
+      { name: "missing", reason: "Missing credentials" },
+      { name: "anthropic", reason: "Active account needs re-authentication" },
+    ]);
+  });
 });
 
 describe("usage: relative time", () => {

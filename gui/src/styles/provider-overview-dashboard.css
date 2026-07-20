@@ -76,6 +76,21 @@
   padding-bottom: 2px;
 }
 
+.pws-dashboard-attention .pws-dashboard-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--yellow, #eab308);
+  text-transform: none;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+}
+
+.pws-dashboard-row--attention {
+  border-color: color-mix(in srgb, var(--yellow, #eab308) 40%, var(--border));
+  background: color-mix(in srgb, var(--yellow, #eab308) 8%, var(--bg-secondary, var(--bg)));
+}
+
 /* Clickable provider rows */
 .pws-dashboard-rows {
   display: flex;

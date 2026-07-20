@@ -19,6 +19,9 @@ export function statusLabel(p: WorkspaceProvider, t: TFn): string {
   const s = binProviderStatus(p);
   if (s === "disabled") return t("prov.disabledBadge");
   if (s === "ready") return t("pws.status.ready");
+  if ("activeNeedsReauth" in p && (p as WorkspaceItem).activeNeedsReauth) {
+    return t("pws.status.needsAttention");
+  }
   return t("pws.status.needsSetup");
 }
 

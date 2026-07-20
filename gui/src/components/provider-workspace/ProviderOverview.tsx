@@ -28,9 +28,12 @@ export default function ProviderOverview({
   const { locale } = useI18n();
   const timeLabels = relativeTimeLabelsFromT(t);
   const status = binProviderStatus(item);
+  const needsAttention = Boolean(item.activeNeedsReauth);
   const statusText = status === "ready"
     ? t("pws.status.connected")
-    : status === "needs-setup" ? t("pws.status.needsSetup") : t("prov.disabledBadge");
+    : status === "needs-setup"
+      ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
+      : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   const quota = accountQuotaFromReport(quotaReport);
@@ -77,18 +80,31 @@ export default function ProviderOverview({
 
       <section className="pws-section" aria-label={t("pws.authSummary")}>
         <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
-        <div className="pws-auth-summary">
-          <span className="pws-auth-dot" />
-          <span>
-            {item.authMode === "forward"
-              ? t("pws.passthrough")
-              : item.authMode === "oauth"
-                ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
-                : item.hasApiKey
-                  ? t("pws.apiKeyConfigured")
-                  : authModeLabel(item, t)}
-          </span>
-        </div>
+        {needsAttention ? (
+          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            <span>
+              <strong>{t("pws.status.needsAttention")}</strong>
+              {" — "}
+              {item.authMode === "forward"
+                ? t("pws.attention.reauthForward")
+                : t("pws.attention.reauth")}
+            </span>
+          </div>
+        ) : (
+          <div className="pws-auth-summary">
+            <span className="pws-auth-dot" />
+            <span>
+              {item.authMode === "forward"
+                ? t("pws.passthrough")
+                : item.authMode === "oauth"
+                  ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
+                  : item.hasApiKey
+                    ? t("pws.apiKeyConfigured")
+                    : authModeLabel(item, t)}
+            </span>
+          </div>
+        )}
       </section>
       </div>
 

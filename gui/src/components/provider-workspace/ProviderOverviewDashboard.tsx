@@ -1,14 +1,16 @@
 /**
  * ProviderOverviewDashboard — aggregate overview when no provider is selected.
- * Shows summary cards, per-provider rate limits (QuotaBars stacked), and
+ * Shows summary cards, attention list, per-provider rate limits (QuotaBars), and
  * recently-used ranking. Phase 010 of workspace design parity.
  */
 import { useMemo } from "react";
 import { useT, useI18n } from "../../i18n";
-import { IconChevron } from "../../icons";
+import { IconAlert, IconChevron } from "../../icons";
 import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/catalog";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import {
+  attentionReasonKey,
+  buildAttentionItems,
   buildMostUsedProviders,
   formatRelativeTime,
   formatRequestCount,
@@ -40,6 +42,13 @@ export default function ProviderOverviewDashboard({
   );
   const knownNames = useMemo(() => new Set(allItems.map(p => p.name)), [allItems]);
 
+  const attention = useMemo(() => buildAttentionItems(sections, {}), [sections]);
+  const attentionCount = attention.length;
+  const reauthCount = useMemo(
+    () => sections.needsSetup.filter(p => p.activeNeedsReauth).length,
+    [sections],
+  );
+
   /* Rate-limit rows: only providers present in sections AND having quota data */
   const quotaProviders = useMemo(() => {
     const result: Array<{ item: WorkspaceItem; report: ProviderQuotaReportView }> = [];
@@ -61,6 +70,13 @@ export default function ProviderOverviewDashboard({
     return buildMostUsedProviders(filtered);
   }, [usageTotals, knownNames]);
 
+  const localizeAttentionReason = (reason: string) => {
+    const key = attentionReasonKey(reason);
+    if (key === "reauth") return t("pws.attention.reauth");
+    if (key === "missing") return t("pws.attention.missingCredentials");
+    return reason;
+  };
+
   return (
     <div className="pws-dashboard">
       <div className="pws-dashboard-header">
@@ -71,9 +87,39 @@ export default function ProviderOverviewDashboard({
       {/* Summary cards */}
       <div className="pws-dashboard-summary">
         <SummaryCard count={sections.ready.length} label={t("pws.status.ready")} tone="ok" />
-        <SummaryCard count={sections.needsSetup.length} label={t("pws.status.needsSetup")} tone="warn" />
+        <SummaryCard
+          count={sections.needsSetup.length}
+          label={reauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
+          tone="warn"
+        />
         <SummaryCard count={sections.disabled.length} label={t("prov.disabledBadge")} tone="muted" />
       </div>
+
+      {attentionCount > 0 && (
+        <section className="pws-dashboard-section pws-dashboard-attention" aria-label={t("pws.attentionTitle")}>
+          <h3 className="pws-dashboard-section-title">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            {t("pws.attentionTitle")}
+          </h3>
+          <div className="pws-dashboard-rows">
+            {attention.map(item => (
+              <button
+                key={`${item.name}:${item.reason}`}
+                type="button"
+                className="pws-dashboard-row pws-dashboard-row--attention"
+                onClick={() => onSelectProvider(item.name)}
+              >
+                <ProviderIcon name={item.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
+                <div className="pws-dashboard-row-info">
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                  <span className="pws-dashboard-row-meta muted">{localizeAttentionReason(item.reason)}</span>
+                </div>
+                <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Rate limits */}
       {quotaProviders.length > 0 && (

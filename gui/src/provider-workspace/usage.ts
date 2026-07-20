@@ -131,7 +131,8 @@ export interface AttentionItem {
 
 /**
  * Derives the list of providers that require user attention:
- * - needsSetup providers → "Missing credentials"
+ * - needsSetup with activeNeedsReauth → "Active account needs re-authentication"
+ * - other needsSetup providers → "Missing credentials" (or override)
  * - disabled providers that have an explicit override reason in `overrideReasons`
  *
  * Ready providers are never included.
@@ -142,13 +143,23 @@ export function buildAttentionItems(
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const p of sections.needsSetup) {
-    items.push({ name: p.name, reason: overrideReasons[p.name] ?? "Missing credentials" });
+    const reason = p.activeNeedsReauth
+      ? (overrideReasons[p.name] ?? "Active account needs re-authentication")
+      : (overrideReasons[p.name] ?? "Missing credentials");
+    items.push({ name: p.name, reason });
   }
   for (const p of sections.disabled) {
     const reason = overrideReasons[p.name];
     if (reason) items.push({ name: p.name, reason });
   }
   return items;
+}
+
+/** Stable reason token used by the workspace overview to localize attention copy. */
+export function attentionReasonKey(reason: string): "reauth" | "missing" | "custom" {
+  if (reason === "Active account needs re-authentication") return "reauth";
+  if (reason === "Missing credentials") return "missing";
+  return "custom";
 }
 
 /**
