@@ -29,7 +29,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "google-vertex", "azure-openai",
+  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
   "qianfan", "alibaba", "alibaba-token-plan", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",

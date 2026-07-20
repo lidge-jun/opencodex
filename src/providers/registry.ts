@@ -556,6 +556,28 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
+  {
+    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
+    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
+    // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
+    // selectable. Live-verified 2026-07-20: /v1/chat/completions accepts the `tools` field
+    // and routes to a function-calling-capable upstream.
+    id: "orcarouter", label: "OrcaRouter", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
+    authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
+    defaultModel: "openai/gpt-5.5",
+    models: [
+      "openai/gpt-5.5",
+      "anthropic/claude-opus-4.8",
+      "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-pro",
+      "orcarouter/auto",
+    ],
+    // gpt-5 family and Claude reasoning models reject `temperature` upstream (400).
+    noTemperatureModels: ["openai/gpt-5.5", "anthropic/claude-opus-4.8"],
+    // Text-only models → the vision sidecar describes images instead.
+    noVisionModels: ["deepseek/deepseek-v4-pro"],
+    note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
+  },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
   // 2026-07-10 Gemini API refresh: Tier-2 ai.google.dev evidence recorded in
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
