@@ -10,6 +10,8 @@ export interface CursorRunRequest {
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;
+  /** Wire-names of tools whose inputSchema was stubbed to stay under the byte budget. */
+  stubbedToolNames?: ReadonlySet<string>;
 }
 
 export interface CursorRequestMessage {

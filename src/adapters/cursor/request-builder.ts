@@ -15,22 +15,46 @@ import { toolChoiceAliases, isAllowedToolChoice } from "../../types";
 import type { OcxToolChoice } from "../../types";
 
 /**
- * Maximum number of tools (native + namespace-inner) that the Cursor Connect
- * transport can register per session before returning `resource_exhausted`.
- * Empirically determined: 230 works, 340 fails. 200 provides safe margin.
+ * Cursor Connect transport limits (probe-verified 2026-07-21):
+ *
+ * COUNT limit: ~332 tools per AgentRunRequest.mcp_tools.  Sending 333+
+ * McpToolDefinition entries triggers `resource_exhausted` regardless of
+ * payload size (verified with minimal stub schemas).
+ *
+ * BYTE limit: ~128 KB total protobuf payload for mcp_tools.  With full
+ * JSON schemas (~566 bytes/tool average), this caps us at ~230 tools.
+ *
+ * Hybrid strategy: send up to CURSOR_TOOL_COUNT_BUDGET tools, but stub
+ * the inputSchema for tools beyond the byte budget so the model sees all
+ * tool names/descriptions while staying under both limits.  Full schemas
+ * for stubbed tools are provided via a text catalog in the system prompt
+ * and via tool_search on demand.
+ *
  * See https://github.com/lidge-jun/opencodex/issues/190
  */
-const CURSOR_TOOL_BUDGET = 200;
+const CURSOR_TOOL_COUNT_BUDGET = 330;
+
+/**
+ * Approximate byte budget for the mcp_tools protobuf field.  Probe showed
+ * 128 KB is the server-side ceiling; we use 120 KB for margin.
+ */
+const CURSOR_TOOL_BYTE_BUDGET = 120_000;
+
+/**
+ * Approximate encoded size of a stub schema (`{"type":"object","properties":{}}`).
+ * Used to estimate how much byte-space stubbed tools consume.
+ */
+const STUB_SCHEMA_BYTES = 30;
 
 const CURSOR_DEFERRED_TOOLS_NOTE = [
-  "[opencodex] Not all tools could be advertised to Cursor due to a transport limit.",
-  "Additional MCP/app tools are available via `tool_search` — use it to discover",
-  "and load tools by keyword when the task requires them.",
+  "[opencodex] Some tools have abbreviated schemas due to a transport limit.",
+  "Their full argument schemas are listed in the tool catalog below.",
+  "Use `tool_search` to load any tool's full schema on demand.",
 ].join(" ");
 
 const CURSOR_DEFERRED_TOOLS_NOTE_NO_SEARCH = [
-  "[opencodex] Not all tools could be advertised to Cursor due to a transport limit.",
-  "Some MCP/app tools were omitted. Start a new session if you need access to them.",
+  "[opencodex] Some tools have abbreviated schemas due to a transport limit.",
+  "Their full argument schemas are listed in the tool catalog below.",
 ].join(" ");
 
 /**
@@ -74,8 +98,8 @@ function previouslyUsedToolNames(messages: readonly OcxMessage[]): Set<string> {
 function enforceCursorToolBudget(
   tools: readonly OcxTool[],
   reservedNames: ReadonlySet<string>,
-): { tools: OcxTool[]; trimmed: boolean } {
-  if (tools.length <= CURSOR_TOOL_BUDGET) return { tools: [...tools], trimmed: false };
+): { tools: OcxTool[]; trimmed: boolean; countTrimmed: boolean } {
+  if (tools.length <= CURSOR_TOOL_COUNT_BUDGET) return { tools: [...tools], trimmed: false, countTrimmed: false };
 
   const native: OcxTool[] = [];
   const reserved: OcxTool[] = [];
@@ -97,14 +121,15 @@ function enforceCursorToolBudget(
 
   // Cap native tools at budget if there are too many bare-function tools.
   let trimmed = false;
-  const cappedNative = native.length > CURSOR_TOOL_BUDGET
-    ? (() => { trimmed = true; return native.slice(0, CURSOR_TOOL_BUDGET); })()
+  let countTrimmed = false;
+  const cappedNative = native.length > CURSOR_TOOL_COUNT_BUDGET
+    ? (() => { trimmed = true; countTrimmed = true; return native.slice(0, CURSOR_TOOL_COUNT_BUDGET); })()
     : native;
 
   // Sort namespaces smallest-first to maximise the number of namespaces that fit.
   const sorted = [...namespaceGroups.entries()].sort((a, b) => a[1].length - b[1].length);
 
-  let remaining = CURSOR_TOOL_BUDGET - cappedNative.length - reserved.length;
+  let remaining = CURSOR_TOOL_COUNT_BUDGET - cappedNative.length - reserved.length;
   const kept: OcxTool[] = [...cappedNative, ...reserved];
 
   for (const [, group] of sorted) {
@@ -113,15 +138,84 @@ function enforceCursorToolBudget(
       remaining -= group.length;
     } else {
       trimmed = true;
+      countTrimmed = true;
       // Stop — no more namespaces fit.
       break;
     }
   }
 
   // If we broke early, all subsequent namespaces are also trimmed.
-  if (kept.length < tools.length) trimmed = true;
+  if (kept.length < tools.length) { trimmed = true; countTrimmed = true; }
 
-  return { tools: kept, trimmed };
+  return { tools: kept, trimmed, countTrimmed };
+}
+
+/**
+ * Estimate the encoded protobuf size of a tool's inputSchema.
+ * Uses JSON stringification length as a proxy (protobuf Value encoding
+ * is roughly 1.1-1.3x the JSON length for typical schemas).
+ */
+function estimateSchemaBytes(tool: OcxTool): number {
+  const schema = tool.parameters ?? {};
+  const jsonLen = JSON.stringify(schema).length;
+  // protobuf Value encoding overhead: ~1.2x JSON + field tags
+  return Math.ceil(jsonLen * 1.2) + 20;
+}
+
+/**
+ * Determine which tools should have their schemas stubbed to stay under
+ * the byte budget.  Native tools and the first N namespace tools keep
+ * full schemas; the rest get stubs.  Returns the set of wire-names that
+ * should be stubbed.
+ */
+function computeStubbedTools(tools: readonly OcxTool[]): Set<string> {
+  const stubbed = new Set<string>();
+  let cumulativeBytes = 0;
+
+  // Process tools in order: native first (they keep full schemas),
+  // then namespace tools in their existing order.
+  for (const tool of tools) {
+    const wireName = tool.namespace ? `${tool.namespace}__${tool.name}` : tool.name;
+    const schemaBytes = estimateSchemaBytes(tool);
+
+    if (cumulativeBytes + schemaBytes > CURSOR_TOOL_BYTE_BUDGET) {
+      // This tool's full schema would exceed the byte budget — stub it.
+      stubbed.add(wireName);
+      cumulativeBytes += STUB_SCHEMA_BYTES;
+    } else {
+      cumulativeBytes += schemaBytes;
+    }
+  }
+
+  return stubbed;
+}
+
+/**
+ * Build a compact text catalog of stubbed tools for injection into the
+ * system prompt.  The model reads this to understand argument structures
+ * for tools whose protobuf schemas were stubbed.
+ */
+function buildTextCatalog(tools: readonly OcxTool[], stubbedNames: ReadonlySet<string>): string | undefined {
+  const entries: string[] = [];
+  for (const tool of tools) {
+    const wireName = tool.namespace ? `${tool.namespace}__${tool.name}` : tool.name;
+    if (!stubbedNames.has(wireName)) continue;
+    const schema = tool.parameters ?? {};
+    const props = (schema as Record<string, unknown>).properties;
+    const required = (schema as Record<string, unknown>).required;
+    const propSummary = props && typeof props === "object"
+      ? Object.entries(props as Record<string, Record<string, unknown>>)
+          .map(([k, v]) => `${k}: ${v?.type ?? "any"}${(required as string[] | undefined)?.includes(k) ? "*" : ""}`)
+          .join(", ")
+      : "";
+    entries.push(`- ${wireName}: ${tool.description.slice(0, 120)} | args: {${propSummary}}`);
+  }
+  if (entries.length === 0) return undefined;
+  return [
+    "[opencodex] Tool schema catalog (abbreviated schemas — use these to construct arguments):",
+    ...entries,
+    "(*) = required parameter",
+  ].join("\n");
 }
 
 /**
@@ -200,13 +294,21 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
   const used = previouslyUsedToolNames(parsed.context.messages);
   const reservedNames = new Set([...required, ...used]);
 
-  const { tools: budgetedTools, trimmed } = enforceCursorToolBudget(rawTools, reservedNames);
+  const { tools: budgetedTools, trimmed, countTrimmed } = enforceCursorToolBudget(rawTools, reservedNames);
+
+  // Compute which tools need stubbed schemas to stay under the byte budget.
+  const stubbedToolNames = computeStubbedTools(budgetedTools);
+  const hasStubbedTools = stubbedToolNames.size > 0;
 
   // Only suggest tool_search if it actually survived the budget.
   const hasToolSearch = budgetedTools.some(t => t.name === "tool_search");
-  const deferredNote = trimmed
+  const needsNote = trimmed || hasStubbedTools;
+  const deferredNote = needsNote
     ? (hasToolSearch ? CURSOR_DEFERRED_TOOLS_NOTE : CURSOR_DEFERRED_TOOLS_NOTE_NO_SEARCH)
     : undefined;
+
+  // Build text catalog for stubbed tools.
+  const textCatalog = hasStubbedTools ? buildTextCatalog(budgetedTools, stubbedToolNames) : undefined;
 
   return {
     modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
@@ -218,12 +320,14 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
     system: [
       ...(parsed.context.systemPrompt ?? []),
       ...(deferredNote ? [deferredNote] : []),
+      ...(textCatalog ? [textCatalog] : []),
     ],
     messages: parsed.context.messages
       .map(requestMessage)
       .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0),
     rawMessages: parsed.context.messages,
     ...(budgetedTools.length ? { tools: budgetedTools } : {}),
+    ...(stubbedToolNames.size > 0 ? { stubbedToolNames } : {}),
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };

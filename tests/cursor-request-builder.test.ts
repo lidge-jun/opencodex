@@ -147,7 +147,7 @@ describe("Cursor request builder", () => {
  });
 
   test("enforces a Cursor tool budget — keeps native tools and trims namespaces when over limit", () => {
-    // Build a realistic catalog: 11 native tools + 4 namespaces totalling 340 inner tools.
+    // Build a catalog that exceeds the 330 count budget: 11 native + 4 namespaces = 351 tools.
     const nativeTools = Array.from({ length: 11 }, (_, i) => ({
       name: `native_${i}`,
       description: `Native tool ${i}`,
@@ -177,9 +177,9 @@ describe("Cursor request builder", () => {
       },
     });
 
-    // Budget is 200 total tools. Native (11) always kept.
-    // Remaining budget: 189. ns_small(5) + ns_medium(30) + ns_large(89) = 124 ≤ 189.
-    // ns_huge(216) would push to 340 > 189, so it's cut.
+    // Budget is 330 total tools. Native (11) always kept.
+    // Remaining budget: 319. ns_small(5) + ns_medium(30) + ns_large(89) + ns_huge(216) = 340 > 319.
+    // ns_small + ns_medium + ns_large = 124 ≤ 319. ns_huge(216) would push to 343 > 319, so it's cut.
     const kept = request.tools ?? [];
     const keptNamespaces = new Set(kept.filter(t => t.namespace).map(t => t.namespace));
     expect(keptNamespaces.has("ns_small")).toBe(true);
@@ -187,7 +187,7 @@ describe("Cursor request builder", () => {
     expect(keptNamespaces.has("ns_large")).toBe(true);
     expect(keptNamespaces.has("ns_huge")).toBe(false);
     expect(kept.length).toBe(11 + 5 + 30 + 89); // 135
-    expect(kept.length).toBeLessThanOrEqual(200);
+    expect(kept.length).toBeLessThanOrEqual(330);
   });
 
   test("does not trim when catalog is under the Cursor tool budget", () => {
@@ -230,7 +230,7 @@ describe("Cursor request builder", () => {
     });
     const systemText = (request.system ?? []).join("\n");
     expect(systemText).toContain("tool_search");
-    expect(systemText).toContain("Not all tools could be advertised");
+    expect(systemText).toContain("abbreviated schemas");
   });
 
   test("does not add deferred-tools note when nothing is trimmed", () => {
@@ -243,7 +243,7 @@ describe("Cursor request builder", () => {
       context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
     });
     const systemText = (request.system ?? []).join("\n");
-    expect(systemText).not.toContain("Not all tools could be advertised");
+    expect(systemText).not.toContain("abbreviated schemas");
   });
 
   // --- Review-finding tests (PR #192 round 2) ---
@@ -302,13 +302,13 @@ describe("Cursor request builder", () => {
       },
     });
     const systemText = (request.system ?? []).join("\n");
-    expect(systemText).toContain("Not all tools could be advertised");
+    expect(systemText).toContain("abbreviated schemas");
     expect(systemText).not.toContain("tool_search");
   });
 
   test("caps oversized bare-function catalogs at the budget", () => {
-    // 250 native (non-namespace) tools — exceeds budget without any namespaces
-    const tools = Array.from({ length: 250 }, (_, i) => ({
+    // 350 native (non-namespace) tools — exceeds 330 count budget
+    const tools = Array.from({ length: 350 }, (_, i) => ({
       name: `func_${i}`,
       description: `Function tool ${i}`,
       parameters: { type: "object" as const, properties: {} },
@@ -318,9 +318,9 @@ describe("Cursor request builder", () => {
       context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
     });
     const kept = request.tools ?? [];
-    expect(kept.length).toBeLessThanOrEqual(200);
+    expect(kept.length).toBeLessThanOrEqual(330);
     const systemText = (request.system ?? []).join("\n");
-    expect(systemText).toContain("Not all tools could be advertised");
+    expect(systemText).toContain("abbreviated schemas");
   });
 
   test("keeps previously-used tools from trimmed namespaces across turns", () => {
@@ -365,5 +365,89 @@ describe("Cursor request builder", () => {
     const kept = request.tools ?? [];
     const hasSearched = kept.some(t => t.name === "special_action" && t.namespace === "ns_huge");
     expect(hasSearched).toBe(true);
+  });
+
+  // --- Hybrid budget tests (probe-verified 2026-07-21) ---
+
+  test("stubs schemas for tools beyond byte budget while keeping all under count budget", () => {
+    // 300 tools with large schemas — should exceed byte budget but not count budget (330).
+    const largeSchema = {
+      type: "object" as const,
+      properties: Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => [`param_${i}`, { type: "string", description: `Parameter ${i} with a long description to inflate the schema size significantly` }]),
+      ),
+      required: Array.from({ length: 5 }, (_, i) => `param_${i}`),
+    };
+    const tools = Array.from({ length: 300 }, (_, i) => ({
+      name: `big_tool_${i}`,
+      namespace: "ns_big",
+      description: `Big tool ${i}`,
+      parameters: largeSchema,
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    // All 300 tools should survive (under 330 count budget).
+    expect(request.tools?.length).toBe(300);
+    // Some tools should have stubbed schemas (byte budget exceeded).
+    expect(request.stubbedToolNames).toBeDefined();
+    expect(request.stubbedToolNames!.size).toBeGreaterThan(0);
+    expect(request.stubbedToolNames!.size).toBeLessThan(300);
+  });
+
+  test("does not stub schemas when catalog fits within byte budget", () => {
+    const tools = Array.from({ length: 50 }, (_, i) => ({
+      name: `small_tool_${i}`,
+      description: `Small tool ${i}`,
+      parameters: { type: "object" as const, properties: { x: { type: "string" } } },
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    expect(request.tools?.length).toBe(50);
+    expect(request.stubbedToolNames).toBeUndefined();
+  });
+
+  test("injects text catalog for stubbed tools into system prompt", () => {
+    const largeSchema = {
+      type: "object" as const,
+      properties: Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => [`param_${i}`, { type: "string", description: `Parameter ${i} with a long description to inflate the schema size significantly` }]),
+      ),
+      required: Array.from({ length: 5 }, (_, i) => `param_${i}`),
+    };
+    const tools = Array.from({ length: 300 }, (_, i) => ({
+      name: `big_tool_${i}`,
+      namespace: "ns_big",
+      description: `Big tool ${i}`,
+      parameters: largeSchema,
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    const systemText = (request.system ?? []).join("\n");
+    expect(systemText).toContain("Tool schema catalog");
+    expect(systemText).toContain("big_tool_");
+    expect(systemText).toContain("param_0: string*");
+  });
+
+  test("keeps all tools when catalog is between old and new count budget", () => {
+    // 250 tools with tiny schemas — would have been trimmed at old 200 budget,
+    // but should all survive at 330 count budget with no stubbing needed.
+    const tools = Array.from({ length: 250 }, (_, i) => ({
+      name: `tool_${i}`,
+      namespace: "ns_a",
+      description: `Tool ${i}`,
+      parameters: { type: "object" as const, properties: {} },
+    }));
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+    });
+    expect(request.tools?.length).toBe(250);
+    expect(request.stubbedToolNames).toBeUndefined();
   });
 });

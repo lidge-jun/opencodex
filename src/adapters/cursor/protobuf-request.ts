@@ -379,7 +379,7 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
     // tool-count prompt, so a call to it would be rejected as an unknown Responses tool.
     ...(() => {
       const visibleTools = cursorToolsForActivePrompt(request.tools, activePromptText(request), request.toolChoice);
-      const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice);
+      const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice, request.stubbedToolNames);
       return mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }) } : {};
     })(),
   });

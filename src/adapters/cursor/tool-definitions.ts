@@ -286,19 +286,30 @@ export function encodeCursorInputSchema(schema: unknown): Uint8Array {
   return toBinary(ValueSchema, fromJson(ValueSchema, value));
 }
 
+/** Pre-encoded stub schema — reused for every stubbed tool to avoid re-encoding. */
+let _stubSchemaBytes: Uint8Array | undefined;
+export function stubCursorInputSchema(): Uint8Array {
+  if (!_stubSchemaBytes) {
+    _stubSchemaBytes = encodeCursorInputSchema({ type: "object", properties: {} });
+  }
+  return _stubSchemaBytes;
+}
+
 export function buildCursorToolDefinitions(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  stubbedToolNames?: ReadonlySet<string>,
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
   return tools.filter(tool => toolChoiceAllows(tool, toolChoice)).map(tool => {
     const wireName = cursorToolWireName(tool);
+    const useStub = stubbedToolNames?.has(wireName) ?? false;
     return create(McpToolDefinitionSchema, {
       name: wireName,
       toolName: wireName,
       providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
       description: tool.description,
-      inputSchema: encodeCursorInputSchema(cursorToolInputSchema(tool)),
+      inputSchema: useStub ? stubCursorInputSchema() : encodeCursorInputSchema(cursorToolInputSchema(tool)),
     });
   });
 }

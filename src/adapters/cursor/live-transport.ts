@@ -434,7 +434,7 @@ class LiveCursorTransport implements CursorTransport {
     const activeText = activePromptText(request);
     this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(request, this.clientToolFinalizeGraceMs);
     const cursorVisibleTools = cursorToolsForActivePrompt(request.tools, activeText, request.toolChoice);
-    const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, request.toolChoice);
+    const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, request.toolChoice, request.stubbedToolNames);
     this.execContext = {
       ...this.execContext,
       clientToolDefs,
