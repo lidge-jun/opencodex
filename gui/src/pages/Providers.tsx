@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
+import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import { oauthTosRisk } from "../oauth-tos-risk";
 import { Notice } from "../ui";
 import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, IconLink } from "../icons";
 import { useT } from "../i18n";
@@ -34,6 +36,9 @@ const OAUTH_LABELS: Record<string, string> = {
   xai: "xAI (Grok)",
   anthropic: "Anthropic (Claude)",
   kimi: "Kimi (Moonshot)",
+  "google-antigravity": "Google Antigravity",
+  "github-copilot": "GitHub Copilot",
+  cursor: "Cursor",
 };
 const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;
 
@@ -66,6 +71,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [workspaceView, setWorkspaceView] = useState(() => location.hash.replace(/^#\/?/, "") === "providers/workspace");
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
+  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
   const aliveRef = useRef(true);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
@@ -380,6 +386,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const requestLoginOAuth = (provider: string, addAccount = false) => {
+    if (oauthTosRisk(provider)) {
+      setOauthTosPending({ provider, addAccount });
+      return;
+    }
+    void loginOAuth(provider, addAccount);
+  };
+
   /** Paste redirect URL / auth code when the browser cannot hit the loopback callback. */
   const submitManualCode = async (provider: string) => {
     const input = manualCode.trim();
@@ -554,7 +568,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               busyProvider={busy}
               loginHint={loginInfo}
               authHandlers={{
-                onLogin: loginOAuth,
+                onLogin: requestLoginOAuth,
                 onLogout: logoutOAuth,
                 onSwitchAccount: switchAccount,
                 onRemoveAccount: removeAccount,
@@ -641,7 +655,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                   {st.loggedIn ? (
                     <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
                   ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => loginOAuth(p)} disabled={isBusy}>
+                    <button className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(p)} disabled={isBusy}>
                       {isBusy ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconLock />{t("prov.login")}</>}
                     </button>
                   )}
@@ -870,7 +884,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                           </button>
                         ))}
                         {accountSet ? (
-                          <button className="prov-account-row prov-account-add" onClick={() => loginOAuth(name, true)} disabled={busy === name}>
+                          <button className="prov-account-row prov-account-add" onClick={() => requestLoginOAuth(name, true)} disabled={busy === name}>
                             {busy === name ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconPlus style={{ width: 13, height: 13 }} />{t("prov.accountAdd")}</>}
                           </button>
                         ) : addingKeyFor === name ? (
@@ -910,6 +924,18 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           existingNames={Object.keys(config.providers)}
           onClose={() => setAdding(false)}
           onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+        />
+      )}
+      {oauthTosPending && (
+        <OAuthTosWarningModal
+          providerId={oauthTosPending.provider}
+          providerLabel={oauthLabel(oauthTosPending.provider)}
+          onCancel={() => setOauthTosPending(null)}
+          onContinue={() => {
+            const pending = oauthTosPending;
+            setOauthTosPending(null);
+            void loginOAuth(pending.provider, pending.addAccount);
+          }}
         />
       )}
     </>

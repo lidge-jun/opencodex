@@ -8,6 +8,8 @@ import {
   type ProviderPayload,
   type ProviderPayloadForm,
 } from "../provider-payload";
+import { oauthTosRisk } from "../oauth-tos-risk";
+import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
@@ -55,6 +57,7 @@ export default function AddProviderModal({
   const [presets, setPresets] = useState<Preset[]>(fallbackPresets);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [usageRank, setUsageRank] = useState<Record<string, number>>({});
+  const [oauthTosPending, setOauthTosPending] = useState<string | null>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -227,6 +230,14 @@ export default function AddProviderModal({
     }
   };
 
+  const requestLoginOAuth = (providerId: string) => {
+    if (oauthTosRisk(providerId)) {
+      setOauthTosPending(providerId);
+      return;
+    }
+    void loginOAuth(providerId);
+  };
+
   const submitManualCode = async (providerId: string) => {
     const input = manualCode.trim();
     if (!input || manualCodeBusy) return;
@@ -264,6 +275,7 @@ export default function AddProviderModal({
   const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
 
   return (
+    <>
     <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
       <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
@@ -286,7 +298,7 @@ export default function AddProviderModal({
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div className="muted text-control">{preset.note ?? t("modal.oauthDefaultNote")}</div>
               {oauthSupported.includes(preset.oauthProvider ?? "") ? (
-                <button className="btn btn-primary" onClick={() => loginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
+                <button className="btn btn-primary" onClick={() => requestLoginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
                   style={{ width: "100%", padding: "12px 16px" }}>
                   <IconLock />{oauthBusy ? t("modal.waitingBrowser") : t("modal.logInWith", { label: preset.label })}
                 </button>
@@ -430,6 +442,19 @@ export default function AddProviderModal({
         )}
       </div>
     </div>
+    {oauthTosPending && (
+      <OAuthTosWarningModal
+        providerId={oauthTosPending}
+        providerLabel={preset?.label ?? oauthTosPending}
+        onCancel={() => setOauthTosPending(null)}
+        onContinue={() => {
+          const id = oauthTosPending;
+          setOauthTosPending(null);
+          void loginOAuth(id);
+        }}
+      />
+    )}
+    </>
   );
 }
 
