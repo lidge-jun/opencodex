@@ -3,6 +3,9 @@
  * for the workspace Settings tab (WP091). Uses PATCH /api/providers via an
  * onUpdateProvider prop. May fetch `/api/provider-presets` once per provider
  * to discover `baseUrlChoices` (e.g. Qwen Cloud endpoint picker).
+ *
+ * Parent should remount on provider change (`key={item.name}`) so choice-loading
+ * state resets cleanly without sync setState-in-effect.
  */
 import { useEffect, useMemo, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
@@ -37,10 +40,10 @@ export default function ProviderSettings({
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
-  const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>("idle");
-  const [endpointChoice, setEndpointChoice] = useState("custom");
+  const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase ? "loading" : "idle");
+  const [endpointChoice, setEndpointChoice] = useState(() => "custom");
 
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset on provider switch */
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
@@ -48,26 +51,24 @@ export default function ProviderSettings({
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setNote(item.note ?? "");
     setMsg(null);
-  }, [item.name, item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note]);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Fetch choices by provider id only — do not refetch when baseUrl alone changes after save.
   useEffect(() => {
-    if (!apiBase) {
-      setBaseUrlChoices(undefined);
-      setChoicesStatus("idle");
-      return;
-    }
+    if (!apiBase) return;
     let cancelled = false;
-    setChoicesStatus("loading");
+    const providerId = item.name;
+    const savedBaseUrl = item.baseUrl;
     fetch(`${apiBase}/api/provider-presets`)
       .then(r => r.json())
       .then((d: { providers?: CatalogPreset[] }) => {
         if (cancelled) return;
-        const preset = (d.providers ?? []).find(p => p.id === item.name);
+        const preset = (d.providers ?? []).find(p => p.id === providerId);
         const choices = preset?.baseUrlChoices;
         setBaseUrlChoices(choices);
         setChoicesStatus("ready");
+        setEndpointChoice(matchChoiceId(choices, savedBaseUrl));
       })
       .catch(() => {
         if (cancelled) return;
@@ -75,12 +76,9 @@ export default function ProviderSettings({
         setChoicesStatus("error");
       });
     return () => { cancelled = true; };
+    // Remount via key={item.name}; capture savedBaseUrl once per mount/fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- item.baseUrl sync is handled by the form-reset effect
   }, [apiBase, item.name]);
-
-  useEffect(() => {
-    if (choicesStatus !== "ready") return;
-    setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
-  }, [choicesStatus, baseUrlChoices, item.baseUrl]);
 
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
