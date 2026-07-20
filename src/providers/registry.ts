@@ -572,10 +572,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "deepseek/deepseek-v4-pro",
       "orcarouter/auto",
     ],
-    // gpt-5 family and Claude reasoning models reject `temperature` upstream (400).
+    // gpt-5 family and Claude reasoning models reject `temperature` upstream (400). This is an
+    // exact-id list, so it covers the seeded ids only; live-discovered gpt-5.x reasoning variants
+    // would need their own entries (pending a live-catalog enumeration).
     noTemperatureModels: ["openai/gpt-5.5", "anthropic/claude-opus-4.8"],
     // Text-only models → the vision sidecar describes images instead.
     noVisionModels: ["deepseek/deepseek-v4-pro"],
+    // OrcaRouter's chat/completions accepts reasoning_effort low|medium|high for gpt-5.5, so cap the
+    // advertised ladder there — mapReasoningEffort clamps xhigh/max requests down to high. DeepSeek
+    // V4 mirrors the direct-DeepSeek wiring for the same upstream model (thinking-effort map +
+    // reasoning_content history replay) so namespaced selections behave identically.
+    modelReasoningEfforts: {
+      "openai/gpt-5.5": ["low", "medium", "high"],
+      "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+    },
+    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
+    preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
     note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
   },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
