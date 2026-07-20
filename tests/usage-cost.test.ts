@@ -100,6 +100,40 @@ describe("normalizeCostTokens", () => {
 });
 
 describe("resolveMatchedPrice", () => {
+  test("17. model-level fallback: kiro's claude opus follows the anthropic price", () => {
+    const price = resolveMatchedPrice("kiro", "claude-opus-4.6");
+    expect(price).not.toBeNull();
+    expect(price!.source).toBe("jawcode");
+    expect(price!.jawcodeProvider).toBe("anthropic");
+    expect(price!.status).toBe("verified-derived");
+    expect(price!.cost4).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
+  test("17b. model-level fallback: openai provider gets gpt prices from the openai bundle", () => {
+    const price = resolveMatchedPrice("openai", "gpt-5.5");
+    expect(price).not.toBeNull();
+    expect(price!.jawcodeProvider).toBe("openai");
+    expect(price!.cost4.input).toBe(5);
+    expect(price!.cost4.output).toBe(30);
+  });
+
+  test("17c. model-level fallback: cursor's claude-fable-5 follows the anthropic price", () => {
+    const price = resolveMatchedPrice("cursor", "claude-fable-5");
+    expect(price).not.toBeNull();
+    expect(price!.jawcodeProvider).toBe("anthropic");
+    expect(price!.cost4.input).toBe(10);
+  });
+
+  test("17d. model-level fallback: all-zero everywhere stays null (grok-composer)", () => {
+    expect(resolveMatchedPrice("xai", "grok-composer-2.5-fast")).toBeNull();
+  });
+
+  test("17e. exact provider bundle still beats the model-level fallback", () => {
+    const price = resolveMatchedPrice("anthropic", "claude-3-haiku-20240307");
+    expect(price?.status).toBe("verified");
+    expect(price?.cost4.input).toBe(0.25);
+  });
+
   test("6. unmatched exact key is null", () => {
     expect(resolveMatchedPrice("no-such-provider", "no-such-model")).toBeNull();
     expect(resolveMatchedPrice("openai", "definitely-not-a-model")).toBeNull();
@@ -140,8 +174,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 11 keys, no unverified", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(11);
+  test("16. shipped overlay membership: 35 keys, no unverified", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(35);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -156,6 +190,30 @@ describe("resolveMatchedPrice", () => {
       "google-antigravity/gemini-3.5-flash-mid",
       "google-antigravity/gemini-3.5-flash-high",
       "google-antigravity/gemini-3-flash-agent",
+      "google-antigravity/gemini-3.1-pro-preview",
+      "google-antigravity/claude-sonnet-4-6",
+      "google-antigravity/claude-opus-4-6-thinking",
+      "google-antigravity/gpt-oss-120b-medium",
+      "kimi/k3",
+      "kimi/k3[1m]",
+      "kimi/kimi-k2.7-code",
+      "kimi/kimi-k2.7-code-highspeed",
+      "kimi/kimi-k2.6",
+      "kimi/kimi-k2.5",
+      "kimi/kimi-for-coding",
+      "moonshot/kimi-k3",
+      "moonshot/kimi-k2.7-code",
+      "moonshot/kimi-k2.7-code-highspeed",
+      "moonshot/kimi-k2.6",
+      "moonshot/kimi-k2.5",
+      "kimi-code/k3",
+      "kimi-code/k3[1m]",
+      "kimi-code/kimi-k2.7-code",
+      "kimi-code/kimi-k2.7-code-highspeed",
+      "kimi-code/kimi-k2.6",
+      "kimi-code/kimi-k2.5",
+      "kimi-code/kimi-for-coding",
+      "cursor/auto",
     ]) {
       expect(keys.has(expected)).toBe(true);
     }

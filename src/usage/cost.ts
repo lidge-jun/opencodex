@@ -10,6 +10,7 @@
  * - combo sums per-attempt costs and fails closed when any attempt is unpriced.
  */
 import {
+  findJawcodeCostByModelId,
   getJawcodeModelMetadata,
   resolveJawcodeProvider,
 } from "../generated/jawcode-model-metadata";
@@ -129,9 +130,11 @@ export function calculateCost(tokens: CostTokens, cost4: Cost4): CostBreakdown {
 }
 
 /**
- * Fixed priority: jawcode exact nonzero -> overlay verified -> overlay
- * verified-derived -> null. All-zero jawcode rows are overlay candidates
- * (zero is "not billable here", not "free").
+ * Fixed priority: jawcode exact (provider bundle) nonzero -> overlay verified ->
+ * overlay verified-derived -> jawcode model-level vendor price (cross-provider
+ * fallback: a model follows its official vendor price — WP5 policy, e.g.
+ * kiro/claude-opus-4-6 uses the anthropic price) -> null. All-zero jawcode rows
+ * are overlay candidates (zero is "not billable here", not "free").
  */
 export function resolveMatchedPrice(
   provider: string,
@@ -153,7 +156,9 @@ export function resolveMatchedPrice(
     };
   }
   const overlay = findExpectedPriceOverlay(provider, modelId, overlays);
-  if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) return null;
+  if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) {
+    return resolveModelLevelPrice(provider, modelId);
+  }
   if (overlay.status === "unverified") return null;
   return {
     provider,
@@ -164,6 +169,23 @@ export function resolveMatchedPrice(
     sourceRef: overlay.source,
     verifiedAt: overlay.verifiedAt,
     status: overlay.status,
+  };
+}
+
+function resolveModelLevelPrice(provider: string, modelId: string): MatchedPrice | null {
+  // Exact first; then dot->dash variant for providers that spell vendor ids with
+  // dots where the catalog uses dashes (kiro "claude-opus-4.6" vs anthropic
+  // "claude-opus-4-6"). No fuzzy matching beyond this one normalization.
+  const found = findJawcodeCostByModelId(modelId)
+    ?? (modelId.includes(".") ? findJawcodeCostByModelId(modelId.replaceAll(".", "-")) : undefined);
+  if (!found) return null;
+  return {
+    provider,
+    modelId,
+    jawcodeProvider: found.provider,
+    cost4: found.cost,
+    source: "jawcode",
+    status: "verified-derived",
   };
 }
 

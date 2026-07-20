@@ -33,7 +33,18 @@ if (!existsSync(sourcePath)) {
 }
 
 const registry = JSON.parse(readFileSync(sourcePath, "utf-8")) as Record<string, Record<string, RawModel>>;
-const allowedProviders = Array.from(new Set(Object.values(PROVIDER_ALIASES))).sort();
+// Vendor bundles whose model-level list prices are used for cross-provider fallback
+// (policy: a model follows its official vendor price regardless of which provider
+// serves it — e.g. kiro/claude-opus-4-6 -> anthropic price). Priority order matters:
+// first nonzero exact modelId match wins, so canonical vendors come first.
+const COST_VENDOR_BUNDLES = [
+  "anthropic", "openai", "google", "moonshot", "minimax", "deepseek", "xai",
+  "zai", "mistral", "cerebras", "azure-openai", "amazon-bedrock", "xiaomi",
+];
+
+const allowedProviders = Array.from(
+  new Set([...Object.values(PROVIDER_ALIASES), ...COST_VENDOR_BUNDLES]),
+).sort();
 const lines: string[] = [];
 
 function compactRow(values: unknown[]): unknown[] {
@@ -100,6 +111,22 @@ lines.push("}");
 lines.push("");
 lines.push("export function listJawcodeModelMetadata(provider: string): JawcodeModelMetadata[] {");
 lines.push("  return (DATA[provider] ?? []).map(row => rowToMetadata(provider, row));");
+lines.push("}");
+lines.push("");
+lines.push("// Cross-provider model-level price fallback (260720 WP5): a model follows its");
+lines.push("// official vendor price regardless of the serving provider. Exact modelId match in");
+lines.push("// priority-ordered vendor bundles; first nonzero cost wins.");
+lines.push("const COST_VENDOR_PRIORITY = " + JSON.stringify(COST_VENDOR_BUNDLES) + ";");
+lines.push("export function findJawcodeCostByModelId(modelId: string): { provider: string; cost: { input: number; output: number; cacheRead: number; cacheWrite: number } } | undefined {");
+lines.push("  for (const provider of COST_VENDOR_PRIORITY) {");
+lines.push("    const row = DATA[provider]?.find(r => r[0] === modelId);");
+lines.push("    if (!row) continue;");
+lines.push("    const meta = rowToMetadata(provider, row);");
+lines.push("    if (meta.cost && (meta.cost.input !== 0 || meta.cost.output !== 0 || meta.cost.cacheRead !== 0 || meta.cost.cacheWrite !== 0)) {");
+lines.push("      return { provider, cost: meta.cost };");
+lines.push("    }");
+lines.push("  }");
+lines.push("  return undefined;");
 lines.push("}");
 lines.push("");
 lines.push("function rowToMetadata(provider: string, row: Row): JawcodeModelMetadata {");
