@@ -538,8 +538,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
        const isNative = rows.every(m => m.native);
        const q = (search[provider] ?? "").trim().toLowerCase();
        const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
+       // Display-only: enabled models float to the top of each provider group so they
+       // stay findable in long lists. The sort is stable, so the server order is kept
+       // inside each partition, and this does not affect the picker order above
+       // (visibility toggles still only filter).
+       const sorted = [...filtered].sort((a, b) => Number(disabled.has(a.namespaced)) - Number(disabled.has(b.namespaced)));
        const shown = limit[provider] ?? PAGE;
-       const visible = filtered.slice(0, shown);
+       const visible = sorted.slice(0, shown);
        const remaining = filtered.length - visible.length;
         const allOn = rows.every(m => !disabled.has(m.namespaced));
         const allOff = rows.every(m => disabled.has(m.namespaced));
