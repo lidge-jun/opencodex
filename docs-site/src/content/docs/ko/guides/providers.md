@@ -117,7 +117,7 @@ opencodex v2.7.1에는 빌트인 프리셋이 50개 들어 있습니다. 키 방
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
-| Qwen Portal | `https://portal.qwen.ai/v1` |
+| Qwen Cloud | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitHub Copilot · GitLab Duo | `https://api.githubcopilot.com` · `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |

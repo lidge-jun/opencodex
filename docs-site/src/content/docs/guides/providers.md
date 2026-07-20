@@ -120,7 +120,7 @@ validates the key, and stores it. Notable entries:
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
-| Qwen Portal | `https://portal.qwen.ai/v1` |
+| Qwen Cloud | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |

@@ -662,8 +662,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
-  // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
-  { id: "qwen-portal", label: "Qwen Portal", baseUrl: "https://portal.qwen.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://portal.qwen.ai" },
+  // Qwen Cloud OpenAI-compatible hosts (pay-as-you-go vs token plan differ):
+  //   pay-as-you-go: https://dashscope.aliyuncs.com/compatible-mode/v1  (preset default)
+  //   token plan:    https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+  // Preset id was formerly `qwen-portal` / portal.qwen.ai — that host is outdated.
+  { id: "qwen-cloud", label: "Qwen Cloud", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://docs.qwencloud.com", note: "Pay as you go · token plan uses token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.

@@ -32,7 +32,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "opencode-zen": "opencode.svg",
   openrouter: "openrouter-color.svg",
   qianfan: "qianfan-color.svg",
-  "qwen-portal": "qwen-portal-color.svg",
+  "qwen-cloud": "qwen-portal-color.svg",
   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
   vllm: "vllm-color.svg",
   xai: "grok-color.svg",
