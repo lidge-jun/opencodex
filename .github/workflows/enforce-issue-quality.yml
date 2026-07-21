@@ -206,9 +206,9 @@ jobs:
                   BOT_MARKER,
                   stateTag(doneState),
                   "",
-                  "### Automated check passed",
+                  "### Maintainer decision respected",
                   "",
-                  "The report now passes the automated issue-quality check. It remains closed because its state was changed by a maintainer after the automated closure.",
+                  "A maintainer has reopened this issue. The automated closure has been deactivated.",
                 ].join("\n"));
               }
               return;

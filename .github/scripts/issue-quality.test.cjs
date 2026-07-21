@@ -161,6 +161,18 @@ describe("validateIssue - feature", () => {
     assert.equal(result.valid, true);
   });
 
+  it("accepts a valid legacy feature request without blocker/example headings", () => {
+    const body = [
+      "### Problem to solve",
+      "No way to set a custom timeout per provider in the proxy config.",
+      "### Proposed solution",
+      "Add a per-provider timeout field in the config JSON.",
+    ].join("\n");
+    const result = validateIssue({ title: "[Feature]: per-provider timeout", body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got reasons: ${result.reasons.join(", ")}`);
+  });
+
   it("accepts a detailed CJK submission", () => {
     const body = [
       "### Area",
@@ -227,6 +239,18 @@ describe("validateIssue - bug", () => {
     const result = validateIssue({ title: "Segfault on ARM64 streaming", body, labels: ["bug"] });
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, true);
+  });
+
+  it("accepts a valid legacy bug report without version/OS headings", () => {
+    const body = [
+      "### Summary",
+      "The proxy crashes when streaming is enabled.",
+      "### Reproduction",
+      "Run ocx start and send a streaming request.",
+    ].join("\n");
+    const result = validateIssue({ title: "[Bug]: crash on streaming", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, true, `Expected valid but got reasons: ${result.reasons.join(", ")}`);
   });
 });
 

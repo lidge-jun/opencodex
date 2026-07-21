@@ -214,9 +214,11 @@ function validateIssue(issue) {
     const coreSections = [goal, blocker, behaviour, example];
     const emptyCore = [];
     if (isEmpty(goal)) emptyCore.push("goal / problem");
-    if (isEmpty(blocker)) emptyCore.push("current limitation");
+    // blocker and example are only required on the new form (heading exists).
+    // On the legacy form these sections are absent (null), which is acceptable.
+    if (blocker !== null && isEmpty(blocker)) emptyCore.push("current limitation");
     if (isEmpty(behaviour)) emptyCore.push("expected behaviour");
-    if (isEmpty(example)) emptyCore.push("example usage");
+    if (example !== null && isEmpty(example)) emptyCore.push("example usage");
 
     if (emptyCore.length > 0) {
       reasons.push(`Required sections are missing or empty: ${emptyCore.join(", ")}.`);
@@ -252,7 +254,9 @@ function validateIssue(issue) {
     }
 
     // Required environment fields removed after submission.
-    if (isEmpty(version) && isEmpty(os)) {
+    // Only fire when the headings exist in the body (new form). Legacy bug
+    // reports never had Version or OS fields, so null means absent, not removed.
+    if (version !== null && os !== null && isEmpty(version) && isEmpty(os)) {
       reasons.push("Version and Operating system are both missing.");
       guidance.push("Add your OpenCodex version and OS so we can reproduce the environment.");
     }
