@@ -570,10 +570,14 @@ async function handleComboResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions,
 ): Promise<Response> {
+  const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
+    ? (rawBody as { model: string }).model
+    : `combo/${comboId}`;
   Object.assign(logCtx, {
-    requestedModel: `combo/${comboId}`,
-    model: `combo/${comboId}`,
+    requestedModel,
+    model: requestedModel,
     provider: "combo",
+    comboId,
   });
   const combo = getCombo(config, comboId);
   if (!combo) {
@@ -675,9 +679,10 @@ async function handleComboResponses(
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target);
       Object.assign(logCtx, childLog, {
-        requestedModel: `combo/${comboId}`,
-        model: `combo/${comboId}`,
+        requestedModel,
+        model: requestedModel,
         provider: "combo",
+        comboId,
         attempts: logCtx.attempts,
         activeAttempt: attempt,
         activeAttemptStartedAt: started,
@@ -725,9 +730,10 @@ async function handleComboResponses(
     lastFailure = failure.response;
     if (comboFailureDecision(response.status, failure.classificationText) === "stop") {
       Object.assign(logCtx, childLog, {
-        requestedModel: `combo/${comboId}`,
-        model: `combo/${comboId}`,
+        requestedModel,
+        model: requestedModel,
         provider: "combo",
+        comboId,
         attempts: logCtx.attempts,
         activeAttempt: undefined,
         activeAttemptStartedAt: undefined,
@@ -757,7 +763,7 @@ export async function handleResponses(
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
-  const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
+  const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, options);
   }

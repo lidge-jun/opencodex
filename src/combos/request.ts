@@ -1,11 +1,11 @@
-import type { OcxComboDefaultEffort, OcxComboTarget } from "../types";
-import { parseComboModelId } from "./types";
+import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types";
+import { resolveComboId } from "./types";
 
-export function comboIdFromRawBody(body: unknown): string | null {
+export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const model = (body as { model?: unknown }).model;
   if (typeof model !== "string") return null;
-  return parseComboModelId(model);
+  return resolveComboId(config, model);
 }
 
 export function concreteComboRequestBody(

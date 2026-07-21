@@ -301,7 +301,7 @@ export function startServer(port?: number) {
         // (pure availability list — disabled natives are omitted entirely).
         const data = [
           ...visibleNativeSlugs(config).map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
-          ...goOrdered.map(m => ({ id: `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
+          ...goOrdered.map(m => ({ id: m.alias ?? `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, config);
       }

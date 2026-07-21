@@ -1555,12 +1555,15 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   if (url.pathname === "/api/combos" && req.method === "GET") {
-    const { comboModelId, getCombo, listComboIds } = await import("../combos");
-    return jsonResponse({ combos: listComboIds(config).map(id => ({
-      id,
-      model: comboModelId(id),
-      ...getCombo(config, id)!,
-    })) });
+    const { comboPublicModelId, getCombo, listComboIds } = await import("../combos");
+    return jsonResponse({ combos: listComboIds(config).map(id => {
+      const combo = getCombo(config, id)!;
+      return {
+        id,
+        model: comboPublicModelId(id, combo),
+        ...combo,
+      };
+    }) });
   }
 
   if (url.pathname === "/api/combos" && req.method === "PUT") {
@@ -1574,18 +1577,70 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return jsonResponse({ error: "id is required and must be a string" }, 400);
     }
     const id = body.id.trim();
-    const { comboConfigError, normalizeComboConfig, comboModelId, clearComboSelectionState, clearComboTargetCooldowns } = await import("../combos");
+    let renameFrom: string | undefined;
+    if (body.renameFrom !== undefined) {
+      if (typeof body.renameFrom !== "string" || !body.renameFrom.trim()) {
+        return jsonResponse({ error: "renameFrom must be a non-empty string" }, 400);
+      }
+      renameFrom = body.renameFrom.trim();
+      if (renameFrom === id) {
+        return jsonResponse({ error: "renameFrom must differ from id" }, 400);
+      }
+      if (!Object.hasOwn(config.combos ?? {}, renameFrom)) {
+        return jsonResponse({ error: `combo "${renameFrom}" does not exist` }, 400);
+      }
+      if (Object.hasOwn(config.combos ?? {}, id)) {
+        return jsonResponse({ error: `combo "${id}" already exists` }, 400);
+      }
+    }
+    const {
+      clearComboSelectionState,
+      clearComboTargetCooldowns,
+      comboConfigError,
+      comboModelId,
+      comboPublicModelId,
+      normalizeComboConfig,
+    } = await import("../combos");
     const error = comboConfigError(id, body.combo, config.providers, {
       requireEnabledTarget: true,
+      combos: config.combos,
+      excludeComboId: renameFrom ?? id,
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../types").OcxComboConfig);
-    config.combos = { ...(config.combos ?? {}), [id]: normalized };
+    const stored: import("../types").OcxComboConfig = normalized.alias === null
+      ? (({ alias: _alias, ...rest }) => rest)(normalized)
+      : normalized;
+    const sourceId = renameFrom ?? id;
+    const previous = config.combos?.[sourceId];
+    const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
+    const newPublicModel = comboPublicModelId(id, normalized);
+    const nextCombos = { ...(config.combos ?? {}) };
+    if (renameFrom) delete nextCombos[renameFrom];
+    nextCombos[id] = stored;
+    config.combos = nextCombos;
+    if (oldPublicModel && oldPublicModel !== newPublicModel) {
+      const migratedModels = new Set([oldPublicModel]);
+      if (renameFrom) migratedModels.add(comboModelId(renameFrom));
+      const migrateReferences = (models: string[]): string[] => [
+        ...new Set(models.map(model => migratedModels.has(model) ? newPublicModel : model)),
+      ];
+      if (config.disabledModels) {
+        config.disabledModels = migrateReferences(config.disabledModels);
+      }
+      if (config.subagentModels) {
+        config.subagentModels = migrateReferences(config.subagentModels);
+      }
+    }
     saveConfig(config);
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
+    if (renameFrom) {
+      clearComboSelectionState(renameFrom);
+      clearComboTargetCooldowns(renameFrom);
+    }
     await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, id, model: comboModelId(id), combo: normalized });
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: normalized });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {

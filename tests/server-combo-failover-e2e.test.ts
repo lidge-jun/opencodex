@@ -378,6 +378,43 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("bare alias runs full failover and preserves structural combo log identity", async () => {
+    const targetBodies: Array<{ provider: string; model?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "a", model: body.model });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "b", model: body.model });
+      return chatSuccess("alias backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, undefined, { alias: "deepseek-v4-flash" });
+    const response = await postLogged(config, { model: "deepseek-v4-flash" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("alias backup");
+    expect(targetBodies).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "deepseek-v4-flash",
+        requestedModel: "deepseek-v4-flash",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 503 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+    }
+  });
+
   test("streaming failover records request-relative parent TTFT and attempt-relative attempt TTFT", async () => {
     // A fails after a real delay so parent TTFT (request-relative) must exceed
     // the successful B attempt's own TTFT (attempt-relative) — WP4 separation.

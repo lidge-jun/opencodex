@@ -500,6 +500,12 @@ export interface OcxComboConfig {
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. Default medium. */
   defaultEffort?: OcxComboDefaultEffort;
+  /**
+   * Optional public model name replacing the default `combo/<id>` slug. Bare names
+   * without "/" are allowed (e.g. "deepseek-v4-flash") so the combo can answer to a
+   * mandated model id; exact-match requests route here before any provider resolution.
+   */
+  alias?: string;
 }
 
 /**

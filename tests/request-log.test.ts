@@ -151,6 +151,7 @@ describe("request log metadata", () => {
       model: "combo/free",
       provider: "combo",
       requestedModel: "combo/free",
+      comboId: "free",
       resolvedModel: "model-b",
       providerAdapter: "openai-chat",
       usage: { inputTokens: 10, outputTokens: 2 },

@@ -447,7 +447,12 @@ const configSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["combos"], message: "combos must be an object" });
     } else {
       for (const [id, raw] of Object.entries(combos as Record<string, unknown>)) {
-        for (const issue of comboConfigIssues(id, raw, config.providers)) {
+        // Pass the full map so cross-combo rules (alias uniqueness) apply at load time
+        // too, not just via the management API; each combo is excluded from its own check.
+        for (const issue of comboConfigIssues(id, raw, config.providers, {
+          combos: combos as Record<string, import("./types").OcxComboConfig>,
+          excludeComboId: id,
+        })) {
           ctx.addIssue({
             code: "custom",
             path: ["combos", id, ...issue.path],
