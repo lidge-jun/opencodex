@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, codexSupportedReasoningEfforts, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -1685,5 +1685,91 @@ describe("media-generation model filtering", () => {
     ]) {
       expect(isMediaGenerationModelId(id)).toBe(false);
     }
+  });
+});
+
+describe("Codex reasoning-effort capability clamp (regression: max/ultra on Codex 0.133.0)", () => {
+  // A bundled catalog exactly as `codex debug models --bundled` prints it. The native models'
+  // supported_reasoning_levels are the ground truth of the reasoning enum the installed binary accepts.
+  function bundledDeps(efforts: string[]) {
+    return {
+      commandCandidates: () => ["codex"],
+      execFileSync: () => JSON.stringify({
+        models: [{
+          slug: "gpt-5.5",
+          display_name: "GPT-5.5",
+          base_instructions: "x",
+          supported_reasoning_levels: efforts.map(effort => ({ effort, description: effort })),
+          default_reasoning_level: "medium",
+        }],
+      }),
+    };
+  }
+
+  const failingDeps = {
+    commandCandidates: () => ["codex"],
+    execFileSync: () => { throw new Error("codex not on PATH"); },
+  };
+
+  function routedEntry() {
+    return {
+      slug: "openrouter/some-model",
+      supported_reasoning_levels: [
+        { effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "max" }, { effort: "ultra" },
+      ],
+      default_reasoning_level: "max",
+    } as Record<string, unknown>;
+  }
+
+  test("codexSupportedReasoningEfforts reads the installed binary's ladder (0.133.0 stops at xhigh)", () => {
+    const supported = codexSupportedReasoningEfforts(bundledDeps(["low", "medium", "high", "xhigh"]));
+    expect(supported && [...supported].sort()).toEqual(["high", "low", "medium", "xhigh"]);
+    expect(supported?.has("max")).toBe(false);
+    expect(supported?.has("ultra")).toBe(false);
+  });
+
+  test("codexSupportedReasoningEfforts returns null when codex can't be probed", () => {
+    expect(codexSupportedReasoningEfforts(failingDeps)).toBeNull();
+  });
+
+  test("clampCatalogModelsToCodexSupport strips the max/ultra rungs a 0.133.0-era binary rejects", () => {
+    const models = [routedEntry()];
+    clampCatalogModelsToCodexSupport(models, bundledDeps(["low", "medium", "high", "xhigh"]));
+    expect((models[0]!.supported_reasoning_levels as Array<{ effort: string }>).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    // default was `max` (unsupported) -> repaired to the highest surviving rung.
+    expect(models[0]!.default_reasoning_level).toBe("xhigh");
+  });
+
+  test("clampCatalogModelsToCodexSupport preserves max/ultra when the installed binary advertises them", () => {
+    const models = [routedEntry()];
+    clampCatalogModelsToCodexSupport(models, bundledDeps(["low", "medium", "high", "xhigh", "max", "ultra"]));
+    expect((models[0]!.supported_reasoning_levels as Array<{ effort: string }>).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(models[0]!.default_reasoning_level).toBe("max");
+  });
+
+  test("clampCatalogModelsToCodexSupport is a no-op when codex isn't probeable (prior behavior preserved)", () => {
+    const models = [routedEntry()];
+    clampCatalogModelsToCodexSupport(models, failingDeps);
+    expect((models[0]!.supported_reasoning_levels as Array<{ effort: string }>).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(models[0]!.default_reasoning_level).toBe("max");
+  });
+
+  test("clampEntryToCodexSupportedEfforts never empties a ladder and repairs the default at/below the original", () => {
+    const supported = new Set(["low", "medium", "high", "xhigh"]);
+    const entry: Record<string, unknown> = {
+      supported_reasoning_levels: [{ effort: "high" }, { effort: "xhigh" }, { effort: "max" }],
+      default_reasoning_level: "max",
+    };
+    clampEntryToCodexSupportedEfforts(entry, supported);
+    expect((entry.supported_reasoning_levels as Array<{ effort: string }>).map(l => l.effort)).toEqual(["high", "xhigh"]);
+    expect(entry.default_reasoning_level).toBe("xhigh");
+
+    // Defensive: an entirely-unsupported ladder is left intact rather than emptied (would break the picker).
+    const edge: Record<string, unknown> = { supported_reasoning_levels: [{ effort: "max" }, { effort: "ultra" }] };
+    clampEntryToCodexSupportedEfforts(edge, supported);
+    expect((edge.supported_reasoning_levels as Array<{ effort: string }>).map(l => l.effort)).toEqual(["max", "ultra"]);
   });
 });

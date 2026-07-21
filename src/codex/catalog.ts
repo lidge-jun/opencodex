@@ -830,6 +830,85 @@ function ensureUltraReasoningLevel(entry: RawEntry): void {
 }
 
 /**
+ * Reasoning-effort labels the INSTALLED Codex binary can actually parse, read from its OWN
+ * bundled catalog (`codex debug models --bundled`). codex-rs deserializes every catalog reasoning
+ * level into a strict `ReasoningEffort` enum and rejects the ENTIRE catalog file on the first
+ * unknown variant — Codex 0.133.0 knows none..xhigh but NOT the `max`/`ultra` rungs opencodex mocks
+ * onto every model, so an unguarded catalog fails to load ("failed to create task ... unknown
+ * variant `max`"). The bundled catalog — not the on-disk file, which a prior sync may already have
+ * polluted with max/ultra — is the authoritative record of what the binary accepts. Returns null
+ * when the binary can't be probed (no codex on PATH), so callers keep the prior behavior instead of
+ * clamping against an empty set.
+ */
+export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): Set<string> | null {
+  const bundled = loadBundledCodexCatalog(deps);
+  if (!bundled) return null;
+  const efforts = new Set<string>();
+  for (const model of bundled.models ?? []) {
+    if (typeof model.slug !== "string" || model.slug.includes("/")) continue;
+    const levels = Array.isArray(model.supported_reasoning_levels) ? model.supported_reasoning_levels : [];
+    for (const level of levels) {
+      const effort = (level as { effort?: unknown })?.effort;
+      if (typeof effort === "string") efforts.add(effort);
+    }
+    if (typeof model.default_reasoning_level === "string") efforts.add(model.default_reasoning_level);
+  }
+  return efforts.size > 0 ? efforts : null;
+}
+
+/**
+ * Repaired `default_reasoning_level` once unsupported rungs are dropped: the highest surviving rung
+ * at or below the original, else the lowest surviving rung. Keeps a model's default effort pointing
+ * at a label the installed binary accepts (e.g. a native defaulted to `max` on Codex 0.133.0 falls
+ * back to `xhigh`).
+ */
+function clampedDefaultEffort(original: string, surviving: readonly string[]): string {
+  if (surviving.length === 0) return original;
+  const ranked = [...surviving]
+    .map(effort => ({ effort, rank: codexEffortRank(effort) }))
+    .sort((a, b) => a.rank - b.rank);
+  const originalRank = codexEffortRank(original);
+  const atOrBelow = ranked.filter(item => item.rank >= 0 && item.rank <= originalRank);
+  return (atOrBelow.at(-1) ?? ranked[0]!).effort;
+}
+
+/**
+ * Drop reasoning rungs the installed Codex can't parse from ONE catalog entry and repair its
+ * default. Never empties a non-empty ladder: the universal low/medium/high rungs are always in the
+ * supported set, so the filter always leaves at least those. No-op when `supported` is null.
+ */
+export function clampEntryToCodexSupportedEfforts(entry: RawEntry, supported: Set<string> | null): void {
+  if (!supported) return;
+  const levels = Array.isArray(entry.supported_reasoning_levels)
+    ? entry.supported_reasoning_levels as Array<{ effort?: string }>
+    : null;
+  if (levels && levels.length > 0) {
+    const kept = levels.filter(level => typeof level?.effort === "string" && supported.has(level.effort));
+    if (kept.length > 0 && kept.length < levels.length) entry.supported_reasoning_levels = kept;
+  }
+  const currentDefault = entry.default_reasoning_level;
+  if (typeof currentDefault === "string" && !supported.has(currentDefault)) {
+    const surviving = (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+      .flatMap(level => typeof (level as { effort?: string })?.effort === "string" ? [(level as { effort: string }).effort] : [])
+      .filter(effort => supported.has(effort));
+    entry.default_reasoning_level = clampedDefaultEffort(currentDefault, surviving);
+  }
+}
+
+/**
+ * Final catalog-emission guard: clamp EVERY entry's reasoning ladder to what the installed Codex
+ * binary can parse. Applied at each on-wire boundary (on-disk sync + the /v1/models catalog shape)
+ * so a mocked max/ultra rung can never reach a codex-rs build whose enum predates it and abort
+ * catalog loading. Returns the same list unchanged when the binary can't be probed.
+ */
+export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: BundledCatalogDeps = {}): RawEntry[] {
+  const supported = codexSupportedReasoningEfforts(deps);
+  if (!supported) return models;
+  for (const entry of models) clampEntryToCodexSupportedEfforts(entry, supported);
+  return models;
+}
+
+/**
  * Native entry from the pinned upstream snapshot, finished for emission. Keeps the entry's
  * OWN identity (display_name, description, priority, availability_nux — it is the model's own
  * NUX, not another model's) instead of the caller's generic passthrough blurb. The caller's
@@ -1865,7 +1944,7 @@ export function mergeCatalogEntriesForSync(
  *  - the catalog is backed up to ~/.opencodex/catalog-backup.json before writing.
  * No-op if the catalog file does not exist.
  */
-export async function syncCatalogModels(config: OcxConfig): Promise<{ added: number; path: string }> {
+export async function syncCatalogModels(config: OcxConfig, catalogDeps: BundledCatalogDeps = {}): Promise<{ added: number; path: string }> {
   const catalogPath = readCodexCatalogPath();
   const catalog = loadCatalogForSync(catalogPath);
   if (!catalog) return { added: 0, path: catalogPath };
@@ -1903,6 +1982,12 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
   catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider);
+
+  // Final guard before the file Codex parses: strip any reasoning rung the installed binary can't
+  // deserialize (e.g. the mocked max/ultra tiers on Codex 0.133.0, whose enum stops at xhigh). An
+  // unclamped rung makes codex-rs reject the WHOLE catalog ("unknown variant `max`"), which surfaces
+  // as "failed to create task". No-op when codex isn't probeable — behavior then matches the prior release.
+  catalog.models = clampCatalogModelsToCodexSupport(catalog.models ?? [], catalogDeps);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
   return { added: goEntries.length, path: catalogPath };
