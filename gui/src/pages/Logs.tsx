@@ -6,6 +6,13 @@ import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
 import { EmptyState } from "../ui";
+import Debug from "./Debug";
+
+type LogsTab = "logs" | "debug";
+
+function readTabFromHash(): LogsTab {
+  return window.location.hash.replace(/^#\/?/, "") === "logs/debug" ? "debug" : "logs";
+}
 
 interface UsageBreakdown {
   inputTokens: number;
@@ -245,8 +252,27 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [surfaceFilter, setSurfaceFilter] = useState<"all" | "claude" | "codex">("all");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
+  // The hash is the source of truth for the active tab (#logs vs #logs/debug),
+  // so refresh/bookmark/back-forward keep the tab choice.
+  const [tab, setTab] = useState<LogsTab>(readTabFromHash);
 
   useEffect(() => {
+    const onHash = () => setTab(readTabFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const selectTab = (next: LogsTab) => {
+    window.location.hash = next === "debug" ? "logs/debug" : "logs";
+  };
+
+  const onTabKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft" || e.key === "Home") { e.preventDefault(); selectTab("logs"); document.getElementById("logs-tab-logs")?.focus(); }
+    else if (e.key === "ArrowRight" || e.key === "End") { e.preventDefault(); selectTab("debug"); document.getElementById("logs-tab-debug")?.focus(); }
+  };
+
+  useEffect(() => {
+    if (tab !== "logs") return;
     const fetchLogs = async () => {
       try {
         const res = await fetch(`${apiBase}/api/logs`);
@@ -257,7 +283,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     if (!autoRefresh) return;
     const interval = setInterval(fetchLogs, 2000);
     return () => clearInterval(interval);
-  }, [apiBase, autoRefresh]);
+  }, [apiBase, autoRefresh, tab]);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
   const filteredLogs = logs.filter(log => (
@@ -282,12 +308,51 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   return (
     <>
       <div className="page-head">
-        <h2>{t("logs.title")}</h2>
-        <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
-          {t("logs.autoRefresh")}
-        </label>
+        <h2>{t("nav.logs")}</h2>
+        {tab === "logs" && (
+          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
+            {t("logs.autoRefresh")}
+          </label>
+        )}
       </div>
+      <div className="page-tabs" role="tablist" aria-label={t("nav.logs")}>
+        <button
+          type="button"
+          role="tab"
+          id="logs-tab-logs"
+          aria-selected={tab === "logs"}
+          aria-controls="logs-panel-logs"
+          tabIndex={tab === "logs" ? 0 : -1}
+          className={`page-tab${tab === "logs" ? " page-tab--active" : ""}`}
+          onClick={() => selectTab("logs")}
+          onKeyDown={onTabKeyDown}
+        >
+          {t("logs.tabLogs")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="logs-tab-debug"
+          aria-selected={tab === "debug"}
+          aria-controls="logs-panel-debug"
+          tabIndex={tab === "debug" ? 0 : -1}
+          className={`page-tab${tab === "debug" ? " page-tab--active" : ""}`}
+          onClick={() => selectTab("debug")}
+          onKeyDown={onTabKeyDown}
+        >
+          {t("logs.tabDebug")}
+        </button>
+      </div>
+
+      {tab === "debug" && (
+        <div role="tabpanel" id="logs-panel-debug" aria-labelledby="logs-tab-debug">
+          <Debug apiBase={apiBase} embedded />
+        </div>
+      )}
+
+      {tab === "logs" && (
+      <div role="tabpanel" id="logs-panel-logs" aria-labelledby="logs-tab-logs">
       <p className="page-sub">{t("logs.subtitle")}</p>
 
       <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center" }}>
@@ -417,6 +482,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       {detail && (
         <LogDetailDialog detail={detail} detailInfo={detailInfo} localeCode={locale} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
       )}
+      </div>
+      )}
     </>
   );
 }
@@ -511,6 +578,7 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-cost">
           <h4 id="log-detail-cost" className="log-detail-section-title">{t("logs.detail.section.cost")}</h4>
+          <p className="log-detail-notes-line muted">{t("usage.cost.disclaimer")}</p>
           {cost?.kind === "value" ? (
             <>
               <div className="log-detail-grid">

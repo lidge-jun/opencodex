@@ -29,12 +29,12 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "groq", "google", "google-vertex", "azure-openai",
+  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-cloud",
-  "qianfan", "alibaba", "alibaba-token-plan", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
-  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "gitlab-duo",
+  "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
 ];
 
 describe("provider registry parity", () => {
@@ -217,11 +217,18 @@ describe("provider registry parity", () => {
       ],
       modelInputModalities: {
         "qwen3.8-max-preview": ["text", "image"],
-        "qwen3.7-max": ["text"],
+        "qwen3.7-max": ["text", "image"],
       },
       modelReasoningEfforts: {
         "qwen3.8-max-preview": ["low", "medium", "high", "xhigh", "max"],
       },
+      modelContextWindows: {
+        "qwen3.8-max-preview": 983_616,
+        "qwen3.7-max": 1_000_000,
+        "deepseek-v4-pro": 1_000_000,
+      },
+      noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
+      preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .toContain("qwen3.8-max-preview");
@@ -385,7 +392,7 @@ describe("provider registry parity", () => {
     expect(nvidia?.freeTier).toBe(true);
     expect(nvidia?.authKind).toBe("key");
     expect(nvidia?.keyOptional).toBeUndefined();
-    expect(freeTierProviders).toEqual(["nvidia"]);
+    expect(freeTierProviders).toEqual(["nvidia", "cloudflare-workers-ai"]);
   });
 
   test("freeTier propagates through config seed, enrich backfill, and presets without overwriting user config", async () => {
@@ -418,7 +425,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -547,8 +554,21 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.5-flash-mid");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.5-flash-high");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash-medium");
+    for (const tier of ["low", "medium", "high"]) {
+      const modelId = `gemini-3.6-flash-${tier}`;
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain(modelId);
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.[modelId]).toBe(1_048_576);
+    }
+    for (const hidden of [
+      "gemini-3.5-flash-extra-low",
+      "gemini-3.5-flash-low",
+      "gemini-3.5-flash-mid",
+      "gemini-3.5-flash-high",
+      "gemini-3-flash-agent",
+    ]) {
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).not.toContain(hidden);
+    }
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-pro-high");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.1-pro-high"]).toBe(1_048_576);
   });

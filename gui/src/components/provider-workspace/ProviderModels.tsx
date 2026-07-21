@@ -1,9 +1,9 @@
 /**
- * ProviderModels — the models tab (WP090): searchable, virtualized model list
- * with default/selected flags and copy-to-clipboard ids.
+ * ProviderModels — the models tab: searchable wrapping model chips with
+ * default/selected flags and copy-to-clipboard ids. Uses a wrap layout so
+ * short lists fill horizontal space instead of a tall single-column stack.
  */
-import { useMemo, useRef, useState, type CSSProperties } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
@@ -14,67 +14,57 @@ export default function ProviderModels({
   selectedModels,
   modelsLoading = false,
   modelsLoadFailed = false,
+  needsReauth = false,
   onRetryModels,
+  onOpenAccounts,
 }: {
   item: WorkspaceItem;
   availableModels: string[];
   selectedModels: string[];
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
+  /** Active OAuth account needs a fresh login before live discovery works. */
+  needsReauth?: boolean;
   onRetryModels?: () => void;
+  onOpenAccounts?: () => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const copyResetRef = useRef<number | null>(null);
   const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
+  const configuredModels = useMemo(() => item.models ?? [], [item.models]);
   const models = useMemo(
-    () => filterModels(availableModels, item.defaultModel, query),
-    [availableModels, item.defaultModel, query],
+    () => filterModels(availableModels, item.defaultModel, query, configuredModels),
+    [availableModels, item.defaultModel, query, configuredModels],
   );
 
-  const virtualize = models.length > 40;
-  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
-  const virtualizer = useVirtualizer({
-    count: virtualize ? models.length : 0,
-    getScrollElement: () => listRef.current,
-    estimateSize: () => 36,
-    overscan: 12,
-  });
+  useEffect(() => () => {
+    if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
+  }, []);
 
   const copyModelId = async (modelId: string) => {
     try {
       await navigator.clipboard.writeText(modelId);
       setCopiedId(modelId);
-      window.setTimeout(() => setCopiedId(prev => (prev === modelId ? null : prev)), 1200);
+      if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => {
+        setCopiedId(prev => (prev === modelId ? null : prev));
+        copyResetRef.current = null;
+      }, 1200);
     } catch {
       /* ignore clipboard failures */
     }
   };
 
-  const renderRow = (modelId: string, style?: CSSProperties) => {
-    const isDefault = modelId === item.defaultModel;
-    const isSelected = selectedSet.has(modelId);
-    return (
-      <div key={modelId} className="pws-model-row" style={style}>
-        <span className="pws-model-id" title={modelId}>{modelId}</span>
-        <span className="pws-model-meta">
-          {isDefault ? <span className="pws-model-flag">{t("prov.defaultBadge")}</span> : null}
-          {isSelected ? <span className="pws-model-flag pws-model-flag--selected">{t("pws.selected")}</span> : null}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => { void copyModelId(modelId); }}
-            aria-label={t("pws.copyModelId")}
-          >
-            {copiedId === modelId ? t("pws.modelCopied") : t("pws.copyModelId")}
-          </button>
-        </span>
-      </div>
-    );
-  };
-
-  const emptyBase = availableModels.length === 0 && !item.defaultModel;
+  const emptyBase = availableModels.length === 0 && configuredModels.length === 0 && !item.defaultModel;
+  const showingConfiguredFallback = availableModels.length === 0 && configuredModels.length > 0;
+  // Aggregators (OpenRouter etc.) can return thousands of ids; capping the mounted
+  // chips keeps the tab responsive. Filtering narrows the list, so the cap only
+  // bites on the unfiltered full catalog.
+  const CHIP_RENDER_CAP = 300;
+  const capped = models.length > CHIP_RENDER_CAP;
+  const visibleModels = capped ? models.slice(0, CHIP_RENDER_CAP) : models;
 
   return (
     <div className="pws-section">
@@ -84,6 +74,19 @@ export default function ProviderModels({
           <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
         )}
       </div>
+      {needsReauth && (
+        <div className="pws-inline-error" role="status">
+          <span>{t("pws.modelsNeedsReauth")}</span>
+          {onOpenAccounts && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenAccounts}>
+              {t("pws.tab.accounts")}
+            </button>
+          )}
+        </div>
+      )}
+      {showingConfiguredFallback && !needsReauth && (
+        <p className="muted text-label" style={{ marginBottom: 10 }}>{t("pws.modelsConfiguredFallback")}</p>
+      )}
       {!emptyBase && (
         <input
           type="search"
@@ -109,24 +112,34 @@ export default function ProviderModels({
         <p className="muted">{t("pws.noModels")}</p>
       ) : models.length === 0 ? (
         <p className="muted" role="status">{t("pws.noModelMatch")}</p>
-      ) : virtualize ? (
-        <div ref={listRef} className="pws-model-list pws-model-list--virtual">
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-            {virtualizer.getVirtualItems().map(row => (
-              renderRow(models[row.index]!, {
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: row.size,
-                // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings
-                transform: `translateY(${String(row.start)}px)`,
-              })
-            ))}
-          </div>
-        </div>
       ) : (
-        <div className="pws-model-list">{models.map(id => renderRow(id))}</div>
+        <div className="pws-model-list" role="list">
+          {visibleModels.map(modelId => {
+            const isDefault = modelId === item.defaultModel;
+            const isSelected = selectedSet.has(modelId);
+            const copied = copiedId === modelId;
+            return (
+              <div key={modelId} className="pws-model-chip" role="listitem">
+                <button
+                  type="button"
+                  className="pws-model-chip-main"
+                  onClick={() => { void copyModelId(modelId); }}
+                  title={modelId}
+                  aria-label={copied ? t("pws.modelCopied") : t("pws.copyModelId")}
+                >
+                  <span className="pws-model-id">{modelId}</span>
+                </button>
+                {isDefault ? <span className="badge badge-muted pws-model-flag">{t("prov.defaultBadge")}</span> : null}
+                {isSelected ? <span className="badge badge-accent pws-model-flag">{t("pws.selected")}</span> : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {capped && (
+        <p className="muted text-label" style={{ marginTop: 10 }}>
+          {t("pws.modelsTruncated", { shown: String(CHIP_RENDER_CAP), total: String(models.length) })}
+        </p>
       )}
     </div>
   );

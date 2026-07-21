@@ -126,8 +126,8 @@ function EffortSelect({
   disabled,
 }: {
   id: string;
-  value: ComboEffort;
-  onChange: (next: ComboEffort) => void;
+  value: ComboEffort | null;
+  onChange: (next: ComboEffort | null) => void;
   disabled?: boolean;
 }) {
   const t = useT();
@@ -135,11 +135,12 @@ function EffortSelect({
     <select
       id={id}
       className="input"
-      value={value}
+      value={value ?? ""}
       disabled={disabled}
       aria-label={t("cws.field.defaultEffort")}
-      onChange={(e) => onChange(e.target.value as ComboEffort)}
+      onChange={(e) => onChange(e.target.value === "" ? null : e.target.value as ComboEffort)}
     >
+      <option value="">{t("cws.field.defaultEffortNone")}</option>
       {COMBO_EFFORTS.map((effort) => (
         <option key={effort} value={effort}>{effort}</option>
       ))}

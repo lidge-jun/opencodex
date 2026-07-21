@@ -5,46 +5,68 @@ import Models from "./pages/Models";
 import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
-import Debug from "./pages/Debug";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "providers" | "models" | "combos" | "subagents" | "logs" | "debug" | "usage" | "storage" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "providers" | "models" | "combos" | "subagents" | "logs" | "usage" | "storage" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "combos", "subagents", "logs", "debug", "usage", "storage", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "combos", "subagents", "logs", "usage", "storage", "codex-auth", "api", "claude"]);
 
 function readPageFromHash(): Page {
   const raw = location.hash.replace(/^#\/?/, "");
   // Sub-views use a "/" suffix (e.g. #providers/workspace); the first segment is the page id.
   const pageId = raw.split("/")[0] as Page;
+  // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
+  if (pageId === ("debug" as Page)) return "logs";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
 }
 
 function hashBelongsToPage(rawHash: string, page: Page): boolean {
-  return rawHash === page || (page === "providers" && rawHash === "providers/workspace");
+  return rawHash === page
+    || (page === "providers" && rawHash === "providers/workspace")
+    || (page === "logs" && rawHash === "logs/debug");
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
+const PROVIDERS_VIEW_KEY = "ocx-providers-view";
+
+function readProvidersViewPreference(): "classic" | "workspace" {
+  try {
+    return localStorage.getItem(PROVIDERS_VIEW_KEY) === "workspace" ? "workspace" : "classic";
+  } catch {
+    return "classic";
+  }
+}
+
+function writeProvidersViewPreference(view: "classic" | "workspace"): void {
+  try {
+    localStorage.setItem(PROVIDERS_VIEW_KEY, view);
+  } catch {
+    /* ignore quota / private-mode failures */
+  }
+}
+
+function providersHashForPage(): string {
+  return readProvidersViewPreference() === "workspace" ? "providers/workspace" : "providers";
+}
 
 const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
-  { id: "combos", tkey: "nav.combos", Icon: IconShuffle },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
-  { id: "debug", tkey: "nav.debug", Icon: IconTerminal },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
@@ -85,9 +107,27 @@ export default function App() {
       const nextPage = readPageFromHash();
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       setNavOpen(false);
-      if (!hashBelongsToPage(rawHash, nextPage)) {
-        window.location.hash = nextPage;
+      // Legacy #debug deep links → the Debug tab on Logs.
+      if (rawHash === "debug" || rawHash.startsWith("debug/")) {
+        window.location.hash = "logs/debug";
         return;
+      }
+      if (!hashBelongsToPage(rawHash, nextPage)) {
+        window.location.hash = nextPage === "providers" ? providersHashForPage() : nextPage;
+        return;
+      }
+      // Preference is source of truth for Classic/Workspace. Bare #providers must not
+      // wipe a saved workspace choice (that regressed when leaving Providers and returning).
+      if (nextPage === "providers") {
+        const preferred = readProvidersViewPreference();
+        if (rawHash === "providers/workspace") {
+          writeProvidersViewPreference("workspace");
+        } else if (rawHash === "providers" && preferred === "workspace") {
+          window.location.hash = "providers/workspace";
+          return;
+        } else if (rawHash === "providers") {
+          writeProvidersViewPreference("classic");
+        }
       }
       setPageState(nextPage);
     };
@@ -97,6 +137,23 @@ export default function App() {
 
   useEffect(() => {
     const rawHash = window.location.hash.replace(/^#\/?/, "");
+    // Legacy #debug deep links must resolve before generic normalization
+    // (otherwise the hash collapses to bare #logs and the tab choice is lost).
+    if (rawHash === "debug" || rawHash.startsWith("debug/")) {
+      window.location.hash = "logs/debug";
+      return;
+    }
+    if (page === "providers") {
+      // Honor an explicit workspace deep link on first load before normalizing
+      // to the saved preference (bookmarks/shared links must not open Classic).
+      if (rawHash === "providers/workspace") {
+        writeProvidersViewPreference("workspace");
+        return;
+      }
+      const wanted = providersHashForPage();
+      if (rawHash !== wanted) window.location.hash = wanted;
+      return;
+    }
     if (!hashBelongsToPage(rawHash, page)) {
       window.location.hash = page;
     }
@@ -226,7 +283,12 @@ export default function App() {
         <nav>
           {NAV.map(({ id, tkey, Icon }) => (
             <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
-              onClick={() => { setPageState(id); setNavOpen(false); }}
+              onClick={() => {
+                // Always sync the hash on nav click so Providers restores Classic/Workspace preference.
+                window.location.hash = id === "providers" ? providersHashForPage() : id;
+                setPageState(id);
+                setNavOpen(false);
+              }}
               aria-current={page === id ? "page" : undefined}>
               <Icon /> {t(tkey)}
             </button>
@@ -273,7 +335,6 @@ export default function App() {
           {page === "combos" && <Combos apiBase={API_BASE} />}
           {page === "subagents" && <Subagents apiBase={API_BASE} />}
           {page === "logs" && <Logs apiBase={API_BASE} />}
-          {page === "debug" && <Debug apiBase={API_BASE} />}
           {page === "usage" && <Usage apiBase={API_BASE} />}
           {page === "storage" && <Storage apiBase={API_BASE} />}
           {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}

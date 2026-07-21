@@ -97,6 +97,9 @@ export function readClaudeCredentialsFile(): string | null {
 
 /** Keychain first on macOS, then the cross-platform credentials file. */
 function readClaudeSecureStorage(): string | null {
+  // An explicit config-dir override identifies a separate Claude installation/profile.
+  // Do not let the default macOS Keychain entry shadow that requested credential file.
+  if (process.env.CLAUDE_CONFIG_DIR?.trim()) return readClaudeCredentialsFile() ?? readClaudeKeychain();
   return readClaudeKeychain() ?? readClaudeCredentialsFile();
 }
 

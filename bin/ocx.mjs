@@ -124,6 +124,37 @@ function runNpmSelfUpdate() {
     return [launcher, "service", "install"];
   }
 
+  // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
+  // Do not treat a live runtime port of 10100 as "missing" — track whether the read succeeded.
+  let bakePort = 10100;
+  let sawRuntimePort = false;
+  try {
+    const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
+    if (Number.isFinite(rt?.port) && rt.port > 0 && rt.port <= 65535) {
+      // Only trust runtime when its pid still looks alive (stale crash leftovers fall back to config).
+      const rtPid = Number(rt?.pid);
+      let runtimeLive = false;
+      if (Number.isSafeInteger(rtPid) && rtPid > 0) {
+        try {
+          process.kill(rtPid, 0);
+          runtimeLive = true;
+        } catch (e) {
+          if (e && typeof e === "object" && "code" in e && e.code === "EPERM") runtimeLive = true;
+        }
+      }
+      if (runtimeLive) {
+        bakePort = Math.trunc(rt.port);
+        sawRuntimePort = true;
+      }
+    }
+  } catch { /* fall through to config */ }
+  if (!sawRuntimePort) {
+    try {
+      const cfg = JSON.parse(readFileSync(join(configDir(), "config.json"), "utf8"));
+      if (Number.isFinite(cfg?.port) && cfg.port > 0 && cfg.port <= 65535) bakePort = Math.trunc(cfg.port);
+    } catch { /* keep default */ }
+  }
+
   // Never replace package files under a live proxy — stop it first (full `ocx stop`
   // semantics: graceful drain, service stop, native Codex restore). Gate on the service
   // and the runtime-port record too: a service-managed or orphaned proxy can be live
@@ -163,9 +194,16 @@ function runNpmSelfUpdate() {
     // launcher so the new files write the baked paths and the service restarts.
     if (serviceWasInstalled) {
       console.log("Reinstalling the background service with the updated files...");
-      const svcArgs = serviceReinstallArgs();
-      const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
-      if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+      const prevBake = process.env.OCX_BAKE_PORT;
+      process.env.OCX_BAKE_PORT = String(bakePort);
+      try {
+        const svcArgs = serviceReinstallArgs();
+        const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
+        if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+      } finally {
+        if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+        else process.env.OCX_BAKE_PORT = prevBake;
+      }
     } else {
       console.log("Restart the proxy:  ocx start");
     }

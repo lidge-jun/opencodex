@@ -16,6 +16,9 @@ export default function AddCodexAccountModal({
   const [error, setError] = useState("");
   const [authUrl, setAuthUrl] = useState("");
   const [copied, setCopied] = useState(false);
+  const [manualCode, setManualCode] = useState("");
+  const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [flowId, setFlowId] = useState<string | null>(null);
 
   const aliveRef = useRef(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -41,9 +44,16 @@ export default function AddCodexAccountModal({
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
   }, []);
 
+  const clearManualCode = useCallback(() => {
+    setManualCode("");
+    setManualCodeBusy(false);
+  }, []);
+
   const cancelLogin = useCallback(async () => {
+    clearManualCode();
     const flowId = flowRef.current;
     flowRef.current = null;
+    setFlowId(null);
     setAuthUrl("");
     stopPolling();
     loginAbortRef.current?.abort();
@@ -54,14 +64,16 @@ export default function AddCodexAccountModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ flowId }),
     }).catch(() => {});
-  }, [apiBase, stopPolling]);
+  }, [apiBase, clearManualCode, stopPolling]);
 
   useEffect(() => () => {
+    clearManualCode();
     aliveRef.current = false;
     loginAbortRef.current?.abort();
     loginAbortRef.current = null;
     const flowId = flowRef.current;
     flowRef.current = null;
+    setFlowId(null);
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     // Cancel in-flight OAuth so a remounted modal cannot race a stale chatgpt scratch slot.
@@ -72,7 +84,7 @@ export default function AddCodexAccountModal({
         body: JSON.stringify({ flowId }),
       }).catch(() => {});
     }
-  }, [apiBase]);
+  }, [apiBase, clearManualCode]);
 
   const closeModal = useCallback(() => {
     if (step === "oauth-waiting") void cancelLogin();
@@ -80,6 +92,9 @@ export default function AddCodexAccountModal({
   }, [step, cancelLogin]);
 
   const startOAuth = useCallback(async (requestedId?: string) => {
+    clearManualCode();
+    flowRef.current = null;
+    setFlowId(null);
     const controller = new AbortController();
     loginAbortRef.current?.abort();
     loginAbortRef.current = controller;
@@ -104,6 +119,7 @@ export default function AddCodexAccountModal({
       }
       if (data.url) {
         flowRef.current = data.flowId ?? null;
+        setFlowId(data.flowId ?? null);
         setAuthUrl(data.url);
         setStep("oauth-waiting");
         stopPolling();
@@ -117,13 +133,17 @@ export default function AddCodexAccountModal({
             const st = await fetch(statusUrl).then(r => r.json()) as { status: string; error?: string };
             if (st.status === "done") {
               stopPolling();
+              clearManualCode();
               flowRef.current = null;
+              setFlowId(null);
               if (!aliveRef.current) return;
               onAddedRef.current();
               onCloseRef.current();
             } else if (st.status === "error" || st.status === "expired") {
               stopPolling();
+              clearManualCode();
               flowRef.current = null;
+              setFlowId(null);
               if (aliveRef.current) {
                 if (!reauthAccountId) setStep("pick");
                 setError(st.error ?? "Login failed");
@@ -133,6 +153,7 @@ export default function AddCodexAccountModal({
         }, 2000);
         timeoutRef.current = setTimeout(() => {
           if (pollRef.current) {
+            clearManualCode();
             void cancelLogin();
             if (aliveRef.current) {
               if (!reauthAccountId) setStep("pick");
@@ -145,7 +166,7 @@ export default function AddCodexAccountModal({
     } catch (e) {
       if (aliveRef.current && !(e instanceof Error && e.name === "AbortError")) setError(String(e));
     }
-  }, [apiBase, cancelLogin, reauthAccountId, stopPolling, t]);
+  }, [apiBase, cancelLogin, clearManualCode, reauthAccountId, stopPolling, t]);
 
   useEffect(() => {
     if (!reauthAccountId) {
@@ -178,6 +199,32 @@ export default function AddCodexAccountModal({
       setError(t("codexAuth.loginLinkCopyFailed"));
     }
   };
+
+  const submitManualCode = useCallback(async () => {
+    const flowId = flowRef.current;
+    const input = manualCode.trim();
+    if (!flowId || !input || manualCodeBusy) return;
+    setManualCodeBusy(true);
+    setManualCode("");
+    try {
+      const resp = await fetch(`${apiBase}/api/codex-auth/login/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flowId, input }),
+      });
+      const data = await resp.json().catch(() => ({})) as { error?: string };
+      if (!aliveRef.current) return;
+      if (!resp.ok) {
+        setError(t("prov.pasteFail", { error: data.error ?? resp.statusText }));
+        return;
+      }
+      setError("");
+    } catch {
+      if (aliveRef.current) setError(t("modal.networkError"));
+    } finally {
+      if (aliveRef.current) setManualCodeBusy(false);
+    }
+  }, [apiBase, manualCode, manualCodeBusy, t]);
 
   // Focus-trap: focus first interactive element on mount, restore on unmount.
   useEffect(() => {
@@ -244,6 +291,37 @@ export default function AddCodexAccountModal({
             <button className="btn btn-ghost" onClick={copyLoginLink} disabled={!authUrl} style={{ width: "100%", justifyContent: "center", marginTop: 12 }}>
               <IconLink width={14} /> {copied ? t("codexAuth.loginLinkCopied") : t("codexAuth.copyLoginLink")}
             </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+              <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={manualCode}
+                  onChange={e => setManualCode(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitManualCode();
+                    }
+                  }}
+                  placeholder={t("prov.pasteRedirect")}
+                  aria-label={t("prov.pasteRedirect")}
+                  disabled={manualCodeBusy}
+                  className="input text-label"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  disabled={manualCodeBusy || !manualCode.trim() || !flowId}
+                  onClick={() => void submitManualCode()}
+                >
+                  {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                </button>
+              </div>
+            </div>
             {error && <div className="notice notice-err" style={{ marginTop: 12 }}>{error}</div>}
             <div style={{ textAlign: "center", padding: "24px 0" }}>
               <span className="spin" style={{ width: 24, height: 24 }} />

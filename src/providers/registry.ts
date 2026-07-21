@@ -2,7 +2,10 @@ import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
-import { QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import {
+  QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
+  ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+} from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -193,12 +196,45 @@ const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
 ];
 const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.8-max-preview": ["text", "image"],
-  "qwen3.7-max": ["text"],
+  "qwen3.7-max": ["text", "image"],
   "qwen3.7-plus": ["text", "image"],
   "qwen3.6-flash": ["text", "image"],
   "glm-5.2": ["text"],
   "deepseek-v4-pro": ["text"],
 };
+
+// 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore, hardened 260721).
+// Multi-vendor lineup distinct from Beijing — includes DeepSeek V4 flash, Kimi K2.7, MiniMax.
+// Evidence: https://www.alibabacloud.com/help/en/model-studio/token-plan-overview
+//           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
+const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
+  "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2",
+  "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+  "glm-5.2", "glm-5.1", "glm-5",
+  "MiniMax-M2.5",
+];
+const ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS = [
+  "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+];
+const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
+  "qwen3.8-max-preview": ["text", "image"],
+  "qwen3.7-max": ["text", "image"],
+  "qwen3.7-plus": ["text", "image"],
+  "qwen3.6-plus": ["text", "image"],
+  "qwen3.6-flash": ["text", "image"],
+  "deepseek-v4-pro": ["text"],
+  "deepseek-v4-flash": ["text"],
+  "deepseek-v3.2": ["text"],
+  "kimi-k2.7-code": ["text", "image"],
+  "kimi-k2.6": ["text", "image"],
+  "kimi-k2.5": ["text", "image"],
+  "glm-5.2": ["text"],
+  "glm-5.1": ["text"],
+  "glm-5": ["text"],
+  "MiniMax-M2.5": ["text"],
+};
+
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
 // alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
@@ -564,14 +600,49 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
+  {
+    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
+    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
+    // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
+    // selectable. Live-verified 2026-07-20: /v1/chat/completions accepts the `tools` field
+    // and routes to a function-calling-capable upstream.
+    id: "orcarouter", label: "OrcaRouter", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
+    authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
+    defaultModel: "openai/gpt-5.5",
+    models: [
+      "openai/gpt-5.5",
+      "anthropic/claude-opus-4.8",
+      "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-pro",
+      "orcarouter/auto",
+    ],
+    // Text-only models → the vision sidecar describes images instead.
+    noVisionModels: ["deepseek/deepseek-v4-pro"],
+    // Reasoning/temperature behavior verified live 2026-07-20 against api.orcarouter.ai:
+    // - openai/gpt-5.5 accepts reasoning_effort none|low|medium|high|xhigh but rejects `max` (400),
+    //   so advertise up to xhigh and let mapReasoningEffort clamp a `max`/`ultra` request to xhigh.
+    // - deepseek/deepseek-v4-pro mirrors the direct-DeepSeek wiring (thinking-effort map +
+    //   reasoning_content history replay) so the namespaced selection behaves identically.
+    // - temperature is accepted by every seeded model (gpt-5.5, claude-opus-4.8, deepseek-v4-pro all
+    //   returned 200), so no noTemperatureModels entry is warranted here.
+    modelReasoningEfforts: {
+      "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
+      "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+    },
+    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
+    preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
+    note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
+  },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
   // 2026-07-10 Gemini API refresh: Tier-2 ai.google.dev evidence recorded in
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
-    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-3.5-flash", "gemini-3.1-pro-preview"],
-    modelContextWindows: { "gemini-3.5-flash": 1_000_000 },
+    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview"],
+    modelContextWindows: { "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000 },
+    modelInputModalities: { "gemini-3.6-flash": ["text", "image"] },
     modelReasoningEfforts: {
+      "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
       "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
       "gemini-3.1-pro-preview": ["low", "medium", "high"],
     },
@@ -580,7 +651,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, defaultModel: "gemini-3.5-flash-low", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, defaultModel: "gemini-3.6-flash-medium", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -699,6 +770,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: false,
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
+    modelContextWindows: {
+      "qwen3.8-max-preview": 983_616, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
+      "qwen3.6-flash": 1_000_000, "glm-5.2": 1_000_000, "deepseek-v4-pro": 1_000_000,
+    },
     modelReasoningEfforts: {
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
@@ -706,7 +781,48 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEffortMap: { "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS,
-    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro"],
+    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
+    noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
+  },
+  {
+    id: "alibaba-token-plan-intl",
+    label: "Alibaba Token Plan (International)",
+    baseUrl: ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+    adapter: "openai-chat",
+    authKind: "key",
+    allowBaseUrlOverride: true,
+    baseUrlChoices: ALIBABA_INTL_BASE_URL_CHOICES,
+    dashboardUrl: "https://modelstudio.console.alibabacloud.com/?tab=api#/api",
+    defaultModel: "qwen3.7-max",
+    models: ALIBABA_INTL_TOKEN_PLAN_MODELS,
+    liveModels: false,
+   note: "Token Plan Team Edition · Singapore (ap-southeast-1)",
+    metadataModelIdNormalize: "case-insensitive",
+   modelInputModalities: ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES,
+    modelContextWindows: {
+      "qwen3.8-max-preview": 983_616,
+      "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000, "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
+      "deepseek-v4-pro": 1_000_000, "deepseek-v4-flash": 1_000_000, "deepseek-v3.2": 131_072,
+      "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
+      "glm-5.2": 1_000_000, "glm-5.1": 1_000_000, "glm-5": 1_000_000,
+      "MiniMax-M2.5": 204_800,
+    },
+    modelReasoningEfforts: {
+      ...Object.fromEntries(ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
+      "qwen3.8-max-preview": ["low", "high", "xhigh"],
+      "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+      "deepseek-v4-flash": DEEPSEEK_THINKING_EFFORTS,
+    },
+    modelReasoningEffortMap: {
+      "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP,
+      "deepseek-v4-flash": DEEPSEEK_THINKING_REASONING_MAP,
+    },
+    thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS,
+    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
+    noVisionModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
+    noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "deepseek-v3.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
+    modelDefaultReasoningEfforts: { "qwen3.8-max-preview": "xhigh" },
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
@@ -816,6 +932,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "No key needed — uses Xiaomi MiMo's free public tier (limited-time offer). A JWT is bootstrapped automatically with an anonymous random client id stored locally. The endpoint contract mirrors the official MiMoCode client and is not publicly documented — Xiaomi may change or restrict it at any time. Prompts may be processed/retained by Xiaomi; do not send confidential material.",
   },
   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
+  {
+    // Cloudflare Workers AI: OpenAI-compatible endpoint. The base URL contains {account_id}
+    // which must be resolved by the user at setup time. Model IDs use the @cf/ prefix.
+    // Live-verified 2026-07-21 against https://developers.cloudflare.com/workers-ai/models/
+    id: "cloudflare-workers-ai", label: "Cloudflare Workers AI",
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    adapter: "openai-chat", authKind: "key", freeTier: true,
+    dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/workers-ai",
+    defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    models: [
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "@cf/qwen/qwq-32b",
+      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "@cf/moonshotai/kimi-k2.7-code",
+      "@cf/zai-org/glm-5.2",
+      "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    ],
+    note: "Workers AI · Free tier included · Account ID required in base URL",
+  },
   // FREEZE 2026-07-10: /models was auth-gated under key login. OAuth device-flow + copilot_internal
   // exchange (issue #151) unlocks live discovery; static seed is a cold-start fallback only.
   {

@@ -121,6 +121,7 @@ describe("Cursor discovery metadata", () => {
       { id: "claude-opus-4-8", supportsReasoningEffort: true },
       { id: "glm-5.2", supportsReasoningEffort: true },
       { id: "grok-4.3", supportsReasoningEffort: true },
+      { id: "unknown-reasoning-model", supportsReasoningEffort: true },
       { id: "composer-2.5", supportsReasoningEffort: false },
     ]);
 
@@ -128,7 +129,8 @@ describe("Cursor discovery metadata", () => {
     expect(efforts["gpt-5.5"]).toEqual(["low", "medium", "high"]);
     expect(efforts["claude-opus-4-8"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts["glm-5.2"]).toEqual(["high", "max"]);
-    expect(efforts["grok-4.3"]).toEqual(["low", "medium", "high"]);
+    expect(efforts["grok-4.3"]).toEqual([]);
+    expect(efforts["unknown-reasoning-model"]).toEqual([]);
     expect(efforts["composer-2.5"]).toEqual([]);
   });
 });

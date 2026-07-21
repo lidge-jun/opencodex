@@ -22,7 +22,7 @@ import {
 import { collectStatus } from "./status";
 import { installCrashGuards } from "../lib/crash-guard";
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
-import { findAvailablePort, isAddrInUse, shouldPersistSelectedPort } from "../server/ports";
+import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
@@ -85,23 +85,43 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
   return null;
 }
 
+/** Argv for detached `start`, optionally hard-pinning the listen port. */
+function startArgv(port?: number): string[] {
+  const args = [process.argv[1], "start"];
+  if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
+    args.push("--port", String(Math.trunc(port)));
+  }
+  return args;
+}
+
 async function chooseListenPort(requestedPort?: number): Promise<number> {
   const config = loadConfig();
   const preferred = requestedPort ?? config.port ?? 10100;
-  // Brief prefer-retry covers stop→start races (update restart, `ocx restart`) where the
-  // old process has exited but the listen socket is still draining.
-  const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1", {
-    preferRetryMs: 750,
-    preferRetryIntervalMs: 50,
-  });
-  if (selected !== preferred) {
-    console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+  const hardPin = requestedPort !== undefined && requestedPort > 0;
+  // Soft start: brief prefer-retry then ephemeral hop.
+  // Explicit `--port` (service wrappers / update restart): longer prefer-retry, never hop.
+  try {
+    const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1", {
+      preferRetryMs: hardPin ? 8_000 : 750,
+      preferRetryIntervalMs: 50,
+      allowEphemeralFallback: !hardPin,
+    });
+    if (selected !== preferred) {
+      console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+    }
+    if (shouldPersistSelectedPort(config.port, selected, preferred)) {
+      config.port = selected;
+      saveConfig(config);
+    }
+    return selected;
+  } catch (err) {
+    if (err instanceof PortUnavailableError) {
+      console.error(`❌ ${err.message}`);
+      console.error("   Stop whatever holds that port, or change config.port, then retry.");
+      process.exit(1);
+    }
+    throw err;
   }
-  if (shouldPersistSelectedPort(config.port, selected, preferred)) {
-    config.port = selected;
-    saveConfig(config);
-  }
-  return selected;
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
@@ -128,7 +148,8 @@ async function handleStart(options: { block?: boolean } = {}) {
   await maybeShowUpdatePrompt();
 
   // Port selection is check-then-bind: a concurrent `ocx start`/`ensure` can win the port
-  // between the probe and Bun.serve. Retry the pick instead of dying on EADDRINUSE.
+  // between the probe and Bun.serve. Soft starts may re-pick; hard-pinned `--port` retries
+  // the same port only (never hop — that was the remaining PR #152 gap).
   let port = await chooseListenPort(requestedPort);
   let server: ReturnType<typeof startServer>;
   for (let attempt = 0; ; attempt++) {
@@ -137,6 +158,16 @@ async function handleStart(options: { block?: boolean } = {}) {
       break;
     } catch (err) {
       if (!isAddrInUse(err) || attempt >= 2) throw err;
+      if (requestedPort !== undefined) {
+        console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);
+        const hostname = loadConfig().hostname ?? "127.0.0.1";
+        const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 3_000, intervalMs: 50 });
+        if (!freed) {
+          console.error(`❌ Port ${port} stayed busy; refusing to hop to an ephemeral port.`);
+          process.exit(1);
+        }
+        continue;
+      }
       console.log(`⚠️  Port ${port} was taken while starting; picking another...`);
       port = await chooseListenPort(requestedPort);
     }
@@ -249,7 +280,8 @@ async function handleEnsure() {
       return;
     }
 
-  const child = spawn(process.execPath, [process.argv[1], "start"], {
+  const pinPort = config.port ?? 10100;
+  const child = spawn(process.execPath, startArgv(pinPort > 0 ? pinPort : undefined), {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -537,7 +569,7 @@ switch (command) {
     let live = await findLiveProxy();
     if (!live) {
       console.log("Proxy not running. Starting...");
-      const child = spawn(process.execPath, [process.argv[1], "start"], {
+      const child = spawn(process.execPath, startArgv((config.port ?? 10100) > 0 ? (config.port ?? 10100) : undefined), {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -545,6 +577,10 @@ switch (command) {
       });
       child.unref();
       live = await waitForProxy();
+      if (!live) {
+        console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
+        process.exit(1);
+      }
     }
     // Open the host the proxy actually binds — `localhost` only answers for
     // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.
@@ -626,6 +662,11 @@ switch (command) {
     case "provider": {
     const { handleProviderCommand } = await import("./provider");
     await handleProviderCommand(args.slice(1));
+    break;
+  }
+  case "account": {
+    const { cmdAccount } = await import("./account");
+    process.exitCode = await cmdAccount(args.slice(1));
     break;
   }
   case "models": {

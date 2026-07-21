@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { expandUserPath, getConfigDir } from "../config";
+import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { durableBunPath } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 
@@ -72,9 +72,20 @@ export interface WinswEntry {
  * Task Scheduler wrapper / launchd / systemd: the SCM service environment lacks the
  * user's interactive PATH, which provider subprocesses may need.
  */
-export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = process.env): string {
+export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = process.env, port?: number): string {
   const domain = env.USERDOMAIN?.trim() || ".";
   const user = env.USERNAME?.trim() || "";
+  const listenPort = (() => {
+    if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) return Math.trunc(port);
+    const baked = env.OCX_BAKE_PORT?.trim();
+    if (baked && /^\d+$/.test(baked)) {
+      const n = Number(baked);
+      if (n > 0 && n <= 65535) return n;
+    }
+    return loadConfig().port ?? 10100;
+  })();
+  // Services never bake `--port 0` (parsePortOption rejects it); treat as default.
+  const safeListenPort = listenPort > 0 && listenPort <= 65535 ? listenPort : 10100;
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
@@ -88,7 +99,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   <name>OpenCodex Proxy (native)</name>
   <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
-  <arguments>${xmlEscape(`"${entry.cli}" start`)}</arguments>
+  <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
   <logpath>${xmlEscape(winswLogDir())}</logpath>
   <log mode="roll-by-size">
@@ -212,7 +223,13 @@ export function probeScmRegistration(run: () => string = queryScmForService): bo
     const text = [e.stderr, e.stdout, e.message]
       .map(v => (typeof v === "string" ? v : ""))
       .join("\n");
-    if (e.status === 1060 || /FAILED 1060/i.test(text)) return false;
+    // ERROR_SERVICE_DOES_NOT_EXIST: the numeric identifier 1060 is locale-invariant
+    // (FALHA 1060 pt-BR, localized ko output, English FAILED 1060). The query is a
+    // fixed `sc.exe query <service>` so a standalone 1060 in its output is proof of
+    // absence. Bun may deliver e.status as 36 (1060 & 0xff) — status 36 ALONE is
+    // NOT accepted (collides with any status ≡ 36 mod 256); the textual 1060 is
+    // required corroboration and covers those hosts.
+    if (e.status === 1060 || /\b1060\b/.test(text)) return false;
     return "error";
   }
 }

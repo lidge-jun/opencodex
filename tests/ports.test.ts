@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server } from "node:net";
-import { findAvailablePort, isAddrInUse, isPortAvailable, shouldPersistSelectedPort, waitForPortAvailable } from "../src/server/ports";
+import { findAvailablePort, isAddrInUse, isPortAvailable, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../src/server/ports";
 
 const servers: Server[] = [];
 
@@ -87,6 +87,18 @@ describe("port selection", () => {
     }, 60);
 
     expect(await pending).toBe(port);
+  });
+
+  test("refuses ephemeral hop when allowEphemeralFallback is false", async () => {
+    const { port } = await listen();
+    expect(await isPortAvailable(port)).toBe(false);
+    await expect(
+      findAvailablePort(port, "127.0.0.1", {
+        preferRetryMs: 80,
+        preferRetryIntervalMs: 20,
+        allowEphemeralFallback: false,
+      }),
+    ).rejects.toBeInstanceOf(PortUnavailableError);
   });
 
   test("isAddrInUse recognizes bind conflicts by code or message and rejects everything else", () => {

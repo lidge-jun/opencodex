@@ -28,11 +28,11 @@ export default function ProviderUsage({ item, usageTotals, quotaReport }: {
           <div className="pws-usage-metrics" role="group" aria-label={t("pws.usageLast30d")}>
             <div className="pws-usage-metric">
               <span className="pws-usage-metric-value">{formatRequestCount(usageTotals?.requests, locale)}</span>
-              <span className="muted">{t("pws.metricRequests")}</span>
+              <span className="muted pws-usage-metric-label">{t("pws.metricRequests")}</span>
             </div>
             <div className="pws-usage-metric">
               <span className="pws-usage-metric-value">{formatTokenCount(usageTotals?.totalTokens, locale)}</span>
-              <span className="muted">{t("pws.metricTokens")}</span>
+              <span className="muted pws-usage-metric-label">{t("pws.metricTokens")}</span>
             </div>
           </div>
         ) : (

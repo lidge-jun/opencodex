@@ -4,7 +4,7 @@
  * empty state, and a render-prop `detail` slot. Detail/Overview panel bodies
  * arrive in WP090/091; until then the slot renders a real placeholder message.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useT } from "../../i18n";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey } from "../../icons";
 import {
@@ -25,6 +25,7 @@ import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
 import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
+import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
 
 export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: boolean };
 
@@ -36,6 +37,7 @@ export interface DetailSlotData {
   selectedModels: string[];
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
+  onRetryModels?: () => void;
 }
 
 const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za" | "pws.sort.freePaid" | "pws.sort.paidFree" | "pws.sort.accountsFirst" }[] = [
@@ -53,6 +55,10 @@ export default function ProviderWorkspaceShell({
   selectedName,
   onSelect,
   onAddProvider,
+  onEditConfig,
+  jsonEditor,
+  jsonSaving = false,
+  modelsRefreshToken = 0,
   activeAccountNeedsReauth,
   detail,
 }: {
@@ -62,6 +68,11 @@ export default function ProviderWorkspaceShell({
   selectedName: string | null;
   onSelect: (name: string | null) => void;
   onAddProvider: (intent?: AddProviderIntent) => void;
+  onEditConfig?: () => void;
+  jsonEditor?: JsonEditorState;
+  jsonSaving?: boolean;
+  /** Bump after login/config changes so /api/selected-models is refetched. */
+  modelsRefreshToken?: number;
   activeAccountNeedsReauth?: Record<string, boolean>;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
@@ -81,6 +92,7 @@ export default function ProviderWorkspaceShell({
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>({});
+  const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
   const sections = useMemo(() => {
@@ -88,21 +100,37 @@ export default function ProviderWorkspaceShell({
     return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
   }, [providers, activeAccountNeedsReauth]);
 
+  const retryModels = useCallback(() => {
+    setModelsLoadEpoch(epoch => epoch + 1);
+  }, []);
+
   useEffect(() => {
+    // Deferred load (matches Models/Usage/ClaudeCode): avoids synchronous setState
+    // inside the effect, per the react-hooks/set-state-in-effect lint gate.
     let cancelled = false;
-    fetch(`${apiBase}/api/selected-models`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
-      .then(data => {
-        if (cancelled) return;
-        setModelCounts(countAvailableModels(data));
-        setAvailableModels(parseAvailableModels(data));
-        setSelectedModels(parseSelectedModels(data));
-        setModelsLoadFailed(false);
-        setModelsLoading(false);
-      })
-      .catch(() => { if (!cancelled) { setModelsLoadFailed(true); setModelsLoading(false); } });
-    return () => { cancelled = true; };
-  }, [apiBase]);
+    const timeout = window.setTimeout(() => {
+      setModelsLoading(true);
+      fetch(`${apiBase}/api/selected-models`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+        .then(data => {
+          if (cancelled) return;
+          setModelCounts(countAvailableModels(data));
+          setAvailableModels(parseAvailableModels(data));
+          setSelectedModels(parseSelectedModels(data));
+          setModelsLoadFailed(false);
+          setModelsLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setModelsLoadFailed(true);
+          setModelsLoading(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [apiBase, modelsRefreshToken, modelsLoadEpoch]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,19 +152,22 @@ export default function ProviderWorkspaceShell({
       .then(r => r.ok ? r.json() : null)
       .then((data: { reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown }> } | null) => {
         if (cancelled || !data) return;
-        const byProvider: Record<string, ProviderQuotaReportView> = {};
-        for (const report of data.reports ?? []) {
-          if (!report?.provider) continue;
-          byProvider[report.provider] = {
-            label: report.label,
-            source: report.source,
-            updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
-            quota: report.quota,
-          };
-        }
-        setQuotaReports(byProvider);
+        // Merge so a partial/failed probe cannot wipe a previously good provider row.
+        setQuotaReports(prev => {
+          const next = { ...prev };
+          for (const report of data.reports ?? []) {
+            if (!report?.provider) continue;
+            next[report.provider] = {
+              label: report.label,
+              source: report.source,
+              updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
+              quota: report.quota,
+            };
+          }
+          return next;
+        });
       })
-      .catch(() => {});
+      .catch(() => { /* keep last-good */ });
     return () => { cancelled = true; };
   }, [apiBase]);
 
@@ -380,7 +411,14 @@ export default function ProviderWorkspaceShell({
         </div>
         </aside>
         <main className="pws-main" aria-label={t("pws.workspaceMainAria")}>
-        {selectedItem ? (
+        {jsonEditor?.open ? (
+          <ProviderJsonEditor
+            editor={jsonEditor}
+            providerName={t("nav.providers")}
+            saving={jsonSaving}
+            onSave={() => { void jsonEditor.onSave(); }}
+          />
+        ) : selectedItem ? (
           detail?.(selectedItem, {
             usageTotals: usageTotals[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
@@ -388,6 +426,7 @@ export default function ProviderWorkspaceShell({
             selectedModels: selectedModels[selectedItem.name] ?? [],
             modelsLoading,
             modelsLoadFailed,
+            onRetryModels: retryModels,
           }) ?? (
             <div className="pws-detail-placeholder">
               <h3>{formatProviderDisplayName(selectedItem.name)}</h3>
@@ -403,6 +442,7 @@ export default function ProviderWorkspaceShell({
             quotaReports={quotaReports}
             usageTotals={usageTotals}
             onSelectProvider={(name) => onSelect(name)}
+            onEditConfig={onEditConfig}
           />
         ) : null}
         </main>

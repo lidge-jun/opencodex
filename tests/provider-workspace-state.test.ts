@@ -18,6 +18,13 @@ describe("workspace detail derived states (WP090)", () => {
       expect(filterModels([], "gpt-5.6-sol", "claude")).toEqual([]);
     });
 
+    test("empty base falls back to configured models before the default model", () => {
+      expect(filterModels([], "ignored-default", "", ["claude-sonnet-5", "claude-opus-4-8"]))
+        .toEqual(["claude-sonnet-5", "claude-opus-4-8"]);
+      expect(filterModels([], "ignored-default", "opus", ["claude-sonnet-5", "claude-opus-4-8"]))
+        .toEqual(["claude-opus-4-8"]);
+    });
+
     test("query filters case-insensitively on substrings; live models win over the fallback", () => {
       const base = ["gpt-5.6-sol", "gpt-5.6-terra", "claude-fable-5"];
       expect(filterModels(base, "ignored-fallback", "")).toEqual(base);

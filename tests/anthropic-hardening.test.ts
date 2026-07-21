@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { AnthropicTokenError, refreshAnthropicToken } from "../src/oauth/anthropic";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 function parsed(): OcxParsedRequest {
   return {
@@ -23,6 +27,22 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
 }
 
 describe("anthropic provider hardening", () => {
+  test("AnthropicTokenError carries parsed status and OAuth error", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })) as typeof fetch;
+    try {
+      await refreshAnthropicToken("secret");
+      throw new Error("expected refresh failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AnthropicTokenError);
+      expect(error).toMatchObject({ httpStatus: 400, oauthError: "invalid_grant" });
+    }
+  });
+
+  test("AnthropicTokenError tolerates a malformed error body", async () => {
+    globalThis.fetch = (async () => new Response("not-json", { status: 503 })) as typeof fetch;
+    await expect(refreshAnthropicToken("secret")).rejects.toMatchObject({ httpStatus: 503, oauthError: undefined });
+  });
+
   test("key mode rejects a blank API key", async () => {
     const adapter = createAnthropicAdapter(provider({ apiKey: "   " }));
 

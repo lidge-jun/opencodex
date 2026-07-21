@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getConfigDir, readPid, readRuntimePort } from "../config";
+import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -171,6 +171,20 @@ export async function runUpdate(): Promise<void> {
     serviceWasInstalled = isServiceInstalled();
   } catch { /* best-effort */ }
 
+  // Capture listen target before stop clears runtime state (same contract as GUI update worker).
+  // Prefer a live runtime record; a stale crashed leftover must not override config.port.
+  const preUpdateConfig = loadConfig();
+  const preUpdateRt = readRuntimePort();
+  const livePid = readPid();
+  const runtimeTrusted = !!(preUpdateRt && livePid && preUpdateRt.pid === livePid);
+  const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
+    ? preUpdateConfig.port
+    : 10100;
+  const capturedListen = {
+    port: runtimeTrusted ? preUpdateRt.port : configPort,
+    hostname: (runtimeTrusted ? preUpdateRt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
+  };
+
   // Never replace package files under a live proxy: the running server dynamic-imports
   // modules after startup, so an in-place update leaves it executing mixed old/new code.
   // Gate on the service and the runtime-port record too, not just the pid file — a
@@ -230,14 +244,27 @@ export async function runUpdate(): Promise<void> {
     if (serviceWasInstalled) {
       console.log("🔁 Reinstalling the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
-      const svcStdio = updateChildStdio();
-      const svc = spawnSync(process.execPath, [process.argv[1], ...serviceReinstallArgs()], {
-        stdio: svcStdio,
-        encoding: svcStdio === "pipe" ? "utf8" : undefined,
-        windowsHide: true,
+      const { waitForPortAvailable } = await import("../server/ports");
+      const freed = await waitForPortAvailable(capturedListen.port, capturedListen.hostname, {
+        timeoutMs: 5_000,
+        intervalMs: 25,
       });
-      if (svcStdio === "pipe") logSpawnOutput("", svc);
-      if (svc.status !== 0) console.warn("⚠️  Service refresh failed — run 'ocx service install' manually.");
+      if (!freed) console.warn(`⚠️  Port ${capturedListen.port} still busy; reinstalling with pinned --port anyway.`);
+      const prevBake = process.env.OCX_BAKE_PORT;
+      process.env.OCX_BAKE_PORT = String(capturedListen.port);
+      try {
+        const svcStdio = updateChildStdio();
+        const svc = spawnSync(process.execPath, [process.argv[1], ...serviceReinstallArgs()], {
+          stdio: svcStdio,
+          encoding: svcStdio === "pipe" ? "utf8" : undefined,
+          windowsHide: true,
+        });
+        if (svcStdio === "pipe") logSpawnOutput("", svc);
+        if (svc.status !== 0) console.warn("⚠️  Service refresh failed — run 'ocx service install' manually.");
+      } finally {
+        if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+        else process.env.OCX_BAKE_PORT = prevBake;
+      }
     } else {
       console.log("Restart the proxy:  ocx start");
     }

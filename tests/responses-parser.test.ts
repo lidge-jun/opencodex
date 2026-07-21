@@ -224,6 +224,17 @@ describe("codex-rs compat surface (260707)", () => {
     expect(result?.content as string).toContain("failed");
   });
 
+  test("marks tool_search-loaded definitions for transport priority", () => {
+    const parsed = parseRequest({ ...base, input: [
+      { type: "tool_search_call", call_id: "ts1", arguments: { query: "automation" } },
+      {
+        type: "tool_search_output", call_id: "ts1", status: "completed", execution: "client",
+        tools: [{ type: "function", name: "automation_update", description: "Update", parameters: {} }],
+      },
+    ]});
+    expect(parsed.context.tools?.find(tool => tool.name === "automation_update")?.loadedFromToolSearch).toBe(true);
+  });
+
   test("normalizes ultra reasoning effort to max like the upstream client boundary", () => {
     const parsed = parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "ultra" } });
     expect(parsed.options.reasoning).toBe("max");

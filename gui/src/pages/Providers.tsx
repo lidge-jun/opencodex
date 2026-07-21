@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddProviderModal from "../components/AddProviderModal";
+import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
+import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import type { AccountLoadState } from "../components/provider-workspace/types";
@@ -13,15 +15,16 @@ import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, Ic
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "../components/QuotaBars";
-import { providerIconSrc } from "../provider-icons";
+import { providerIconSrc, formatProviderDisplayName } from "../provider-icons";
+import { apiErrorMessage } from "../api-error";
 
 interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
 }
 
-interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; activeAccountId?: string | null }
+interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
 interface ProviderQuotaReport { provider: string; quota: AccountQuota; source: string; updatedAt: number }
 interface OAuthAccount { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
@@ -67,13 +70,30 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
-  // Workspace view (WP080b): active when the hash carries the /workspace suffix.
-  const [workspaceView, setWorkspaceView] = useState(() => location.hash.replace(/^#\/?/, "") === "providers/workspace");
+  // Workspace vs Classic: localStorage is source of truth; hash stays in sync.
+  // Leaving Providers (e.g. Models) must not reset a saved workspace preference.
+  const [workspaceView, setWorkspaceView] = useState(() => {
+    try {
+      return localStorage.getItem("ocx-providers-view") === "workspace";
+    } catch {
+      return false;
+    }
+  });
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
+  const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
+  const [jsonBaseline, setJsonBaseline] = useState("");
+  const [jsonSaving, setJsonSaving] = useState(false);
+  const [jsonLeaveOpen, setJsonLeaveOpen] = useState(false);
+  const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
+  /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
+  const [codexLoginOpen, setCodexLoginOpen] = useState(false);
+  const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
   const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
   const [codexActiveNeedsReauth, setCodexActiveNeedsReauth] = useState(false);
   const aliveRef = useRef(true);
+  const jsonEditorOpenRef = useRef(false);
+  const removeBusyRef = useRef(false);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
   const codexReauthGenerationRef = useRef(0);
@@ -83,13 +103,54 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   useEffect(() => {
-    const onHash = () => setWorkspaceView(location.hash.replace(/^#\/?/, "") === "providers/workspace");
+    const writePref = (workspace: boolean) => {
+      try {
+        localStorage.setItem("ocx-providers-view", workspace ? "workspace" : "classic");
+      } catch {
+        /* ignore */
+      }
+    };
+    const readPrefWorkspace = () => {
+      try {
+        return localStorage.getItem("ocx-providers-view") === "workspace";
+      } catch {
+        return false;
+      }
+    };
+    const wantedHash = workspaceView ? "providers/workspace" : "providers";
+    const onHash = () => {
+      const hash = location.hash.replace(/^#\/?/, "");
+      // Ignore unrelated routes (Models, Usage, …) — do not clear the preference.
+      if (hash === "providers/workspace") {
+        setWorkspaceView(true);
+        writePref(true);
+        return;
+      }
+      if (hash === "providers") {
+        // Bare #providers must not clobber a saved workspace choice (nav race).
+        if (readPrefWorkspace()) {
+          location.hash = "#providers/workspace";
+          return;
+        }
+        setWorkspaceView(false);
+        writePref(false);
+      }
+    };
     window.addEventListener("hashchange", onHash);
+    if (location.hash.replace(/^#\/?/, "") !== wantedHash) {
+      location.hash = `#${wantedHash}`;
+    }
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [workspaceView]);
   const toggleWorkspace = () => {
-    // The hash is the source of truth so reload/deep-link restores the view.
-    location.hash = workspaceView ? "#providers" : "#providers/workspace";
+    const next = !workspaceView;
+    try {
+      localStorage.setItem("ocx-providers-view", next ? "workspace" : "classic");
+    } catch {
+      /* ignore */
+    }
+    setWorkspaceView(next);
+    location.hash = next ? "#providers/workspace" : "#providers";
   };
 
   const fetchConfig = useCallback(async () => {
@@ -97,31 +158,75 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/config`);
       const data = await res.json();
       setConfig(data);
-      setDraft(JSON.stringify(data, null, 2));
+      // Never overwrite the draft while the JSON editor is open — that cleared dirty state.
+      if (!jsonEditorOpenRef.current) {
+        setDraft(JSON.stringify(data, null, 2));
+      }
     } catch {
       notify(t("prov.loadConfigFail"), false);
     }
   }, [apiBase, t]);
 
-  // Load the list of OAuth-capable providers, then each one's login status.
+  // Load OAuth-capable providers + ChatGPT/Codex pool status (shared by all forward providers).
   const fetchOauth = useCallback(async () => {
     try {
       const provs: string[] = (await fetch(`${apiBase}/api/oauth/providers`).then(r => r.json())).providers ?? [];
       setOauthProviders(provs);
-      const entries = await Promise.all(provs.map(async p => {
-        const s = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).then(r => r.json()).catch(() => ({ loggedIn: false }));
-        return [p, s] as const;
-      }));
-      setOauthStatus(Object.fromEntries(entries));
+      const [oauthEntries, codexAccounts, codexActive] = await Promise.all([
+        Promise.all(provs.map(async p => {
+          const s = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).then(r => r.json()).catch(() => ({ loggedIn: false }));
+          return [p, s] as const;
+        })),
+        fetch(`${apiBase}/api/codex-auth/accounts`)
+          .then(r => r.ok ? r.json() as Promise<{ accounts?: Array<{ id?: string; email?: string; isMain?: boolean; hasCredential?: boolean; needsReauth?: boolean }> }> : null)
+          .catch(() => null),
+        fetch(`${apiBase}/api/codex-auth/active`)
+          .then(r => r.ok ? r.json() as Promise<{ activeCodexAccountId?: string | null }> : null)
+          .catch(() => null),
+      ]);
+      const next: Record<string, OAuthStatus> = Object.fromEntries(oauthEntries);
+      const accounts = codexAccounts?.accounts ?? [];
+      const main = accounts.find(a => a.isMain) ?? accounts[0];
+      // The synthetic main row always carries hasCredential: true and a placeholder
+      // email ("Codex App login") even without a real credential. Only treat it as
+      // logged in when it has a real email or a pool account has a credential.
+      const mainIsReal = !!main && !!main.email && main.email !== "Codex App login";
+      const poolLoggedIn = accounts.some(a => !a.isMain && (a.hasCredential || a.email));
+      const codexLoggedIn = mainIsReal || poolLoggedIn;
+      const codexEmail = mainIsReal ? main.email : (accounts.find(a => !a.isMain && a.email)?.email ?? undefined);
+      // Only flag the ACTIVE account for reauth — stale inactive accounts must not
+      // trigger a Models-tab warning when the active/main account is usable.
+      const activeId = codexActive?.activeCodexAccountId ?? null;
+      const activePoolAccount = activeId && activeId !== "__main__"
+        ? accounts.find(a => a.id === activeId)
+        : null;
+      const codexNeedsReauth = activePoolAccount
+        ? Boolean(activePoolAccount.needsReauth)
+        : Boolean(main?.needsReauth);
+      // Built-in openai (and any other forward row) share the same Codex account pool.
+      next.openai = {
+        loggedIn: codexLoggedIn,
+        email: codexEmail,
+        ...(codexNeedsReauth ? { needsReauth: true } : {}),
+      };
+      setOauthStatus(next);
     } catch { /* ignore */ }
   }, [apiBase]);
 
   const fetchProviderQuotas = useCallback(async (refresh = false) => {
     try {
-      const data = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`).then(r => r.json()) as { reports?: ProviderQuotaReport[] };
-      setQuotaReports(Object.fromEntries((data.reports ?? []).map(report => [report.provider, report])));
+      const res = await fetch(`${apiBase}/api/provider-quotas${refresh ? "?refresh=1" : ""}`);
+      if (!res.ok) return;
+      const data = await res.json() as { reports?: ProviderQuotaReport[] };
+      setQuotaReports(prev => {
+        const next = { ...prev };
+        for (const report of data.reports ?? []) {
+          if (report?.provider) next[report.provider] = report;
+        }
+        return next;
+      });
     } catch {
-      setQuotaReports({});
+      /* keep last-good */
     }
   }, [apiBase]);
 
@@ -354,7 +459,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timeout);
   }, [fetchKeyPools, keyCardProviders]);
 
-  const saveConfig = async () => {
+  const saveConfig = async (): Promise<boolean> => {
+    setJsonSaving(true);
     try {
       const parsed = JSON.parse(draft);
       const res = await fetch(`${apiBase}/api/config`, {
@@ -365,16 +471,57 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       if (res.ok) {
         notify(t("prov.saved"), true);
         setEditing(false);
+        setJsonEditorOpen(false);
+        jsonEditorOpenRef.current = false;
+        setJsonLeaveOpen(false);
+        setJsonBaseline(JSON.stringify(parsed, null, 2));
         fetchConfig();
         fetchProviderQuotas(true);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        notify(d.error || t("prov.saveFailed"), false);
+        setModelsRefreshToken(n => n + 1);
+        return true;
       }
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      notify(data.error || t("prov.saveFailed"), false);
+      return false;
     } catch {
       notify(t("prov.invalidJson"), false);
+      return false;
+    } finally {
+      setJsonSaving(false);
     }
   };
+
+  const openJsonEditor = () => {
+    const baseline = config ? JSON.stringify(config, null, 2) : draft;
+    setJsonBaseline(baseline);
+    setDraft(baseline);
+    setJsonLeaveOpen(false);
+    setJsonEditorOpen(true);
+    jsonEditorOpenRef.current = true;
+  };
+
+  const discardJsonEditor = () => {
+    setJsonLeaveOpen(false);
+    setJsonEditorOpen(false);
+    jsonEditorOpenRef.current = false;
+    const baseline = config ? JSON.stringify(config, null, 2) : jsonBaseline;
+    setJsonBaseline(baseline);
+    setDraft(baseline);
+  };
+
+  const requestCloseJsonEditor = () => {
+    if (jsonEditorOpen && draft !== jsonBaseline) {
+      setJsonLeaveOpen(true);
+      return;
+    }
+    discardJsonEditor();
+  };
+
+  const restoreJsonEditor = () => {
+    setDraft(jsonBaseline);
+  };
+
+  const jsonIsDirty = jsonEditorOpen && draft !== jsonBaseline;
 
   const cancelLoginOAuth = useCallback(async (provider: string) => {
     const gen = (oauthLoginGenerationRef.current.get(provider) ?? 0) + 1;
@@ -419,7 +566,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const data = await res.json();
       if (oauthLoginGenerationRef.current.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
-      // The server opens the browser itself (popup-safe). Show the URL + paste fallback.
       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       // Poll until the loopback callback (or device flow / manual paste) completes.
@@ -472,6 +618,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           fetchConfig();
           fetchAccountSets(Object.keys(accountSets).includes(provider) ? Object.keys(accountSets) : [...Object.keys(accountSets), provider]);
           fetchProviderQuotas(true);
+          setModelsRefreshToken(n => n + 1);
           finished = true;
           break;
         }
@@ -492,6 +639,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       }
     } finally {
       if (aliveRef.current && oauthLoginGenerationRef.current.get(provider) === generation) setBusy(null);
+
     }
   };
 
@@ -543,6 +691,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         fetchConfig(),
         fetchProviderQuotas(true),
       ]);
+      setModelsRefreshToken(n => n + 1);
       notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
     } catch {
       notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
@@ -550,10 +699,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   };
 
   const removeProvider = async (name: string) => {
-    if (!window.confirm(t("prov.removeConfirm", { name }))) return;
-    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
-    if (res.ok) { notify(t("prov.removed", { name }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }
-    else notify(t("prov.removeFail", { name }), false);
+    setRemoveConfirmName(name);
+  };
+
+  const confirmRemoveProvider = async () => {
+    const name = removeConfirmName;
+    if (!name || removeBusyRef.current) return;
+    removeBusyRef.current = true;
+    setRemoveConfirmName(null);
+    const fallback = t("prov.removeFail", { name });
+    try {
+      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (res.ok) {
+        notify(t("prov.removed", { name }), true);
+        if (workspaceSelected === name) setWorkspaceSelected(null);
+        fetchConfig();
+        fetchOauth();
+        fetchProviderQuotas(true);
+      } else {
+        notify(await apiErrorMessage(res, fallback), false);
+      }
+    } catch {
+      notify(fallback, false);
+    } finally {
+      removeBusyRef.current = false;
+    }
   };
 
   const setProviderDisabled = async (name: string, disabled: boolean) => {
@@ -639,6 +809,70 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     .filter(([name, prov]) => (prov.hasApiKey || name === "openai-apikey") && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
     .map(([name]) => name);
 
+  const addModalAccountRows = [
+    ...Object.entries(config.providers)
+      .filter(([, prov]) => prov.authMode === "forward")
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name]) => ({
+        id: name,
+        label: formatProviderDisplayName(name),
+        kind: "codex" as const,
+        href: "#codex-auth",
+      })),
+    ...[...oauthProviders]
+      .sort((a, b) => a.localeCompare(b))
+      .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
+    ...Object.entries(config.providers)
+      .filter(([name, prov]) =>
+        (prov.hasApiKey || prov.keyOptional)
+        && prov.authMode !== "oauth"
+        && prov.authMode !== "forward"
+        && !oauthProviders.includes(name))
+      .map(([name, prov]) => ({
+        id: name,
+        label: name,
+        kind: "key" as const,
+        statusLabel: prov.keyOptional && !prov.hasApiKey ? t("modal.badge.free") : t("prov.hasApiKey"),
+      })),
+  ];
+
+  const isForwardProvider = (name: string) => config.providers[name]?.authMode === "forward";
+
+  const accountLoginStatus: Record<string, OAuthStatus> = { ...oauthStatus };
+  const codexStatus = oauthStatus.openai;
+  if (codexStatus) {
+    for (const [name, prov] of Object.entries(config.providers)) {
+      if (prov.authMode === "forward") accountLoginStatus[name] = codexStatus;
+    }
+  }
+
+  const onAccountLogin = (provider: string) => {
+    if (isForwardProvider(provider)) {
+      setCodexLoginOpen(true);
+      return;
+    }
+    // API-key rows have no OAuth login path (catalog hides the button).
+    if (config.providers[provider]?.authMode === "oauth" || oauthProviders.includes(provider)) {
+      requestLoginOAuth(provider);
+    }
+  };
+
+  const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
+
+  const codexLoginModal = codexLoginOpen ? (
+    <AddCodexAccountModal
+      apiBase={apiBase}
+      onClose={() => setCodexLoginOpen(false)}
+      onAdded={() => {
+        setCodexLoginOpen(false);
+        notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }), true);
+        void fetchOauth();
+        void fetchProviderQuotas(true);
+        bumpModelsRefresh();
+      }}
+    />
+  ) : null;
+
   if (workspaceView) {
     return (
       <>
@@ -657,8 +891,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           selectedName={workspaceSelected}
           onSelect={setWorkspaceSelected}
           onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
+          onEditConfig={openJsonEditor}
+          jsonEditor={{
+            open: jsonEditorOpen,
+            draft,
+            isDirty: jsonIsDirty,
+            onDraftChange: setDraft,
+            onSave: () => saveConfig(),
+            onClose: requestCloseJsonEditor,
+            onRestore: restoreJsonEditor,
+          }}
+          jsonSaving={jsonSaving}
+          modelsRefreshToken={modelsRefreshToken}
           activeAccountNeedsReauth={activeAccountNeedsReauth}
-          detail={(item, data) => (
+          detail={(item, data) => {
+            const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
+            return (
             <ProviderDetails
               key={item.name}
               item={item}
@@ -668,10 +916,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               selectedModels={data.selectedModels}
               modelsLoading={data.modelsLoading}
               modelsLoadFailed={data.modelsLoadFailed}
-              oauthEmail={oauthStatus[item.name]?.email}
+              onRetryModels={data.onRetryModels}
+              oauthEmail={loginStatus?.email}
               onDeselect={() => setWorkspaceSelected(null)}
               apiBase={apiBase}
-              oauth={oauthStatus[item.name]}
+              oauth={loginStatus}
               accounts={accountSets[item.name]?.accounts ?? []}
               keys={keyPools[item.name] ?? []}
               accountLoadState={accountLoadStates[item.name] ?? (item.authMode === "oauth" ? "idle" : "ready")}
@@ -696,7 +945,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onUpdateProvider={updateProvider}
               onCodexActiveNeedsReauthChange={setCodexActiveNeedsReauth}
             />
-          )}
+            );
+          }}
         />
         {adding && (
           <AddProviderModal
@@ -704,8 +954,49 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             existingNames={Object.keys(config.providers)}
             initialTier={addIntent?.tier}
             initialCustom={addIntent?.custom}
-            onClose={() => { setAdding(false); setAddIntent(null); }}
-            onAdded={(name) => { setAdding(false); setAddIntent(null); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+            onClose={() => {
+              if (busy) void cancelLoginOAuth(busy);
+              setAdding(false);
+              setAddIntent(null);
+            }}
+            onAdded={(name) => { setAdding(false); setAddIntent(null); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); bumpModelsRefresh(); }}
+            accountRows={addModalAccountRows}
+            accountStatus={accountLoginStatus}
+            accountBusy={busy}
+            onAccountLogin={onAccountLogin}
+            onAccountCancelLogin={(provider) => { void cancelLoginOAuth(provider); }}
+            onAccountLogout={(provider) => { void logoutOAuth(provider); }}
+            onOpen={fetchOauth}
+          />
+        )}
+        {codexLoginModal}
+        {removeConfirmName && (
+          <RemoveConfirmDialog
+            providerName={removeConfirmName}
+            onCancel={() => setRemoveConfirmName(null)}
+            onConfirm={() => { void confirmRemoveProvider(); }}
+          />
+        )}
+        {jsonLeaveOpen && (
+          <UnsavedLeaveDialog
+            saving={jsonSaving}
+            onCancel={() => { if (!jsonSaving) setJsonLeaveOpen(false); }}
+            onDiscard={discardJsonEditor}
+            onSave={() => { void saveConfig(); }}
+          />
+        )}
+        {oauthTosPending && (
+          <OAuthTosWarningModal
+            key={`${oauthTosPending.provider}:${oauthTosPending.addAccount ? "add" : "login"}`}
+            providerId={oauthTosPending.provider}
+            providerLabel={oauthLabel(oauthTosPending.provider)}
+            onCancel={() => setOauthTosPending(null)}
+            onContinue={() => {
+              const pending = oauthTosPending;
+              if (!pending) return;
+              setOauthTosPending(null);
+              void loginOAuth(pending.provider, pending.addAccount);
+            }}
           />
         )}
       </>
@@ -768,6 +1059,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 <span className="oauth-actions">
                   {st.loggedIn ? (
                     <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
+                  ) : isBusy ? (
+                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelLoginOAuth(p); }}>{t("common.cancel")}</button>
                   ) : (
                     <button className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(p)} disabled={isBusy}>
                       {isBusy ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconLock />{t("prov.login")}</>}
@@ -1068,8 +1361,26 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         <AddProviderModal
           apiBase={apiBase}
           existingNames={Object.keys(config.providers)}
-          onClose={() => setAdding(false)}
-          onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); }}
+          onClose={() => {
+            if (busy) void cancelLoginOAuth(busy);
+            setAdding(false);
+          }}
+          onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
+          accountRows={addModalAccountRows}
+          accountStatus={accountLoginStatus}
+          accountBusy={busy}
+          onAccountLogin={onAccountLogin}
+          onAccountCancelLogin={(provider) => { void cancelLoginOAuth(provider); }}
+          onAccountLogout={(provider) => { void logoutOAuth(provider); }}
+          onOpen={fetchOauth}
+        />
+      )}
+      {codexLoginModal}
+      {removeConfirmName && (
+        <RemoveConfirmDialog
+          providerName={removeConfirmName}
+          onCancel={() => setRemoveConfirmName(null)}
+          onConfirm={() => { void confirmRemoveProvider(); }}
         />
       )}
       {oauthTosPending && (

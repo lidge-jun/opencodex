@@ -8,7 +8,7 @@ import { en } from "../src/i18n/en.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-for (const loc of ["de", "ko", "zh"]) {
+for (const loc of ["de", "ko", "zh", "ru"]) {
   const path = join(root, "src", "i18n", `${loc}.ts`);
   let text = readFileSync(path, "utf8");
   const missing = Object.entries(en).filter(([key]) => !text.includes(`"${key}":`));

@@ -318,6 +318,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
 .page-head h2 { font-size: var(--text-title); }
 .page-sub { color: var(--muted); font-size: var(--text-body); margin: 4px 0 22px; max-width: 70ch; }
+
+/* Page-level underline tabs (Logs & Debug). Distinct from pill .segmented filters. */
+.page-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 14px; }
+.page-tab { appearance: none; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); cursor: pointer; font: inherit; font-size: var(--text-control); }
+.page-tab:hover { color: var(--text); }
+.page-tab--active { color: var(--text); border-bottom-color: var(--accent); font-weight: var(--weight-semibold); }
+.page-tab:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
 .page-sub b { color: var(--text); font-weight: var(--weight-semibold); }
 .api-page h2 svg { width: 1em; height: 1em; vertical-align: -0.16em; }
 .api-page .page-sub code {

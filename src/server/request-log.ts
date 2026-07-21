@@ -11,11 +11,13 @@ import type { OcxUsage } from "../types";
 import { redactSecretString } from "../lib/redact";
 import {
   appendUsageEntry,
+  readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
   type AttemptRecoveryKind,
   type PersistedUsageAttempt,
+  type PersistedUsageEntry,
   type UsageStatus,
 } from "../usage/log";
 import {
@@ -60,6 +62,9 @@ export interface RequestLogContext {
   upstreamError?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  affinity?: "reused" | "new_bind" | "rebound" | "cleared";
+  transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
+  terminalSource?: "upstream" | "synthetic";
 }
 
 export interface RequestLogEntry {
@@ -90,11 +95,103 @@ export interface RequestLogEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** Codex pool affinity decision for this request (diagnostics for #186). */
+  affinity?: "reused" | "new_bind" | "rebound" | "cleared";
+  /** Where the upstream terminal/failure was observed. */
+  transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
+  /** Whether the terminal came from a real upstream SSE event or a proxy synthetic tail. */
+  terminalSource?: "upstream" | "synthetic";
 }
 
 const requestLog: RequestLogEntry[] = [];
 const MAX_LOG_SIZE = 200;
 let requestLogSeq = 0;
+/** True after hydrateRequestLogsFromDisk ran once in this process. */
+let requestLogsHydratedFromDisk = false;
+
+function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
+  if (value === "completed" || value === "failed" || value === "incomplete") return value;
+  return undefined;
+}
+
+function asCloseReason(value: string | undefined): RequestLogEntry["closeReason"] | undefined {
+  switch (value) {
+    case "terminal":
+    case "client_cancel":
+    case "non_stream":
+    case "body_stall":
+    case "body_overflow":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+/** Project a persisted usage.jsonl row back into the in-memory /api/logs shape. */
+export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): RequestLogEntry {
+  const terminalStatus = asTerminalStatus(entry.terminalStatus);
+  const closeReason = asCloseReason(entry.closeReason);
+  return {
+    requestId: entry.requestId,
+    timestamp: entry.timestamp,
+    model: entry.model,
+    provider: entry.provider,
+    ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
+    ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+    ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+    ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
+    ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
+    ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
+    ...(entry.configuredSpeedLabel ? { configuredSpeedLabel: entry.configuredSpeedLabel } : {}),
+    ...(entry.modelSupportsServiceTier !== undefined
+      ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
+      : {}),
+    ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
+    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+    status: entry.status,
+    durationMs: entry.durationMs,
+    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    ...(terminalStatus ? { terminalStatus } : {}),
+    ...(closeReason ? { closeReason } : {}),
+    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    usageStatus: entry.usageStatus,
+    ...(entry.usage ? { usage: entry.usage } : {}),
+    ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+    ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
+  };
+}
+
+/**
+ * Seed the in-memory Logs ring buffer from usage.jsonl so GUI /api/logs survives
+ * `ocx stop` / `ocx start` (process restart). Idempotent per process; no-ops when
+ * the buffer already has live entries. Read failures are non-fatal (same as /api/usage).
+ */
+export function hydrateRequestLogsFromDisk(
+  reader: () => PersistedUsageEntry[] = () => readRecentUsageEntries(MAX_LOG_SIZE),
+): number {
+  if (requestLogsHydratedFromDisk) return 0;
+  if (requestLog.length > 0) {
+    requestLogsHydratedFromDisk = true;
+    return 0;
+  }
+  try {
+    const persisted = reader();
+    requestLogsHydratedFromDisk = true;
+    if (persisted.length === 0) return 0;
+    const slice = persisted.length > MAX_LOG_SIZE
+      ? persisted.slice(persisted.length - MAX_LOG_SIZE)
+      : persisted;
+    for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
+    return slice.length;
+  } catch (err) {
+    requestLogsHydratedFromDisk = true;
+    console.warn(
+      `[request-log] failed to hydrate from usage.jsonl: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
+  }
+}
 
 export function addRequestLog(entry: RequestLogEntry) {
   requestLog.push(entry);
@@ -119,6 +216,15 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+      ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+      ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
+      ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
+      ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
+      ...(entry.configuredSpeedLabel ? { configuredSpeedLabel: entry.configuredSpeedLabel } : {}),
+      ...(entry.modelSupportsServiceTier !== undefined
+        ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
+        : {}),
+      ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
@@ -490,6 +596,9 @@ export function addFinalRequestLog(
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(attempts?.length ? { attempts } : {}),
+    ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
+    ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
+    ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
   });
   if (isUsageDebugEnabled()) {
     appendUsageDebug({
@@ -687,4 +796,5 @@ export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
 export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
   requestLogSeq = 0;
+  requestLogsHydratedFromDisk = false;
 }

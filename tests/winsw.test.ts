@@ -38,11 +38,15 @@ describe("winsw xml", () => {
     const xml = buildWinswXml(entry, env);
 
     expect(xml).toContain("<executable>C:\\OpenCodex\\bun.exe</executable>");
-    expect(xml).toContain("<arguments>&quot;C:\\Open Codex\\cli &amp; co\\index.ts&quot; start</arguments>");
+    expect(xml).toContain("<arguments>&quot;C:\\Open Codex\\cli &amp; co\\index.ts&quot; start --port 10100</arguments>");
     expect(xml).toContain('<onfailure action="restart" delay="5 sec"/>');
     expect(xml).toContain("<stoptimeout>20 sec</stoptimeout>");
     expect(xml).toContain('<log mode="roll-by-size">');
     expect(xml).toContain(`<id>${WINSW_SERVICE_ID}</id>`);
+  });
+  test("honors OCX_BAKE_PORT when building WinSW arguments", () => {
+    const xml = buildWinswXml(entry, { ...env, OCX_BAKE_PORT: "14444" });
+    expect(xml).toContain("start --port 14444");
   });
 });
 
@@ -125,8 +129,12 @@ describe("winsw fail-closed lifecycle", () => {
     // sc.exe can channel the 1060 line on STDOUT (observed in service-lifecycle CI) —
     // every captured stream must be scanned, not just stderr.
     expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stdout: string }; e.status = 1; e.stdout = "[SC] OpenService FAILED 1060:"; throw e; })).toBe(false);
+    // Localized output with Bun's low-byte status still proves absence via textual 1060.
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stdout: string }; e.status = 36; e.stdout = "[SC] EnumQueryServicesStatus:OpenService FALHA 1060: ..."; throw e; })).toBe(false);
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stderr: string }; e.status = 36; e.stderr = "[SC] OpenService 1060: 지정된 서비스가 ..."; throw e; })).toBe(false);
+    expect(probeScmRegistration(() => { const e = new Error("<localized> 1060") as Error & { status: number }; e.status = 1; throw e; })).toBe(false);
     // Access denied / missing sc.exe / any other failure → error, never absence.
-    expect(probeScmRegistration(() => { const e = new Error("denied") as Error & { status: number }; e.status = 5; throw e; })).toBe("error");
+    expect(probeScmRegistration(() => { const e = new Error("Acesso negado") as Error & { status: number; stderr: string }; e.status = 5; e.stderr = "[SC] OpenSCManager FALHA 5: Acesso negado."; throw e; })).toBe("error");
     expect(probeScmRegistration(() => { throw new Error("spawn sc.exe ENOENT"); })).toBe("error");
   });
 

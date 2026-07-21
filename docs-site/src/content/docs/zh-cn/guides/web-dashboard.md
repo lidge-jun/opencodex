@@ -38,6 +38,9 @@ bun run dev:gui
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Stop** | 优雅地停止代理和已安装的后台服务，恢复原生 Codex 并退出（`POST /api/stop`）。 |
 
+**Logs** 和 **Usage** 中的费用是根据已报告 token 计算的 API 标价折算值，不是账单，也不能证明
+实际发生了扣费；实际可能计入订阅用量或消耗服务商额度。
+
 ## 委派选择器与生成路由的区别
 
 Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以及可选的

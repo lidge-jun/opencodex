@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ import {
   parseComboModelId,
   parseRetryAfterMs,
   pickComboTarget,
+  resetComboEffortWarningStateForTests,
   targetKey,
   tryPickComboModel,
   UnknownComboError,
@@ -162,6 +163,8 @@ describe("combo namespace primitives", () => {
 describe("combo request cloning", () => {
   const target = { provider: "a", model: "m1" };
 
+  afterEach(() => resetComboEffortWarningStateForTests());
+
   test("detects only literal combo model ids in raw request records", () => {
     expect(comboIdFromRawBody({ model: "combo/free" })).toBe("free");
     expect(comboIdFromRawBody({ model: "a/m1" })).toBeNull();
@@ -171,7 +174,7 @@ describe("combo request cloning", () => {
 
   test("clones the untouched body and injects an omitted combo default", () => {
     const raw = { model: "combo/free", input: [{ role: "user", content: "hi" }] };
-    const concrete = concreteComboRequestBody(raw, target, "high");
+    const concrete = concreteComboRequestBody(raw, target, "high", ["low", "high"]);
     expect(concrete).toEqual({
       model: "a/m1",
       input: [{ role: "user", content: "hi" }],
@@ -182,19 +185,40 @@ describe("combo request cloning", () => {
   });
 
   test("combo default respects client-owned ignored reasoning values", () => {
-    expect(concreteComboRequestBody({ model: "combo/x", reasoning: null }, target, "high").reasoning).toBeNull();
+    expect(concreteComboRequestBody({ model: "combo/x", reasoning: null }, target, "high", []).reasoning).toBeNull();
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { effort: "" } }, target, "high",
+      { model: "combo/x", reasoning: { effort: "" } }, target, "high", [],
     ).reasoning).toEqual({ effort: "" });
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { effort: "banana" } }, target, "high",
+      { model: "combo/x", reasoning: { effort: "banana" } }, target, "high", [],
     ).reasoning).toEqual({ effort: "banana" });
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { effort: null } }, target, "high",
+      { model: "combo/x", reasoning: { effort: null } }, target, "high", [],
     ).reasoning).toEqual({ effort: null });
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { summary: "concise" } }, target, "high",
+      { model: "combo/x", reasoning: { summary: "concise" } }, target, "high", ["high"],
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
+  });
+
+  test("omits combo defaults for unset, unsupported, and unknown target capabilities", () => {
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, null, ["high"]).reasoning).toBeUndefined();
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", []).reasoning).toBeUndefined();
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", undefined).reasoning).toBeUndefined();
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", ["low", "medium"]).reasoning).toBeUndefined();
+  });
+
+  test("debug-warns once per unsupported combo default", () => {
+    const debug = spyOn(console, "debug").mockImplementation(() => {});
+    concreteComboRequestBody({ model: "combo/x" }, target, "high", []);
+    concreteComboRequestBody({ model: "combo/x" }, target, "high", []);
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(debug.mock.calls[0]?.[1]).toEqual({
+      provider: "a",
+      model: "m1",
+      requestedEffort: "high",
+      capability: "unsupported",
+    });
+    debug.mockRestore();
   });
 });
 
@@ -398,7 +422,8 @@ describe("combo validation and normalization", () => {
       defaultEffort: "high",
       targets: [{ provider: "a", model: "m1", weight: 2 }],
     });
-    expect(comboDefaultEffort(baseConfig(), "free")).toBe("medium");
+    expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    expect(comboDefaultEffort(baseConfig(), "free")).toBeNull();
     expect(comboDefaultEffort(baseConfig({
       combos: { free: { defaultEffort: "xhigh", targets: [{ provider: "a", model: "m1" }] } },
     }), "free")).toBe("xhigh");
@@ -551,7 +576,7 @@ describe("combo management API", () => {
         success: true,
         id: "zeta",
         model: "combo/zeta",
-        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: "medium" },
+        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: null },
       });
       const updated = await comboApi(config, "PUT", "/api/combos", {
         id: "zeta",

@@ -57,11 +57,20 @@ export function formatQuotaSourceLabel(source: string | undefined): string {
 }
 
 /**
- * Models-tab list derivation: live models, else the default model as a
- * single-row fallback, filtered by a case-insensitive substring query.
+ * Models-tab list derivation: live models, else configured static ids, else
+ * the default model as a single-row fallback; filtered by substring query.
  */
-export function filterModels(base: string[], defaultModel: string | undefined, query: string): string[] {
-  const list = base.length > 0 ? base : defaultModel ? [defaultModel] : [];
+export function filterModels(
+  base: string[],
+  defaultModel: string | undefined,
+  query: string,
+  configuredModels?: string[],
+): string[] {
+  const list = base.length > 0
+    ? base
+    : (configuredModels && configuredModels.length > 0)
+      ? configuredModels
+      : defaultModel ? [defaultModel] : [];
   const q = query.trim().toLowerCase();
   if (!q) return list;
   return list.filter(id => id.toLowerCase().includes(q));

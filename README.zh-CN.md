@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · 📖 <a href="https://lidge-jun.github.io/opencodex/zh-cn/"><b>完整文档 →</b></a>
+  <a href="README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.ru.md">Русский</a> · 📖 <a href="https://lidge-jun.github.io/opencodex/zh-cn/"><b>完整文档 →</b></a>
 </p>
 
 <p align="center">
@@ -240,6 +240,7 @@ ocx sync                       # 刷新模型列表 + 重新注入 Codex
 ocx status                     # 查看代理是否在运行
 ocx login <xai|anthropic|kimi> # OAuth 登录
 ocx logout <provider>          # 移除已保存的登录
+ocx account <list|current|use> # 查看/切换账号与 API-key pool（脱敏；含 refresh/auto-switch/remove/add-key）
 ocx gui                        # 打开 Web 仪表盘
 ocx claude [args...]           # 启动接入代理的 Claude Code（模型发现已开启）
 ocx codex-shim install         # 运行 codex 时自动启动代理

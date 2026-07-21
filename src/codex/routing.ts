@@ -25,14 +25,31 @@ export type CodexThreadResolution =
 const threadAccountMap = new Map<string, ThreadAffinityEntry>();
 type CodexUpstreamHealth = {
   consecutiveFailures: number;
+  /** Consecutive healthy terminals observed while recovering from escalation level 2+. */
+  consecutiveSuccesses?: number;
   lastFailureStatus?: number;
   lastFailureAt?: number;
+  /** Hard cooldown (quota 429). Survives a later 2xx; blocks auth + selection. */
   cooldownUntil?: number;
+  /**
+   * Soft avoid after connect_error / timeout / transient 5xx. Cleared on 2xx.
+   * Blocks pool selection + thread affinity reuse so a sticky session can leave a
+   * flaky account without throwing CodexAccountCooldownError (hard-only).
+   */
+  softAvoidUntil?: number;
 };
 
 const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
 const CODEX_MAX_QUOTA_COOLDOWN_MS = 24 * 60 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
+/** How long a transient failure keeps the account out of pool selection. */
+export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
+const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
+  CODEX_TRANSIENT_SOFT_AVOID_MS,
+  2 * 60_000,
+  10 * 60_000,
+  30 * 60_000,
+] as const;
 export const CODEX_THREAD_AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
 // Min interval between quota threshold re-evaluations for a single bound thread.
@@ -47,6 +64,8 @@ export type CodexUpstreamOutcomeMeta = {
   retryAfter?: string | null;
   resetAt?: unknown | unknown[];
   now?: number;
+  /** When set, clears affinity for this thread immediately on transient failure. */
+  threadId?: string | null;
 };
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
@@ -162,8 +181,21 @@ export function isCodexAccountInCooldown(accountId: string, now = Date.now()): b
   return getCodexAccountCooldownUntil(accountId, now) !== null;
 }
 
+export function getCodexAccountSoftAvoidUntil(accountId: string, now = Date.now()): number | null {
+  const softAvoidUntil = upstreamHealth.get(accountId)?.softAvoidUntil;
+  return typeof softAvoidUntil === "number" && Number.isFinite(softAvoidUntil) && softAvoidUntil > now
+    ? softAvoidUntil
+    : null;
+}
+
+export function isCodexAccountSoftAvoided(accountId: string, now = Date.now()): boolean {
+  return getCodexAccountSoftAvoidUntil(accountId, now) !== null;
+}
+
 function isCodexAccountSelectable(config: OcxConfig, accountId: string, now: number): boolean {
-  return !isCodexAccountInCooldown(accountId, now) && isCodexAccountUsable(config, accountId);
+  return !isCodexAccountInCooldown(accountId, now)
+    && !isCodexAccountSoftAvoided(accountId, now)
+    && isCodexAccountUsable(config, accountId);
 }
 
 function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boolean {
@@ -215,6 +247,7 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   const ids = (config.codexAccounts ?? [])
     .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
     .filter(account => !isCodexAccountInCooldown(account.id, now))
+    .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id))
     .map(account => account.id);
   // The main Codex account is not stored in config.codexAccounts; include it as a
@@ -223,6 +256,7 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && !isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now)
+    && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID)
   ) {
     ids.unshift(MAIN_CODEX_ACCOUNT_ID);
@@ -352,6 +386,9 @@ export function resolveCodexAccountForThreadDetailed(
     if (
       isThreadAffinityGenerationLive(entry)
       && isCodexAccountSelectable(config, entry.accountId, now)
+      // Affined threads must leave a failing account once the streak trips failover
+      // (soft-avoid covers the first-hit case; this catches post-avoid residual streaks).
+      && !shouldFailover(config, entry.accountId, now)
     ) {
       entry.lastUsedAt = now;
       // Periodic quota re-eval: a long-lived bound thread must still switch when
@@ -420,7 +457,22 @@ export function recordCodexUpstreamOutcome(
   const now = meta.now ?? Date.now();
   const outcomeClass = classifyCodexUpstreamOutcome(outcome);
   if (outcomeClass === "success") {
+    const current = upstreamHealth.get(accountId);
     const cooldownUntil = getCodexAccountCooldownUntil(accountId, now);
+    const failoverEnabled = (config.upstreamFailoverThreshold ?? 3) > 0;
+    if (failoverEnabled && current && current.consecutiveFailures >= 2) {
+      const consecutiveSuccesses = (current.consecutiveSuccesses ?? 0) + 1;
+      if (consecutiveSuccesses < 2) {
+        upstreamHealth.set(accountId, {
+          ...current,
+          consecutiveSuccesses,
+          ...(cooldownUntil ? { cooldownUntil } : {}),
+        });
+        return;
+      }
+    }
+    // Level 1 clears immediately; escalated accounts need two consecutive healthy terminals.
+    // Hard quota cooldown intentionally survives either recovery path.
     if (cooldownUntil) upstreamHealth.set(accountId, { consecutiveFailures: 0, cooldownUntil });
     else upstreamHealth.delete(accountId);
     return;
@@ -454,15 +506,44 @@ export function recordCodexUpstreamOutcome(
     return;
   }
 
+  // transient (connect_error / timeout / 5xx)
   const current = upstreamHealth.get(accountId);
   const stale = current?.lastFailureAt ? now - current.lastFailureAt > CODEX_FAILURE_WINDOW_MS : false;
-  const cooldownUntil = getCodexAccountCooldownUntil(accountId, now) ?? undefined;
+  const hardCooldownUntil = getCodexAccountCooldownUntil(accountId, now) ?? undefined;
+  // Soft avoid + affinity clears are part of failover. When threshold is 0, leave
+  // sticky sessions alone (same as shouldFailover / applyFailureFailover no-ops).
+  const failoverEnabled = (config.upstreamFailoverThreshold ?? 3) > 0;
+  const consecutiveFailures = stale ? 1 : (current?.consecutiveFailures ?? 0) + 1;
+  const escalationMs = CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS[
+    Math.min(consecutiveFailures, CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS.length) - 1
+  ]!;
+  const softAvoidUntil = failoverEnabled
+    ? Math.max(
+      getCodexAccountSoftAvoidUntil(accountId, now) ?? 0,
+      now + escalationMs,
+    )
+    : undefined;
   upstreamHealth.set(accountId, {
-    consecutiveFailures: stale ? 1 : (current?.consecutiveFailures ?? 0) + 1,
+    consecutiveFailures,
     lastFailureStatus,
     lastFailureAt: now,
-    ...(cooldownUntil ? { cooldownUntil } : {}),
+    ...(hardCooldownUntil ? { cooldownUntil: hardCooldownUntil } : {}),
+    ...(softAvoidUntil !== undefined ? { softAvoidUntil } : {}),
   });
+  // Drop this thread's pin immediately so the next continue can rebind without
+  // waiting for the soft-avoid selectable check. Guard: only delete when the
+  // thread is still pinned to the FAILING account — a late failure from account A
+  // must not delete a newer healthy binding to account B (race: T→A, A fails,
+  // T→B, late A failure must not delete B's mapping).
+  if (failoverEnabled && meta.threadId) {
+    const bound = threadAccountMap.get(meta.threadId);
+    if (bound?.accountId === accountId) threadAccountMap.delete(meta.threadId);
+  }
+  // Once the account is past the failover streak, clear every thread still pinned
+  // to it — matching 429 affinity behavior so "continue" cannot stay on a bad peer.
+  if (shouldFailover(config, accountId, now)) {
+    clearThreadAccountMapForAccount(accountId);
+  }
   if (config.activeCodexAccountId === accountId) applyFailureFailover(config, accountId, now);
 }
 

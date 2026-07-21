@@ -2,7 +2,7 @@
  * ProviderDetails — the detail header + tab shell (WP090+091). Owns tab state
  * and composes the Overview/Models/Usage/Settings panels.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
@@ -17,6 +17,7 @@ import ProviderModels from "./ProviderModels";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import ProviderSettings from "./ProviderSettings";
+import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
 
@@ -59,7 +60,7 @@ export default function ProviderDetails({
   oauthEmail?: string;
   onDeselect: () => void;
   apiBase: string;
-  oauth?: { loggedIn: boolean; email?: string; error?: string };
+  oauth?: { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
   accounts?: OAuthAccountRow[];
   accountLoadState?: AccountLoadState;
   switchingAccountId?: string | null;
@@ -76,6 +77,12 @@ export default function ProviderDetails({
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
+  const [leaveSaving, setLeaveSaving] = useState(false);
+  const settingsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
+    settingsSaveRef.current = save;
+  }, []);
   const isDisabled = item.disabled === true;
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
@@ -90,10 +97,19 @@ export default function ProviderDetails({
 
   const switchTab = useCallback((next: Tab) => {
     if (settingsDirty && tab === "settings" && next !== "settings") {
-      if (!window.confirm(t("pws.unsavedLeaveBody"))) return;
+      setPendingLeave(next);
+      return;
     }
     setTab(next);
-  }, [tab, settingsDirty, t]);
+  }, [tab, settingsDirty]);
+
+  const requestDeselect = useCallback(() => {
+    if (settingsDirty && tab === "settings") {
+      setPendingLeave("deselect");
+      return;
+    }
+    onDeselect();
+  }, [settingsDirty, tab, onDeselect]);
 
   const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number;
@@ -115,7 +131,7 @@ export default function ProviderDetails({
   return (
     <div className="pws-detail">
       <div className="pws-detail-head">
-        <button type="button" className="pws-detail-back-link" onClick={onDeselect}>
+        <button type="button" className="pws-detail-back-link" onClick={requestDeselect}>
           <IconChevron className="pws-detail-back-chevron" aria-hidden="true" />
           {t("pws.allProviders")}
         </button>
@@ -214,7 +230,12 @@ export default function ProviderDetails({
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
+            needsReauth={
+              (accounts ?? []).some(account => account.active && account.needsReauth)
+              || oauth?.needsReauth === true
+            }
             onRetryModels={onRetryModels}
+            onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
           />
         )}
         {tab === "usage" && (
@@ -243,9 +264,41 @@ export default function ProviderDetails({
             availableModels={availableModels}
             onUpdateProvider={onUpdateProvider}
             onDirtyChange={setSettingsDirty}
+            onRegisterSave={registerSettingsSave}
           />
         )}
       </div>
+      {pendingLeave && (
+        <UnsavedLeaveDialog
+          saving={leaveSaving}
+          onCancel={() => { if (!leaveSaving) setPendingLeave(null); }}
+          onDiscard={() => {
+            if (leaveSaving) return;
+            const next = pendingLeave;
+            setPendingLeave(null);
+            setSettingsDirty(false);
+            if (next === "deselect") onDeselect();
+            else setTab(next);
+          }}
+          onSave={() => {
+            void (async () => {
+              if (leaveSaving) return;
+              setLeaveSaving(true);
+              try {
+                const ok = await settingsSaveRef.current?.() ?? false;
+                if (!ok) return;
+                const next = pendingLeave;
+                setPendingLeave(null);
+                setSettingsDirty(false);
+                if (next === "deselect") onDeselect();
+                else if (next) setTab(next);
+              } finally {
+                setLeaveSaving(false);
+              }
+            })();
+          }}
+        />
+      )}
     </div>
   );
 }

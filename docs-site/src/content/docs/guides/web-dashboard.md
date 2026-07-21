@@ -39,6 +39,10 @@ bun run dev:gui
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). |
 
+Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
+They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
+may apply instead.
+
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,

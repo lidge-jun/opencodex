@@ -2,7 +2,7 @@ import { create, fromJson, toBinary, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { OcxRequestOptions, OcxTool } from "../../types";
 import { namespacedToolName } from "../../types";
-import { McpToolDefinitionSchema, type McpToolDefinition } from "./gen/agent_pb";
+import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from "./gen/agent_pb";
 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
@@ -50,7 +50,7 @@ export function cursorRequestAdvertisesApplyPatch(
   tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
 ): boolean {
-  return tools?.some(tool => !tool.namespace && tool.name === CODEX_APPLY_PATCH_TOOL && tool.freeform === true && toolChoiceAllows(tool, toolChoice)) ?? false;
+  return tools?.some(tool => !tool.namespace && tool.name === CODEX_APPLY_PATCH_TOOL && tool.freeform === true && cursorToolAllowedByChoice(tool, toolChoice)) ?? false;
 }
 
 export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {
@@ -176,7 +176,7 @@ export function cursorToolsForActivePrompt<T extends Pick<OcxTool, "namespace" |
 ): readonly T[] | undefined {
   if (!shouldUseNativeExecOnlyForGenericToolUse(tools, activeText)) return tools;
   const execTools = tools?.filter(isBareCodexExecCommandTool);
-  if (execTools?.length && !execTools.some(tool => toolChoiceAllows(tool, toolChoice))) return tools;
+  if (execTools?.length && !execTools.some(tool => cursorToolAllowedByChoice(tool, toolChoice))) return tools;
   return execTools && execTools.length > 0 ? execTools : tools;
 }
 
@@ -199,7 +199,7 @@ export function appendCursorShellAliasHint(
   return `${text}${text.endsWith("\n") ? "\n" : "\n\n"}${CURSOR_SHELL_ALIAS_USER_HINT}`;
 }
 
-function toolChoiceAllows(tool: Pick<OcxTool, "namespace" | "name">, toolChoice: OcxRequestOptions["toolChoice"] | undefined): boolean {
+export function cursorToolAllowedByChoice(tool: Pick<OcxTool, "namespace" | "name">, toolChoice: OcxRequestOptions["toolChoice"] | undefined): boolean {
   if (!toolChoice || toolChoice === "auto" || toolChoice === "required") return true;
   if (toolChoice === "none") return false;
   if ("allowedTools" in toolChoice) {
@@ -232,7 +232,7 @@ export function buildCursorToolGuidanceSystemNote(
   if (!tools?.length) return undefined;
   const wireNames = [...new Set(
     tools
-      .filter(tool => toolChoiceAllows(tool, toolChoice))
+      .filter(tool => cursorToolAllowedByChoice(tool, toolChoice))
       .map(tool => cursorToolWireName(tool)),
   )];
   if (wireNames.length === 0) return undefined;
@@ -291,7 +291,7 @@ export function buildCursorToolDefinitions(
   toolChoice?: OcxRequestOptions["toolChoice"],
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
-  return tools.filter(tool => toolChoiceAllows(tool, toolChoice)).map(tool => {
+  return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice)).map(tool => {
     const wireName = cursorToolWireName(tool);
     return create(McpToolDefinitionSchema, {
       name: wireName,
@@ -301,4 +301,21 @@ export function buildCursorToolDefinitions(
       inputSchema: encodeCursorInputSchema(cursorToolInputSchema(tool)),
     });
   });
+}
+
+/** Exact byte size of the protobuf field value Cursor receives for client tool registration. */
+export function cursorMcpToolsEncodedSize(
+  tools: readonly OcxTool[] | undefined,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): number {
+  const definitions = buildCursorToolDefinitions(tools, toolChoice);
+  return toBinary(McpToolsSchema, create(McpToolsSchema, { mcpTools: definitions })).byteLength;
+}
+
+/** Exact additive contribution of one repeated McpToolDefinition entry. */
+export function cursorMcpToolEncodedSize(
+  tool: OcxTool,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): number {
+  return cursorMcpToolsEncodedSize([tool], toolChoice);
 }

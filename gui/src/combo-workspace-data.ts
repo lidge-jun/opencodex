@@ -7,7 +7,6 @@ export type ComboStrategy = "failover" | "round-robin";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export const COMBO_EFFORTS: ComboEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
-export const COMBO_DEFAULT_EFFORT: ComboEffort = "medium";
 
 export interface ComboTarget {
   provider: string;
@@ -21,7 +20,7 @@ export interface ComboItem {
   model: string;
   strategy: ComboStrategy;
   stickyLimit: number;
-  defaultEffort: ComboEffort;
+  defaultEffort: ComboEffort | null;
   targets: ComboTarget[];
 }
 
@@ -56,10 +55,10 @@ export function normalizeStickyLimit(raw: unknown): number {
     : 1;
 }
 
-export function normalizeDefaultEffort(raw: unknown): ComboEffort {
+export function normalizeDefaultEffort(raw: unknown): ComboEffort | null {
   return typeof raw === "string" && (COMBO_EFFORTS as string[]).includes(raw)
     ? (raw as ComboEffort)
-    : COMBO_DEFAULT_EFFORT;
+    : null;
 }
 
 export function normalizeWeight(raw: unknown): number | undefined {
@@ -155,7 +154,7 @@ export function toPutBody(item: ComboItem): {
     targets: ComboTarget[];
     strategy: ComboStrategy;
     stickyLimit?: number;
-    defaultEffort: ComboEffort;
+    defaultEffort: ComboEffort | null;
   };
 } {
   return {
@@ -235,7 +234,7 @@ export function emptyDraft(id = ""): ComboItem {
     model: id ? comboModelId(id) : "combo/",
     strategy: "failover",
     stickyLimit: 1,
-    defaultEffort: COMBO_DEFAULT_EFFORT,
+    defaultEffort: null,
     targets: [{ provider: "", model: "" }],
   };
 }

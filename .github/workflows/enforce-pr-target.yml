@@ -1,0 +1,279 @@
+name: Enforce PR target branch
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - edited
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: enforce-pr-target-${{ github.event.pull_request.number }}
+
+jobs:
+  enforce-target:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require dev as PR target
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const EXPECTED_BASE = "dev";
+            const TITLE_PREFIX = "[WRONG BRANCH] ";
+            const COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
+            const STATE_PATTERN =
+              /<!-- wrong-branch-enforcer-state:([\s\S]*?) -->/;
+
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Fetch the latest PR state instead of relying on a possibly
+            // outdated event payload.
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number
+            });
+
+            // Find the workflow's existing comment. Its hidden state records
+            // whether the workflow changed the title or draft status.
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100
+              }
+            );
+
+            const botComment = comments.find(
+              comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(COMMENT_MARKER)
+            );
+
+            function parseState(body) {
+              const match = body?.match(STATE_PATTERN);
+
+              if (!match) {
+                return null;
+              }
+
+              try {
+                return JSON.parse(match[1]);
+              } catch (error) {
+                core.warning(
+                  `Could not parse stored workflow state: ${error.message}`
+                );
+
+                return null;
+              }
+            }
+
+            function stateMarker(state) {
+              return (
+                "<!-- wrong-branch-enforcer-state:" +
+                JSON.stringify(state) +
+                " -->"
+              );
+            }
+
+            function inlineCode(value) {
+              return `\`${String(value).replaceAll("`", "\\`")}\``;
+            }
+
+            async function upsertComment(body) {
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: botComment.id,
+                  body
+                });
+
+                return;
+              }
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pull_number,
+                body
+              });
+            }
+
+            async function convertToDraft() {
+              await github.graphql(
+                `
+                  mutation($pullRequestId: ID!) {
+                    convertPullRequestToDraft(
+                      input: {
+                        pullRequestId: $pullRequestId
+                      }
+                    ) {
+                      pullRequest {
+                        id
+                        isDraft
+                      }
+                    }
+                  }
+                `,
+                {
+                  pullRequestId: pr.node_id
+                }
+              );
+            }
+
+            async function markReadyForReview() {
+              await github.graphql(
+                `
+                  mutation($pullRequestId: ID!) {
+                    markPullRequestReadyForReview(
+                      input: {
+                        pullRequestId: $pullRequestId
+                      }
+                    ) {
+                      pullRequest {
+                        id
+                        isDraft
+                      }
+                    }
+                  }
+                `,
+                {
+                  pullRequestId: pr.node_id
+                }
+              );
+            }
+
+            const storedState = parseState(botComment?.body);
+            const wrongBase = pr.base.ref !== EXPECTED_BASE;
+
+            // Wrong branch:
+            // - add the title prefix
+            // - convert ready PRs to draft
+            // - post or update the explanation
+            // - remember which changes were made by this workflow
+            if (wrongBase) {
+              const state = storedState?.active
+                ? { ...storedState }
+                : {
+                    version: 1,
+                    active: true,
+                    autoDraftedByBot: false,
+                    titlePrefixedByBot: false
+                  };
+
+              if (!pr.draft) {
+                state.autoDraftedByBot = true;
+              }
+
+              if (!pr.title.startsWith(TITLE_PREFIX)) {
+                state.titlePrefixedByBot = true;
+              }
+
+              const draftExplanation = state.autoDraftedByBot
+                ? "This pull request is being kept as a draft automatically. Once the target branch is corrected, it will be marked ready for review again."
+                : "This pull request was already a draft. Its draft status will be preserved after the target branch is corrected.";
+
+              // Store the restoration state before changing the PR, allowing
+              // a rerun to recover if an API request fails partway through.
+              await upsertComment(
+                [
+                  COMMENT_MARKER,
+                  stateMarker(state),
+                  "",
+                  "⚠️ **Wrong target branch**",
+                  "",
+                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target ${inlineCode(EXPECTED_BASE)}.`,
+                  "",
+                  `Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`,
+                  "",
+                  "Please retarget this PR to the `dev` branch — all contributions go to `dev` first, and `main` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏",
+                  "",
+                  draftExplanation
+                ].join("\n")
+              );
+
+              if (!pr.title.startsWith(TITLE_PREFIX)) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number,
+                  title: `${TITLE_PREFIX}${pr.title}`
+                });
+              }
+
+              if (!pr.draft) {
+                await convertToDraft();
+              }
+
+              return;
+            }
+
+            // The target is correct and the workflow has nothing to restore.
+            if (!storedState?.active) {
+              core.info(
+                "Target branch is correct and there is no active bot state."
+              );
+
+              return;
+            }
+
+            // Remove only the exact prefix added by this workflow. Other title
+            // edits made by the contributor are preserved.
+            if (
+              storedState.titlePrefixedByBot &&
+              pr.title.startsWith(TITLE_PREFIX)
+            ) {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number,
+                title: pr.title.slice(TITLE_PREFIX.length)
+              });
+            }
+
+            // Mark the PR ready only if this workflow originally converted it
+            // to draft. Intentionally drafted PRs remain drafts.
+            if (
+              storedState.autoDraftedByBot &&
+              pr.draft
+            ) {
+              await markReadyForReview();
+            }
+
+            const completedState = {
+              version: 1,
+              active: false,
+              autoDraftedByBot: false,
+              titlePrefixedByBot: false
+            };
+
+            const titleResult = storedState.titlePrefixedByBot
+              ? `The ${inlineCode(TITLE_PREFIX.trim())} title prefix has been removed.`
+              : "The title was left unchanged.";
+
+            const draftResult = storedState.autoDraftedByBot
+              ? "The pull request has been marked ready for review again."
+              : "Its existing draft status has been preserved.";
+
+            await upsertComment(
+              [
+                COMMENT_MARKER,
+                stateMarker(completedState),
+                "",
+                "✅ **Target branch corrected**",
+                "",
+                `This pull request now targets ${inlineCode(EXPECTED_BASE)}.`,
+                "",
+                `${titleResult} ${draftResult}`
+              ].join("\n")
+            );

@@ -21,6 +21,24 @@ export const QWEN_CLOUD_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
   { id: "custom", label: "Custom" },
 ];
 
+/**
+ * Alibaba Token Plan International (ap-southeast-1) endpoint presets.
+ * Same product as the Beijing Token Plan but for international accounts.
+ * Note: ALIBABA_INTL_TOKEN_PLAN_BASE_URL intentionally duplicates
+ * QWEN_CLOUD_TOKEN_PLAN_BASE_URL — same host, different product branding
+ * and model lineup. Kept as a separate constant for clarity.
+ */
+export const ALIBABA_INTL_TOKEN_PLAN_BASE_URL =
+  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+export const ALIBABA_INTL_PAYG_BASE_URL =
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+
+export const ALIBABA_INTL_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
+  { id: "token-plan", label: "Token plan", baseUrl: ALIBABA_INTL_TOKEN_PLAN_BASE_URL },
+  { id: "payg", label: "Pay as you go", baseUrl: ALIBABA_INTL_PAYG_BASE_URL },
+  { id: "custom", label: "Custom" },
+];
+
 /** Match a saved baseUrl to a known choice id (`custom` when it does not match). */
 export function matchBaseUrlChoice(
   choices: readonly ProviderBaseUrlChoice[],

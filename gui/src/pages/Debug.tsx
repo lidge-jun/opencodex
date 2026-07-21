@@ -57,7 +57,7 @@ function isDebugFlagEnabled(debug: DebugSettings, flag: keyof DebugSettings["env
   return flag === "debug" ? debug.enabled : flag === "usage" ? debug.usage : flag === "injection" ? debug.injection : debug.claude;
 }
 
-export default function Debug({ apiBase }: { apiBase: string }) {
+export default function Debug({ apiBase, embedded }: { apiBase: string; embedded?: boolean }) {
   const { t } = useI18n();
   const [debug, setDebug] = useState<DebugSettings | null>(null);
   const [debugBusy, setDebugBusy] = useState(false);
@@ -205,8 +205,8 @@ export default function Debug({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <div className="page-head">
-        <h2>{t("debug.title")}</h2>
+      <div className={embedded ? "row" : "page-head"} style={embedded ? { justifyContent: "flex-end", marginBottom: 4 } : undefined}>
+        {!embedded && <h2>{t("debug.title")}</h2>}
         <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
           <button
             type="button"

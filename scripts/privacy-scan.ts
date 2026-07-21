@@ -66,6 +66,12 @@ function isAllowedHomePath(file: string, username: string): boolean {
   return false;
 }
 
+function isAllowedTokenLooking(file: string, token: string): boolean {
+  if (!file.startsWith("tests/")) return false;
+  // Test fixture sentinels: sk-rawsentinel..., sk-test-...
+  return /^sk-(?:rawsentinel|test-)\d+[a-z]*$/.test(token);
+}
+
 function isAllowedBearerToken(file: string, token: string): boolean {
   if (!file.startsWith("tests/")) return false;
   return /^(?:access|stack|usage-debug)-token(?:-value)?-[A-Za-z0-9-]+$/.test(token);
@@ -123,7 +129,7 @@ function scanFile(file: string): Finding[] {
     text,
     "token-looking",
     /\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/g,
-    () => false,
+    match => isAllowedTokenLooking(file, match[0]),
   );
   return findings;
 }

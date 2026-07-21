@@ -48,7 +48,10 @@ export function classifyCursorError(message: string): string {
 
   if (
     lower.includes("resource_exhausted") ||
-    lower.includes("resource exhausted") ||
+    lower.includes("resource exhausted")
+  ) return "Cursor resource limit exceeded";
+
+  if (
     lower.includes("rate limit") ||
     lower.includes("rate-limit") ||
     lower.includes("too many requests") ||
@@ -106,7 +109,9 @@ export function classifyCursorError(message: string): string {
  * Mirrors `safeKiroErrorMessage` / `safeKiroHttpErrorMessage` in kiro-errors.ts.
  */
 export function safeCursorErrorMessage(rawMessage: string): string {
-  const detail = sanitize(rawMessage).slice(0, 500);
   const prefix = classifyCursorError(rawMessage);
+  const detail = sanitize(rawMessage)
+    .replace(/resource[_ ]exhausted/gi, "resource limit exceeded")
+    .slice(0, 500);
   return detail ? `${prefix}: ${detail}` : prefix;
 }

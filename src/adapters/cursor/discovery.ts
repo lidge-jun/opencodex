@@ -165,7 +165,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "kimi-k2.7-code", contextWindow: CONTEXT_262K },
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
-  { id: "grok-4.5-fast", contextWindow: 500_000 },
+  { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {
@@ -195,7 +195,7 @@ export function cursorModelReasoningEfforts(
     normalizeCursorModels(models).map(model => [
       model.id,
       model.supportsReasoningEffort === true
-        ? cursorModelEffortLadder(model.id) ?? [...CURSOR_REASONING_EFFORTS]
+        ? cursorModelEffortLadder(model.id) ?? []
         : [],
     ]),
   );

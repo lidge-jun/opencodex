@@ -163,4 +163,33 @@ describe("live provider model discovery (authority + fallback)", () => {
     const ids = models.filter(m => m.provider === PROVIDER).map(m => m.id);
     expect(ids.sort()).toEqual(["grok-4.3", "grok-4.5"]);
   });
+
+  test("oauth without a usable token still returns the configured static catalog", async () => {
+    // No oauth store / no network: resolveModelsAuthToken yields no key, and the
+    // catalog must not collapse to [] (GUI Models tab / rail counts).
+    let liveFetchCount = 0;
+    globalThis.fetch = (async () => {
+      liveFetchCount += 1;
+      return new Response("should-not-hit-live", { status: 500 });
+    }) as typeof fetch;
+
+    const oauthProvider = "anthropic-oauth-fallback";
+    clearModelCache(oauthProvider);
+    const models = await gatherRoutedModels({
+      providers: {
+        [oauthProvider]: {
+          baseUrl: "https://api.anthropic.com",
+          adapter: "anthropic",
+          authMode: "oauth",
+          models: ["claude-sonnet-5", "claude-opus-4-8"],
+          defaultModel: "claude-sonnet-5",
+        },
+      },
+    } as unknown as OcxConfig);
+
+    const ids = models.filter(m => m.provider === oauthProvider).map(m => m.id).sort();
+    expect(ids).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
+    expect(liveFetchCount).toBe(0);
+    clearModelCache(oauthProvider);
+  });
 });

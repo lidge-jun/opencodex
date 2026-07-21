@@ -122,6 +122,8 @@ export interface OcxTool {
   freeform?: boolean;
   /** Client-executed tool discovery (tool_search): the model's call must be relayed as a tool_search_call. */
   toolSearch?: boolean;
+  /** Tool definition restored from a prior tool_search output; transports may prioritize it when catalogs are bounded. */
+  loadedFromToolSearch?: boolean;
   /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
   webSearch?: boolean;
 }
@@ -496,8 +498,8 @@ export interface OcxComboConfig {
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;
-  /** Used when the client omits reasoning.effort. Default medium. */
-  defaultEffort?: OcxComboDefaultEffort;
+  /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
+  defaultEffort?: OcxComboDefaultEffort | null;
 }
 
 /**

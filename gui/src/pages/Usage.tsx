@@ -294,6 +294,7 @@ function UsageSummaryCards({
           <span className="stat-value mono usage-cost-value">
             {formatEstimatedUsdValue(summary.estimatedCostUsd, locale)}
           </span>
+          <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
           {((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)) > 0 && (
             <span className="muted text-caption">
               {t("usage.cost.unpricedNote").replace("{count}", String((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)))}

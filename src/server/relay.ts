@@ -406,7 +406,7 @@ export function relaySseWithHeartbeat(
  */
 export function consumeForInspection(
   body: ReadableStream<Uint8Array>,
-  onTerminal: (status: ResponsesTerminalStatus) => void,
+  onTerminal: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void,
   signal?: AbortSignal,
   onDone?: () => void,
   logCtx?: RequestLogContext,
@@ -451,14 +451,24 @@ export function consumeForInspection(
             reportFirstOutput(payload);
             if (payload) {
               const status = terminalStatusFromSsePayload(payload);
-              if (status) { reported = true; onTerminal(status); }
+              if (status) {
+                reported = true;
+                if (logCtx) {
+                  logCtx.transportPhase = "terminal_sse";
+                  logCtx.terminalSource = "upstream";
+                }
+                onTerminal(status);
+              }
               if (onCompletedResponse) {
                 const response = completedResponseFromSsePayload(payload);
                 if (response) onCompletedResponse(response);
               }
             }
           }
-          if (!reported && !cancelled) onTerminal("incomplete");
+          if (!reported && !cancelled) {
+            if (logCtx) logCtx.terminalSource = "synthetic";
+            onTerminal("incomplete");
+          }
           return;
         }
         buffer += decoder.decode(value, { stream: true });
@@ -472,7 +482,14 @@ export function consumeForInspection(
           if (!payload) continue;
           if (!reported) {
             const status = terminalStatusFromSsePayload(payload);
-            if (status) { reported = true; onTerminal(status); }
+            if (status) {
+              reported = true;
+              if (logCtx) {
+                logCtx.transportPhase = "terminal_sse";
+                logCtx.terminalSource = "upstream";
+              }
+              onTerminal(status);
+            }
           }
           if (onCompletedResponse) {
             const response = completedResponseFromSsePayload(payload);
@@ -481,7 +498,16 @@ export function consumeForInspection(
         }
       }
     } catch {
-      if (!reported && !cancelled) onTerminal("incomplete");
+      // Upstream read failure after HTTP 200 (mid-stream socket reset) is not a
+      // protocol `response.incomplete` terminal. Report a synthetic 502 so account
+      // health treats it as transient; abort-driven client cancellation still wins.
+      if (!reported && !cancelled) {
+        if (logCtx) {
+          logCtx.transportPhase = "mid_stream";
+          logCtx.terminalSource = "synthetic";
+        }
+        onTerminal("failed", 502);
+      }
     } finally {
       onDone?.();
     }

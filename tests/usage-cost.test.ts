@@ -174,8 +174,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 35 keys, no unverified", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(35);
+  test("16. shipped overlay membership: 39 keys, including Gemini 3.6 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(39);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -185,6 +185,10 @@ describe("resolveMatchedPrice", () => {
       "deepseek/deepseek-reasoner",
       "google-antigravity/gemini-3.1-pro-low",
       "google-antigravity/gemini-3.1-pro-high",
+      "google/gemini-3.6-flash",
+      "google-antigravity/gemini-3.6-flash-low",
+      "google-antigravity/gemini-3.6-flash-medium",
+      "google-antigravity/gemini-3.6-flash-high",
       "google-antigravity/gemini-3.5-flash-extra-low",
       "google-antigravity/gemini-3.5-flash-low",
       "google-antigravity/gemini-3.5-flash-mid",
@@ -216,6 +220,26 @@ describe("resolveMatchedPrice", () => {
       "cursor/auto",
     ]) {
       expect(keys.has(expected)).toBe(true);
+    }
+
+    const direct = findExpectedPriceOverlay("google", "gemini-3.6-flash");
+    expect(direct).toMatchObject({
+      cost4: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+      status: "verified",
+    });
+    for (const modelId of [
+      "gemini-3.5-flash-extra-low",
+      "gemini-3.5-flash-low",
+      "gemini-3.5-flash-mid",
+      "gemini-3.5-flash-high",
+      "gemini-3-flash-agent",
+    ]) {
+      const compatibility = findExpectedPriceOverlay("google-antigravity", modelId);
+      expect(compatibility).toMatchObject({
+        cost4: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+        status: "verified-derived",
+      });
+      expect(compatibility?.source).toContain("gemini-3.6-flash");
     }
   });
 });

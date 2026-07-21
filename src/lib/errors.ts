@@ -99,6 +99,9 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     return { message, type: "invalid_request_error", code: "context_length_exceeded" };
   }
+  if (text.includes("cursor resource limit exceeded")) {
+    return { message, type: "invalid_request_error", code: "tool_catalog_too_large" };
+  }
   if (
     text.includes("insufficient_quota") ||
     text.includes("exceeded your current quota") ||
@@ -199,6 +202,7 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
   const lower = message.toLowerCase();
   // Client aborts (e.g. mid web-search loop) must not look like upstream 502s in /api/logs.
   if (isClientClosedMessage(lower)) return 499;
+  if (lower.includes("cursor resource limit exceeded")) return 400;
   if (
     lower.includes("resource_exhausted") ||
     lower.includes("resource exhausted") ||

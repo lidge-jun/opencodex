@@ -1,7 +1,17 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
+import { pathToFileURL } from "node:url";
+import { Database, constants } from "bun:sqlite";
 import { resolveCodexHomeDir } from "../codex/home";
+
+// SQLITE_OPEN_READONLY alone is not filesystem-read-only for a WAL-mode DB: Bun's
+// `{ readonly: true }` can still materialize *.sqlite-wal/-shm sidecars the first time a
+// checkpointed WAL database (no live sidecars yet) is opened and queried. `immutable=1`
+// (via a file: URI, which requires the SQLITE_OPEN_URI flag) tells SQLite the file will
+// never change for this connection's lifetime, so it skips WAL/shm entirely — the
+// tradeoff is reading the last-checkpointed snapshot instead of blocking on a live writer,
+// which is the right tradeoff for a passive diagnostics scan that must never write.
+const IMMUTABLE_READONLY_FLAGS = constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI;
 
 /**
  * Read-only CODEX_HOME storage scanner — Phase 1 of the Storage page epic
@@ -121,15 +131,17 @@ function buildBucket(key: StorageBucketKey, files: FileEntry[]): StorageBucket {
 }
 
 /**
- * Row count via a lock-safe readonly open (the same secondary-reader contract as
- * codex/history-provider.ts): short busy timeout, and any lock/corruption/schema
- * error degrades to null — "unknown", never a crash and never a write.
+ * Row count via an immutable readonly open — guarantees zero writes under CODEX_HOME even
+ * for a checkpointed WAL-mode DB with no sidecars yet. Any error (corruption, a file that
+ * vanished mid-scan, a future schema change) degrades to null — "unknown", never a crash.
  */
 function countRowsReadonly(dbPath: string, table: string): number | null {
   try {
-    const db = new Database(dbPath, { readonly: true });
+    // pathToFileURL percent-encodes reserved characters (space, #, ?, %) that a naive
+    // `file:${dbPath}` concatenation would misparse as a URI fragment/query/escape.
+    const uri = `${pathToFileURL(dbPath).href}?immutable=1`;
+    const db = new Database(uri, IMMUTABLE_READONLY_FLAGS);
     try {
-      db.exec("PRAGMA busy_timeout = 100");
       const row = db.query<{ n: number }, []>(`SELECT count(*) AS n FROM "${table}"`).get();
       return row?.n ?? null;
     } finally {

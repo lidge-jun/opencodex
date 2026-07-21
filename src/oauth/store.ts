@@ -36,6 +36,38 @@ export function getAuthRefreshIntentLockPath(provider: string, accountId: string
   const accountHash = createHash("sha256").update(accountId).digest("hex").slice(0, 24);
   return join(getConfigDir(), `auth.refresh.${safeProvider}.${accountHash}.lock`);
 }
+export function getAuthRefreshIntentPath(provider: string, accountId: string): string {
+  return `${getAuthRefreshIntentLockPath(provider, accountId)}.json`;
+}
+export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; uncertain?: true }
+export function readOAuthRefreshIntent(provider: string, accountId: string): OAuthRefreshIntent | undefined {
+  const path = getAuthRefreshIntentPath(provider, accountId);
+  try {
+    hardenConfigDir();
+    hardenExistingSecret(path);
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<OAuthRefreshIntent>;
+    if (value.version !== 1 || value.provider !== provider || value.accountId !== accountId || typeof value.generation !== "string" || typeof value.createdAt !== "number") {
+      return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    }
+    return value as OAuthRefreshIntent;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+  }
+}
+export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now()): void {
+  const dir = getConfigDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  hardenConfigDir();
+  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt };
+  atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify(intent)}\n`);
+}
+export function clearOAuthRefreshIntent(provider: string, accountId: string, generation: string): boolean {
+  const current = readOAuthRefreshIntent(provider, accountId);
+  if (!current || current.generation !== generation) return false;
+  try { unlinkSync(getAuthRefreshIntentPath(provider, accountId)); return true; }
+  catch (error) { if (errorCode(error) === "ENOENT") return false; throw error; }
+}
 export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
 }

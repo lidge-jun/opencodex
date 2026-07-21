@@ -16,6 +16,7 @@ on:
       - "tsconfig.json"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
+      - ".github/workflows/enforce-pr-target.yml"
   push:
     branches: [main, preview, dev]
     paths:
@@ -31,6 +32,7 @@ on:
       - "tsconfig.json"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
+      - ".github/workflows/enforce-pr-target.yml"
   workflow_dispatch:
 
 permissions:

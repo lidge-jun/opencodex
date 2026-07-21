@@ -242,9 +242,29 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function buildServiceShellCommand(bun: string, cli: string): string {
+/**
+ * Listen port baked into service wrappers / WinSW XML.
+ * Priority: explicit override → OCX_BAKE_PORT (update restart) → config.port → 10100.
+ * `config.port === 0` means ephemeral for interactive start; services need a stable pin,
+ * so treat 0 / invalid like unset (default 10100) instead of baking `--port 0`.
+ */
+export function resolveServiceListenPort(override?: number): number {
+  if (typeof override === "number" && Number.isFinite(override) && override > 0 && override <= 65535) {
+    return Math.trunc(override);
+  }
+  const baked = process.env.OCX_BAKE_PORT?.trim();
+  if (baked && /^\d+$/.test(baked)) {
+    const n = Number(baked);
+    if (n > 0 && n <= 65535) return n;
+  }
+  const configured = loadConfig().port;
+  if (typeof configured === "number" && configured > 0 && configured <= 65535) return configured;
+  return 10100;
+}
+
+function buildServiceShellCommand(bun: string, cli: string, port = resolveServiceListenPort()): string {
   const tokenFile = serviceApiTokenFilePath();
-  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start`;
+  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start --port ${port}`;
 }
 
 function systemdQuote(value: string): string {
@@ -316,7 +336,7 @@ function taskXmlString(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export function buildWindowsServiceScript(entry = cliEntry()): string {
+export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
   const { bun, cli } = entry;
   const bunRuntime = durableBunRuntime();
   const path = process.env.PATH ?? "";
@@ -345,7 +365,7 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
     '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
-    '"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1',
+    `"%OCX_BUN%" "%OCX_CLI%" start --port ${port} >>"%OCX_SERVICE_LOG%" 2>&1`,
     "if %ERRORLEVEL% NEQ 0 (",
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',
     // `timeout` needs console stdin and dies with "Input redirection is not supported"
@@ -483,7 +503,7 @@ function installWindows(): void {
       throw new Error(`Cannot remove the native service before switching to Task Scheduler: ${err instanceof Error ? err.message : String(err)}. Remove it manually with 'sc delete ${WINSW_SERVICE_ID}' or retry.`);
     }
     if (statusWinswRaw() !== "nonexistent") {
-      throw new Error("Native service still present after removal attempt — aborting switch. Remove it manually with 'sc delete opencodex-proxy-native'.");
+      throw new Error(`Native service registration could not be re-verified after the removal attempt — aborting switch. Check 'sc.exe query ${WINSW_SERVICE_ID}' and remove it manually if present.`);
     }
   }
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
@@ -741,7 +761,9 @@ export function stopServiceIfInstalled(): boolean {
       const q = schtasks(["/query", "/tn", TASK]);
       if (q.includes(TASK)) { stopWindows(); stopped = true; }
     } catch { /* task not found */ }
-    if (statusWinswRaw() !== "nonexistent") { stopWinswService(); stopped = true; }
+    if (statusWinswRaw() !== "nonexistent") {
+      try { stopWinswService(); stopped = true; } catch { /* best-effort */ }
+    }
     if (stopped) return true;
   } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
     try { stopSystemd(); return true; } catch { return false; }
@@ -773,7 +795,14 @@ export function uninstallServiceIfInstalled(): boolean {
       const q = schtasks(["/query", "/tn", TASK]);
       if (q.includes(TASK)) { uninstallWindows(); removed = true; }
     } catch { /* task not found */ }
-    if (statusWinswRaw() !== "nonexistent") { uninstallWinswService(); removed = true; }
+    if (statusWinswRaw() !== "nonexistent") {
+      try {
+        uninstallWinswService();
+        removed = true;
+      } catch (err) {
+        console.warn(`⚠️  Failed to remove native service: ${err instanceof Error ? err.message : String(err)}. Check 'sc.exe query ${WINSW_SERVICE_ID}'.`);
+      }
+    }
     if (removed) { removeServiceInstallState(); return true; }
   } else if (process.platform === "linux" && existsSync(unitPath())) {
     try { uninstallSystemd(); removeServiceInstallState(); return true; } catch {

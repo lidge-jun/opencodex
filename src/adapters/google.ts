@@ -23,6 +23,7 @@ import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityWireModelId } from "../providers/antigravity-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -225,6 +226,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (parsed.options.temperature !== undefined) generationConfig.temperature = parsed.options.temperature;
       if (parsed.options.topP !== undefined) generationConfig.topP = parsed.options.topP;
       if (parsed.options.stopSequences) generationConfig.stopSequences = parsed.options.stopSequences;
+      const directFlashThinking = provider.googleMode !== "vertex"
+        && provider.googleMode !== "cloud-code-assist"
+        && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")
+        ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
+        : undefined;
+      if (directFlashThinking) generationConfig.thinkingConfig = { thinkingLevel: directFlashThinking };
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
       const method = parsed.stream ? "streamGenerateContent" : "generateContent";

@@ -1240,11 +1240,22 @@ function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModel
 async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
   const apiKey = await resolveModelsAuthToken(name, prov);
-  const configured: CatalogModel[] = (prov.models ?? []).map(id => ({
+  const seedVertexDefault = prov.adapter === "google"
+    && prov.googleMode === "vertex"
+    && (prov.models?.length ?? 0) === 0
+    && Boolean(prov.defaultModel);
+  const configuredIds = seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : (prov.models ?? []);
+  const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
   }));
+  const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
+  const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
+    vertexDefaultSeed && !models.some(model => model.id === vertexDefaultSeed.id)
+      ? [...models, vertexDefaultSeed]
+      : models
+  );
   if (prov.adapter === "cursor") {
     if (prov.liveModels === false || !apiKey) return configured;
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
@@ -1266,25 +1277,37 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     const staleCursor = getStaleCached(name);
     return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
   }
-  if (prov.authMode === "oauth" && !apiKey) return []; // not logged in → skip
+  if (prov.authMode === "oauth" && !apiKey) {
+    // No usable token (logged out, or account marked needsReauth). Still surface the
+    // configured static catalog so the GUI Models tab / rail counts are not empty —
+    // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
+    return configured;
+  }
   if (prov.liveModels === false) {
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
-  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh, contextCap); // dedups Codex's frequent /v1/models polling within the TTL
+  if (fresh) return withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)); // dedups Codex's frequent /v1/models polling within the TTL
   if (isModelsFetchCoolingDown(name)) {
     // A recently-failed provider (unreachable API, missing proxy, bad key) must not re-pay the
     // fetch timeout on every catalog poll — the dashboard polls this path per page load.
     const stale = getStaleCached(name);
-    return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
   }
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
+  const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
+    ? "vertex-aiplatform"
+    : "provider-models";
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       markModelsFetchFailure(name);
       const stale = getStaleCached(name);
-      return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+      const fallback = stale ? "stale" : "configured";
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
     }
     const json = await res.json() as unknown;
     const data = json !== null && typeof json === "object" && !Array.isArray(json)
@@ -1296,7 +1319,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
         `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data; using stale/static catalog degradation.`,
       );
       const stale = getStaleCached(name);
-      return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
     }
     const items = data;
     const live = items.map(m => applyProviderConfigHints(name, prov, {
@@ -1319,7 +1342,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       if (dated) {
         // Reapply config hints so alias-keyed overrides (modelContextWindows etc.) win.
         live.push(applyProviderConfigHints(name, prov, { ...dated, id: m.id }, contextCap));
-      } else if (shouldRetainConfiguredProviderModel(name, m.id)) {
+      } else if (seedVertexDefault || shouldRetainConfiguredProviderModel(name, m.id)) {
         live.push(m);
       } else {
         droppedConfiguredIds.push(m.id);
@@ -1336,10 +1359,14 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     }
     setCached(name, live);
     return live;
-  } catch {
+  } catch (error) {
     markModelsFetchFailure(name);
     const stale = getStaleCached(name);
-    return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+    const fallback = stale ? "stale" : "configured";
+    console.warn(
+      `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
+    );
+    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
   }
 }
 
@@ -1436,11 +1463,12 @@ function intersectStrings(values: readonly string[][]): string[] {
 }
 
 function effectiveComboDefault(
-  configured: string | undefined,
+  configured: string | null | undefined,
   common: readonly string[],
 ): string | undefined {
+  if (!configured) return undefined;
   if (configured && common.includes(configured)) return configured;
-  const requestedRank = codexEffortRank(configured ?? "medium");
+  const requestedRank = codexEffortRank(configured);
   const ranked = common
     .map(effort => ({ effort, rank: codexEffortRank(effort) }))
     .filter(item => item.rank >= 0)

@@ -67,6 +67,38 @@ describe("routeModel registry effort defaults", () => {
     });
   });
 
+  test("routes a self-namespaced native id whole instead of stripping to the remainder", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "orcarouter",
+      providers: {
+        orcarouter: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.orcarouter.ai/v1",
+          authMode: "key",
+          apiKey: "sk-orca-test",
+          models: ["orcarouter/auto", "openai/gpt-5.5"],
+        },
+      },
+    };
+
+    // The advertised native id must reach the upstream intact — a bare `auto` has no channel.
+    expect(routeModel(config, "orcarouter/auto")).toMatchObject({
+      providerName: "orcarouter",
+      modelId: "orcarouter/auto",
+    });
+    // The Codex-facing encoded slug still decodes back to the same native id.
+    expect(routeModel(config, "orcarouter/orcarouter-auto")).toMatchObject({
+      providerName: "orcarouter",
+      modelId: "orcarouter/auto",
+    });
+    // A normal vendor-namespaced model still strips the provider prefix as before.
+    expect(routeModel(config, "orcarouter/openai-gpt-5.5")).toMatchObject({
+      providerName: "orcarouter",
+      modelId: "openai/gpt-5.5",
+    });
+  });
+
   test("routes bare OpenAI models only through canonical openai and stops terminally", () => {
     const forward = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const };
     const api = { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-test", defaultModel: "gpt-5.5" };
