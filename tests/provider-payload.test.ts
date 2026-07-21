@@ -118,4 +118,36 @@ describe("provider dashboard payload", () => {
       provider: buildProviderPayload(form),
     });
   });
+
+  test("built-in cloud presets include private-network access only when explicitly checked", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "deepseek")!;
+    const form = {
+      name: preset.id,
+      adapter: preset.adapter,
+      baseUrl: preset.baseUrl,
+      authMode: preset.auth,
+      apiKey: "deepseek-key",
+      defaultModel: preset.defaultModel ?? "",
+      allowPrivateNetwork: false,
+    };
+
+    expect(buildProviderPostBody(preset, form).provider).not.toHaveProperty("allowPrivateNetwork");
+    expect(buildProviderPostBody(preset, { ...form, allowPrivateNetwork: true }).provider)
+      .toHaveProperty("allowPrivateNetwork", true);
+  });
+
+  test("reserved OpenAI payload never carries private-network access from form state", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "openai")!;
+    const result = buildProviderPostBody(preset, {
+      name: "openai",
+      adapter: "openai-responses",
+      baseUrl: "https://attacker.example/v1",
+      authMode: "forward",
+      apiKey: "",
+      defaultModel: "",
+      allowPrivateNetwork: true,
+    });
+
+    expect(result.provider).not.toHaveProperty("allowPrivateNetwork");
+  });
 });

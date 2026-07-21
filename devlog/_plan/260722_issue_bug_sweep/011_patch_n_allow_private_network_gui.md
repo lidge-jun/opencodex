@@ -3,6 +3,7 @@
 - 소스 RCA: `003_rca_n_allow_private_network.md` (리뷰어 검증 완료)
 - 위험도: **security-sensitive** — SSRF 방어 우회 옵션의 GUI 활성화 표면 확대. 백엔드 능력 추가 없음.
 - 선행 조건: 없음 (독립 패치 단위). #175 백엔드(109b7672)는 이미 랜딩.
+- **구현 완료 (2026-07-22)**: AddProviderModal.tsx:478 가드 `!isReservedForward` + hint 렌더; provider-payload.ts:53 조건부 포함(불변); tests/provider-payload.test.ts +2 케이스. 보안 불변식(기본 false :54/:147, reserved 제외 :303, metadata 차단 불변) 트리 재확인. 검증: `bun test tests/provider-payload.test.ts` 10 pass, `bun x tsc --noEmit` exit 0. 커밋: WP-impl-2.
 
 ## 보안 불변식 (구현·리뷰 필수 체크리스트)
 
