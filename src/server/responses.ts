@@ -6,7 +6,7 @@ import {
 } from "../config";
 import { parseRequest } from "../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../responses/compaction";
-import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { FORWARD_HEADERS, compactEndpoint } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
 import {
@@ -1741,12 +1741,19 @@ export async function handleResponsesCompact(
       }
       throw err;
     }
-    const base = (compactProvider.baseUrl ?? "").replace(/\/$/, "");
+    // Build the compact endpoint URL. Forward (ChatGPT pool) mode uses the bare path
+    // `${baseUrl}/responses/compact` - mirroring the adapter's forward branch (`${baseUrl}/responses`).
+    // Keyed (API-key) mode uses version-segment-aware logic: a baseUrl ending in "/v1", "/v3", etc.
+    // keeps that segment (e.g. Ark's "/api/plan/v3/responses/compact"); a bare baseUrl falls back
+    // to "/v1/responses/compact" for OpenAI-compatible proxies.
+    const compactUrl = compactProvider.authMode === "forward"
+      ? `${(compactProvider.baseUrl ?? "").replace(/\/$/, "")}/responses/compact`
+      : compactEndpoint(compactProvider.baseUrl ?? "");
     if (compactProvider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     const { reasoning: _reasoning, ...compactBody } = raw as typeof raw & { reasoning?: unknown };
     let upstream: Response;
     try {
-      upstream = await fetch(`${base}/responses/compact`, {
+      upstream = await fetch(compactUrl, {
         method: "POST",
         headers,
         body: JSON.stringify({ ...compactBody, model: route.modelId }),

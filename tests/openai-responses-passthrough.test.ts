@@ -458,3 +458,43 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(body.tools.some(t => t.type === "function" && t.name === "image_gen.imagegen")).toBe(true);
   });
 });
+
+describe("OpenAI Responses keyed-mode URL construction", () => {
+  const meta = { headers: new Headers({ authorization: "Bearer token" }) };
+
+  test("Ark /api/plan/v3 baseUrl builds /v3/responses (not /v3/v1/responses)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.5", input: "hi" },
+    }, meta);
+
+    expect(request.url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/responses");
+  });
+
+  test("OpenAI /v1 baseUrl still builds /v1/responses (backward compat)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.example/v1",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.5", input: "hi" },
+    }, meta);
+
+    expect(request.url).toBe("https://api.openai.example/v1/responses");
+  });
+});

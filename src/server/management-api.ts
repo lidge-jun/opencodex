@@ -52,6 +52,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
+import { positiveIntegerRecordConfigError } from "../config";
 import { applySystemEnvToggle } from "./system-env";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
@@ -685,6 +686,32 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       if (cleaned.length > 0) next.models = cleaned;
       else delete next.models;
       touched = true;
+    }
+    if (Object.hasOwn(rawBody, "modelContextWindows")) {
+      // Replacement semantics: a null/undefined clears the map, an empty object clears it,
+      // otherwise the whole map is replaced (not merged) so the GUI owns the full per-model
+      // override set. Values must be positive integers; blank keys are trimmed and dropped.
+      const raw = (rawBody as { modelContextWindows?: unknown }).modelContextWindows;
+      if (raw == null) {
+        delete next.modelContextWindows;
+        touched = true;
+      } else {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          return jsonResponse({ error: "modelContextWindows must be a plain object" }, 400);
+        }
+        const map: Record<string, number> = {};
+        let badValue = false;
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          const id = k.trim();
+          if (id.length === 0) continue; // blank key: drop, do not reject
+          if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v) || v <= 0) { badValue = true; break; }
+          map[id] = Math.floor(v);
+        }
+        if (badValue) return jsonResponse({ error: "modelContextWindows values must be positive integers" }, 400);
+        if (Object.keys(map).length > 0) next.modelContextWindows = map;
+        else delete next.modelContextWindows;
+        touched = true;
+      }
     }
 
     if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);

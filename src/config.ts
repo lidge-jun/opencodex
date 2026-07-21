@@ -417,6 +417,17 @@ const configSchema = z.object({
         message: maxInputError,
       });
     }
+    const contextWindowError = positiveIntegerRecordConfigError(
+      (provider as { modelContextWindows?: unknown }).modelContextWindows,
+      "modelContextWindows",
+    );
+    if (contextWindowError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelContextWindows"],
+        message: contextWindowError,
+      });
+    }
     if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {
       // Persisted account mode is valid ONLY on the canonical built-in `openai` forward provider.
       // Old openai-multi rows stay parseable (they never carry a mode) so startup can migrate them.
