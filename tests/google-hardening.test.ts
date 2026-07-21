@@ -149,7 +149,7 @@ describe("google provider hardening", () => {
     const vertex = PROVIDER_REGISTRY.find(entry => entry.id === "google-vertex");
 
     expect(google?.defaultModel).toBe("gemini-3.5-flash");
-    expect(google?.models).toEqual(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview"]);
+    expect(google?.models).toEqual(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"]);
     expect(google?.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
     expect(google?.modelContextWindows?.["gemini-3.5-flash"]).toBe(1_000_000);
     expect(google?.modelContextWindows?.["gemini-3.1-pro-preview"]).toBeUndefined();
@@ -164,5 +164,13 @@ describe("google provider hardening", () => {
       "low", "medium", "high",
     ]);
     expect(vertex?.defaultModel).toBe("gemini-3-pro");
+  });
+
+  test("registers gemini-3.5-flash-lite with its text-only context metadata", () => {
+    const google = PROVIDER_REGISTRY.find(entry => entry.id === "google");
+
+    expect(google?.models).toContain("gemini-3.5-flash-lite");
+    expect(google?.modelContextWindows?.["gemini-3.5-flash-lite"]).toBe(1_048_576);
+    expect(google?.modelInputModalities?.["gemini-3.5-flash-lite"]).toEqual(["text"]);
   });
 });
