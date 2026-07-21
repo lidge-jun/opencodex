@@ -32,7 +32,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-cloud",
-  "qianfan", "alibaba", "alibaba-token-plan", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
 ];
@@ -418,7 +418,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

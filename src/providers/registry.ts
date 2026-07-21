@@ -2,7 +2,10 @@ import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
-import { QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import {
+  QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
+  ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+} from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -199,6 +202,33 @@ const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "glm-5.2": ["text"],
   "deepseek-v4-pro": ["text"],
 };
+
+// 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore).
+// Multi-vendor lineup distinct from Beijing — includes DeepSeek V4 flash, Kimi K2.7, MiniMax.
+// Evidence: https://www.alibabacloud.com/help/en/model-studio/token-plan-overview
+const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
+  "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2",
+  "kimi-k2.7-code",
+  "glm-5.2",
+  "MiniMax-M2.5",
+];
+const ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS = [
+  "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+];
+const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
+  "qwen3.7-max": ["text"],
+  "qwen3.7-plus": ["text", "image"],
+  "qwen3.6-plus": ["text", "image"],
+  "qwen3.6-flash": ["text", "image"],
+  "deepseek-v4-pro": ["text"],
+  "deepseek-v4-flash": ["text"],
+  "deepseek-v3.2": ["text"],
+  "kimi-k2.7-code": ["text"],
+  "glm-5.2": ["text"],
+  "MiniMax-M2.5": ["text"],
+};
+
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
 // alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
@@ -740,6 +770,35 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: { "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS,
     preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "qwen3.8-max-preview"],
+  },
+  {
+    id: "alibaba-token-plan-intl",
+    label: "Alibaba Token Plan (International)",
+    baseUrl: ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+    adapter: "openai-chat",
+    authKind: "key",
+    allowBaseUrlOverride: true,
+    baseUrlChoices: ALIBABA_INTL_BASE_URL_CHOICES,
+    dashboardUrl: "https://modelstudio.console.alibabacloud.com/?tab=api#/api",
+    defaultModel: "qwen3.7-max",
+    models: ALIBABA_INTL_TOKEN_PLAN_MODELS,
+    liveModels: false,
+    note: "Token Plan Team Edition · Singapore (ap-southeast-1)",
+    modelInputModalities: ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES,
+    modelContextWindows: { "deepseek-v4-pro": 1_000_000, "deepseek-v4-flash": 1_000_000, "glm-5.2": 1_000_000 },
+    modelReasoningEfforts: {
+      ...Object.fromEntries(ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
+      "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+      "deepseek-v4-flash": DEEPSEEK_THINKING_EFFORTS,
+    },
+    modelReasoningEffortMap: {
+      "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP,
+      "deepseek-v4-flash": DEEPSEEK_THINKING_REASONING_MAP,
+    },
+    thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS,
+    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.7-max"],
+    noVisionModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "kimi-k2.7-code", "glm-5.2", "MiniMax-M2.5", "qwen3.7-max"],
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
