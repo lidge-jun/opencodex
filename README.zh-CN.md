@@ -132,7 +132,7 @@ ocx gui
 1. 点击 **"Add Provider"**。
 2. 从 **40+ 内置 provider** 中选择，或输入自定义的 OpenAI 兼容端点。
 3. 粘贴 API key（Anthropic、xAI、Kimi 也可用 OAuth 登录）。
-4. 模型会从 provider 的 `/v1/models` 端点**自动发现**。
+4. 默认情况下，模型会从 provider 的 `/v1/models` 端点**自动发现**；也可以在 Add Provider 对话框中选择**手动设置**，每行输入一个模型 ID（会写入 `liveModels: false` 和你输入的 `models` 列表，不会发起 `/models` 请求）。
 
 新 provider 立即可用，无需重启。
 

@@ -27,6 +27,10 @@ export interface CatalogPreset {
   keyOptional?: boolean;
   /** Free pricing — may still require an API key (e.g. NVIDIA NIM). */
   freeTier?: boolean;
+  /** Ships with discovery off and a fixed model list (mirrors server DTO). */
+  liveModels?: boolean;
+  /** Fixed model-id list for presets that ship with `liveModels: false`. */
+  models?: string[];
   /**
    * Endpoint picker (e.g. Qwen Cloud). Choice without `baseUrl` = Custom (show text field).
    */

@@ -191,6 +191,12 @@ text-only models. Text-only models (e.g. `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`, `gemini-3-flash-preview`) are not. Matching is
 tolerant of Ollama's `:size` tags, so `gpt-oss` covers `gpt-oss:120b` and `gpt-oss:20b`.
 
+### Manual model entry
+
+In the Add Provider dialog you can choose **Set manually** instead of auto-discovering models.
+Manual mode writes `liveModels: false` and the `models` list to the provider config, and no `/models` fetch is made — the IDs you type are exactly what Codex sees.
+See the [configuration reference](/opencodex/reference/configuration/) for details.
+
 ## 4. Local providers
 
 Point opencodex at a local OpenAI-compatible server — usually with a blank key:

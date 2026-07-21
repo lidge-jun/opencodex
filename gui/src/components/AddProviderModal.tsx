@@ -5,6 +5,7 @@ import {
   buildProviderPostBody,
   codexPresetDescriptionKey,
   isReservedCodexForwardPreset,
+  parseManualModels,
   type ProviderPayload,
   type ProviderPayloadForm,
 } from "../provider-payload";
@@ -42,7 +43,7 @@ export default function AddProviderModal({
   );
   const [form, setForm] = useState<FormState | null>(
     initialCustom
-      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "", allowPrivateNetwork: false }
+      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "", allowPrivateNetwork: false, modelSource: "auto", manualModels: "" }
       : null,
   );
   const [saving, setSaving] = useState(false);
@@ -134,6 +135,8 @@ export default function AddProviderModal({
       apiKey: "",
       defaultModel: p.defaultModel ?? "",
       allowPrivateNetwork: false,
+      modelSource: p.liveModels === false ? "manual" : "auto",
+      manualModels: p.liveModels === false ? (p.models ?? []).join("\n") : "",
     });
     setError("");
     setOauthMsg("");
@@ -163,6 +166,14 @@ export default function AddProviderModal({
       : form.baseUrl.trim();
     if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
     if (!reserved && !resolvedBaseUrl) { setError(t("modal.baseUrlRequired")); return; }
+    if (form.modelSource === "manual" && parseManualModels(form.manualModels).length === 0) { setError(t("modal.manualModelsRequired")); return; }
+    if (form.modelSource === "manual") {
+      const trimmedDefault = form.defaultModel.trim();
+      if (trimmedDefault && !parseManualModels(form.manualModels).includes(trimmedDefault)) {
+        setError(t("modal.manualModelsDefaultError"));
+        return;
+      }
+    }
     const submitForm = { ...form, baseUrl: resolvedBaseUrl };
     let postBody: { name: string; provider: ProviderPayload };
     try {
@@ -289,6 +300,7 @@ export default function AddProviderModal({
   const isCustom = preset?.id === "custom";
   const isLocal = form?.authMode === "local";
   const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
+  const parsedModels = form ? parseManualModels(form.manualModels) : [];
 
   return (
     <>
@@ -490,9 +502,35 @@ export default function AddProviderModal({
               {!isReservedForward && <Field label={t("modal.defaultModel")}>
                 <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
               </Field>}
+              {!isReservedForward && <>
+                <Field label={t("modal.modelSource")}>
+                  <select className="input" value={form.modelSource} onChange={e => setForm({ ...form, modelSource: e.target.value as "auto" | "manual" })}>
+                    <option value="auto">{t("modal.modelSourceAuto")}</option>
+                    <option value="manual">{t("modal.modelSourceManual")}</option>
+                  </select>
+                </Field>
+                {form.modelSource === "auto" && (
+                  <div className="muted text-label">{t("modal.modelSourceAutoHint")}</div>
+                )}
+                {form.modelSource === "manual" && <>
+                  <textarea
+                    className="input"
+                    rows={5}
+                    value={form.manualModels}
+                    onChange={e => setForm({ ...form, manualModels: e.target.value })}
+                    placeholder={t("modal.manualModelsPlaceholder")}
+                  />
+                  {parsedModels.length === 0 && (
+                    <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{t("modal.manualModelsRequired")}</div>
+                  )}
+                  {form.defaultModel.trim() !== "" && !parsedModels.includes(form.defaultModel.trim()) && (
+                    <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{t("modal.manualModelsDefaultError")}</div>
+                  )}
+                </>}
+              </>}
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
-                <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>
+                <button className="btn btn-primary" onClick={submit} disabled={saving || (form.modelSource === "manual" && (parsedModels.length === 0 || (form.defaultModel.trim() !== "" && !parsedModels.includes(form.defaultModel.trim()))))}>{saving ? t("modal.adding") : t("modal.add")}</button>
                 {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>{t("modal.useOauthLogin")}</button>}
                 <div style={{ flex: 1 }} />
                 <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>

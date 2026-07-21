@@ -63,6 +63,8 @@ export interface DerivedProviderPreset {
    * form shows a dropdown; `custom` reveals a free-text base URL field.
    */
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
+  models?: string[];
+  liveModels?: boolean;
   /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
   provider?: OcxProviderConfig;
 }
@@ -262,6 +264,8 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
+    ...(entry.models ? { models: [...entry.models] } : {}),
+    ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
   };
 }
 

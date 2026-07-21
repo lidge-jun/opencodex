@@ -170,6 +170,12 @@ Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；
 
 Ollama Cloud 是托管（而非本地）的 Ollama，在 `https://ollama.com/v1` 上兼容 OpenAI，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/opencodex/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
 
+### 手动输入模型
+
+在 Add Provider 对话框中，你可以选择**手动设置**来代替自动发现。
+手动模式会向 provider 配置写入 `liveModels: false` 和 `models` 列表，并且不会发起 `/models` 请求。你输入的 ID 就是 Codex 看到的全部模型。
+详情请参见 [配置参考](/opencodex/zh-cn/reference/configuration/)。
+
 ## 4. 本地提供商
 
 让 opencodex 指向本地的 OpenAI 兼容服务器——通常使用空密钥：

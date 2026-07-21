@@ -127,7 +127,7 @@ This opens the dashboard at `http://localhost:10100`. From there:
 1. Click **"Add Provider"**
 2. Pick from **40+ built-in providers** — or enter a custom OpenAI-compatible endpoint
 3. Paste your API key (or log in via OAuth for Anthropic, xAI, and Kimi)
-4. Models are **auto-discovered** from the provider's `/v1/models` endpoint
+4. Models are **auto-discovered** from the provider's `/v1/models` endpoint by default — or choose **Set manually** in the Add Provider dialog and enter one model ID per line (writes `liveModels: false` + your `models` list; no `/models` fetch is made).
 
 Your new provider is ready to use immediately. No restart needed.
 

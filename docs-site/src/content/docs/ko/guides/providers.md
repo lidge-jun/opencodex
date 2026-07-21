@@ -189,6 +189,12 @@ Ollama Cloud는 호스팅형(로컬이 아님) Ollama로, `https://ollama.com/v1
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`, `gemini-3-flash-preview`)은 포함되지 않습니다. 매칭은
 Ollama의 `:size` 태그에 관대하므로 `gpt-oss`는 `gpt-oss:120b`와 `gpt-oss:20b`를 모두 포괄합니다.
 
+### 수동 모델 입력
+
+Add Provider 대화 상자에서 자동 감지 대신 **수동 설정**을 선택할 수 있습니다.
+수동 모드는 프로바이더 설정에 `liveModels: false`와 `models` 목록을 저장하며, `/models` 요청은 발생하지 않습니다. 입력한 ID가 Codex에 보이는 전부입니다.
+자세한 내용은 [설정 레퍼런스](/opencodex/ko/reference/configuration/)를 참고하세요.
+
 ## 4. 로컬 프로바이더
 
 opencodex를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 빈 키와 함께 사용합니다:

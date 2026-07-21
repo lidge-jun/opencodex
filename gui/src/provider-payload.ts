@@ -6,6 +6,13 @@ export interface ProviderPayloadForm {
   apiKey: string;
   defaultModel: string;
   allowPrivateNetwork?: boolean;
+  /**
+   * Where the model list comes from. Defaults to `"auto"` (live `/v1/models`)
+   * when omitted — older call sites and tests don't need to opt in explicitly.
+   */
+  modelSource?: "auto" | "manual";
+  /** One model id per line; only consulted when `modelSource === "manual"`. */
+  manualModels?: string;
 }
 
 export interface ProviderPostPreset {
@@ -33,6 +40,21 @@ export interface ProviderPayload {
   authMode?: "key" | "forward" | "oauth";
   codexAccountMode?: "pool" | "direct";
   allowPrivateNetwork?: boolean;
+  liveModels?: boolean;
+  models?: string[];
+}
+
+export function parseManualModels(input: string | undefined): string[] {
+  if (!input) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of input.split(/\r?\n/)) {
+    const model = raw.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    result.push(model);
+  }
+  return result;
 }
 
 export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload {
@@ -52,6 +74,13 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
   }
   if (form.allowPrivateNetwork) {
     provider.allowPrivateNetwork = true;
+  }
+  if (form.modelSource === "manual") {
+    provider.liveModels = false;
+    const parsedModels = parseManualModels(form.manualModels ?? "");
+    if (parsedModels.length > 0) {
+      provider.models = parsedModels;
+    }
   }
 
   return provider;
