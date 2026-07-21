@@ -291,6 +291,12 @@ export interface RestartIo {
   waitForPort?: typeof waitForPortAvailable;
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number) => void;
   serviceInstalledFn?: () => boolean;
+  /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
+  runService?: (
+    job: UpdateJobState,
+    bin: string,
+    args: string[],
+  ) => { status: number | null; signal?: NodeJS.Signals | null };
 }
 
 async function restartAfterUpdate(
@@ -313,10 +319,26 @@ async function restartAfterUpdate(
     } catch { /* fallback to default service install */ }
   }
   const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port, svcArgs);
+  const waitFn = io.waitForPort ?? waitForPortAvailable;
+
   if (serviceInstalled) {
-    const result = runLoggedCommand(job, cmd.bin, cmd.args, RESTART_TIMEOUT_MS);
-    if (result.status !== 0) {
-      throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
+    // Stop-first update already unloaded the service; wait for the socket to drain,
+    // then reinstall wrappers that bake `--port` via OCX_BAKE_PORT (PR #152 gap).
+    const freed = await waitFn(port, hostname, { timeoutMs: 5_000, intervalMs: 25 });
+    if (!freed) {
+      updateJob(job, {}, `Port ${port} still busy after stop; reinstalling service with pinned --port ${port} anyway.`);
+    }
+    const prevBake = process.env.OCX_BAKE_PORT;
+    process.env.OCX_BAKE_PORT = String(Math.trunc(port));
+    try {
+      const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
+      const result = run(job, cmd.bin, cmd.args);
+      if (result.status !== 0) {
+        throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
+      }
+    } finally {
+      if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+      else process.env.OCX_BAKE_PORT = prevBake;
     }
     return;
   }
@@ -329,8 +351,7 @@ async function restartAfterUpdate(
   // The old socket can stay busy briefly after stop (Windows taskkill drain, or the
   // stop-first update path that already killed the proxy before we got here) — wait
   // unconditionally on the captured port so the pinned start does not race the drain.
-  const waitFn = io.waitForPort ?? waitForPortAvailable;
-  const freed = await waitFn(port, hostname, { timeoutMs: 2000, intervalMs: 25 });
+  const freed = await waitFn(port, hostname, { timeoutMs: 2_000, intervalMs: 25 });
   if (!freed) {
     updateJob(job, {}, `Port ${port} still busy after stop; starting with --port ${port} anyway.`);
   }
@@ -352,11 +373,17 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
   const now = new Date().toISOString();
   // Capture the live listen target BEFORE the update command runs: the stop-first update
   // flow clears pid/runtime state, so this is the last moment the real port is knowable.
+  // Only trust runtime-port.json when its pid matches the live pidfile process.
   const rt = readRuntimePort();
+  const livePid = readPid();
   const preUpdateConfig = loadConfig();
+  const runtimeTrusted = !!(rt && livePid && rt.pid === livePid);
+  const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
+    ? preUpdateConfig.port
+    : 10100;
   const captured = {
-    port: rt?.port ?? preUpdateConfig.port ?? 10100,
-    hostname: rt?.hostname ?? preUpdateConfig.hostname ?? "127.0.0.1",
+    port: runtimeTrusted ? rt.port : configPort,
+    hostname: (runtimeTrusted ? rt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
   };
   if (!job) {
     job = {
