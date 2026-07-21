@@ -54,6 +54,7 @@ describe("antigravity CCA envelope", () => {
 
   test("client-visible Antigravity aliases resolve to CCA wire model ids", async () => {
     for (const [alias, wire] of [
+      ["gemini-3.6-flash", "gemini-3.6-flash-medium"],
       ["gemini-3.5-flash-mid", "gemini-3.5-flash-low"],
       ["gemini-3.5-flash-high", "gemini-3-flash-agent"],
       ["gemini-3.1-pro-high", "gemini-pro-agent"],

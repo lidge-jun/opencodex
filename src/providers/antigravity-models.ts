@@ -5,6 +5,9 @@
 // client aliases. The CCA envelope's `model` field must receive the wire id (for example
 // "Gemini 3.1 Pro (High)" => gemini-pro-agent), while the picker can expose label-shaped aliases.
 const ANTIGRAVITY_WIRE_MODELS = [
+  "gemini-3.6-flash-medium",
+  "gemini-3.6-flash-low",
+  "gemini-3.6-flash-high",
   "gemini-3.5-flash-low",
   "gemini-3-flash-agent",
   "gemini-3.5-flash-extra-low",
@@ -16,6 +19,7 @@ const ANTIGRAVITY_WIRE_MODELS = [
 ];
 
 export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
+  "gemini-3.6-flash": "gemini-3.6-flash-medium",
   "gemini-3.5-flash-mid": "gemini-3.5-flash-low",
   "gemini-3.5-flash-high": "gemini-3-flash-agent",
   "gemini-3.1-pro-high": "gemini-pro-agent",
@@ -29,6 +33,9 @@ export const ANTIGRAVITY_MODELS = [
 
 // Context windows from the upstream `:fetchAvailableModels` maxTokens per model.
 const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-3.6-flash-medium": 1_048_576,
+  "gemini-3.6-flash-low": 1_048_576,
+  "gemini-3.6-flash-high": 1_048_576,
   "gemini-3.5-flash-low": 1_048_576,
   "gemini-3-flash-agent": 1_048_576,
   "gemini-3.5-flash-extra-low": 1_048_576,
