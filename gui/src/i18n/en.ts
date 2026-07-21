@@ -944,6 +944,7 @@ export const en = {
   "cws.field.stickyLimit": "Sticky successes before rotate",
   "cws.field.stickyLimitHint": "Retain the selected target for this many successful requests before the weighted selector advances.",
   "cws.field.defaultEffort": "Default reasoning",
+  "cws.field.defaultEffortNone": "None (target default)",
   "cws.field.defaultEffortHint": "Used only when the client omits reasoning effort. Client effort wins, and each target applies its own capability handling.",
   "cws.targets": "Targets",
   "cws.targets.failoverHint": "Order matters — first is primary.",

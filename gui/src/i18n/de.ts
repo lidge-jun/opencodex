@@ -923,6 +923,7 @@ export const de = {
   "cws.field.stickyLimit": "Sticky-Erfolge vor Rotation",
   "cws.field.stickyLimitHint": "Das gewählte Ziel für so viele erfolgreiche Anfragen behalten, bevor die gewichtete Auswahl weiterschaltet.",
   "cws.field.defaultEffort": "Standard-Reasoning",
+  "cws.field.defaultEffortNone": "Keine (Ziel-Standard)",
   "cws.field.defaultEffortHint": "Nur verwendet, wenn der Client keinen Reasoning-Aufwand sendet. Der Client-Wert hat Vorrang; jedes Ziel wendet seine eigene Fähigkeitsbehandlung an.",
   "cws.targets": "Ziele",
   "cws.targets.failoverHint": "Reihenfolge zählt — das erste ist primär.",

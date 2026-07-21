@@ -18,6 +18,7 @@ export default function AddCodexAccountModal({
   const [copied, setCopied] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [flowId, setFlowId] = useState<string | null>(null);
 
   const aliveRef = useRef(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -52,6 +53,7 @@ export default function AddCodexAccountModal({
     clearManualCode();
     const flowId = flowRef.current;
     flowRef.current = null;
+    setFlowId(null);
     setAuthUrl("");
     stopPolling();
     loginAbortRef.current?.abort();
@@ -71,6 +73,7 @@ export default function AddCodexAccountModal({
     loginAbortRef.current = null;
     const flowId = flowRef.current;
     flowRef.current = null;
+    setFlowId(null);
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     // Cancel in-flight OAuth so a remounted modal cannot race a stale chatgpt scratch slot.
@@ -91,6 +94,7 @@ export default function AddCodexAccountModal({
   const startOAuth = useCallback(async (requestedId?: string) => {
     clearManualCode();
     flowRef.current = null;
+    setFlowId(null);
     const controller = new AbortController();
     loginAbortRef.current?.abort();
     loginAbortRef.current = controller;
@@ -115,6 +119,7 @@ export default function AddCodexAccountModal({
       }
       if (data.url) {
         flowRef.current = data.flowId ?? null;
+        setFlowId(data.flowId ?? null);
         setAuthUrl(data.url);
         setStep("oauth-waiting");
         stopPolling();
@@ -130,6 +135,7 @@ export default function AddCodexAccountModal({
               stopPolling();
               clearManualCode();
               flowRef.current = null;
+              setFlowId(null);
               if (!aliveRef.current) return;
               onAddedRef.current();
               onCloseRef.current();
@@ -137,6 +143,7 @@ export default function AddCodexAccountModal({
               stopPolling();
               clearManualCode();
               flowRef.current = null;
+              setFlowId(null);
               if (aliveRef.current) {
                 if (!reauthAccountId) setStep("pick");
                 setError(st.error ?? "Login failed");
@@ -308,7 +315,7 @@ export default function AddCodexAccountModal({
                 <button
                   className="btn btn-ghost"
                   type="button"
-                  disabled={manualCodeBusy || !manualCode.trim() || !flowRef.current}
+                  disabled={manualCodeBusy || !manualCode.trim() || !flowId}
                   onClick={() => void submitManualCode()}
                 >
                   {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}

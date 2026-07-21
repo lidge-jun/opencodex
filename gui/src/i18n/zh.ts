@@ -943,6 +943,7 @@ export const zh: Record<TKey, string> = {
   "cws.field.stickyLimit": "轮换前的粘性成功次数",
   "cws.field.stickyLimitHint": "加权选择器推进前，将所选目标保留这么多次成功请求。",
   "cws.field.defaultEffort": "默认推理级别",
+  "cws.field.defaultEffortNone": "无（使用目标默认）",
   "cws.field.defaultEffortHint": "仅在客户端未指定推理级别时使用。客户端值优先，每个目标会按自身能力进行处理。",
   "cws.targets": "目标",
   "cws.targets.failoverHint": "顺序很重要 — 第一个为主。",

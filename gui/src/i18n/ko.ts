@@ -943,6 +943,7 @@ export const ko: Record<TKey, string> = {
   "cws.field.stickyLimit": "회전 전 sticky 성공 횟수",
   "cws.field.stickyLimitHint": "가중 선택기가 다음 대상으로 진행하기 전에 선택된 대상을 이 성공 요청 횟수만큼 유지합니다.",
   "cws.field.defaultEffort": "기본 추론 수준",
+  "cws.field.defaultEffortNone": "없음 (대상 기본값)",
   "cws.field.defaultEffortHint": "클라이언트가 추론 수준을 생략한 경우에만 사용합니다. 클라이언트 값이 우선하며 각 대상이 자체 기능에 맞게 처리합니다.",
   "cws.targets": "대상",
   "cws.targets.failoverHint": "순서가 중요합니다 — 첫 번째가 기본입니다.",

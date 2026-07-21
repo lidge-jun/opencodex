@@ -140,7 +140,7 @@ function EffortSelect({
       aria-label={t("cws.field.defaultEffort")}
       onChange={(e) => onChange(e.target.value === "" ? null : e.target.value as ComboEffort)}
     >
-      <option value="">None (target default)</option>
+      <option value="">{t("cws.field.defaultEffortNone")}</option>
       {COMBO_EFFORTS.map((effort) => (
         <option key={effort} value={effort}>{effort}</option>
       ))}
