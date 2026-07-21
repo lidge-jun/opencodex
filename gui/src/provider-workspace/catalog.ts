@@ -44,8 +44,6 @@ export interface WorkspaceProvider {
   allowPrivateNetwork?: boolean;
   /** When false, only the configured `models` are routed (no /models fetch). */
   liveModels?: boolean;
-  /** Static model list. Used as the authoritative catalog when `liveModels === false`. */
-  models?: string[];
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */
