@@ -20,6 +20,8 @@ export interface Desktop3pModelEntry {
    * authoritative routed contextWindow >= 1M — never guessed (devlog 136 B5).
    */
   supports1m?: true;
+  /** When true, Desktop selects the 1M variant by default (official schema, Luna research 260722). */
+  prefer1m?: true;
 }
 
 /**
@@ -136,7 +138,7 @@ function collectDesktop3pModels(
         labelOverride: model.label,
         anthropicFamilyTier: model.family,
         ...(model.isFamilyDefault ? { isFamilyDefault: true } : {}),
-        ...(model.supports1m ? { supports1m: true } : {}),
+        ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
       });
     }
     // Legacy hashes are compatibility-only and can collide. Bind them in stable route order so
@@ -173,6 +175,7 @@ function collectDesktop3pModels(
         labelOverride: `${displayModelId(id)} (${provider})`,
         anthropicFamilyTier: "opus",
         ...supports1m,
+      ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
       });
       continue;
     }
@@ -191,6 +194,7 @@ function collectDesktop3pModels(
       labelOverride: `${displayModelId(id)} (${provider})`,
       anthropicFamilyTier: "opus",
       ...supports1m,
+      ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
     });
   }
 
