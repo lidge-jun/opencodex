@@ -330,17 +330,27 @@ async function restartAfterUpdate(
     }
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(Math.trunc(port));
+    let serviceOk = false;
     try {
       const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
       const result = run(job, cmd.bin, cmd.args);
-      if (result.status !== 0) {
-        throw new Error(`service restart failed (${cmd.display}, exit ${result.status ?? "?"})`);
+      serviceOk = result.status === 0;
+      if (!serviceOk) {
+        // On Windows, `schtasks /create` requires an elevated token. The update worker
+        // inherits the (non-admin) proxy's privileges, so a service-managed install
+        // updated from the GUI or a normal terminal fails here with access denied.
+        // Falling back to a direct proxy start keeps the update from leaving the proxy
+        // stopped; the stale service manager can be refreshed later with an admin
+        // `ocx service install`.
+        updateJob(job, {}, `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start. Run 'ocx service install' as administrator to refresh the background service manager.`);
       }
     } finally {
       if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
       else process.env.OCX_BAKE_PORT = prevBake;
     }
-    return;
+    if (serviceOk) return;
+    // Fall through to the direct proxy start below so the update never leaves the
+    // proxy stopped when the service reinstall could not run.
   }
 
   const pid = readPid();

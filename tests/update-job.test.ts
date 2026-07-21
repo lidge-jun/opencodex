@@ -184,6 +184,34 @@ describe("GUI update execution decisions", () => {
     }
   });
 
+  test("service reinstall failure falls back to a direct proxy start", async () => {
+    const spawned: Array<{ port: number }> = [];
+    const job: UpdateJobState = {
+      id: "svc-fallback",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.26",
+      latestVersion: "2.7.28",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => true,
+      waitForPort: async () => true,
+      runService: () => ({ status: 1 }),
+      spawnStart: (_job, _installer, port) => {
+        spawned.push({ port: port ?? 0 });
+      },
+    });
+    // The fallback must fire: direct proxy start instead of throwing.
+    expect(spawned).toEqual([{ port: 19999 }]);
+  });
+
   test("a running job prevents a second update job", () => {
     const now = new Date().toISOString();
     const job: UpdateJobState = {
