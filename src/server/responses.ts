@@ -631,7 +631,12 @@ async function handleComboResponses(
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
     );
     const childHeaders = new Headers(req.headers);
+    // Combo children re-serialize already-decoded JSON. Drop transport headers from the
+    // original compressed request or readJsonRequestBody will try to zstd-decompress
+    // uncompressed JSON ("Unknown frame descriptor" -> Invalid JSON body) and combo
+    // failover will stop before trying later targets.
     childHeaders.delete("content-length");
+    childHeaders.delete("content-encoding");
     const childRequest = new Request(req.url, {
       method: req.method,
       headers: childHeaders,
