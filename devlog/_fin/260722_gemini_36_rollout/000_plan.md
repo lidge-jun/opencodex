@@ -71,7 +71,7 @@ The probe emitted no token, project ID, authorization header, or raw upstream er
 - Direct Google 3.5/3.6 thinking-level request wiring.
 - Gemini 3.6 public-list-price and Antigravity-derived usage overlays.
 - Existing-config reconciliation and regression tests.
-- Fresh runtime proof after implementation and daemon restart.
+- Fresh current-source CLI and direct Antigravity proof after implementation; daemon restart was explicitly removed by the user during C.
 
 ### OUT
 
@@ -99,7 +99,7 @@ The probe emitted no token, project ID, authorization header, or raw upstream er
 - Activation scenario for effort wiring: a direct Google 3.6 request with `reasoning: "high"` contains `generationConfig.thinkingConfig.thinkingLevel = "high"`; an unset effort omits `thinkingConfig`.
 - Usage resolution returns the verified 3.6 public price for direct Google and derived prices for all three visible Antigravity tiers. Hidden 3.5/legacy compatibility IDs retain exact-key overlays whose prices and evidence point to their mapped 3.6 tiers, because cost matching currently receives the requested ID rather than the resolved wire ID.
 - Cursor and OrcaRouter remain unchanged.
-- Focused tests and typecheck pass; after `ocx restart`, all three 3.6 Antigravity tiers complete a minimal live prompt.
+- Focused tests and typecheck pass; all three 3.6 Antigravity tiers complete a minimal live prompt through the current source adapter. The user explicitly removed daemon restart from this run during C, so no restarted-daemon claim is made.
 - The completed Gemini branch is committed and merged with a normal merge into the local `dev` worktree without modifying or staging its unrelated `devlog/_plan/260722_issue_bug_sweep/000_plan.md` change. No remote push is performed.
 - After merged-`dev` verification passes, the linked `/Users/jun/.codex/worktrees/2d67/opencodex` worktree is removed from the main repository. The merged `gemini-3.6` branch ref is retained unless separately requested.
 
@@ -111,3 +111,19 @@ The probe emitted no token, project ID, authorization header, or raw upstream er
 - Rollback restores the old Antigravity visible list/default, removes the direct 3.6 seed and overlays, and reverts the focused tests. No persistent data migration is introduced.
 - Local integration uses `git merge --no-ff gemini-3.6` as explicitly directed after confirming the branch histories and changed paths. Hash the unrelated dirty file before and after, and stop rather than stash or discard user work if the merge would touch it.
 - Worktree cleanup runs only after the merge commit, post-merge tests, merged-SHA check, and dirty-file preservation check pass. Invoke `git worktree remove` from the main repository so cleanup does not operate from inside the directory being removed.
+
+## C evidence — 2026-07-22
+
+- Automated: focused provider/catalog/migration suite `175 pass, 0 fail` with 972 assertions; `bun run typecheck` exit 0; `bun run privacy:scan` passed; `git show --check a257458e` passed.
+- Secret scanning: a broad `gitleaks detect --source=. --no-git --redact` remained non-zero with 11 repository/dependency findings. The scoped `gitleaks git . --log-opts='a257458e^..a257458e' --redact` scan passed with `no leaks found`, so the Gemini implementation commit introduced none.
+- CLI QA: isolated canonical Antigravity config reported default `gemini-3.6-flash-medium`, exactly the 3.6 Low/Medium/High Flash rows, no hidden 3.5/legacy row, identical repeat output, and exit 1 for a missing provider and unknown flag.
+- Live HTTP QA after implementation: Low, Medium, and High each returned HTTP 200 with `POST-LOW`, `POST-MEDIUM`, and `POST-HIGH`. The old `gemini-3.5-flash-low` request resolved to wire `gemini-3.6-flash-medium` and returned HTTP 200 with `COMPAT-MEDIUM`.
+- QA artifacts: `.codexclaw/evidence/019f8537-6c9e-7da1-9ace-2f956a6bf2bd/qa/gemini36-cli/` and `gemini36-live/`.
+- Restart exception: a source CLI restart attempt stopped the existing service manager/proxy, restored native Codex routing, then observed `codexAutoStart=false` and did not launch a replacement daemon. The user then directed “재시작 하지말고 계속”; no further daemon start/restart was attempted, and runtime proof uses direct current-source calls only.
+
+## D pre-integration attestation
+
+- Implementation commit: `a257458e feat(google): add Gemini 3.6 Flash tiers`.
+- C verdict: PASS for automated checks, current-source CLI QA, all three live 3.6 tiers, and the old-default compatibility route. The broad repository gitleaks baseline remains non-zero; the implementation commit scan is clean.
+- Integration decision: merge `gemini-3.6` into local `dev` with `--no-ff`, verify the merge contains this tip, rerun focused tests from `dev`, and compare the unrelated issue-sweep file hash before/after.
+- Cleanup decision: after merged-`dev` verification and the persisted D close, remove this linked worktree from the main repository. Keep the merged branch ref and do not push.

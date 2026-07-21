@@ -1,5 +1,7 @@
 # Gemini 3.6 research and contract evidence
 
+- Archive status: verified and shipped with the Gemini 3.6 rollout.
+
 ## 1. Official Google evidence
 
 All official pages below were browser-rendered and read on 2026-07-22 because the plain HTTP reader initially returned no content.

@@ -1,5 +1,7 @@
 # Phase 1 — Gemini 3.6 catalog, wire compatibility, and verification
 
+- Archive status: implemented and C-gate verified.
+
 ## Outcome
 
 One implementation slice adds Gemini 3.6 to the direct Google provider, replaces visible Gemini 3.5 Antigravity tiers with 3.6 tiers, preserves old Antigravity selections through hidden aliases, wires direct Google effort selection, and closes metadata/price/test/runtime parity.
