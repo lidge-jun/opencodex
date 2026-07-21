@@ -19,43 +19,43 @@ const prefix = locale ? `${base}${locale}/` : base;
 type NavLink = { label: string; href: string };
 type NavGroup = { label: string; links: NavLink[] };
 
-const t = (en: string, ko: string, zh: string) =>
-	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : en;
+const t = (en: string, ko: string, zh: string, ru: string) =>
+	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'ru' ? ru : en;
 
 const groups: NavGroup[] = [
 	{
-		label: t('Getting Started', '시작하기', '开始使用'),
+		label: t('Getting Started', '시작하기', '开始使用', 'Начало работы'),
 		links: [
-			{ label: t('Installation', '설치', '安装'), href: `${prefix}getting-started/installation/` },
-			{ label: t('Quickstart', '빠른 시작', '快速开始'), href: `${prefix}getting-started/quickstart/` },
-			{ label: t('How It Works', '동작 원리', '工作原理'), href: `${prefix}getting-started/how-it-works/` },
+			{ label: t('Installation', '설치', '安装', 'Установка'), href: `${prefix}getting-started/installation/` },
+			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт'), href: `${prefix}getting-started/quickstart/` },
+			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает'), href: `${prefix}getting-started/how-it-works/` },
 		],
 	},
 	{
-		label: t('Guides', '가이드', '指南'),
+		label: t('Guides', '가이드', '指南', 'Руководства'),
 		links: [
-			{ label: t('Providers', '프로바이더', '提供商'), href: `${prefix}guides/providers/` },
-			{ label: t('Model Routing', '모델 라우팅', '模型路由'), href: `${prefix}guides/model-routing/` },
-			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成'), href: `${prefix}guides/codex-integration/` },
-			{ label: t('Codex App Model Picker', 'Codex App 모델 선택기', 'Codex App 模型选择器'), href: `${prefix}guides/codex-app-models/` },
-			{ label: t('Sidecars: Search & Vision', '사이드카: 검색 & 비전', '边车：搜索与视觉'), href: `${prefix}guides/sidecars/` },
-			{ label: t('Web Dashboard', '웹 대시보드', '网页控制台'), href: `${prefix}guides/web-dashboard/` },
-			{ label: t('Sub-agent Surface', '서브에이전트 서피스', '子代理界面'), href: `${prefix}guides/sub-agent-surface/` },
+			{ label: t('Providers', '프로바이더', '提供商', 'Провайдеры'), href: `${prefix}guides/providers/` },
+			{ label: t('Model Routing', '모델 라우팅', '模型路由', 'Маршрутизация моделей'), href: `${prefix}guides/model-routing/` },
+			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成', 'Интеграция с Codex'), href: `${prefix}guides/codex-integration/` },
+			{ label: t('Codex App Model Picker', 'Codex App 모델 선택기', 'Codex App 模型选择器', 'Селектор моделей Codex App'), href: `${prefix}guides/codex-app-models/` },
+			{ label: t('Sidecars: Search & Vision', '사이드카: 검색 & 비전', '边车：搜索与视觉', 'Сайдкары: поиск и зрение'), href: `${prefix}guides/sidecars/` },
+			{ label: t('Web Dashboard', '웹 대시보드', '网页控制台', 'Веб-дашборд'), href: `${prefix}guides/web-dashboard/` },
+			{ label: t('Sub-agent Surface', '서브에이전트 서피스', '子代理界面', 'Интерфейс подагентов'), href: `${prefix}guides/sub-agent-surface/` },
 		],
 	},
 	{
-		label: t('Reference', '레퍼런스', '参考'),
+		label: t('Reference', '레퍼런스', '参考', 'Справочник'),
 		links: [
 			{ label: 'CLI', href: `${prefix}reference/cli/` },
-			{ label: t('Configuration', '설정', '配置'), href: `${prefix}reference/configuration/` },
-			{ label: t('Adapters', '어댑터', '适配器'), href: `${prefix}reference/adapters/` },
-			{ label: t('Architecture', '아키텍처', '架构'), href: `${prefix}reference/architecture/` },
+			{ label: t('Configuration', '설정', '配置', 'Конфигурация'), href: `${prefix}reference/configuration/` },
+			{ label: t('Adapters', '어댑터', '适配器', 'Адаптеры'), href: `${prefix}reference/adapters/` },
+			{ label: t('Architecture', '아키텍처', '架构', 'Архитектура'), href: `${prefix}reference/architecture/` },
 		],
 	},
 ];
 
 const contributing: NavLink = {
-	label: t('Contributing', '기여하기', '贡献'),
+	label: t('Contributing', '기여하기', '贡献', 'Участие в проекте'),
 	href: `${prefix}contributing/`,
 };
 ---
@@ -64,7 +64,7 @@ const contributing: NavLink = {
 	<div class="title-wrapper sl-flex">
 		<SiteTitle />
 	</div>
-	<nav class="glass-nav print:hidden" aria-label={t('Main', '주 메뉴', '主导航')}>
+	<nav class="glass-nav print:hidden" aria-label={t('Main', '주 메뉴', '主导航', 'Основная навигация')}>
 		<ul>
 			{
 				groups.map((group, i) => (
@@ -110,7 +110,7 @@ const contributing: NavLink = {
 				aria-haspopup="true"
 				aria-expanded="false"
 				aria-controls="lp-menu-panel"
-				aria-label={t('Menu', '메뉴', '菜单')}
+				aria-label={t('Menu', '메뉴', '菜单', 'Меню')}
 			>
 				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
 					<path d="M4 6h16M4 12h16M4 18h16" />

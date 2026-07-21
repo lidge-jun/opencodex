@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · 📖 <a href="https://lidge-jun.github.io/opencodex/ko/"><b>전체 문서 →</b></a>
+  <a href="README.md">English</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ru.md">Русский</a> · 📖 <a href="https://lidge-jun.github.io/opencodex/ko/"><b>전체 문서 →</b></a>
 </p>
 
 <p align="center">

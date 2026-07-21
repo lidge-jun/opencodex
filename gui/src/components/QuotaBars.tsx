@@ -102,6 +102,8 @@ function bcp47(locale: Locale): string {
       return "ko-KR";
     case "zh":
       return "zh-CN";
+    case "ru":
+      return "ru-RU";
     default: {
       const _exhaustive: never = locale;
       return _exhaustive;
