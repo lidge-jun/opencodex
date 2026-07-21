@@ -132,6 +132,12 @@ export default function App() {
   useEffect(() => {
     const rawHash = window.location.hash.replace(/^#\/?/, "");
     if (page === "providers") {
+      // Honor an explicit workspace deep link on first load before normalizing
+      // to the saved preference (bookmarks/shared links must not open Classic).
+      if (rawHash === "providers/workspace") {
+        writeProvidersViewPreference("workspace");
+        return;
+      }
       const wanted = providersHashForPage();
       if (rawHash !== wanted) window.location.hash = wanted;
       return;

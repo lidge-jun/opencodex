@@ -784,6 +784,7 @@ export const ko: Record<TKey, string> = {
   "pws.modelsLoadFailed": "모델을 불러오지 못했습니다.",
   "pws.modelsNeedsReauth": "실시간 모델 목록을 받으려면 다시 로그인해야 합니다. 지금은 설정된 모델을 표시합니다.",
   "pws.modelsConfiguredFallback": "설정된 모델을 표시합니다 (실시간 검색 불가).",
+  "pws.modelsTruncated": "{total}개 모델 중 처음 {shown}개를 표시합니다. 필터로 목록을 좁히세요.",
   "pws.retry": "다시 시도",
   "pws.noModels": "이 프로바이더에서 발견된 모델이 없습니다.",
  "pws.noModelMatch": "필터와 일치하는 모델이 없습니다.",

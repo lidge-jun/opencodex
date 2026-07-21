@@ -59,6 +59,12 @@ export default function ProviderModels({
 
   const emptyBase = availableModels.length === 0 && configuredModels.length === 0 && !item.defaultModel;
   const showingConfiguredFallback = availableModels.length === 0 && configuredModels.length > 0;
+  // Aggregators (OpenRouter etc.) can return thousands of ids; capping the mounted
+  // chips keeps the tab responsive. Filtering narrows the list, so the cap only
+  // bites on the unfiltered full catalog.
+  const CHIP_RENDER_CAP = 300;
+  const capped = models.length > CHIP_RENDER_CAP;
+  const visibleModels = capped ? models.slice(0, CHIP_RENDER_CAP) : models;
 
   return (
     <div className="pws-section">
@@ -108,7 +114,7 @@ export default function ProviderModels({
         <p className="muted" role="status">{t("pws.noModelMatch")}</p>
       ) : (
         <div className="pws-model-list" role="list">
-          {models.map(modelId => {
+          {visibleModels.map(modelId => {
             const isDefault = modelId === item.defaultModel;
             const isSelected = selectedSet.has(modelId);
             const copied = copiedId === modelId;
@@ -129,6 +135,11 @@ export default function ProviderModels({
             );
           })}
         </div>
+      )}
+      {capped && (
+        <p className="muted text-label" style={{ marginTop: 10 }}>
+          {t("pws.modelsTruncated", { shown: String(CHIP_RENDER_CAP), total: String(models.length) })}
+        </p>
       )}
     </div>
   );

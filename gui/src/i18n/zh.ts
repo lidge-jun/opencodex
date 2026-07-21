@@ -784,6 +784,7 @@ export const zh: Record<TKey, string> = {
   "pws.modelsLoadFailed": "无法加载模型。",
   "pws.modelsNeedsReauth": "需要重新登录后才能获取实时模型列表。当前显示已配置的模型。",
   "pws.modelsConfiguredFallback": "显示已配置的模型（实时发现不可用）。",
+  "pws.modelsTruncated": "显示 {total} 个模型中的前 {shown} 个。使用筛选以缩小列表。",
   "pws.retry": "重试",
   "pws.noModels": "未发现此提供商的模型。",
  "pws.noModelMatch": "没有匹配筛选的模型。",

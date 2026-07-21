@@ -172,21 +172,37 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     try {
       const provs: string[] = (await fetch(`${apiBase}/api/oauth/providers`).then(r => r.json())).providers ?? [];
       setOauthProviders(provs);
-      const [oauthEntries, codexAccounts] = await Promise.all([
+      const [oauthEntries, codexAccounts, codexActive] = await Promise.all([
         Promise.all(provs.map(async p => {
           const s = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).then(r => r.json()).catch(() => ({ loggedIn: false }));
           return [p, s] as const;
         })),
         fetch(`${apiBase}/api/codex-auth/accounts`)
-          .then(r => r.ok ? r.json() as Promise<{ accounts?: Array<{ email?: string; isMain?: boolean; hasCredential?: boolean; needsReauth?: boolean }> }> : null)
+          .then(r => r.ok ? r.json() as Promise<{ accounts?: Array<{ id?: string; email?: string; isMain?: boolean; hasCredential?: boolean; needsReauth?: boolean }> }> : null)
+          .catch(() => null),
+        fetch(`${apiBase}/api/codex-auth/active`)
+          .then(r => r.ok ? r.json() as Promise<{ activeCodexAccountId?: string | null }> : null)
           .catch(() => null),
       ]);
       const next: Record<string, OAuthStatus> = Object.fromEntries(oauthEntries);
       const accounts = codexAccounts?.accounts ?? [];
       const main = accounts.find(a => a.isMain) ?? accounts[0];
-      const codexLoggedIn = !!(main?.hasCredential || main?.email || accounts.some(a => a.hasCredential || a.email));
-      const codexEmail = main?.email ?? accounts.find(a => a.email)?.email;
-      const codexNeedsReauth = accounts.some(a => a.needsReauth === true);
+      // The synthetic main row always carries hasCredential: true and a placeholder
+      // email ("Codex App login") even without a real credential. Only treat it as
+      // logged in when it has a real email or a pool account has a credential.
+      const mainIsReal = !!main && !!main.email && main.email !== "Codex App login";
+      const poolLoggedIn = accounts.some(a => !a.isMain && (a.hasCredential || a.email));
+      const codexLoggedIn = mainIsReal || poolLoggedIn;
+      const codexEmail = mainIsReal ? main.email : (accounts.find(a => !a.isMain && a.email)?.email ?? undefined);
+      // Only flag the ACTIVE account for reauth — stale inactive accounts must not
+      // trigger a Models-tab warning when the active/main account is usable.
+      const activeId = codexActive?.activeCodexAccountId ?? null;
+      const activePoolAccount = activeId && activeId !== "__main__"
+        ? accounts.find(a => a.id === activeId)
+        : null;
+      const codexNeedsReauth = activePoolAccount
+        ? Boolean(activePoolAccount.needsReauth)
+        : Boolean(main?.needsReauth);
       // Built-in openai (and any other forward row) share the same Codex account pool.
       next.openai = {
         loggedIn: codexLoggedIn,

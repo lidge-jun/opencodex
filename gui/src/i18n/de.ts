@@ -764,6 +764,7 @@ export const de = {
   "pws.modelsLoadFailed": "Modelle konnten nicht geladen werden.",
   "pws.modelsNeedsReauth": "Konto muss neu angemeldet werden, bevor Live-Modelle geladen werden. Zeige konfigurierte Modelle.",
   "pws.modelsConfiguredFallback": "Zeige konfigurierte Modelle (Live-Erkennung nicht verfügbar).",
+  "pws.modelsTruncated": "Zeige die ersten {shown} von {total} Modellen. Filtern, um die Liste einzugrenzen.",
   "pws.retry": "Erneut versuchen",
   "pws.noModels": "Keine Modelle für diesen Provider gefunden.",
  "pws.noModelMatch": "Keine Modelle entsprechen dem Filter.",

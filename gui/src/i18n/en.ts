@@ -612,6 +612,7 @@ export const en = {
   "pws.modelsLoadFailed": "Could not load models.",
   "pws.modelsNeedsReauth": "Account needs re-login before live model discovery works. Showing configured models for now.",
   "pws.modelsConfiguredFallback": "Showing configured models (live discovery unavailable).",
+  "pws.modelsTruncated": "Showing first {shown} of {total} models. Filter to narrow the list.",
   "pws.retry": "Retry",
   "pws.noModels": "No models discovered for this provider.",
  "pws.noModelMatch": "No models match the filter.",
