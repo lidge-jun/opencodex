@@ -400,3 +400,79 @@ describe("routeModel backfills google wire mode from the registry", () => {
     expect(routeModel(config, "gemini-3-pro").provider.googleMode).toBe("vertex");
   });
 });
+
+describe("routeModel respects user-saved adapter for registry providers", () => {
+  test("honours a user override to openai-responses for minimax", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "minimax",
+      providers: {
+        minimax: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.minimax.io/v1",
+          authMode: "key",
+          apiKey: "minimax-test-key",
+          defaultModel: "MiniMax-M3",
+        },
+      },
+    };
+    const routed = routeModel(config, "minimax/MiniMax-M3");
+    expect(routed.providerName).toBe("minimax");
+    expect(routed.provider.adapter).toBe("openai-responses");
+  });
+
+  test("honours a user override to openai-responses for minimax-cn", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "minimax-cn",
+      providers: {
+        "minimax-cn": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.minimaxi.com/v1",
+          authMode: "key",
+          apiKey: "minimax-cn-test-key",
+          defaultModel: "MiniMax-M3",
+        },
+      },
+    };
+    const routed = routeModel(config, "minimax-cn/MiniMax-M3");
+    expect(routed.providerName).toBe("minimax-cn");
+    expect(routed.provider.adapter).toBe("openai-responses");
+  });
+
+  test("falls back to registry default adapter when user keeps openai-chat", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "minimax",
+      providers: {
+        minimax: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.minimax.io/v1",
+          authMode: "key",
+          apiKey: "minimax-test-key",
+          defaultModel: "MiniMax-M3",
+        },
+      },
+    };
+    const routed = routeModel(config, "minimax/MiniMax-M3");
+    expect(routed.provider.adapter).toBe("openai-chat");
+  });
+
+  test("falls back to registry default adapter when user adapter is empty", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "minimax",
+      providers: {
+        minimax: {
+          adapter: "",
+          baseUrl: "https://api.minimax.io/v1",
+          authMode: "key",
+          apiKey: "minimax-test-key",
+          defaultModel: "MiniMax-M3",
+        },
+      },
+    };
+    const routed = routeModel(config, "minimax/MiniMax-M3");
+    expect(routed.provider.adapter).toBe("openai-chat");
+  });
+});
