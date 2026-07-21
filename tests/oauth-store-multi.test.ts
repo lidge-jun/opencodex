@@ -150,13 +150,24 @@ describe("multi-account auth store", () => {
     expect(getCredential("anthropic")?.access).toBe("access-a");
   });
 
-  test("needsReauth flag persists and clears on fresh save", async () => {
+  test("needsReauth flag works in-memory but is not loaded from disk (boot-time transient errors must not permanently lock accounts)", async () => {
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a" }));
     const id = getAccountSet("xai")!.activeAccountId;
     await markAccountNeedsReauth("xai", id, true);
+    // In-memory: the flag is visible immediately within the same process.
     expect(listAccounts("xai")[0]?.needsReauth).toBe(true);
+    // After a fresh credential save the in-memory flag is cleared.
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a", access: "fresh" }));
     expect(listAccounts("xai")[0]?.needsReauth).toBeUndefined();
+    // Simulate a process restart: mark needsReauth, read the raw JSON, then reload.
+    await markAccountNeedsReauth("xai", id, true);
+    expect(listAccounts("xai")[0]?.needsReauth).toBe(true);
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const raw = JSON.parse(readFileSync(join(TEST_DIR, "auth.json"), "utf8"));
+    // The raw JSON must NOT contain needsReauth — only in-memory mutations write it to disk.
+    const account = raw.xai?.accounts?.[0];
+    expect(account?.needsReauth).toBeUndefined();
   });
 
   test("invalid account entries are dropped on load", async () => {

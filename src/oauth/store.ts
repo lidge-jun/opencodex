@@ -2,7 +2,7 @@
  * OAuth token store at ~/.opencodex/auth.json, keyed by provider name.
  *
  * Multiauth shape (260706): each provider value is a ProviderAccountSet
- * `{ activeAccountId, accounts: [{ id, credential, needsReauth?, addedAt? }] }`.
+ * `{ activeAccountId, accounts: [{ id, credential, addedAt? }] }`.
  * Legacy single-credential values (`{ access, refresh, expires, ... }`) normalize on load,
  * and the first new-shape persist writes a one-time `auth.json.pre-multiauth` backup so a
  * downgraded loader (which silently drops unknown shapes) cannot destroy refresh tokens.
@@ -23,6 +23,16 @@ import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 type AuthStore = Record<string, ProviderAccountSet>;
+
+/**
+ * In-memory-only set of accounts currently marked needsReauth.
+ * Intentionally NOT persisted across process restarts: a transient failure at boot time
+ * (network not yet up on Windows, brief Anthropic outage, etc.) must not permanently lock
+ * an account that has a valid refresh token (#209). The mark is re-established within a
+ * session if a terminal refresh failure is confirmed.
+ */
+const inMemoryNeedsReauth = new Set<string>();
+function needsReauthKey(provider: string, accountId: string): string { return `${provider}\x00${accountId}`; }
 
 /** Providers whose account set is pinned to a single slot (see module doc). */
 const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt"]);
@@ -147,7 +157,7 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   const credential = normalizeCredential(candidate.credential);
   if (!credential) return null;
   const account: ProviderAccount = { id: candidate.id, credential };
-  if (candidate.needsReauth === true) account.needsReauth = true;
+  // needsReauth is NOT loaded from disk — see inMemoryNeedsReauth above.
   if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
   return account;
 }
@@ -226,7 +236,7 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
       const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
         existing.credential = safe;
-        delete existing.needsReauth;
+        inMemoryNeedsReauth.delete(needsReauthKey(provider, existing.id));
         set.activeAccountId = existing.id;
         return;
       }
@@ -237,7 +247,7 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
       const active = set.accounts.find(a => a.id === set.activeAccountId);
       if (active && active.credential.accountId === undefined && active.credential.email === undefined) {
         active.credential = safe;
-        delete active.needsReauth;
+        inMemoryNeedsReauth.delete(needsReauthKey(provider, active.id));
         return;
       }
       const id = newAccountId(safe);
@@ -249,7 +259,7 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
     const active = set.accounts.find(a => a.id === set.activeAccountId);
     if (active) {
       active.credential = safe;
-      delete active.needsReauth;
+      inMemoryNeedsReauth.delete(needsReauthKey(provider, active.id));
     } else {
       const id = newAccountId(safe);
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
@@ -263,6 +273,7 @@ export async function removeCredential(provider: string): Promise<void> {
   await mutateStore(store => {
     const set = store[provider];
     if (!set) return;
+    inMemoryNeedsReauth.delete(needsReauthKey(provider, set.activeAccountId));
     set.accounts = set.accounts.filter(a => a.id !== set.activeAccountId);
     if (set.accounts.length === 0) {
       delete store[provider];
@@ -277,11 +288,19 @@ export async function removeCredential(provider: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export function getAccountSet(provider: string): ProviderAccountSet | null {
-  return loadAuthStore()[provider] ?? null;
+  const set = loadAuthStore()[provider];
+  if (!set) return null;
+  // Overlay in-memory needsReauth markers onto the loaded accounts.
+  const accounts = set.accounts.map(a =>
+    inMemoryNeedsReauth.has(needsReauthKey(provider, a.id))
+      ? { ...a, needsReauth: true as const }
+      : a,
+  );
+  return { ...set, accounts };
 }
 
 export function listAccounts(provider: string): ProviderAccount[] {
-  return loadAuthStore()[provider]?.accounts ?? [];
+  return getAccountSet(provider)?.accounts ?? [];
 }
 
 export function getAccountCredential(provider: string, accountId: string): OAuthCredentials | null {
@@ -296,7 +315,7 @@ export async function saveAccountCredential(provider: string, accountId: string,
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;
     account.credential = safe;
-    delete account.needsReauth;
+    inMemoryNeedsReauth.delete(needsReauthKey(provider, accountId));
   });
 }
 
@@ -315,6 +334,7 @@ export async function removeAccount(provider: string, accountId: string): Promis
     const set = store[provider];
     if (!set) return false;
     const before = set.accounts.length;
+    inMemoryNeedsReauth.delete(needsReauthKey(provider, accountId));
     set.accounts = set.accounts.filter(a => a.id !== accountId);
     if (set.accounts.length === before) return false;
     if (set.accounts.length === 0) {
@@ -327,13 +347,11 @@ export async function removeAccount(provider: string, accountId: string): Promis
 }
 
 export async function markAccountNeedsReauth(provider: string, accountId: string, needsReauth: boolean): Promise<void> {
-  await mutateStore(store => {
-    const account = store[provider]?.accounts.find(a => a.id === accountId);
-    if (!account) return;
-    if (needsReauth) account.needsReauth = true;
-    else delete account.needsReauth;
-  });
+  // Update in-memory marker (survives until process exit or credential save).
+  const key = needsReauthKey(provider, accountId);
+  if (needsReauth) inMemoryNeedsReauth.add(key);
+  else inMemoryNeedsReauth.delete(key);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;delete account.needsReauth;return{superseded:false};});}
-export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string):Promise<boolean>{return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;account.needsReauth=true;return true;});}
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;inMemoryNeedsReauth.delete(needsReauthKey(provider,accountId));return{superseded:false};});}
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string):Promise<boolean>{return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;inMemoryNeedsReauth.add(needsReauthKey(provider,accountId));return true;});}
