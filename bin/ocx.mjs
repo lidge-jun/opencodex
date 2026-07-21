@@ -199,7 +199,24 @@ function runNpmSelfUpdate() {
       try {
         const svcArgs = serviceReinstallArgs();
         const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
-        if (svc.status !== 0) console.warn("opencodex: service refresh failed — run 'ocx service install' manually.");
+        if (svc.status !== 0) {
+          // On Windows, schtasks /create requires elevation. The launcher inherits the
+          // user's (non-admin) token, so the service reinstall can fail with access
+          // denied. Fall back to a direct detached proxy start so the update never
+          // leaves the user without a running proxy.
+          console.warn("opencodex: service refresh failed — starting the proxy directly instead.");
+          console.warn("  Run 'ocx service install' as administrator to refresh the background service.");
+          const env = { ...process.env };
+          delete env.OCX_SERVICE;
+          const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+            env,
+          });
+          child.unref();
+          console.log(`Proxy starting on port ${bakePort}.`);
+        }
       } finally {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
