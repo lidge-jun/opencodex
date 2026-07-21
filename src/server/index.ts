@@ -537,7 +537,7 @@ export function startServer(port?: number) {
         void (async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
-          const logCtx = { model: "unknown", provider: "unknown" };
+          const logCtx: RequestLogContext = { model: "unknown", provider: "unknown" };
           let logged = false;
           const finalizeLog = (
             status: number,
@@ -556,7 +556,7 @@ export function startServer(port?: number) {
             body: JSON.stringify({ ...payload, stream: true }),
           });
           try {
-            let terminalRecorder: ((status: ResponsesTerminalStatus) => void) | undefined;
+            let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
               forceEmptyResponseId: true,
               abortSignal: turnAbort.signal,
@@ -570,7 +570,7 @@ export function startServer(port?: number) {
             await sendResponseToWebSocket(ws, response, isCurrent, {
               onSsePayload: payload => inspectResponseLogSsePayload(logCtx, payload),
               onTerminal: status => {
-                terminalRecorder?.(status);
+                terminalRecorder?.(status, logCtx.terminalHttpStatus);
                 finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {
                   terminalStatus: status,
                   closeReason: "terminal",
