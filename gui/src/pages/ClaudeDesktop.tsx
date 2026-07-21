@@ -21,7 +21,15 @@ interface DesktopModel {
   label: string;
   available: boolean;
   contextWindow?: number;
+  effortSupported?: boolean;
   assignment: Assignment;
+}
+
+interface DesktopStatus {
+  applied: boolean;
+  appliedAt: string | null;
+  stale: boolean;
+  health: { lastRequestAt: string | null; requestCount: number; errorCount: number };
 }
 
 interface DesktopResponse {
@@ -85,6 +93,7 @@ function formatContextWindow(value: number | undefined, t: TFn): string | null {
 
 export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   const t = useT();
+  const [status, setStatus] = useState<DesktopStatus | null>(null);
   const [data, setData] = useState<DesktopResponse | null>(null);
   const [profile, setProfile] = useState<DesktopProfile | null>(null);
   const [savedProfile, setSavedProfile] = useState<DesktopProfile | null>(null);
@@ -144,6 +153,15 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     return result;
   }, [modelsByFamily, profile]);
 
+  // Poll Desktop status every 5s for applied-state + health.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => fetch(`${apiBase}/api/claude-desktop/status`).then(r => r.json()).then(d => { if (!cancelled) setStatus(d as DesktopStatus); }).catch(() => {});
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [apiBase]);
+
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;
     setProfile(current => {
@@ -200,6 +218,7 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
 
   const exportProfile = () => {
     if (!profile) return;
+    // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings -- file content newline, not UI text
     const url = URL.createObjectURL(new Blob([`${JSON.stringify(profile, null, 2)}\n`], { type: "application/json" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -256,6 +275,15 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
           <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
         </div>
       </div>
+
+      {status && (
+        <div className={`claude-status-bar ${status.stale ? "stale" : status.applied ? "applied" : "not-applied"}`}>
+          <span className="claude-status-dot" />
+          <span>{status.stale ? t("claudeDesktop.status.stale") : status.applied ? t("claudeDesktop.status.applied") : t("claudeDesktop.status.notApplied")}</span>
+          {status.health.lastRequestAt && <span className="claude-status-health">{t("claudeDesktop.health.lastRequest")}: {new Date(status.health.lastRequestAt).toLocaleTimeString()}</span>}
+          {status.health.requestCount > 0 && <span className="claude-status-health">{t("claudeDesktop.health.stats", { count: status.health.requestCount, errors: status.health.errorCount })}</span>}
+        </div>
+      )}
 
       <div className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>
       {message && <Notice tone={message.tone}>{message.text}</Notice>}
@@ -320,6 +348,8 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
                       </span>
                     </div>
                     {context && <span className="claude-model-context">{context}</span>}
+                    {model.effortSupported === false && <span className="claude-effort-badge off">{t("claudeDesktop.effort.displayOnly")}</span>}
+                    {model.effortSupported === true && <span className="claude-effort-badge on">{t("claudeDesktop.effort.supported")}</span>}
                     {effectiveDefaults[family] === model.route && profile.defaults[family] !== model.route && (
                       <span className="claude-effective-default">{t("claudeDesktop.temporaryDefault")}</span>
                     )}

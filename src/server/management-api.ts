@@ -1809,11 +1809,21 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
   const profile = reconcileDesktopProfile(stored ?? config.claudeCode?.desktopProfile, profileModels);
   const available = new Set(profileModels.map(model => model.route));
   const modelByRoute = new Map(profileModels.map(model => [model.route, model]));
+  // Effort support: routed models with a non-empty reasoningEfforts ladder support effort;
+  // native models always support it (Anthropic native effort).
+  const effortByRoute = new Map<string, boolean>();
+  for (const m of routed) {
+    effortByRoute.set(`${m.provider}/${m.id}`, Array.isArray(m.reasoningEfforts) && m.reasoningEfforts.length > 0);
+  }
+  for (const id of visibleNativeSlugs(config)) {
+    effortByRoute.set(`native/${id}`, true);
+  }
   const models = Object.keys(profile.assignments).sort().map(route => ({
     route,
     label: modelByRoute.get(route)?.label ?? route,
     available: available.has(route),
     ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
+    effortSupported: effortByRoute.get(route) ?? false,
     assignment: profile.assignments[route]!,
   }));
   return {

@@ -1031,6 +1031,13 @@ export const en = {
   "claudeDesktop.useAsDefault": "Use as {family} default",
   "claudeDesktop.moveTo": "Move to",
   "claudeDesktop.move": "Move",
+  "claudeDesktop.status.applied": "Applied to Desktop",
+  "claudeDesktop.status.stale": "Config stale — re-apply",
+  "claudeDesktop.status.notApplied": "Not applied",
+  "claudeDesktop.health.lastRequest": "Last request",
+  "claudeDesktop.health.stats": "{count} req / {errors} err",
+  "claudeDesktop.effort.supported": "effort",
+  "claudeDesktop.effort.displayOnly": "effort (display only)",
 
 } as const;
 

@@ -1010,6 +1010,13 @@ export const de = {
   "claudeDesktop.useAsDefault": "Als {family}-Standard verwenden",
   "claudeDesktop.moveTo": "Verschieben nach",
   "claudeDesktop.move": "Verschieben",
+  "claudeDesktop.status.applied": "Auf Desktop angewendet",
+  "claudeDesktop.status.stale": "Konfiguration veraltet — erneut anwenden",
+  "claudeDesktop.status.notApplied": "Nicht angewendet",
+  "claudeDesktop.health.lastRequest": "Letzte Anfrage",
+  "claudeDesktop.health.stats": "{count} Anf. / {errors} Fehl.",
+  "claudeDesktop.effort.supported": "effort",
+  "claudeDesktop.effort.displayOnly": "effort (nur Anzeige)",
 
 } as const;
 

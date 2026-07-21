@@ -1030,5 +1030,12 @@ export const ko: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "{family} 기본 모델로 사용",
   "claudeDesktop.moveTo": "이동 위치",
   "claudeDesktop.move": "이동",
+  "claudeDesktop.status.applied": "Desktop에 적용됨",
+  "claudeDesktop.status.stale": "설정 변경됨 — 재적용 필요",
+  "claudeDesktop.status.notApplied": "미적용",
+  "claudeDesktop.health.lastRequest": "마지막 요청",
+  "claudeDesktop.health.stats": "{count} 요청 / {errors} 에러",
+  "claudeDesktop.effort.supported": "effort",
+  "claudeDesktop.effort.displayOnly": "effort (표시만)",
 
 };

@@ -1030,5 +1030,12 @@ export const zh: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "设为 {family} 默认模型",
   "claudeDesktop.moveTo": "移动到",
   "claudeDesktop.move": "移动",
+  "claudeDesktop.status.applied": "已应用到 Desktop",
+  "claudeDesktop.status.stale": "配置已更改 — 需重新应用",
+  "claudeDesktop.status.notApplied": "未应用",
+  "claudeDesktop.health.lastRequest": "最后请求",
+  "claudeDesktop.health.stats": "{count} 请求 / {errors} 错误",
+  "claudeDesktop.effort.supported": "effort",
+  "claudeDesktop.effort.displayOnly": "effort (仅显示)",
 
 };

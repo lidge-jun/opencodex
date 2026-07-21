@@ -1087,3 +1087,25 @@ button.prov-account-row.active { cursor: default; }
   .claude-lane-head { align-items: flex-start; }
   .claude-move-row .input, .claude-move-row .btn { min-height: 44px; }
 }
+
+/* ── Desktop status bar + effort badges (hardening WP3) ── */
+.claude-status-bar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  font-size: 12.5px; color: var(--muted);
+}
+.claude-status-bar.applied { border-color: var(--green); }
+.claude-status-bar.stale { border-color: var(--amber); }
+.claude-status-bar.not-applied { border-color: var(--border); }
+.claude-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+}
+.claude-status-bar.applied .claude-status-dot { background: var(--green); }
+.claude-status-bar.stale .claude-status-dot { background: var(--amber); }
+.claude-status-health { margin-left: auto; font-size: 11.5px; }
+.claude-effort-badge {
+  display: inline-block; margin-top: 4px; padding: 1px 6px; border-radius: var(--radius-xs);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+}
+.claude-effort-badge.on { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.claude-effort-badge.off { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }
