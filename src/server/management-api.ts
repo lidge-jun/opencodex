@@ -221,6 +221,30 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     } catch { /* best-effort */ }
   }
 
+  /** Best-effort Desktop 3P config auto-reconcile when providers change. */
+  async function autoApplyDesktopBestEffort(): Promise<void> {
+    try {
+      if (config.claudeCode?.desktopAutoApply === false) return;
+      if (!config.claudeCode?.desktopProfile) return;
+      const { writeDesktop3pConfig } = await import("../claude/desktop-3p");
+      const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
+      const allModels = await fetchAllModels(config);
+      const routed = filterCatalogVisibleModels(allModels, config).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow }));
+      const result = writeDesktop3pConfig(
+        config.port ?? 10100,
+        [...visibleNativeSlugs(config)],
+        routed,
+        config.apiKeys?.[0]?.key,
+        "static",
+        config.claudeCode.desktopProfile,
+      );
+      if (result.written && result.fingerprint) {
+        config.claudeCode = { ...config.claudeCode, desktopProfile: { ...config.claudeCode.desktopProfile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
+        saveConfig(config);
+      }
+    } catch { /* best-effort */ }
+  }
+
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(safeConfigDTO(config));
   }
@@ -1079,6 +1103,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     save(config);
     await refreshCodexCatalogBestEffort();
     await syncClaudeAgentDefsBestEffort();
+    await autoApplyDesktopBestEffort();
     return jsonResponse({ ok: true, applied: chosen });
   }
 
@@ -1184,6 +1209,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       const savedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
       const appliedAt = config.claudeCode?.desktopProfile?.appliedAt ?? null;
       const stale = savedFingerprint !== null && onDiskFingerprint !== null && savedFingerprint !== onDiskFingerprint;
+      const { getDesktopHealth } = await import("../claude/desktop-health");
+      const health = getDesktopHealth();
       return jsonResponse({
         applied: savedFingerprint !== null,
         appliedAt,
@@ -1191,6 +1218,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         onDiskFingerprint,
         configPath,
         stale,
+        health,
       });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
