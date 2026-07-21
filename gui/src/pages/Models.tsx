@@ -578,7 +578,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
              onClick={toggleCombosOpen}
              style={{ flex: 1, gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", minWidth: 0 }}
            >
-             <IconChevron style={{ transform: combosOpen ? "rotate(90deg)" : undefined, transition: "transform .15s", flexShrink: 0 }} />
+             <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0, transform: combosOpen ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
              <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
              <strong>{t("nav.combos")}</strong>
              <span className="muted mono text-label">{t("models.combosActive", { count: combos.length })}</span>
