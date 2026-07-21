@@ -858,7 +858,7 @@ function isExactComboCatalogModel(
   return model !== undefined && exactComboSlugs.has(catalogModelSlug(model));
 }
 
-function catalogModelSlug(model: CatalogModel): string {
+export function catalogModelSlug(model: CatalogModel): string {
   return model.alias ?? routedSlug(model.provider, model.id);
 }
 
@@ -1567,12 +1567,17 @@ function warnUncataloguedComboOnce(
   );
 }
 
-export function exactComboCatalogSlugs(config: Pick<OcxConfig, "combos">): Set<string> {
-  return new Set(listComboIds(config).map(id => {
+export function exactComboCatalogSlugs(
+  config: Pick<OcxConfig, "combos" | "disabledModels">,
+): Set<string> {
+  const disabled = new Set(config.disabledModels ?? []);
+  return new Set(listComboIds(config).flatMap(id => {
     const alias = typeof config.combos?.[id]?.alias === "string"
       ? config.combos[id]!.alias!.trim()
       : "";
-    return alias || comboModelId(id);
+    const canonical = comboModelId(id);
+    const publicSlug = alias || canonical;
+    return disabled.has(publicSlug) || disabled.has(canonical) ? [] : [publicSlug];
   }));
 }
 

@@ -319,6 +319,23 @@ describe("deterministic combo selection", () => {
     expect(routeModel(config, "combo/free").providerName).toBe("a");
   });
 
+  test("routes a concrete combo target without re-entering its shadowing alias", () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          alias: "a/m1",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      },
+    });
+
+    expect(routeModel(config, "a/m1")).toMatchObject({
+      providerName: "a",
+      modelId: "m1",
+      combo: { comboId: "free", target: { provider: "a", model: "m1" } },
+    });
+  });
+
   test("eligibility, exclusions, and state reset are deterministic", () => {
     const config = rrConfig(1, [1, 1]);
     expect(pickComboTarget(config, "free", { exclude: ["a/m1"] })?.target.provider).toBe("b");
@@ -730,6 +747,32 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT rename migrates canonical references when the public alias stays unchanged", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        disabledModels: ["before", "combo/old", "after"],
+        subagentModels: ["combo/old", "another"],
+        combos: {
+          old: { ...VALID_COMBO, alias: "stable-public" },
+        },
+      });
+      saveConfig(config);
+
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "new",
+        renameFrom: "old",
+        combo: { ...VALID_COMBO, alias: "stable-public" },
+      });
+
+      expect(response?.status).toBe(200);
+      expect(config.disabledModels).toEqual(["before", "stable-public", "after"]);
+      expect(config.subagentModels).toEqual(["stable-public", "another"]);
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.disabledModels).toEqual(["before", "stable-public", "after"]);
+      expect(persisted.subagentModels).toEqual(["stable-public", "another"]);
+    });
+  });
+
   test("PUT rename rejects missing sources and existing destinations without mutation", async () => {
     await withTempHome(async () => {
       const config = baseConfig({
@@ -768,6 +811,29 @@ describe("combo management API", () => {
       expect(config.disabledModels).toEqual(["free-public"]);
       expect(config.subagentModels).toEqual(["free-public"]);
     });
+  });
+
+  test("GET subagent models exposes a combo alias as an available round-trip value", async () => {
+    const config = baseConfig({
+      subagentModels: ["deepseek-v4-flash"],
+      combos: {
+        free: { ...VALID_COMBO, alias: "deepseek-v4-flash" },
+      },
+    });
+    config.providers.a!.modelContextWindows = { m1: 128_000 };
+
+    const response = await comboApi(config, "GET", "/api/subagent-models");
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { chosen: string[]; available: string[] };
+    expect(body.chosen).toEqual(["deepseek-v4-flash"]);
+    expect(body.available).toContain("deepseek-v4-flash");
+    expect(body.available.filter(model => model === "deepseek-v4-flash")).toHaveLength(1);
+    expect(body.available).not.toContain("combo/free");
+
+    config.disabledModels = ["deepseek-v4-flash"];
+    const disabledResponse = await comboApi(config, "GET", "/api/subagent-models");
+    const disabledBody = await disabledResponse!.json() as { available: string[] };
+    expect(disabledBody.available).not.toContain("deepseek-v4-flash");
   });
 
   test("PUT clearing an alias deduplicates migrated references in stable order", async () => {

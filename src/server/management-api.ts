@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../codex/catalog";
-import { invalidateCodexModelsCache, nativeModelRows } from "../codex/catalog";
+import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows } from "../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -1060,9 +1060,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../codex/catalog");
-    const visibleRouted = models
-      .filter(m => ![...disabled].some(stored => slugEquals(stored, m.provider, m.id)))
-      .map(m => routedSlug(m.provider, m.id));
+    const visibleRouted = [...new Set(models
+      .filter(m => ![...disabled].some(stored =>
+        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
+      ))
+      .map(catalogModelSlug))];
     const available = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
       ...visibleRouted,
@@ -1619,9 +1621,12 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (renameFrom) delete nextCombos[renameFrom];
     nextCombos[id] = stored;
     config.combos = nextCombos;
+    const migratedModels = new Set<string>();
     if (oldPublicModel && oldPublicModel !== newPublicModel) {
-      const migratedModels = new Set([oldPublicModel]);
-      if (renameFrom) migratedModels.add(comboModelId(renameFrom));
+      migratedModels.add(oldPublicModel);
+    }
+    if (renameFrom) migratedModels.add(comboModelId(renameFrom));
+    if (migratedModels.size > 0) {
       const migrateReferences = (models: string[]): string[] => [
         ...new Set(models.map(model => migratedModels.has(model) ? newPublicModel : model)),
       ];

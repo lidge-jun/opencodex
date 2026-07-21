@@ -250,6 +250,44 @@ describe("combo catalog capability intersection", () => {
       .toEqual([]);
   });
 
+  test("repairs a provider row after its shadowing combo alias is disabled", () => {
+    const alias = "vendor/deepseek-v4-flash";
+    const combo = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias }),
+      [memberA, memberB],
+    )!;
+    const provider = {
+      provider: "vendor",
+      id: "deepseek-v4-flash",
+      reasoningEfforts: ["low", "medium"],
+    };
+    const config = {
+      combos: {
+        mixed: { alias, targets: [{ provider: "a", model: "m1" }] },
+      },
+      disabledModels: ["combo/mixed"],
+      providers: { vendor: {}, combo: {} },
+    };
+
+    const visible = filterCatalogVisibleModels([provider, combo], config);
+    const rows = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      visible,
+      undefined,
+      false,
+      "default",
+      exactComboCatalogSlugs(config),
+    );
+    const levels = (rows.find(row => row.slug === alias)?.supported_reasoning_levels ?? []) as Array<{ effort: string }>;
+    const efforts = levels.map(level => level.effort);
+
+    expect(visible).toEqual([provider]);
+    expect(exactComboCatalogSlugs(config)).toEqual(new Set());
+    expect(efforts).toEqual(["low", "medium", "max", "ultra"]);
+  });
+
   test("never repairs an exact combo with an empty modality intersection", () => {
     const exact = new Set(["combo/hidden"]);
     const derived = deriveComboCatalogModel("hidden", normalizedCombo(), [
@@ -352,6 +390,14 @@ describe("combo catalog capability intersection", () => {
       empty: { alias: "   ", targets: [{ provider: "a", model: "m1" }] },
     } }))
       .toEqual(new Set(["combo/free", "deepseek-v4-flash", "vendor/flash", "combo/empty"]));
+    expect(exactComboCatalogSlugs({
+      disabledModels: ["combo/free", "deepseek-v4-flash"],
+      combos: {
+        free: { targets: [{ provider: "a", model: "m1" }] },
+        bare: { alias: "deepseek-v4-flash", targets: [{ provider: "a", model: "m1" }] },
+        slashed: { alias: "vendor/flash", targets: [{ provider: "a", model: "m1" }] },
+      },
+    })).toEqual(new Set(["vendor/flash"]));
     expect(exactComboCatalogSlugs({})).toEqual(new Set());
   });
 });

@@ -227,15 +227,17 @@ function routeResult(providerName: string, provider: OcxProviderConfig, modelId:
   };
 }
 
-export function routeModel(config: OcxConfig, modelId: string): RouteResult {
+function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: boolean): RouteResult {
   const preservePhysicalComboProvider =
     hasOwnProvider(config.providers, COMBO_NAMESPACE)
     && Object.keys(config.combos ?? {}).length === 0;
-  if (!preservePhysicalComboProvider) {
+  if (!bypassCombos && !preservePhysicalComboProvider) {
     const combo = tryPickComboModel(config, modelId);
     if (combo) {
       const concrete = `${combo.target.provider}/${combo.target.model}`;
-      const routed = routeModel(config, concrete);
+      // The selected target is already a concrete provider/model reference. Resolve it without
+      // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
+      const routed = routeModelInternal(config, concrete, true);
       return { ...routed, combo };
     }
   }
@@ -297,6 +299,10 @@ export function routeModel(config: OcxConfig, modelId: string): RouteResult {
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
+}
+
+export function routeModel(config: OcxConfig, modelId: string): RouteResult {
+  return routeModelInternal(config, modelId, false);
 }
 
 function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {
