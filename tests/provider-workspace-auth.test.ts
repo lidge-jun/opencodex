@@ -180,4 +180,55 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("disabled={busy === name}");
     expect(page).toMatch(/<div[\s\S]*?className=\{`prov-account-row\$\{account\.active/);
   });
+
+  test("keeps account provider discovery behind a connected-only picker", async () => {
+    const page = await Bun.file("gui/src/pages/Providers.tsx").text();
+    expect(page).toContain("const connectedAccountRows = addModalAccountRows.filter");
+    expect(page).toContain("providerStatus?.loggedIn || activeAccountNeedsReauth[row.id]");
+    expect(page).toContain("return !connected && (!query");
+    expect(page).toContain("isAccountProvider(name, provider)");
+    expect(page).toContain('className="prov-account-add-tile"');
+    expect(page).toContain("visibleAccountRows.map");
+    expect(page).toContain("dialog.showModal()");
+    expect(page).toContain("if (event.target !== event.currentTarget || busy) return");
+    expect(page).not.toContain("keyProviders");
+  });
+
+  test("splits OAuth and API providers with a key-only setup catalog", async () => {
+    const [page, modal, catalog, styles] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/AddProviderModal.tsx").text(),
+      Bun.file("gui/src/components/provider-catalog/ProviderCatalog.tsx").text(),
+      Bun.file("gui/src/styles.css").text(),
+    ]);
+    expect(page).toContain('className="prov-auth-grid"');
+    expect(page).toContain('t("prov.oauthProviders")');
+    expect(page).toContain('t("prov.apiProviders")');
+    expect(page).toContain("keyCardProviders.map");
+    expect(page).toContain("setAddingApiProvider(true)");
+    expect(page).toContain("apiKeyOnly={addingApiProvider}");
+    expect(modal).toContain("excludedProviderIds={apiKeyOnly ? existingNames : []}");
+    expect(catalog).toContain("supportsApiKeySetup(preset)");
+    expect(catalog).toContain("!excluded.has(preset.id)");
+    expect(styles).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+  });
+
+  test("replaces the redundant add button with Codex restart and warns after provider creation", async () => {
+    const [page, ui] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/ui.tsx").text(),
+    ]);
+    expect(page).toContain('fetch(`${apiBase}/api/codex/restart`, { method: "POST" })');
+    expect(page).toContain("const restartCodexButton");
+    expect(page).toContain('t("prov.restartCodexConfirm")');
+    expect(page).toContain('notifyAfterModelSync(t("prov.addedRestartRequired", { name }), true)');
+    expect(ui).toContain('tone: "ok" | "warn" | "err"');
+  });
+
+  test("reports automatic model-sync failures after provider connection", async () => {
+    const page = await Bun.file("gui/src/pages/Providers.tsx").text();
+    expect(page).toContain('return (await fetch(`${apiBase}/api/sync`, { method: "POST" })).ok');
+    expect(page).toContain('t("prov.modelSyncFailed", { cmd: "ocx sync" })');
+    expect(page).toContain("void notifyAfterModelSync");
+  });
 });

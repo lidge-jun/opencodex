@@ -5,13 +5,13 @@ import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
-import type { WorkspaceProvider } from "../provider-workspace/catalog";
+import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { Notice } from "../ui";
-import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, IconLink } from "../icons";
+import { IconPlus, IconTrash, IconLock, IconExternal, IconPower, IconChevron, IconLink, IconSearch, IconX, IconRefresh } from "../icons";
 import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "../components/QuotaBars";
@@ -50,9 +50,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [addingApiProvider, setAddingApiProvider] = useState(false);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
-  const [statusOk, setStatusOk] = useState(false);
+  const [statusTone, setStatusTone] = useState<"ok" | "warn" | "err">("err");
+  const [restartingCodex, setRestartingCodex] = useState(false);
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthStatus, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
@@ -89,7 +91,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
-  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
+  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean; accountId?: string } | null>(null);
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
+  const [accountPickerQuery, setAccountPickerQuery] = useState("");
   const [codexActiveNeedsReauth, setCodexActiveNeedsReauth] = useState(false);
   const aliveRef = useRef(true);
   const jsonEditorOpenRef = useRef(false);
@@ -98,10 +102,33 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
   const codexReauthGenerationRef = useRef(0);
   const oauthLoginGenerationRef = useRef<Map<string, number>>(new Map());
+  const accountPickerDialogRef = useRef<HTMLDialogElement>(null);
+  const accountPickerBusyRef = useRef<string | null>(null);
+  const accountPickerTosRef = useRef(false);
 
-  const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusOk(ok); };
+  const notify = (msg: string, ok: boolean) => { setStatus(msg); setStatusTone(ok ? "ok" : "err"); };
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  useEffect(() => { accountPickerBusyRef.current = busy; }, [busy]);
+  useEffect(() => { accountPickerTosRef.current = oauthTosPending !== null; }, [oauthTosPending]);
+  useEffect(() => {
+    if (!accountPickerOpen) return;
+    const dialog = accountPickerDialogRef.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const onCancel = (event: Event) => {
+      event.preventDefault();
+      if (accountPickerBusyRef.current || accountPickerTosRef.current) return;
+      setAccountPickerOpen(false);
+      setAccountPickerQuery("");
+    };
+    dialog?.addEventListener("cancel", onCancel);
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      dialog?.removeEventListener("cancel", onCancel);
+      if (dialog?.open) dialog.close();
+      previousFocus?.focus();
+    };
+  }, [accountPickerOpen]);
   useEffect(() => {
     const writePref = (workspace: boolean) => {
       try {
@@ -167,6 +194,39 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase, t]);
 
+  const syncModelsNow = useCallback(async (): Promise<boolean> => {
+    try {
+      return (await fetch(`${apiBase}/api/sync`, { method: "POST" })).ok;
+    } catch {
+      return false;
+    }
+  }, [apiBase]);
+
+  const notifyAfterModelSync = async (successMessage: string, restartRecommended = false) => {
+    const synced = await syncModelsNow();
+    if (!aliveRef.current) return;
+    if (!synced) {
+      notify(t("prov.modelSyncFailed", { cmd: "ocx sync" }), false);
+      return;
+    }
+    setStatus(successMessage);
+    setStatusTone(restartRecommended ? "warn" : "ok");
+  };
+
+  const restartCodex = async () => {
+    if (restartingCodex || !window.confirm(t("prov.restartCodexConfirm"))) return;
+    setRestartingCodex(true);
+    try {
+      const res = await fetch(`${apiBase}/api/codex/restart`, { method: "POST" });
+      if (res.ok) return;
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      notify(t("prov.restartCodexFailed", { error: data.error ?? res.statusText }), false);
+    } catch (error) {
+      notify(t("prov.restartCodexFailed", { error: error instanceof Error ? error.message : String(error) }), false);
+    }
+    if (aliveRef.current) setRestartingCodex(false);
+  };
+
   // Load OAuth-capable providers + ChatGPT/Codex pool status (shared by all forward providers).
   const fetchOauth = useCallback(async () => {
     try {
@@ -203,7 +263,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const codexNeedsReauth = activePoolAccount
         ? Boolean(activePoolAccount.needsReauth)
         : Boolean(main?.needsReauth);
-      // Built-in openai (and any other forward row) share the same Codex account pool.
+      // Only the canonical built-in openai row owns the Codex account pool.
       next.openai = {
         loggedIn: codexLoggedIn,
         email: codexEmail,
@@ -544,6 +604,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, [apiBase, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+    const providerWasConfigured = Boolean(config?.providers[provider]);
     const nextGen = (oauthLoginGenerationRef.current.get(provider) ?? 0) + 1;
     oauthLoginGenerationRef.current.set(provider, nextGen);
     const generation = nextGen;
@@ -611,7 +672,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          void notifyAfterModelSync(
+            providerWasConfigured
+              ? t("prov.loginOk", { provider: oauthLabel(provider) })
+              : t("prov.addedRestartRequired", { name: oauthLabel(provider) }),
+            !providerWasConfigured,
+          );
           setLoginInfo(null);
           setManualCode("");
           setManualCodeMsg("");
@@ -643,13 +709,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const requestLoginOAuth = (provider: string, addAccount = false) => {
+  const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
     if (busy === provider) return;
     if (oauthTosRisk(provider)) {
-      setOauthTosPending({ provider, addAccount });
+      setOauthTosPending({ provider, addAccount, accountId });
       return;
     }
-    void loginOAuth(provider, addAccount);
+    void loginOAuth(provider, addAccount, accountId);
   };
 
   /** Paste redirect URL / auth code when the browser cannot hit the loopback callback. */
@@ -804,14 +870,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     );
   }
 
-  // API-key providers shown alongside OAuth logins in the account panel.
-  const keyProviders = Object.entries(config.providers)
-    .filter(([name, prov]) => (prov.hasApiKey || name === "openai-apikey") && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
-    .map(([name]) => name);
-
   const addModalAccountRows = [
     ...Object.entries(config.providers)
-      .filter(([, prov]) => prov.authMode === "forward")
+      .filter(([name, provider]) => isAccountProvider(name, provider))
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name]) => ({
         id: name,
@@ -822,32 +883,33 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     ...[...oauthProviders]
       .sort((a, b) => a.localeCompare(b))
       .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
-    ...Object.entries(config.providers)
-      .filter(([name, prov]) =>
-        (prov.hasApiKey || prov.keyOptional)
-        && prov.authMode !== "oauth"
-        && prov.authMode !== "forward"
-        && !oauthProviders.includes(name))
-      .map(([name, prov]) => ({
-        id: name,
-        label: name,
-        kind: "key" as const,
-        statusLabel: prov.keyOptional && !prov.hasApiKey ? t("modal.badge.free") : t("prov.hasApiKey"),
-      })),
   ];
 
-  const isForwardProvider = (name: string) => config.providers[name]?.authMode === "forward";
+  const isCodexAccountProvider = (name: string) => {
+    const provider = config.providers[name];
+    return provider ? isAccountProvider(name, provider) : false;
+  };
 
   const accountLoginStatus: Record<string, OAuthStatus> = { ...oauthStatus };
   const codexStatus = oauthStatus.openai;
   if (codexStatus) {
     for (const [name, prov] of Object.entries(config.providers)) {
-      if (prov.authMode === "forward") accountLoginStatus[name] = codexStatus;
+      if (isAccountProvider(name, prov)) accountLoginStatus[name] = codexStatus;
     }
   }
 
+  const connectedAccountRows = addModalAccountRows.filter(row => {
+    const providerStatus = accountLoginStatus[row.id];
+    return providerStatus?.loggedIn || activeAccountNeedsReauth[row.id];
+  });
+  const visibleAccountRows = addModalAccountRows.filter(row => {
+    const query = accountPickerQuery.trim().toLowerCase();
+    const connected = accountLoginStatus[row.id]?.loggedIn || activeAccountNeedsReauth[row.id];
+    return !connected && (!query || row.id.toLowerCase().includes(query) || row.label.toLowerCase().includes(query));
+  });
+
   const onAccountLogin = (provider: string) => {
-    if (isForwardProvider(provider)) {
+    if (isCodexAccountProvider(provider)) {
       setCodexLoginOpen(true);
       return;
     }
@@ -865,13 +927,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       onClose={() => setCodexLoginOpen(false)}
       onAdded={() => {
         setCodexLoginOpen(false);
-        notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }), true);
+        void notifyAfterModelSync(t("prov.loginOk", { provider: formatProviderDisplayName("openai") }));
         void fetchOauth();
         void fetchProviderQuotas(true);
         bumpModelsRefresh();
       }}
     />
   ) : null;
+
+  const restartCodexButton = (
+    <button type="button" className="btn btn-primary" onClick={() => { void restartCodex(); }} disabled={restartingCodex}>
+      {restartingCodex ? <span className="spin" /> : <IconRefresh />}
+      {t("prov.restartCodex")}
+    </button>
+  );
 
   if (workspaceView) {
     return (
@@ -880,17 +949,17 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <h2>{t("nav.providers")}</h2>
           <div className="row">
             <button className="btn btn-ghost btn-sm" onClick={toggleWorkspace}>{t("pws.classicToggle")}</button>
-            <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
+            {restartCodexButton}
           </div>
         </div>
-        {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
+        {status && <Notice tone={statusTone}>{status}</Notice>}
         <ProviderWorkspaceShell
           providers={config.providers as Record<string, WorkspaceProvider>}
           apiBase={apiBase}
           defaultProvider={config.defaultProvider}
           selectedName={workspaceSelected}
           onSelect={setWorkspaceSelected}
-          onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
+          onAddProvider={intent => { setAddingApiProvider(false); setAddIntent(intent ?? null); setAdding(true); }}
           onEditConfig={openJsonEditor}
           jsonEditor={{
             open: jsonEditorOpen,
@@ -957,9 +1026,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onClose={() => {
               if (busy) void cancelLoginOAuth(busy);
               setAdding(false);
+              setAddingApiProvider(false);
               setAddIntent(null);
             }}
-            onAdded={(name) => { setAdding(false); setAddIntent(null); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); bumpModelsRefresh(); }}
+            onAdded={(name) => { setAdding(false); setAddingApiProvider(false); setAddIntent(null); void notifyAfterModelSync(t("prov.addedRestartRequired", { name }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); bumpModelsRefresh(); }}
             accountRows={addModalAccountRows}
             accountStatus={accountLoginStatus}
             accountBusy={busy}
@@ -995,7 +1065,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               const pending = oauthTosPending;
               if (!pending) return;
               setOauthTosPending(null);
-              void loginOAuth(pending.provider, pending.addAccount);
+              void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
             }}
           />
         )}
@@ -1018,7 +1088,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             </>
           ) : (
             <>
-              <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
+              {restartCodexButton}
               <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t("prov.editJson")}</button>
             </>
           )}
@@ -1026,119 +1096,135 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       </div>
       <p className="page-sub">{t("prov.subtitle")}</p>
 
-      {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
+      {status && <Notice tone={statusTone}>{status}</Notice>}
 
-      {/* OAuth Login — every OAuth-capable provider, with its live login status. */}
-      <div className="panel panel-accent" style={{ marginBottom: 18 }}>
-        <div className="row" style={{ marginBottom: 14 }}>
-          <IconLock style={{ width: 16, height: 16, color: "var(--accent)" }} />
-          <span className="font-semibold">{t("prov.accountLogin")}</span>
-        </div>
-        <div className="oauth-grid">
-          {oauthProviders.length === 0 && keyProviders.length === 0 && (
-            <span className="muted text-control" style={{ gridColumn: "1 / -1" }}>{t("prov.noOauth")}</span>
-          )}
-          {oauthProviders.map(p => {
-            const st = oauthStatus[p] ?? { loggedIn: false };
-            const isBusy = busy === p;
-            const icon = providerIconSrc(p);
-            return (
-              <div key={p} className="oauth-row">
-                <span className="oauth-name" title={oauthLabel(p)}>
-                  <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
-                  <span className="oauth-name-text">{p}</span>
-                </span>
-                <span className="oauth-status">
-                  <span className={`dot ${st.loggedIn ? "dot-green" : "dot-muted"}`} />
-                  {st.loggedIn ? (
-                    <span className="oauth-email" style={{ color: "var(--green)" }}>{st.email ?? t("prov.loggedIn")}</span>
-                  ) : (
-                    <span className="oauth-email muted">{t("prov.notLoggedIn")}</span>
-                  )}
-                </span>
-                <span className="oauth-actions">
-                  {st.loggedIn ? (
-                    <button className="btn btn-ghost btn-sm" onClick={() => logoutOAuth(p)}>{t("prov.logout")}</button>
-                  ) : isBusy ? (
-                    <button className="btn btn-ghost btn-sm" onClick={() => { void cancelLoginOAuth(p); }}>{t("common.cancel")}</button>
-                  ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(p)} disabled={isBusy}>
-                      {isBusy ? <><span className="spin" />{t("prov.waitingBrowser")}</> : <><IconLock />{t("prov.login")}</>}
-                    </button>
-                  )}
-                </span>
-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
-                  <span className="oauth-login-hint muted">
-                    <span className="oauth-login-hint-links">
-                      {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal width={14} height={14} />{t("prov.didntOpen")}</a>}
-                      <button className="link-btn" onClick={() => {
-                        if (loginInfo?.url) {
-                          navigator.clipboard.writeText(loginInfo.url).then(() => {
-                            setLinkCopied(true);
-                            setTimeout(() => setLinkCopied(false), 2500);
-                          }).catch(() => {});
-                        }
-                      }} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                        <IconLink width={14} height={14} />{linkCopied ? t("prov.linkCopied") : t("prov.copyLink")}
-                      </button>
-                      {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
-                      {isBusy && (
-                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => void cancelLoginOAuth(p)}>
-                          {t("common.cancel")}
-                        </button>
+      {!editing && (
+        <div className="prov-auth-grid">
+          <section className="panel panel-accent prov-accounts-panel" aria-labelledby="oauth-providers-title">
+            <div className="prov-accounts-head">
+              <div>
+                <div className="row">
+                  <IconLock style={{ width: 16, height: 16, color: "var(--accent)" }} />
+                  <h3 id="oauth-providers-title" className="text-subtitle">{t("prov.oauthProviders")}</h3>
+                </div>
+                <p className="muted text-label leading-body" style={{ margin: "5px 0 0" }}>{t("prov.accountLoginHint")}</p>
+              </div>
+            </div>
+
+            <div className="oauth-grid">
+              {connectedAccountRows.map(row => {
+                const providerStatus = accountLoginStatus[row.id] ?? { loggedIn: false };
+                const providerNeedsReauth = activeAccountNeedsReauth[row.id] === true;
+                const activeAccount = accountSets[row.id]?.accounts.find(account => account.active)
+                  ?? accountSets[row.id]?.accounts.find(account => account.id === accountSets[row.id]?.activeAccountId);
+                const providerBusy = busy === row.id;
+                const icon = providerIconSrc(row.id);
+                return (
+                  <div key={row.id} className="oauth-row">
+                    <span className="oauth-name" title={row.label}>
+                      <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
+                      <span className="oauth-name-text">{row.label}</span>
+                    </span>
+                    <span className="oauth-status">
+                      <span className={`dot ${providerNeedsReauth ? "dot-amber" : "dot-green"}`} />
+                      <span className="oauth-email muted">
+                        {providerNeedsReauth ? t("pws.reauth") : (providerStatus.email ?? t("prov.loggedIn"))}
+                      </span>
+                    </span>
+                    <span className="oauth-actions">
+                      {row.kind === "codex" ? (
+                        <a className="btn btn-ghost btn-sm" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
+                      ) : providerBusy ? (
+                        <button className="btn btn-ghost btn-sm" onClick={() => void cancelLoginOAuth(row.id)}>{t("common.cancel")}</button>
+                      ) : providerNeedsReauth ? (
+                        <button className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(row.id, true, activeAccount?.id)}>{t("prov.reauthenticate")}</button>
+                      ) : (
+                        <button className="btn btn-ghost btn-sm" onClick={() => void logoutOAuth(row.id)}>{t("prov.logout")}</button>
                       )}
                     </span>
-                    <span className="oauth-login-paste">
-                      <input
-                        className="input"
-                        type="text"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={manualCode}
-                        onChange={e => setManualCode(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void submitManualCode(p); } }}
-                        placeholder={t("prov.pasteRedirect")}
-                        aria-label={t("prov.pasteRedirect")}
-                        disabled={manualCodeBusy}
-                      />
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        type="button"
-                        disabled={manualCodeBusy || !manualCode.trim()}
-                        onClick={() => void submitManualCode(p)}
-                      >
-                        {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
-                      </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {connectedAccountRows.length === 0 && (
+              <div className="prov-accounts-empty muted text-control">{t("prov.noConnectedAccounts")}</div>
+            )}
+
+            <button
+              type="button"
+              className="prov-account-add-tile"
+              onClick={() => {
+                setAccountPickerQuery("");
+                setAccountPickerOpen(true);
+                void fetchOauth();
+              }}
+              aria-label={t("prov.connectAccountTitle")}
+            >
+              <span className="prov-account-add-icon"><IconPlus /></span>
+              <span className="prov-account-add-copy">
+                <span className="font-semibold">{t("prov.connectAccountTitle")}</span>
+                <span className="muted text-label">{t("prov.connectAccountDesc")}</span>
+              </span>
+            </button>
+          </section>
+
+          <section className="panel panel-accent prov-accounts-panel" aria-labelledby="api-providers-title">
+            <div className="prov-accounts-head">
+              <div>
+                <div className="row">
+                  <IconLock style={{ width: 16, height: 16, color: "var(--accent)" }} />
+                  <h3 id="api-providers-title" className="text-subtitle">{t("prov.apiProviders")}</h3>
+                </div>
+                <p className="muted text-label leading-body" style={{ margin: "5px 0 0" }}>{t("prov.apiProvidersHint")}</p>
+              </div>
+            </div>
+
+            <div className="oauth-grid">
+              {keyCardProviders.map(name => {
+                const icon = providerIconSrc(name);
+                const activeKey = keyPools[name]?.find(entry => entry.active) ?? keyPools[name]?.[0];
+                const keyLabel = activeKey?.label
+                  ? `${activeKey.label} · ${activeKey.masked}`
+                  : (activeKey?.masked ?? t("prov.hasApiKey"));
+                return (
+                  <div key={name} className="oauth-row">
+                    <span className="oauth-name" title={formatProviderDisplayName(name)}>
+                      <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
+                      <span className="oauth-name-text">{formatProviderDisplayName(name)}</span>
                     </span>
-                    <span className="text-caption">{manualCodeMsg || t("prov.pasteRedirectHint")}</span>
-                  </span>
-                )}
-              </div>
-            );
-          })}
-          {keyProviders.map(name => {
-            const provider = config?.providers[name];
-            const icon = providerIconSrc(name);
-            const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
-            const missingOpenAiKey = name === "openai-apikey" && !provider?.hasApiKey;
-            return (
-              <div key={name} className="oauth-row">
-                <span className="oauth-name" title={name}>
-                  <span className="provider-icon provider-icon-sm">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
-                  <span className="oauth-name-text">{name}</span>
-                </span>
-                <span className="oauth-status">
-                  <span className={`dot ${missingOpenAiKey ? "dot-amber" : "dot-green"}`} />
-                  <span className="oauth-email muted">{missingOpenAiKey ? t("prov.openaiApiMissing") : keylessFree ? t("modal.badge.free") : t("prov.hasApiKey")}</span>
-                </span>
-                <span className="oauth-actions">
-                  {missingOpenAiKey && <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>{t("prov.openaiApiSetup")}</button>}
-                </span>
-              </div>
-            );
-          })}
+                    <span className="oauth-status">
+                      <span className="dot dot-green" />
+                      <span className="oauth-email muted mono">{keyLabel}</span>
+                    </span>
+                    <span className="oauth-actions"><span className="badge badge-green">{t("prov.apiReady")}</span></span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {keyCardProviders.length === 0 && (
+              <div className="prov-accounts-empty muted text-control">{t("prov.noApiProviders")}</div>
+            )}
+
+            <button
+              type="button"
+              className="prov-account-add-tile"
+              onClick={() => {
+                setAddingApiProvider(true);
+                setAdding(true);
+              }}
+              aria-label={t("prov.addApiProvider")}
+            >
+              <span className="prov-account-add-icon"><IconPlus /></span>
+              <span className="prov-account-add-copy">
+                <span className="font-semibold">{t("prov.addApiProvider")}</span>
+                <span className="muted text-label">{t("prov.addApiProviderDesc")}</span>
+              </span>
+            </button>
+          </section>
         </div>
-      </div>
+      )}
 
       {editing ? (
         <textarea
@@ -1357,15 +1443,165 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           })}
         </div>
       )}
+      {accountPickerOpen && (
+        <dialog
+          ref={accountPickerDialogRef}
+          aria-labelledby="account-picker-title"
+          className="modal-overlay"
+          onClick={event => {
+            if (event.target !== event.currentTarget || busy) return;
+            setAccountPickerOpen(false);
+            setAccountPickerQuery("");
+          }}
+        >
+          <div className="modal-card account-picker-modal" onClick={event => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3 id="account-picker-title">{t("prov.connectAccountTitle")}</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                aria-label={t("common.close")}
+                disabled={Boolean(busy)}
+                onClick={() => { setAccountPickerOpen(false); setAccountPickerQuery(""); }}
+              >
+                <IconX />
+              </button>
+            </div>
+            <p className="modal-desc">{t("prov.connectAccountDesc")}</p>
+            <label className="account-picker-search">
+              <IconSearch aria-hidden="true" />
+              <input
+                className="input"
+                autoFocus
+                value={accountPickerQuery}
+                onChange={event => setAccountPickerQuery(event.target.value)}
+                placeholder={t("prov.searchAccountProviders")}
+                aria-label={t("prov.searchAccountProviders")}
+              />
+            </label>
+            <div className="account-picker-list">
+              {visibleAccountRows.map(row => {
+                const providerStatus = accountLoginStatus[row.id] ?? { loggedIn: false };
+                const providerNeedsReauth = activeAccountNeedsReauth[row.id] === true;
+                const activeAccount = accountSets[row.id]?.accounts.find(account => account.active)
+                  ?? accountSets[row.id]?.accounts.find(account => account.id === accountSets[row.id]?.activeAccountId);
+                const providerBusy = busy === row.id;
+                const icon = providerIconSrc(row.id);
+                return (
+                  <div key={row.id} className="account-picker-entry">
+                    <div className="account-picker-item">
+                      <span className="provider-icon">{icon && <img src={icon} alt="" aria-hidden="true" />}</span>
+                      <span className="account-picker-copy">
+                        <span className="font-semibold">{row.label}</span>
+                        <span className="muted text-label">
+                          {providerNeedsReauth
+                            ? t("pws.reauth")
+                            : providerStatus.loggedIn
+                              ? (providerStatus.email ?? t("prov.loggedIn"))
+                              : t("prov.notLoggedIn")}
+                        </span>
+                      </span>
+                      <span className={`dot ${providerNeedsReauth ? "dot-amber" : providerStatus.loggedIn ? "dot-green" : "dot-muted"}`} />
+                      {row.kind === "codex" && (providerStatus.loggedIn || providerNeedsReauth) ? (
+                        <a className="btn btn-ghost btn-sm" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
+                      ) : providerBusy ? (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void cancelLoginOAuth(row.id)}>{t("common.cancel")}</button>
+                      ) : providerNeedsReauth ? (
+                        <button type="button" className="btn btn-primary btn-sm" onClick={() => requestLoginOAuth(row.id, true, activeAccount?.id)}>{t("prov.reauthenticate")}</button>
+                      ) : providerStatus.loggedIn ? (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logoutOAuth(row.id)}>{t("prov.logout")}</button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => {
+                            if (row.kind === "codex") {
+                              setAccountPickerOpen(false);
+                              setAccountPickerQuery("");
+                            }
+                            onAccountLogin(row.id);
+                          }}
+                        >
+                          {t("prov.connectAccount")}
+                        </button>
+                      )}
+                    </div>
+                    {loginInfo?.provider === row.id && (loginInfo.url || loginInfo.instructions || providerBusy) && (
+                      <div className="oauth-login-hint muted">
+                        <span className="oauth-login-hint-links">
+                          {loginInfo.url && (
+                            <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                              <IconExternal width={14} height={14} />{t("prov.didntOpen")}
+                            </a>
+                          )}
+                          {loginInfo.url && (
+                            <button
+                              type="button"
+                              className="link-btn"
+                              onClick={() => {
+                                navigator.clipboard.writeText(loginInfo.url!).then(() => {
+                                  setLinkCopied(true);
+                                  setTimeout(() => setLinkCopied(false), 2500);
+                                }).catch(() => {});
+                              }}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                            >
+                              <IconLink width={14} height={14} />{linkCopied ? t("prov.linkCopied") : t("prov.copyLink")}
+                            </button>
+                          )}
+                          {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                        </span>
+                        <span className="oauth-login-paste">
+                          <input
+                            className="input"
+                            type="text"
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={manualCode}
+                            onChange={event => setManualCode(event.target.value)}
+                            onKeyDown={event => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void submitManualCode(row.id);
+                              }
+                            }}
+                            placeholder={t("prov.pasteRedirect")}
+                            aria-label={t("prov.pasteRedirect")}
+                            disabled={manualCodeBusy}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={manualCodeBusy || !manualCode.trim()}
+                            onClick={() => void submitManualCode(row.id)}
+                          >
+                            {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                          </button>
+                        </span>
+                        <span className="text-caption">{manualCodeMsg || t("prov.pasteRedirectHint")}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {visibleAccountRows.length === 0 && (
+                <div className="muted text-control provider-catalog-empty">{t("prov.noAccountProvidersMatch")}</div>
+              )}
+            </div>
+          </div>
+        </dialog>
+      )}
       {adding && (
         <AddProviderModal
           apiBase={apiBase}
           existingNames={Object.keys(config.providers)}
+          apiKeyOnly={addingApiProvider}
           onClose={() => {
             if (busy) void cancelLoginOAuth(busy);
             setAdding(false);
+            setAddingApiProvider(false);
           }}
-          onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
+          onAdded={(name) => { setAdding(false); setAddingApiProvider(false); void notifyAfterModelSync(t("prov.addedRestartRequired", { name }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
           accountRows={addModalAccountRows}
           accountStatus={accountLoginStatus}
           accountBusy={busy}
@@ -1393,7 +1629,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             const pending = oauthTosPending;
             if (!pending) return;
             setOauthTosPending(null);
-            void loginOAuth(pending.provider, pending.addAccount);
+            void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
           }}
         />
       )}

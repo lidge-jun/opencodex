@@ -731,6 +731,9 @@ export async function handleCodexAuthAPI(
                 saveRuntimeConfig(config, latestConfig);
               }
               codexAuthLoginState.set(flowId, { status: "done", accountId, email, doneAt: Date.now() });
+              void import("./sync")
+                .then(({ syncModelsToCodex }) => syncModelsToCodex(undefined, getRuntimeConfig(config), null))
+                .catch(() => {});
               completed = true;
             }
             break;

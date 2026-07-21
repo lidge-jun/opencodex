@@ -471,6 +471,10 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
   const config = loadConfig();
   upsertOAuthProvider(config, provider);
   saveConfig(config);
+  // ponytail: one shared post-login sync so GUI/CLI never need a manual `ocx sync`
+  void import("../codex/sync")
+    .then(({ syncModelsToCodex }) => syncModelsToCodex(undefined, loadConfig(), null))
+    .catch(() => {});
   return cred;
 }
 

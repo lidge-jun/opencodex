@@ -23,7 +23,7 @@ type Preset = CatalogPreset;
 type FormState = ProviderPayloadForm;
 
 export default function AddProviderModal({
-  apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
+  apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false, apiKeyOnly = false,
   accountRows, accountStatus, accountBusy, onAccountLogin, onAccountCancelLogin, onAccountLogout, onOpen,
 }: {
   apiBase: string;
@@ -34,6 +34,8 @@ export default function AddProviderModal({
   initialTier?: "accounts" | "free" | "paid";
   /** Skip the catalog and open the custom-provider form immediately. */
   initialCustom?: boolean;
+  /** Show only providers that support API-key setup. */
+  apiKeyOnly?: boolean;
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
   accountBusy?: string | null;
@@ -304,10 +306,10 @@ export default function AddProviderModal({
 
   return (
     <>
-    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label={t(apiKeyOnly ? "modal.addApiProvider" : "modal.add")} className="modal-overlay" onClick={onClose}>
       <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
+          <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t(apiKeyOnly ? "modal.addApiProvider" : "modal.add")}</h3>
           <button className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
         </div>
 
@@ -317,6 +319,8 @@ export default function AddProviderModal({
             usageRank={usageRank}
             presetsLoading={presetsLoading}
             initialTier={initialTier}
+            apiKeyOnly={apiKeyOnly}
+            excludedProviderIds={apiKeyOnly ? existingNames : []}
             onSelectPreset={p => choosePreset(p)}
             onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
             accountRows={accountRows}

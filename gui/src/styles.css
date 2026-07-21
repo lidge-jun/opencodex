@@ -639,6 +639,7 @@ dialog.modal-overlay {
   height: 100%;
   color: inherit;
 }
+dialog.modal-overlay:not([open]) { display: none; }
 dialog.modal-overlay::backdrop {
   background: transparent;
 }
@@ -993,3 +994,127 @@ button.prov-account-row.active { cursor: default; }
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-label .title { font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .setting-label .desc { font-size: var(--text-label); color: var(--muted); line-height: var(--leading-body); }
+/* ---- Providers account panel (connected-only + picker) ---- */
+.prov-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  align-items: stretch;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.prov-auth-grid > .prov-accounts-panel { min-width: 0; }
+.prov-accounts-panel { display: flex; flex-direction: column; gap: 14px; margin-bottom: 0; }
+.prov-accounts-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.prov-accounts-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+.prov-account-add-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 76px;
+  padding: 14px;
+  border: 1px dashed var(--faint);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  margin-top: auto;
+  transition: background var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast);
+}
+.prov-account-add-tile:hover {
+  background: var(--raised);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.prov-account-add-tile:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.prov-account-add-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-round);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.prov-account-add-icon svg { width: 18px; height: 18px; }
+.prov-account-add-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+@media (max-width: 760px) {
+  .prov-auth-grid { grid-template-columns: 1fr; }
+}
+.account-picker-modal { width: min(760px, calc(100vw - 32px)); max-width: 760px; }
+.account-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  color: var(--muted);
+}
+.account-picker-search > svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.account-picker-search .input { flex: 1; min-width: 0; }
+.account-picker-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  gap: 8px;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  padding-right: 2px;
+}
+.account-picker-entry { display: flex; flex-direction: column; gap: 8px; }
+.account-picker-entry:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.account-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border-soft);
+  background: var(--raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.account-picker-item:hover { border-color: var(--faint); background: var(--raised-hover); }
+.account-picker-item > .dot { flex: 0 0 auto; }
+.account-picker-entry .oauth-login-hint {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.account-picker-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.account-picker-copy .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .account-picker-list { grid-template-columns: 1fr; }
+  .account-picker-entry:last-child:nth-child(odd) { grid-column: auto; }
+  .account-picker-item { flex-wrap: wrap; }
+  .account-picker-copy { flex: 1 1 calc(100% - 64px); }
+  .account-picker-item .btn { width: 100%; }
+  .oauth-login-paste { align-items: stretch; flex-direction: column; }
+}

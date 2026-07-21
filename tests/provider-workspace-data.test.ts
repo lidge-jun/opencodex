@@ -34,6 +34,7 @@ import {
   filterPresets,
   presetTier,
   sortPresets,
+  supportsApiKeySetup,
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
@@ -502,6 +503,13 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(presetTier(preset({ id: "ollama", auth: "local", baseUrl: "http://localhost:11434/v1" }))).toBe("free");
     expect(presetTier(preset({ id: "litellm", keyOptional: true }))).toBe("free");
     expect(presetTier(preset({ id: "xai", auth: "oauth" }))).toBe("paid");
+  });
+
+  test("API setup includes key providers and explicit OAuth key overrides only", () => {
+    expect(supportsApiKeySetup(preset({ id: "openrouter" }))).toBe(true);
+    expect(supportsApiKeySetup(preset({ id: "xai", auth: "oauth", supportsApiKey: true }))).toBe(true);
+    expect(supportsApiKeySetup(preset({ id: "anthropic", auth: "oauth" }))).toBe(false);
+    expect(supportsApiKeySetup(preset({ id: "ollama", auth: "local" }))).toBe(false);
   });
 
   test("bucketPresets partitions all three tiers preserving input order", () => {

@@ -9,6 +9,7 @@ import { useT } from "../../i18n";
 import {
   bucketPresets,
   filterPresets,
+  supportsApiKeySetup,
   type CatalogPreset,
 } from "./provider-presets";
 
@@ -31,6 +32,8 @@ export default function ProviderCatalog({
   initialTier = "free",
   onSelectPreset,
   onSelectCustom,
+  apiKeyOnly = false,
+  excludedProviderIds = [],
   accountRows = [],
   accountStatus = {},
   busyProvider = null,
@@ -44,6 +47,10 @@ export default function ProviderCatalog({
   initialTier?: CatalogTier;
   onSelectPreset: (preset: CatalogPreset) => void;
   onSelectCustom: () => void;
+  /** Restrict the catalog to providers that support API-key setup. */
+  apiKeyOnly?: boolean;
+  /** Hide providers that are already configured. */
+  excludedProviderIds?: string[];
   /** Accounts-tab login rows; empty (default) degrades to preset-only rendering. */
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
@@ -68,7 +75,15 @@ export default function ProviderCatalog({
 
   const buckets = useMemo(() => bucketPresets(ranked), [ranked]);
   const tierList = buckets[tier];
-  const rows = useMemo(() => filterPresets(tierList, query), [tierList, query]);
+  const apiKeyRows = useMemo(() => {
+    if (!apiKeyOnly) return [];
+    const excluded = new Set(excludedProviderIds);
+    return ranked.filter(preset => supportsApiKeySetup(preset) && !excluded.has(preset.id));
+  }, [apiKeyOnly, excludedProviderIds, ranked]);
+  const rows = useMemo(
+    () => filterPresets(apiKeyOnly ? apiKeyRows : tierList, query),
+    [apiKeyOnly, apiKeyRows, tierList, query],
+  );
 
   const badges = (p: CatalogPreset) => {
     const auth = p.codexAccountMode === "direct" ? <span className="badge badge-green">{t("modal.badge.direct")}</span>
@@ -88,51 +103,62 @@ export default function ProviderCatalog({
 
   return (
     <div className="provider-catalog">
-      <div className="provider-catalog-tabs" role="tablist">
-        {(["accounts", "free", "paid"] as const).map(candidate => (
-          <button
-            key={candidate}
-            role="tab"
-            aria-selected={tier === candidate}
-            className={`provider-catalog-tab${tier === candidate ? " active" : ""}`}
-            onClick={() => { setTier(candidate); setQuery(""); }}
-          >
-            {t(candidate === "accounts" ? "modal.tab.accounts" : candidate === "free" ? "modal.tab.free" : "modal.tab.paid")}
-          </button>
-        ))}
-      </div>
+      {!apiKeyOnly && (
+        <div className="provider-catalog-tabs" role="tablist">
+          {(["accounts", "free", "paid"] as const).map(candidate => (
+            <button
+              key={candidate}
+              role="tab"
+              aria-selected={tier === candidate}
+              className={`provider-catalog-tab${tier === candidate ? " active" : ""}`}
+              onClick={() => { setTier(candidate); setQuery(""); }}
+            >
+              {t(candidate === "accounts" ? "modal.tab.accounts" : candidate === "free" ? "modal.tab.free" : "modal.tab.paid")}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {tier === "accounts" && (
+      {apiKeyOnly ? (
+        <div className="provider-catalog-accounts-hint muted text-label">
+          {t("modal.apiProvidersHint")}
+        </div>
+      ) : tier === "accounts" && (
         <div className="provider-catalog-accounts-hint muted text-label">
           {t("modal.accountsHint")}
         </div>
       )}
 
       <input
+        type="search"
         className="input provider-catalog-search"
         value={query}
         onChange={e => setQuery(e.target.value)}
         placeholder={t("modal.search")}
+        aria-label={t("modal.search")}
       />
 
       <div className="provider-catalog-rows">
         {presetsLoading && rows.length === 0 && (
           <div className="muted text-control provider-catalog-empty">{t("modal.catalogLoading")}</div>
         )}
-        {tier !== "accounts" && rows.map(p => (
-          <button key={p.id} className="list-row" onClick={() => onSelectPreset(p)}>
-            <div>
-              <div className="title">{p.label}</div>
-              <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
-            </div>
-            <div className="provider-catalog-badges">{badges(p)}</div>
-          </button>
-        ))}
-        {tier !== "accounts" && !presetsLoading && rows.length === 0 && (
+        {(apiKeyOnly || tier !== "accounts") && rows.map(p => {
+          const selectablePreset = apiKeyOnly && p.auth !== "key" ? { ...p, auth: "key" as const } : p;
+          return (
+            <button key={p.id} className="list-row" onClick={() => onSelectPreset(selectablePreset)}>
+              <div>
+                <div className="title">{p.label}</div>
+                <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
+              </div>
+              <div className="provider-catalog-badges">{badges(selectablePreset)}</div>
+            </button>
+          );
+        })}
+        {(apiKeyOnly || tier !== "accounts") && !presetsLoading && rows.length === 0 && (
           <div className="muted text-control provider-catalog-empty">{t("modal.noMatch")}</div>
         )}
 
-        {tier === "accounts" && accountRows.map(row => {
+        {!apiKeyOnly && tier === "accounts" && accountRows.map(row => {
           const status = accountStatus[row.id];
           const busy = busyProvider === row.id;
           const loggedIn = !!status?.loggedIn;
@@ -168,14 +194,14 @@ export default function ProviderCatalog({
             </div>
           );
         })}
-        {tier === "accounts" && accountRows.length === 0 && !presetsLoading && (
+        {!apiKeyOnly && tier === "accounts" && accountRows.length === 0 && !presetsLoading && (
           <div className="muted text-control provider-catalog-empty">{t("modal.noMatch")}</div>
         )}
       </div>
 
       <div className="provider-catalog-footer">
         <div style={{ flex: 1 }} />
-        {tier !== "accounts" && (
+        {(apiKeyOnly || tier !== "accounts") && (
           <button className="link-btn" onClick={onSelectCustom}>{t("modal.notListed")}</button>
         )}
       </div>
