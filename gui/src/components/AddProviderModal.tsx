@@ -173,7 +173,8 @@ export default function AddProviderModal({
       ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
       : form.baseUrl.trim();
     if (!reserved && !form.name.trim()) { setError(t("modal.nameRequired")); return; }
-    if (!reserved && !resolvedBaseUrl) { setError(t("modal.baseUrlRequired")); return; }
+   if (!reserved && !resolvedBaseUrl) { setError(t("modal.baseUrlRequired")); return; }
+    if (!reserved && /\{[^}]*\}/.test(resolvedBaseUrl)) { setError(t("modal.baseUrlPlaceholderError")); return; }
     const submitForm = { ...form, baseUrl: resolvedBaseUrl };
     let postBody: { name: string; provider: ProviderPayload };
     try {
@@ -419,7 +420,8 @@ export default function AddProviderModal({
                     <li>{t("modal.setupStep2")}</li>
                     <li>{t("modal.setupStep3")}</li>
                   </ol>
-                  {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
+                 {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
+                  {/\{[^}]*\}/.test(form.baseUrl) && (<div className="text-label" style={{ color: "var(--amber)", marginTop: 6 }}>{t("modal.baseUrlPlaceholderHint")}</div>)}
                 </details>
               )}
               <Field label={t("modal.providerName")}>

@@ -62,10 +62,10 @@ async function handleOAuthLogin(name: string): Promise<void> {
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
 }
 
-export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string): OcxProviderConfig {
+export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string, baseUrlOverride?: string): OcxProviderConfig {
   return {
     adapter: def.adapter,
-    baseUrl: def.baseUrl,
+    baseUrl: baseUrlOverride ?? def.baseUrl,
     apiKey: key,
     ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
     ...(def.models ? { models: [...def.models] } : {}),
@@ -94,19 +94,30 @@ async function handleKeyLogin(name: string): Promise<void> {
   openUrl(def.dashboardUrl);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const key = (await new Promise<string>((res) => rl.question(`Paste your ${def.label} API key: `, res))).trim();
+  // Template URL with placeholders needs resolution before saving.
+  let baseUrl = def.baseUrl;
+  if (/\{[^}]*\}/.test(baseUrl)) {
+    const resolved = (await new Promise<string>((res) => rl.question(`Your endpoint URL (${baseUrl}): `, res))).trim();
+    if (!resolved) {
+      rl.close();
+      console.error("A resolved URL is required — replace the {placeholder} with your actual value.");
+      process.exit(1);
+    }
+    baseUrl = resolved;
+  }
   rl.close();
   if (!key) {
     console.error("No key entered.");
     process.exit(1);
   }
   process.stdout.write("   validating… ");
-  const valid = await validateApiKey(def, key);
+  const valid = await validateApiKey({ ...def, baseUrl }, key);
   console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
   if (valid === false) {
     console.error("Provider rejected the key. Not saved.");
     process.exit(1);
   }
-  const provider = providerConfigFromKeyLoginProvider(def, key);
+  const provider = providerConfigFromKeyLoginProvider(def, key, baseUrl);
   const config = loadConfig();
   config.providers[name] = provider;
   saveConfig(config);

@@ -691,6 +691,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
     baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    allowBaseUrlOverride: true,
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=plan",
@@ -706,7 +707,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEffortMap: { "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS,
-    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro"],
+    preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "qwen3.8-max-preview"],
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
@@ -816,6 +817,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "No key needed — uses Xiaomi MiMo's free public tier (limited-time offer). A JWT is bootstrapped automatically with an anonymous random client id stored locally. The endpoint contract mirrors the official MiMoCode client and is not publicly documented — Xiaomi may change or restrict it at any time. Prompts may be processed/retained by Xiaomi; do not send confidential material.",
   },
   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
+  {
+    // Cloudflare Workers AI: OpenAI-compatible endpoint. The base URL contains {account_id}
+    // which must be resolved by the user at setup time. Model IDs use the @cf/ prefix.
+    // Live-verified 2026-07-21 against https://developers.cloudflare.com/workers-ai/models/
+    id: "cloudflare-workers-ai", label: "Cloudflare Workers AI",
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    adapter: "openai-chat", authKind: "key", freeTier: true,
+    dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/workers-ai",
+    defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    models: [
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "@cf/qwen/qwq-32b",
+      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "@cf/moonshotai/kimi-k2.7-code",
+      "@cf/zai-org/glm-5.2",
+      "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    ],
+    note: "Workers AI · Free tier included · Account ID required in base URL",
+  },
   // FREEZE 2026-07-10: /models was auth-gated under key login. OAuth device-flow + copilot_internal
   // exchange (issue #151) unlocks live discovery; static seed is a cold-start fallback only.
   {

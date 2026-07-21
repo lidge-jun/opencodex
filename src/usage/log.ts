@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { usageDisplayTotalTokens } from "./totals";
@@ -39,6 +39,14 @@ export interface PersistedUsageEntry {
   surface?: "claude";
   resolvedModel?: string;
   requestedModel?: string;
+  /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
+  requestedEffort?: string;
+  requestedServiceTier?: string;
+  requestedSpeedLabel?: string;
+  configuredServiceTier?: string;
+  configuredSpeedLabel?: string;
+  modelSupportsServiceTier?: boolean;
+  responseServiceTier?: string;
   status: number;
   durationMs: number;
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
@@ -197,6 +205,11 @@ function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);
 }
 
+const MAX_METADATA_STRING_LEN = 64;
+function capMetadataString(s: string): string {
+  return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
+}
+
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   return {
@@ -207,6 +220,27 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
+      ? { requestedEffort: capMetadataString(entry.requestedEffort) }
+      : {}),
+    ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
+      ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
+      : {}),
+    ...(typeof entry.requestedSpeedLabel === "string" && entry.requestedSpeedLabel
+      ? { requestedSpeedLabel: capMetadataString(entry.requestedSpeedLabel) }
+      : {}),
+    ...(typeof entry.configuredServiceTier === "string" && entry.configuredServiceTier
+      ? { configuredServiceTier: capMetadataString(entry.configuredServiceTier) }
+      : {}),
+    ...(typeof entry.configuredSpeedLabel === "string" && entry.configuredSpeedLabel
+      ? { configuredSpeedLabel: capMetadataString(entry.configuredSpeedLabel) }
+      : {}),
+    ...(typeof entry.modelSupportsServiceTier === "boolean"
+      ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
+      : {}),
+    ...(typeof entry.responseServiceTier === "string" && entry.responseServiceTier
+      ? { responseServiceTier: capMetadataString(entry.responseServiceTier) }
+      : {}),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)
@@ -253,4 +287,67 @@ export function readUsageEntries(): PersistedUsageEntry[] {
     }
   }
   return entries;
+}
+
+function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
+  const entries: PersistedUsageEntry[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as PersistedUsageEntry;
+      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
+        entries.push(normalizeUsageEntry(parsed));
+      }
+    } catch {
+      /* skip partial / hand-edited lines */
+    }
+  }
+  return entries;
+}
+
+/**
+ * Read only the newest `limit` usage.jsonl rows without loading the whole append-only
+ * file into memory. Used by request-log hydration on `ocx start`.
+ */
+export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
+  if (!Number.isFinite(limit) || limit <= 0) return [];
+  const path = usageLogPath();
+  if (!existsSync(path)) return [];
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    if (size <= 0) return [];
+    // ~4 KiB/row budget with a floor; expand once if the window yields too few lines.
+    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 4 * 1024));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const start = Math.max(0, size - windowBytes);
+      const buf = Buffer.alloc(size - start);
+      readSync(fd, buf, 0, buf.length, start);
+      let text = buf.toString("utf-8");
+      if (start > 0) {
+        const nl = text.indexOf("\n");
+        if (nl < 0) {
+          if (start === 0) break;
+          windowBytes = Math.min(size, windowBytes * 4);
+          continue;
+        }
+        text = text.slice(nl + 1);
+      }
+      const lines = text.split(/\r?\n/).filter(line => line.trim());
+      // Parse ALL lines first, then take the last N valid entries. This way corrupt
+      // or partial lines are filtered out during parsing and we always return the
+      // most recent N valid rows (not N physical lines minus corrupt ones).
+      const entries = parseUsageLines(lines);
+      if (entries.length >= limit || start === 0 || windowBytes >= size) return entries.slice(-limit);
+      windowBytes = Math.min(size, windowBytes * 4);
+    }
+    return [];
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
 }

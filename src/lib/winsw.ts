@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { expandUserPath, getConfigDir } from "../config";
+import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { durableBunPath } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 
@@ -72,9 +72,20 @@ export interface WinswEntry {
  * Task Scheduler wrapper / launchd / systemd: the SCM service environment lacks the
  * user's interactive PATH, which provider subprocesses may need.
  */
-export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = process.env): string {
+export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = process.env, port?: number): string {
   const domain = env.USERDOMAIN?.trim() || ".";
   const user = env.USERNAME?.trim() || "";
+  const listenPort = (() => {
+    if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) return Math.trunc(port);
+    const baked = env.OCX_BAKE_PORT?.trim();
+    if (baked && /^\d+$/.test(baked)) {
+      const n = Number(baked);
+      if (n > 0 && n <= 65535) return n;
+    }
+    return loadConfig().port ?? 10100;
+  })();
+  // Services never bake `--port 0` (parsePortOption rejects it); treat as default.
+  const safeListenPort = listenPort > 0 && listenPort <= 65535 ? listenPort : 10100;
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
@@ -88,7 +99,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   <name>OpenCodex Proxy (native)</name>
   <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
-  <arguments>${xmlEscape(`"${entry.cli}" start`)}</arguments>
+  <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
   <logpath>${xmlEscape(winswLogDir())}</logpath>
   <log mode="roll-by-size">

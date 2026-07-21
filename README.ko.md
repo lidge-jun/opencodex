@@ -247,6 +247,7 @@ ocx sync                       # 모델 갱신 + Codex에 재주입
 ocx status                     # 프록시 실행 중인지 확인
 ocx login <xai|anthropic|kimi> # OAuth 로그인
 ocx logout <provider>          # 저장된 로그인 정보 삭제
+ocx account <list|current|use> # 계정/API key pool 조회·전환 (마스킹; refresh/auto-switch/remove/add-key 포함)
 ocx gui                        # 웹 대시보드 열기
 ocx claude [args...]           # 프록시에 연결된 Claude Code 실행 (모델 디스커버리 켜짐)
 ocx codex-shim install         # codex 실행 시 `ocx ensure` 실행

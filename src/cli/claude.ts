@@ -135,7 +135,9 @@ export async function fetchClaudeContextWindows(config: OcxConfig, port: number,
 async function ensureProxyForClaude(): Promise<number | null> {
   const live = await findLiveProxy();
   if (live) return live.port;
-  const child = spawn(process.execPath, [process.argv[1], "start"], {
+  const cfgPort = loadConfig().port;
+  const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
+  const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,

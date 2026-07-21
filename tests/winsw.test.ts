@@ -38,11 +38,15 @@ describe("winsw xml", () => {
     const xml = buildWinswXml(entry, env);
 
     expect(xml).toContain("<executable>C:\\OpenCodex\\bun.exe</executable>");
-    expect(xml).toContain("<arguments>&quot;C:\\Open Codex\\cli &amp; co\\index.ts&quot; start</arguments>");
+    expect(xml).toContain("<arguments>&quot;C:\\Open Codex\\cli &amp; co\\index.ts&quot; start --port 10100</arguments>");
     expect(xml).toContain('<onfailure action="restart" delay="5 sec"/>');
     expect(xml).toContain("<stoptimeout>20 sec</stoptimeout>");
     expect(xml).toContain('<log mode="roll-by-size">');
     expect(xml).toContain(`<id>${WINSW_SERVICE_ID}</id>`);
+  });
+  test("honors OCX_BAKE_PORT when building WinSW arguments", () => {
+    const xml = buildWinswXml(entry, { ...env, OCX_BAKE_PORT: "14444" });
+    expect(xml).toContain("start --port 14444");
   });
 });
 

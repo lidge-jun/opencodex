@@ -134,6 +134,12 @@ opencodex v2.7.1에는 빌트인 프리셋이 50개 들어 있습니다. 키 방
 `provider.apiKey`에도 반영합니다. 같은 드롭다운에서 키를 전환하거나 제거할 수 있습니다. 관리 API는
 `/api/providers/keys`이며 마스킹된 키만 반환합니다.
 
+### 터미널에서 계정 전환하기
+
+대시보드를 열지 않고도 `ocx account list`, `ocx account current`, `ocx account use`로 같은 Codex,
+OAuth, API-key pool을 확인하고 전환할 수 있습니다. 전체 명령, JSON 출력, 새 세션 적용 방식은
+[CLI 레퍼런스](/opencodex/ko/reference/cli/#ocx-account-subcommand)를 참고하세요.
+
 ### GPT-5.6 프리뷰 경로
 
 실시간 모델 카탈로그 갱신이 늦어도 `ocx sync`에서 모델이 사라지지 않도록 GPT-5.6

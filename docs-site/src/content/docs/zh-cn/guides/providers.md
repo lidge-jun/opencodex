@@ -125,6 +125,12 @@ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提
 `provider.apiKeyPool`、被设为 active，并同步到 `provider.apiKey`，这样路由和 adapter 仍读取原来的
 字段。同一个下拉列表可以切换或移除密钥；管理 API 是 `/api/providers/keys`，并且只返回脱敏后的密钥。
 
+### 从终端切换账号
+
+无需打开仪表盘，即可使用 `ocx account list`、`ocx account current` 和 `ocx account use` 查看或
+切换同一组 Codex、OAuth 和 API-key pool。完整命令、JSON 输出和新 session 生效规则请参阅
+[CLI 参考](/opencodex/zh-cn/reference/cli/#ocx-account-subcommand)。
+
 ### GPT-5.6 预览路径
 
 GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实时模型目录暂时滞后，`ocx sync`

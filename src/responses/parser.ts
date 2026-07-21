@@ -525,13 +525,18 @@ export function parseRequest(body: unknown): OcxParsedRequest {
 
   const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
   const loadedTools = buildTools(loadedToolSpecs) ?? [];
+  const loadedToolNames = new Set(loadedTools.map(t => namespacedToolName(t.namespace, t.name)));
   const seenTools = new Set<string>();
-  const mergedTools = [...declaredTools, ...loadedTools].filter(t => {
-    const k = namespacedToolName(t.namespace, t.name);
-    if (seenTools.has(k)) return false;
-    seenTools.add(k);
-    return true;
-  });
+  const mergedTools = [...declaredTools, ...loadedTools]
+    .filter(t => {
+      const k = namespacedToolName(t.namespace, t.name);
+      if (seenTools.has(k)) return false;
+      seenTools.add(k);
+      return true;
+    })
+    .map(t => loadedToolNames.has(namespacedToolName(t.namespace, t.name))
+      ? { ...t, loadedFromToolSearch: true }
+      : t);
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
     messages,

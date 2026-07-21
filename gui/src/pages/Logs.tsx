@@ -511,6 +511,7 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-cost">
           <h4 id="log-detail-cost" className="log-detail-section-title">{t("logs.detail.section.cost")}</h4>
+          <p className="log-detail-notes-line muted">{t("usage.cost.disclaimer")}</p>
           {cost?.kind === "value" ? (
             <>
               <div className="log-detail-grid">

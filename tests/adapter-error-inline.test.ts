@@ -59,23 +59,24 @@ describe("inline error envelope in a 200 stream (F1)", () => {
     expect(frames.some(f => f.event === "response.completed")).toBe(false);
   });
 
-  test("Cursor resource_exhausted maps to 429 rate_limit_error in response.failed", async () => {
+  test("Cursor tool-catalog resource exhaustion maps to an actionable 400", async () => {
+    const message = "Cursor resource limit exceeded: Cursor Connect error resource limit exceeded: tool catalog too large";
     async function* gen(): AsyncGenerator<AdapterEvent> {
       yield {
         type: "error",
-        message: "Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests",
+        message,
       };
     }
     const frames = await collectSse(bridgeToResponsesSSE(gen(), "cursor/gpt-5"));
     const failed = frames.find(f => f.event === "response.failed");
     expect(failed).toBeDefined();
     expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({
-      type: "rate_limit_error",
-      code: "rate_limit_exceeded",
+      type: "invalid_request_error",
+      code: "tool_catalog_too_large",
     });
-    expect(adapterFailureFromMessage("Cursor rate limit exceeded: Cursor Connect error resource_exhausted: too many requests")).toMatchObject({
-      httpStatus: 429,
-      error: { type: "rate_limit_error", code: "rate_limit_exceeded" },
+    expect(adapterFailureFromMessage(message)).toMatchObject({
+      httpStatus: 400,
+      error: { type: "invalid_request_error", code: "tool_catalog_too_large" },
     });
   });
 });

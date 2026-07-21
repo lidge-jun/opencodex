@@ -16,6 +16,7 @@ import { useT } from "../i18n";
 import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "../components/QuotaBars";
 import { providerIconSrc, formatProviderDisplayName } from "../provider-icons";
+import { apiErrorMessage } from "../api-error";
 
 interface Config {
   port: number;
@@ -686,6 +687,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     if (!name || removeBusyRef.current) return;
     removeBusyRef.current = true;
     setRemoveConfirmName(null);
+    const fallback = t("prov.removeFail", { name });
     try {
       const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
       if (res.ok) {
@@ -694,7 +696,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         fetchConfig();
         fetchOauth();
         fetchProviderQuotas(true);
-      } else notify(t("prov.removeFail", { name }), false);
+      } else {
+        notify(await apiErrorMessage(res, fallback), false);
+      }
+    } catch {
+      notify(fallback, false);
     } finally {
       removeBusyRef.current = false;
     }

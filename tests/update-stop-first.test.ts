@@ -46,6 +46,11 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("serviceReinstallArgs");
     // The launcher reads the state path for both service-installed detection and backend choice.
     expect(launcherSource).toContain('"service-state.json"');
+    expect(updateSource).toContain("OCX_BAKE_PORT");
+    expect(launcherSource).toContain("OCX_BAKE_PORT");
+    // Live runtime port 10100 must not be discarded as a missing-port sentinel.
+    expect(launcherSource).toContain("sawRuntimePort");
+    expect(updateSource).toContain("runtimeTrusted");
   });
 
   test("both update paths surface a skipped history restore after the stop", () => {

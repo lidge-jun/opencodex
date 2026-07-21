@@ -186,6 +186,126 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ```
 
+### `ocx account <subcommand>`
+
+通过正在运行的代理列出和切换提供商账号及 API key pool。已发布的帮助界面如下：
+
+```text
+Usage: ocx account <list|current|use|refresh|auto-switch|remove|add-key> ...
+
+List and switch provider accounts and API-key pools (GUI parity).
+
+list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+current <provider>  Show the active account or key.
+use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+refresh <provider>  Force-refresh Codex or provider quota reports.
+auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
+remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+add-key <provider> [--label <label>]  Add a key read only from piped stdin.
+Codex pool switches apply to new sessions; running threads keep their account.
+```
+
+所有子命令都要求代理正在运行；CLI 会自动解析已记录的运行时端口。成功时退出码为 0。用法错误、
+未知提供商或账号/key id、代理不可达、API 失败时退出码为 1。凭据字段会按照 management API
+的返回值显示（包括 API 应用的脱敏）；不会返回原始 API key 或 OAuth token。显示便捷值由 CLI
+以与仪表盘相同的方式合成：`main` 是 `openai` 账号池中 Codex App 登录的别名，没有邮箱的
+OAuth 账号显示为 `Account N`，plan/label 列按 plan → 脱敏邮箱 → label → 脱敏 key 依次回退。
+
+`--json` 的账号行使用以下通用形状（没有值时会省略可选字段）：
+
+```json
+{
+  "provider": "openai",
+  "type": "codex | oauth | api-key",
+  "id": "__main__",
+  "label": "plus",
+  "email": "m***@example.com",
+  "plan": "plus",
+  "masked": "sk-ab****wxyz",
+  "active": true,
+  "needsReauth": false,
+  "quota": null
+}
+```
+
+#### `ocx account list [provider] [--json] [--all]`
+
+不指定 provider 时，会列出 Codex pool、OAuth 账号和已配置的 API-key pool。除非传入 `--all`，
+否则跳过空 provider；指定 provider 时只读取对应凭据 family。普通输出的列为
+`PROVIDER TYPE ID PLAN/LABEL STATUS`，已 pin 的 Codex 行标记为 `next session`。当存在已保存的
+Kiro 账号时，输出会说明它只有一个登录 slot，再次登录会替换当前账号。结果为空仍算成功。`--json` 返回：
+
+```text
+{ accounts: AccountRow[], notes: string[] }
+```
+
+#### `ocx account current <provider> [--json]`
+
+显示 active 账号或 key。没有手动 pin 的 Codex pool 会报告自动选择用量最低的账号；其他 family
+没有 active 凭据时也会如实报告并返回退出码 0。`--json` 返回：
+
+```text
+{ provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
+```
+
+#### `ocx account use <provider> <account-or-key-id|main> [--json]`
+
+选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
+Codex 选择只对**新 session**生效；已有 thread 保持其账号。启用的 auto-switch threshold 之后可能
+覆盖手动 pin。未知 provider 或 id 返回退出码 1。`--json` 返回：
+
+```text
+{ ok: true, provider, type, activeId }
+```
+
+#### `ocx account refresh <provider> [--json]`
+
+Codex pool 使用 `ocx account refresh openai [--json]`。它会强制刷新账号 quota，并显示可用的
+周/月百分比和 reset 时间；缺少 quota 时报告 unknown，而不是 0%。JSON envelope 为
+`{ accounts: AccountRow[] }`，每个 Codex 行都带有 `quota`。
+
+对于 OAuth 和 API-key provider，该命令会强制刷新 provider quota-report endpoint；它不是 token
+重新登录，也不是简单重读账号列表。`--json` 返回
+`{ provider, report: ProviderQuotaReport | null }`。如果 provider 没有受支持的 quota report，
+命令会输出 `no quota report available for <provider>` 并返回退出码 0。未知 provider 和
+management API 失败返回退出码 1；upstream quota probe 失败或超时则与仪表盘的 quota 条一样，
+降级为 null/过期 report 并返回退出码 0。
+
+#### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+
+只控制 `openai` Codex 账号 pool。`on` 设置为 80%，`off` 设置为 0%，`status` 读取当前值，
+`threshold <n>` 只接受 0 到 100 的整数。其他 provider 或无效值返回退出码 1。`--json` 返回：
+
+```text
+{ provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+#### `ocx account remove <provider> <id|main> --yes [--json]`
+
+这是受保护的非交互删除，因此必须提供 `--yes`。删除前会验证 id 是否存在；id 不存在时不会发送
+DELETE，并返回退出码 1。主 Codex App 登录不能删除，因此 `remove openai main --yes` 会被拒绝。
+删除后会重新读取对应 family：删除已 pin 的 Codex 账号会清除 pin 并恢复自动选择；OAuth 会提升
+第一个剩余账号，或报告没有账号；API-key pool 会提升第一个剩余 key，或报告没有 key。`--json`
+成功和失败的形状为：
+
+```text
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ error: string } // stderr, exit 1
+```
+
+#### `ocx account add-key <provider> [--label <label>] [--json]`
+
+为 API-key provider 添加并激活 key。key 只从非 TTY 的 pipe/redirect stdin 读取；交互式 TTY、
+空输入、OAuth/Codex provider 和 API 失败都会返回退出码 1。即使 label 中包含 key，也绝不会回显
+key。请使用 secret manager 或 here-string：
+
+```bash
+ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ocx account add-key openrouter --json
+```
+
+`--json` 返回 `{ ok: true, id: string | null, label?: string }`，且绝不包含 key。
+
 ## 认证
 
 ### `ocx login <provider>`

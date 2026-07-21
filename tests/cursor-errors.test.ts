@@ -6,8 +6,8 @@ import {
 } from "../src/adapters/cursor/cursor-errors";
 
 describe("classifyCursorError", () => {
-  test("rate limit / resource exhausted", () => {
-    expect(classifyCursorError("resource_exhausted: too many concurrent requests")).toBe("Cursor rate limit exceeded");
+  test("rate limit and resource exhaustion stay distinct", () => {
+    expect(classifyCursorError("resource_exhausted: tool registration too large")).toBe("Cursor resource limit exceeded");
     expect(classifyCursorError("rate limit exceeded for model")).toBe("Cursor rate limit exceeded");
   });
 
@@ -72,5 +72,12 @@ describe("safeCursorErrorMessage", () => {
   test("truncates very long messages", () => {
     const long = "x".repeat(1000);
     expect(safeCursorErrorMessage(long).length).toBeLessThanOrEqual(530);
+  });
+
+  test("does not present resource exhaustion as a billing or quota rate limit", () => {
+    const msg = safeCursorErrorMessage("resource_exhausted: tool catalog too large");
+    expect(msg).toContain("Cursor resource limit exceeded");
+    expect(msg).not.toContain("resource_exhausted");
+    expect(msg).not.toContain("rate limit");
   });
 });

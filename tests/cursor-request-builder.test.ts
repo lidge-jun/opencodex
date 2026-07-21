@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createCursorRequest } from "../src/adapters/cursor/request-builder";
+import {
+  applyCursorToolBudget,
+  createCursorRequest,
+  CURSOR_TOOL_BYTES_LIMIT,
+  CURSOR_TOOL_COUNT_LIMIT,
+} from "../src/adapters/cursor/request-builder";
+import { cursorMcpToolsEncodedSize } from "../src/adapters/cursor/tool-definitions";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 
@@ -144,5 +150,69 @@ describe("Cursor request builder", () => {
 
     expect(request.toolChoice).toEqual({ mode: "required", allowedTools: ["read_file"] });
     expect(request.parallelToolCalls).toBe(false);
+  });
+
+  test("uses actual protobuf size and continues after an oversized definition", () => {
+    const huge = {
+      name: "huge",
+      namespace: "mcp__huge",
+      description: "x".repeat(CURSOR_TOOL_BYTES_LIMIT + 10_000),
+      parameters: { type: "object", properties: {} },
+    };
+    const small = {
+      name: "small",
+      namespace: "mcp__small",
+      description: "Small tool",
+      parameters: { type: "object", properties: {} },
+    };
+    const budget = applyCursorToolBudget([huge, small], "auto");
+
+    expect(budget.tools.map(tool => tool.name)).toEqual(["small"]);
+    expect(budget.omitted.map(tool => tool.name)).toEqual(["huge"]);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("hard-caps the combined catalog and prioritizes tool_search-loaded tools", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 5 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const loaded = {
+      name: "loaded_action",
+      namespace: "mcp__loaded",
+      description: "Loaded by tool_search",
+      parameters: {},
+      loadedFromToolSearch: true,
+    };
+    const budget = applyCursorToolBudget([...regular, loaded], "auto");
+
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+    expect(budget.tools).toContain(loaded);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("adds an honest recovery note only when tool_search survives", () => {
+    const tools = [
+      { name: "tool_search", description: "Discover", parameters: {}, toolSearch: true },
+      {
+        name: "huge", namespace: "mcp__huge", description: "x".repeat(CURSOR_TOOL_BYTES_LIMIT + 10_000),
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "use tools", timestamp: 1 }], tools },
+    });
+    expect(request.system.join("\n")).toContain("Use tool_search");
+    expect(request.system.join("\n")).toContain("prioritized on the next turn");
+
+    const withoutSearch = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "use tools", timestamp: 1 }], tools: tools.slice(1) },
+    });
+    expect(withoutSearch.system.join("\n")).toContain("unavailable this turn");
+    expect(withoutSearch.system.join("\n")).not.toContain("Use tool_search");
   });
 });

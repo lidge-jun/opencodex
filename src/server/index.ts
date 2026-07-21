@@ -54,6 +54,7 @@ export {
 } from "./lifecycle";
 import {
   addFinalRequestLog,
+  hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
   httpStatusForTerminalStatus,
   inspectResponseLogSsePayload,
@@ -65,6 +66,7 @@ import {
 export {
   addFinalRequestLog,
   filterRequestLogs,
+  hydrateRequestLogsFromDisk,
   httpStatusForTerminalStatus,
   httpStatusFromTerminalError,
   nextRequestLogId,
@@ -175,6 +177,9 @@ export function startServer(port?: number) {
     }
   }
   invalidateCodexModelsCache();
+  // usage.jsonl already persists every request; rehydrate the in-memory Logs ring so
+  // /api/logs (and the GUI) survive `ocx stop` / `ocx start` process restarts.
+  hydrateRequestLogsFromDisk();
 
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
