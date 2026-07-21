@@ -502,6 +502,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (parsed.options.frequencyPenalty !== undefined && !modelInList(provider.noPenaltyModels, parsed.modelId)) {
         body.frequency_penalty = parsed.options.frequencyPenalty;
       }
+      if (parsed.options.promptCacheKey !== undefined) body.prompt_cache_key = parsed.options.promptCacheKey;
 
       if (tools) {
         // Default-ON for chat-completions providers (user decision 260709): the buffered

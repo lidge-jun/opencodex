@@ -129,4 +129,22 @@ describe("openai-chat credential hardening", () => {
       Authorization: "Bearer sk-litellm",
     });
   });
+
+  test("forwards prompt_cache_key to the outbound chat body when set", () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const req = parsed();
+    req.options.promptCacheKey = "shared-prefix-v1";
+
+    const body = JSON.parse(adapter.buildRequest(req).body);
+
+    expect(body.prompt_cache_key).toBe("shared-prefix-v1");
+  });
+
+  test("omits prompt_cache_key from the outbound chat body when unset", () => {
+    const adapter = createOpenAIChatAdapter(provider());
+
+    const body = JSON.parse(adapter.buildRequest(parsed()).body);
+
+    expect(body).not.toHaveProperty("prompt_cache_key");
+  });
 });
