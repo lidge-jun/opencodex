@@ -475,12 +475,13 @@ export default function AddProviderModal({
                     <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
                   </Field>
                 )}
-                {(isCustom || isLocal) && (
-                  <label className="modal-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <input type="checkbox" checked={form?.allowPrivateNetwork ?? false} onChange={e => setForm(f => f ? { ...f, allowPrivateNetwork: e.target.checked } : f)} />
+                <label className="modal-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <input type="checkbox" checked={form?.allowPrivateNetwork ?? false} onChange={e => setForm(f => f ? { ...f, allowPrivateNetwork: e.target.checked } : f)} />
+                  <span>
                     <span className="muted text-control">{t("modal.allowPrivateNetwork")}</span>
-                  </label>
-                )}
+                    <span className="muted text-label" style={{ display: "block" }}>{t("modal.allowPrivateNetworkHint")}</span>
+                  </span>
+                </label>
               </>}
               {form.authMode === "forward" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>

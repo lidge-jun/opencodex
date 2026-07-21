@@ -13,6 +13,13 @@ import { deriveProviderPresets, providerConfigSeed } from "../src/providers/deri
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 
 describe("provider dashboard payload", () => {
+  test("offers private-network opt-in while adding built-in cloud providers", async () => {
+    const modal = await Bun.file("gui/src/components/AddProviderModal.tsx").text();
+    expect(modal).not.toContain("{(isCustom || isLocal) && (");
+    expect(modal).toContain('t("modal.allowPrivateNetwork")');
+    expect(modal).toContain('t("modal.allowPrivateNetworkHint")');
+  });
+
   test("persists explicit API-key mode for built-in OAuth providers", () => {
     expect(buildProviderPayload({
       name: "xai",
