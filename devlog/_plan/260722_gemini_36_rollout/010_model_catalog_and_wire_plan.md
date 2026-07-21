@@ -11,7 +11,7 @@ One implementation slice adds Gemini 3.6 to the direct Google provider, replaces
 | `src/providers/antigravity-models.ts` | MODIFY | Separate visible 3.6 rows from hidden 3.5 compatibility aliases. |
 | `src/providers/registry.ts` | MODIFY | Add direct Google 3.6 metadata and move the Antigravity default to 3.6 Medium. |
 | `src/adapters/google.ts` | MODIFY | Send direct Google 3.5/3.6 reasoning selection as `thinkingLevel`. |
-| `src/usage/expected-prices.ts` | MODIFY | Add verified/derived 3.6 prices and remove retired Antigravity 3.5 prices. |
+| `src/usage/expected-prices.ts` | MODIFY | Add 3.6 prices and remap hidden old-ID compatibility price aliases to 3.6. |
 | `tests/google-antigravity-wire.test.ts` | MODIFY | Prove visible rows, hidden compatibility aliases, and wire resolution. |
 | `tests/google-hardening.test.ts` | MODIFY | Prove direct Google 3.6 registry metadata and thinking-level activation. |
 | `tests/google-models-listing.test.ts` | MODIFY | Update the static-fallback contract to include direct 3.6. |
