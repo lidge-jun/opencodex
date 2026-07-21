@@ -690,7 +690,13 @@ export function materializeBundledCodexCatalog(path: string, deps: BundledCatalo
 
 function loadCatalogForSync(path: string): RawCatalog | null {
   const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
-  if (bundled) return bundled;
+  // Deep-clone the bundled catalog: syncCatalogModels mutates catalog.models IN PLACE (mergeCatalog-
+  // EntriesForSync/ensureUltraReasoningLevel append the mock max/ultra rungs to the native entries),
+  // and loadBundledCodexCatalog hands back the SHARED 60s cache by reference. Returning it directly
+  // poisons that cache — a later reader in the same process (e.g. codexSupportedReasoningEfforts, or
+  // the /v1/models handler) would then see the pristine bundled ladder as low..ultra and stop
+  // clamping. The clone keeps the cache pristine so the effort probe stays trustworthy.
+  if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   const catalog = readCatalog(path);
   if (catalog && findNativeTemplate(catalog)) return catalog;
   return readCatalog(catalogBackupPathFor(path))
