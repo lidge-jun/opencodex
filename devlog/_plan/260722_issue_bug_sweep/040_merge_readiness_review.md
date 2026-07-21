@@ -27,6 +27,8 @@
 
 ### B1 — #202 Vertex: 진단만, 실제 미노출 미해결 (High)
 
+> **해결됨 (2026-07-22, WP-fix-1)**: `catalog.ts fetchProviderModels`에서 adapter=google·googleMode=vertex·models 없음·defaultModel 있음 4조건일 때 defaultModel을 configured에 시드하고, `withVertexDefaultSeed()`로 5개 캐시 fallback(fresh/cooldown/non-2xx/malformed/thrown) + authoritative-empty 분기 모두에 보존. 회귀 테스트(defaultModel-only + 빈 캐시 fresh/stale)는 수정 전 RED. 리뷰어 2라운드(FAIL→PASS). `bun test tests/vertex-catalog.test.ts` 10 pass, tsc 0.
+
 - 위치: `src/codex/catalog.ts:1243` — `configured`는 `prov.models ?? []`에서만 생성, `defaultModel` fallback 없음.
 - 트리거: 이슈 그대로 `defaultModel`만 있고 `models` 배열이 없는 Vertex provider.
 - 영향: discovery 실패 후 configured가 비어 default Gemini가 여전히 대시보드·`/v1/models`에 미노출.

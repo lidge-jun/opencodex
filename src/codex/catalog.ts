@@ -1240,11 +1240,22 @@ function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModel
 async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
   const apiKey = await resolveModelsAuthToken(name, prov);
-  const configured: CatalogModel[] = (prov.models ?? []).map(id => ({
+  const seedVertexDefault = prov.adapter === "google"
+    && prov.googleMode === "vertex"
+    && (prov.models?.length ?? 0) === 0
+    && Boolean(prov.defaultModel);
+  const configuredIds = seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : (prov.models ?? []);
+  const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
   }));
+  const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
+  const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
+    vertexDefaultSeed && !models.some(model => model.id === vertexDefaultSeed.id)
+      ? [...models, vertexDefaultSeed]
+      : models
+  );
   if (prov.adapter === "cursor") {
     if (prov.liveModels === false || !apiKey) return configured;
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
@@ -1276,12 +1287,12 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
-  if (fresh) return applyConfigHintsToCachedModels(name, prov, fresh, contextCap); // dedups Codex's frequent /v1/models polling within the TTL
+  if (fresh) return withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)); // dedups Codex's frequent /v1/models polling within the TTL
   if (isModelsFetchCoolingDown(name)) {
     // A recently-failed provider (unreachable API, missing proxy, bad key) must not re-pay the
     // fetch timeout on every catalog poll — the dashboard polls this path per page load.
     const stale = getStaleCached(name);
-    return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
   }
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
@@ -1296,7 +1307,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       console.warn(
         `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
       );
-      return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
     }
     const json = await res.json() as unknown;
     const data = json !== null && typeof json === "object" && !Array.isArray(json)
@@ -1308,7 +1319,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
         `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data; using stale/static catalog degradation.`,
       );
       const stale = getStaleCached(name);
-      return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
     }
     const items = data;
     const live = items.map(m => applyProviderConfigHints(name, prov, {
@@ -1331,7 +1342,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       if (dated) {
         // Reapply config hints so alias-keyed overrides (modelContextWindows etc.) win.
         live.push(applyProviderConfigHints(name, prov, { ...dated, id: m.id }, contextCap));
-      } else if (shouldRetainConfiguredProviderModel(name, m.id)) {
+      } else if (seedVertexDefault || shouldRetainConfiguredProviderModel(name, m.id)) {
         live.push(m);
       } else {
         droppedConfiguredIds.push(m.id);
@@ -1355,7 +1366,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     console.warn(
       `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
     );
-    return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
+    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
   }
 }
 
