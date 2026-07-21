@@ -1,5 +1,5 @@
 // Generated from PR #144 (gui/src/i18n/{en,ko,zh}.ts) — frontier.* keys only.
-// German strings from the PR are dropped: the docs-site ships en/ko/zh-CN.
+// German strings from the PR are dropped: the docs-site ships en/ko/zh-CN/ru.
 export const FRONTIER_STRINGS = {
   en: {
   "frontier.subtitle": "Compare models on public coding-agent benchmarks: capability vs cost per task. Pick a domain, then a board; filter by model, effort, price, or use-case. Snapshot data — update with OpenCodex releases, not live metering.",

@@ -203,6 +203,144 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ```
 
+### `ocx account <subcommand>`
+
+Перечисляет и переключает аккаунты провайдеров и пулы API-ключей через работающий прокси.
+Поставляемая справка выглядит так:
+
+```text
+Usage: ocx account <list|current|use|refresh|auto-switch|remove|add-key> ...
+
+List and switch provider accounts and API-key pools (GUI parity).
+
+list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+current <provider>  Show the active account or key.
+use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+refresh <provider>  Force-refresh Codex or provider quota reports.
+auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
+remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+add-key <provider> [--label <label>]  Add a key read only from piped stdin.
+Codex pool switches apply to new sessions; running threads keep their account.
+```
+
+Все подкоманды требуют работающего прокси; CLI автоматически определяет записанный runtime-порт.
+Успешные операции завершаются с кодом 0. Неверное использование, неизвестный провайдер или id
+аккаунта/ключа, недоступный прокси и ошибка API завершаются с кодом 1. Поля учётных данных
+отображаются ровно так, как их возвращает management API (включая его маскирование); API-ключи и
+OAuth-токены в открытом виде никогда не возвращаются. Отображаемые для удобства значения
+синтезируются на стороне клиента, так же как в дашборде: `main` — это CLI-алиас входа Codex App
+в пуле аккаунтов `openai`, OAuth-аккаунты без email отображаются как `Account N`, а столбец
+plan/label по цепочке фолбэков использует план, замаскированный email, метку и замаскированный
+ключ.
+
+Строки аккаунтов в `--json` используют общую структуру (необязательные поля опускаются, когда
+данные недоступны):
+
+```json
+{
+  "provider": "openai",
+  "type": "codex | oauth | api-key",
+  "id": "__main__",
+  "label": "plus",
+  "email": "m***@example.com",
+  "plan": "plus",
+  "masked": "sk-ab****wxyz",
+  "active": true,
+  "needsReauth": false,
+  "quota": null
+}
+```
+
+#### `ocx account list [provider] [--json] [--all]`
+
+Без указания провайдера перечисляет пул Codex, OAuth-аккаунты и настроенные пулы API-ключей.
+Пустые провайдеры пропускаются, если не передан `--all`. С указанным провайдером перечисляет
+только это семейство учётных данных. Человекочитаемый вывод использует столбцы
+`PROVIDER TYPE ID PLAN/LABEL STATUS`; закреплённая строка Codex помечается как `next session`.
+Если существует сохранённый аккаунт Kiro, вывод отмечает, что у Kiro один слот входа и что
+повторный вход заменяет текущий аккаунт. Пустой результат — по-прежнему успех. `--json`
+возвращает:
+
+```text
+{ accounts: AccountRow[], notes: string[] }
+```
+
+#### `ocx account current <provider> [--json]`
+
+Показывает активный аккаунт или ключ. Пул Codex без ручного закрепления сообщает об
+автоматическом выборе аккаунта с наименьшим использованием; другое семейство без активных учётных
+данных сообщает об этом состоянии и всё равно завершается с кодом 0. `--json` возвращает:
+
+```text
+{ provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
+```
+
+#### `ocx account use <provider> <account-or-key-id|main> [--json]`
+
+Выбирает существующий аккаунт Codex, OAuth-аккаунт или API-ключ. Для `openai` значение `main`
+выбирает вход Codex App. Выбор для Codex применяется только к **новым сессиям**; существующие
+потоки сохраняют свой аккаунт, а включённый порог автопереключения может позже переопределить
+ручное закрепление. Неизвестные провайдеры или id завершаются с кодом 1. `--json` возвращает:
+
+```text
+{ ok: true, provider, type, activeId }
+```
+
+#### `ocx account refresh <provider> [--json]`
+
+Для пула Codex используйте `ocx account refresh openai [--json]`. Команда принудительно обновляет
+квоты аккаунтов и печатает доступные недельные/месячные проценты и время сброса; отсутствующие
+данные о квоте сообщаются как неизвестные, а не как 0%. JSON-обёртка команды —
+`{ accounts: AccountRow[] }` с полем `quota` в каждой строке Codex.
+
+Для OAuth-провайдеров и провайдеров с API-ключами команда принудительно обновляет конечную точку
+отчёта о квотах провайдера; это не повторный вход по токену и не простое перечитывание списка
+аккаунтов. `--json` возвращает `{ provider, report: ProviderQuotaReport | null }`. Провайдер без
+поддерживаемого отчёта о квотах печатает `no quota report available for <provider>` и завершается
+с кодом 0. Неизвестные провайдеры и ошибки management API завершаются с кодом 1; неудачная или
+истёкшая по времени вышестоящая проверка квоты вместо этого деградирует до null-отчёта или
+устаревшего отчёта (код 0), как и полосы квот в дашборде.
+
+#### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
+
+Управляет только пулом аккаунтов Codex `openai`. `on` устанавливает 80%, `off` устанавливает 0%,
+`status` читает текущее значение, а `threshold <n>` принимает целое число от 0 до 100. Другие
+провайдеры и недопустимые значения завершаются с кодом 1. `--json` возвращает:
+
+```text
+{ provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+#### `ocx account remove <provider> <id|main> --yes [--json]`
+
+Это защищённое неинтерактивное удаление требует `--yes`. Перед удалением команда проверяет, что
+id существует; отсутствующий id завершается с кодом 1 без отправки DELETE. Основной вход Codex App
+удалить нельзя, поэтому `remove openai main --yes` отклоняется. После удаления семейство читается
+заново: удаление закреплённого аккаунта Codex снимает закрепление и возвращает автоматический
+выбор; OAuth делает активным первый оставшийся аккаунт или сообщает, что аккаунтов не осталось;
+пулы API-ключей делают активным первый оставшийся ключ или сообщают, что ключей не осталось.
+Структуры `--json` для успеха и ошибки:
+
+```text
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ error: string } // stderr, exit 1
+```
+
+#### `ocx account add-key <provider> [--label <label>] [--json]`
+
+Добавляет и активирует ключ для провайдера с API-ключами. Ключ читается только из
+неинтерактивного (не-TTY) stdin — через конвейер или перенаправление; интерактивный ввод в TTY,
+пустой ввод, провайдеры OAuth/Codex и ошибки API завершаются с кодом 1. Ключ никогда не выводится
+на экран, в том числе когда он встречается внутри метки. Предпочитайте менеджер секретов или
+here-string:
+
+```bash
+ocx account add-key openrouter --label personal <<< "$OPENROUTER_API_KEY"
+security find-generic-password -w openrouter | ocx account add-key openrouter --json
+```
+
+`--json` возвращает `{ ok: true, id: string | null, label?: string }` и никогда не включает ключ.
+
 ## Аутентификация
 
 ### `ocx login <provider>`

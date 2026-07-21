@@ -289,6 +289,7 @@ ocx codex-shim install         # выполнять `ocx ensure` при кажд
 ocx status                     # работает ли прокси?
 ocx login <provider>          # вход через OAuth (xai, anthropic, kimi, cursor, ...)
 ocx logout <provider>          # удалить сохранённый вход
+ocx account <list|current|use> # просмотр/переключение аккаунтов и пулов API-ключей (маскировано; также refresh/auto-switch/remove/add-key)
 ocx gui                        # открыть веб-панель управления
 ocx claude [args...]           # запустить Claude Code, подключённый к прокси (обнаружение моделей включено)
 ocx service [install|start|stop|status|uninstall]   # установить/обновить/запустить фоновую службу
