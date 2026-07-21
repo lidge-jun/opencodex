@@ -1,5 +1,4 @@
 export {
-  COMBO_DEFAULT_EFFORT,
   COMBO_NAMESPACE,
   comboConfigError,
   comboConfigIssues,
@@ -34,4 +33,5 @@ export {
 export {
   comboIdFromRawBody,
   concreteComboRequestBody,
+  resetComboEffortWarningStateForTests,
 } from "./request";

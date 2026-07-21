@@ -32,16 +32,12 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 describe("Cursor static Codex catalog", () => {
-  test("reasoning-effort models have explicit effort tiers", () => {
-    const reasoningEffortModels = CURSOR_STATIC_MODELS.filter(
-      model => model.supportsReasoningEffort === true,
-    );
-
-    for (const model of reasoningEffortModels) {
+  test("reasoning metadata and explicit effort tiers agree bidirectionally", () => {
+    for (const model of CURSOR_STATIC_MODELS) {
       expect(
-        cursorModelHasEffortTiers(model.id),
-        `Cursor model ${model.id} advertises reasoning effort without explicit effort tiers`,
-      ).toBe(true);
+        model.supportsReasoningEffort === true,
+        `Cursor model ${model.id} metadata and effort-map must agree`,
+      ).toBe(cursorModelHasEffortTiers(model.id));
     }
   });
 

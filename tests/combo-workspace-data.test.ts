@@ -3,6 +3,7 @@ import {
   type ComboItem,
   buildComboAttention,
   draftEquals,
+  emptyDraft,
   filterCombos,
   groupCombos,
   isValidComboId,
@@ -81,7 +82,7 @@ describe("combo-workspace-data", () => {
         model: "combo/fallback",
         strategy: "failover",
         stickyLimit: 1,
-        defaultEffort: "medium",
+        defaultEffort: null,
         targets: [{ provider: "a", model: "m1", weight: 1 }],
       },
       {
@@ -187,6 +188,13 @@ describe("combo-workspace-data", () => {
     });
     expect("stickyLimit" in failoverBody.combo).toBe(false);
     expect("weight" in failoverBody.combo.targets[0]!).toBe(false);
+  });
+
+  test("preserves an unset effort through parse, draft, and PUT", () => {
+    expect(parseComboList({ combos: [{ id: "free", targets: [] }] })[0]?.defaultEffort).toBeNull();
+    expect(emptyDraft().defaultEffort).toBeNull();
+    const draft = combo({ defaultEffort: null });
+    expect(toPutBody(draft).combo.defaultEffort).toBeNull();
   });
 
   test("rejects duplicate targets", () => {

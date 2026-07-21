@@ -4,6 +4,7 @@
 - Cursor 라이브 조사 추적: `008_research_cursor_effort_metadata.md` (본 구현 단위와 분리)
 - 위험도: 낮음~중간 (카탈로그 진단 + 콤보 wire 계약)
 - 선행 조건: 없음. R-a(Vertex)와 R-b(effort)는 독립 커밋 가능하다.
+- **구현 완료 (2026-07-22)**: R-a catalog.ts 진단 로그(정적 seed 미추가, 연기), R-b combos defaultEffort nullable + capability-aware injection(routeModel→supportedLadderFor) + GUI None 옵션, R-c cursor grok-4.5-fast supportsReasoningEffort:true(drift 해소) + 양방향 불변식 테스트 + generic-ladder fallback 제거. 스코프 확장: types.ts persisted null, combo failover e2e 기대값 clamp→omission. 검증: 관련 7스위트 98 pass, `bun x tsc --noEmit` exit 0. 커밋: WP-impl-3.
 
 ## 결정
 

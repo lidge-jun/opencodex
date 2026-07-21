@@ -791,7 +791,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(bodies[0]!.body)).not.toContain("data:image/png");
     expect(JSON.stringify(bodies[1]!.body)).toContain("data:image/png");
-    expect(bodies[0]!.body.reasoning_effort).toBe("low");
+    expect(bodies[0]!.body.reasoning_effort).toBeUndefined();
     expect(bodies[1]!.body.reasoning_effort).toBe("high");
 
     clearComboSelectionState();
