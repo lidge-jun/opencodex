@@ -3,7 +3,7 @@
 - Date: 2026-07-22
 - Branch: `gemini-3.6`
 - Work class: C3 — provider catalog, wire routing, persisted OAuth presets, usage pricing, and tests move together.
-- Status: P complete as a docs-only handoff. No runtime implementation has started.
+- Status: P reopened on user authorization for implementation, live tier verification, and local `dev` merge.
 
 ## Loop spec
 
@@ -11,11 +11,33 @@
 - Trigger: Google released `gemini-3.6-flash` as GA on 2026-07-21, while authenticated Antigravity discovery simultaneously began returning 3.6-specific wire IDs.
 - Goal: make Gemini 3.6 selectable and correctly routed without erasing still-supported Gemini 3.5 outside Antigravity.
 - Non-goals: Vertex AI promotion, Cursor/OrcaRouter/OpenRouter speculative seeding, a global Gemini sampling-parameter migration, manual edits to generated jawcode metadata, or changing the direct Google provider's default model.
-- Verifier: focused provider/adapter/catalog/usage tests, `bun run typecheck`, authenticated Antigravity discovery, and one minimal live request per newly exposed Antigravity tier after `ocx restart`.
+- Verifier: focused provider/adapter/catalog/usage tests, `bun run typecheck`, authenticated Antigravity discovery, one minimal live request per newly exposed Antigravity tier before and after the implementation, and a post-merge smoke check in the local `dev` worktree.
 - Stop condition: the static/runtime catalogs match the surface matrix below, old Antigravity selections migrate without remaining visible, all focused tests and typecheck pass, and each new Antigravity tier returns a valid response.
 - Memory artifact: this unit folder. C/D evidence is appended here before moving the folder to `devlog/_fin/`.
 - Expected terminal outcomes: `DONE`, `BLOCKED` when upstream removes or rejects a discovered ID, or `NEEDS_HUMAN` when live verification would require an unavailable Google API credential.
-- Escalation: no delegation is planned. If implementation is delegated later, that is a P-phase amendment; after two failed worker packets the main session reclaims the slice.
+- Escalation: implementation remains in the main session. The mandatory A-gate uses one read-only independent reviewer; after two failed reviewer correction loops the main session stops and reports the unresolved contradiction.
+
+## 2026-07-22 execution authorization and pre-build live proof
+
+The user expanded the docs-only handoff into an implementation request: call every newly discovered Antigravity tier directly, finish the rollout, and merge the branch into the local `dev` worktree. No push or release was requested.
+
+Sanitized direct CCA calls through the existing adapter and local OAuth credential returned:
+
+| Wire model | HTTP | Output marker |
+|---|---:|---|
+| `gemini-3.6-flash-low` | 200 | `OK--LOW` |
+| `gemini-3.6-flash-medium` | 200 | `OK-DIUM` |
+| `gemini-3.6-flash-high` | 200 | `OK-HIGH` |
+
+The probe emitted no token, project ID, authorization header, or raw upstream error body. This proves all three discovered wire IDs accept inference before catalog exposure changes.
+
+## Security boundary for live verification
+
+- Assets: the local Antigravity OAuth access/refresh tokens and discovered project ID.
+- Entrypoint and trust boundary: a local read of the existing OAuth store followed by an HTTPS request to the fixed `daily-cloudcode-pa.googleapis.com` base URL already owned by the provider registry.
+- Attacker assumption: repository/model text is untrusted, but it cannot choose the destination URL, headers, or credential fields in this fixed probe.
+- Controls: never print or persist credentials/project identifiers; use the existing adapter's redacted error formatter and retry path; record only model ID, HTTP status, and a short model output; run a secret scan on the resulting diff.
+- Blast radius: three minimal quota-consuming inference calls per verification pass. No credential, account, or provider configuration mutation is needed for the probe.
 
 ## User direction translated into surface rules
 
@@ -78,6 +100,7 @@
 - Usage resolution returns the verified 3.6 public price for direct Google and derived prices for all three Antigravity tiers, with no retired 3.5 Antigravity overlay left.
 - Cursor and OrcaRouter remain unchanged.
 - Focused tests and typecheck pass; after `ocx restart`, all three 3.6 Antigravity tiers complete a minimal live prompt.
+- The completed Gemini branch is committed and merged into the local `dev` worktree without modifying or staging its unrelated `devlog/_plan/260722_issue_bug_sweep/000_plan.md` change. No remote push is performed.
 
 ## Risks and rollback
 
@@ -85,3 +108,4 @@
 - Hiding old IDs without compatibility aliases would break saved combos or manually selected slugs. Compatibility aliases are therefore separated from picker exposure.
 - A live request can consume account quota. Verification uses one minimal prompt per tier and records only status/model identity, never OAuth tokens or raw credential payloads.
 - Rollback restores the old Antigravity visible list/default, removes the direct 3.6 seed and overlays, and reverts the focused tests. No persistent data migration is introduced.
+- Local integration prefers `git merge --ff-only gemini-3.6`. If `dev` advances and is no longer a fast-forward target, re-evaluate overlap and use a normal merge only when unrelated dirty work remains untouched; otherwise stop rather than stash or discard user work.

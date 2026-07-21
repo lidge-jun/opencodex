@@ -201,9 +201,12 @@ google-antigravity/gemini-3.6-flash-high
 
 Record model, HTTP/stream completion status, and a redacted output tail in this unit. Never persist OAuth tokens, project IDs, or raw `fetchAvailableModels` payloads.
 
+The pre-build baseline already completed this matrix successfully with HTTP 200 for Low, Medium, and High. Repeat the same sanitized matrix after restart so the C gate proves the changed catalog and compatibility code did not regress wire execution.
+
 ## 7. Completion and SoT sync
 
 - Append focused-test, typecheck, restart, discovery, and live-inference evidence to `000_plan.md` during C/D.
 - Runtime model truth remains `src/providers/registry.ts` plus `src/providers/antigravity-models.ts`; no general README currently enumerates model IDs, so no README edit is needed.
 - If jawcode gains an official 3.6 row later, refresh `src/generated/jawcode-model-metadata.ts` mechanically in a separate unit rather than mixing an external snapshot change into this rollout.
 - Move the folder to `devlog/_fin/260722_gemini_36_rollout/` only after implementation and verification are complete.
+- Commit the completed branch, then integrate it into `/Users/jun/Developer/new/700_projects/opencodex` on local `dev`. Preserve the unrelated dirty issue-sweep devlog file exactly; prefer `git merge --ff-only gemini-3.6`, verify the merged SHA and focused smoke test from `dev`, and do not push.
