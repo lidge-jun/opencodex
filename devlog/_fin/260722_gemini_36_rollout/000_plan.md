@@ -127,3 +127,10 @@ The probe emitted no token, project ID, authorization header, or raw upstream er
 - C verdict: PASS for automated checks, current-source CLI QA, all three live 3.6 tiers, and the old-default compatibility route. The broad repository gitleaks baseline remains non-zero; the implementation commit scan is clean.
 - Integration decision: merge `gemini-3.6` into local `dev` with `--no-ff`, verify the merge contains this tip, rerun focused tests from `dev`, and compare the unrelated issue-sweep file hash before/after.
 - Cleanup decision: after merged-`dev` verification and the persisted D close, remove this linked worktree from the main repository. Keep the merged branch ref and do not push.
+
+## Local `dev` integration evidence
+
+- Normal merge completed as `20ef677439069cbbaf9edc0dcc37987acce025ca` with parents from local `dev` and `gemini-3.6`; `git merge-base --is-ancestor 499fadc2 HEAD` exited 0.
+- The unrelated dirty `devlog/_plan/260722_issue_bug_sweep/000_plan.md` diff hash was `1bcab82fcbd9a11ddd396dbddb4ba9cdc9160183e1ed74cc3bd9dd61fc6b66ce` both before and after merge. It was neither staged nor modified by this rollout.
+- Post-merge focused suite on `dev`: `175 pass, 0 fail`, 972 assertions. Post-merge `bun run typecheck`: exit 0.
+- Final status: DONE on local `dev`; no push, release, or daemon restart performed. The linked Gemini worktree is removed only after the PABCD D close command succeeds.
