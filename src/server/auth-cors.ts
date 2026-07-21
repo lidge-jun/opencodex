@@ -226,6 +226,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (headersError) return `provider ${name} ${headersError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
+  const contextWindowError = positiveIntegerRecordConfigError(raw.modelContextWindows, "modelContextWindows");
+  if (contextWindowError) return `provider ${name} ${contextWindowError}`;
   if (typed.authMode === "local") {
     // "local" bypasses key-requirement enforcement (api-keys/key-failover treat non-oauth/
     // forward as key auth; openai-chat skips credential checks for local). Only providers

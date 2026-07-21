@@ -21,6 +21,9 @@ interface ProviderContextCapsResponse {
   value?: number;
   caps?: Record<string, number>;
 }
+interface ProviderConfigDTO {
+  providers?: Record<string, { modelContextWindows?: Record<string, number> }>;
+}
 
 interface V2Status {
   enabled: boolean;
@@ -96,6 +99,16 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  // Per-model context-window overrides (modelContextWindows). providerCtxWindows is the
+  // persisted source-of-truth from /api/config; cwDraft is the in-flight edit buffer keyed by
+  // provider then model id (string values for input control); cwOpen tracks which provider's
+  // editor is expanded; cwSaving/cwStatus/cwOk mirror the disabled-toggle lifecycle.
+  const [providerCtxWindows, setProviderCtxWindows] = useState<Record<string, Record<string, number>>>({});
+  const [cwDraft, setCwDraft] = useState<Record<string, Record<string, string>>>({});
+  const [cwOpen, setCwOpen] = useState<Set<string>>(new Set());
+  const [cwSaving, setCwSaving] = useState(false);
+  const [cwStatus, setCwStatus] = useState("");
+  const [cwOk, setCwOk] = useState(false);
 
   const shadowModelOptions = useMemo(
     () => activeModelOptions(models, disabled),
@@ -144,6 +157,16 @@ export default function Models({ apiBase }: { apiBase: string }) {
         : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
       if (value !== undefined) setContextCapValue(value);
       setContextCaps(capsData.caps ?? {});
+      // Best-effort: load persisted per-model context-window overrides. A 404/old build just
+      // leaves the map empty - the editor stays usable but every row shows its live value.
+      try {
+        const cfg = await fetch(`${apiBase}/api/config`).then(r => r.json()) as ProviderConfigDTO;
+        const out: Record<string, Record<string, number>> = {};
+        for (const [name, prov] of Object.entries(cfg.providers ?? {})) {
+          if (prov.modelContextWindows) out[name] = { ...prov.modelContextWindows };
+        }
+        setProviderCtxWindows(out);
+      } catch { /* old server / network: editor shows live values only */ }
     } catch {
       setOk(false); setStatus(t("models.loadFail"));
     } finally {
@@ -270,6 +293,62 @@ export default function Models({ apiBase }: { apiBase: string }) {
     } finally {
       setBusy(false);
       busyRef.current = false;
+    }
+  };
+  // --- Per-model context-window overrides (modelContextWindows) ---
+  const openCtxWindowEditor = (provider: string) => {
+    if (cwOpen.has(provider)) { closeCtxWindowEditor(provider); return; }
+    const next = new Set(cwOpen); next.add(provider);
+    setCwOpen(next);
+    // Seed the draft from the persisted overrides so the editor opens with committed state.
+    const persisted = providerCtxWindows[provider] ?? {};
+    const draft: Record<string, string> = {};
+    for (const [id, v] of Object.entries(persisted)) draft[id] = String(v);
+    setCwDraft(prev => ({ ...prev, [provider]: draft }));
+  };
+  const closeCtxWindowEditor = (provider: string) => {
+    const next = new Set(cwOpen); next.delete(provider); setCwOpen(next);
+    setCwDraft(prev => { if (!prev[provider]) return prev; const c = { ...prev }; delete c[provider]; return c; });
+    setCwStatus("");
+  };
+  const setCtxWindowDraft = (provider: string, modelId: string, value: string) => {
+    setCwDraft(prev => {
+      const cur = { ...(prev[provider] ?? {}) };
+      if (value.trim() === "") delete cur[modelId]; else cur[modelId] = value;
+      return { ...prev, [provider]: cur };
+    });
+  };
+  const saveContextWindows = async (provider: string) => {
+    // Build the final map from the draft: blank/non-numeric/non-positive entries are dropped,
+    // valid positive integers are kept. An all-empty draft sends null to clear the field.
+    const draft = cwDraft[provider] ?? {};
+    const map: Record<string, number> = {};
+    for (const [id, raw] of Object.entries(draft)) {
+      const n = Number(raw.replace(/[_,\s]/g, ""));
+      if (Number.isFinite(n) && n > 0 && Number.isInteger(n)) map[id] = Math.floor(n);
+    }
+    setCwSaving(true); setCwStatus("");
+    try {
+      const r = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(provider)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelContextWindows: Object.keys(map).length > 0 ? map : null }),
+      });
+      if (r.ok) {
+        setProviderCtxWindows(prev => {
+          const c = { ...prev };
+          if (Object.keys(map).length > 0) c[provider] = map; else delete c[provider];
+          return c;
+        });
+        setCwOk(true);
+        setCwStatus(Object.keys(map).length > 0 ? t("models.contextWindowApplied") : t("models.contextWindowCleared"));
+      } else {
+        setCwOk(false); setCwStatus(t("models.saveFailed"));
+      }
+    } catch {
+      setCwOk(false); setCwStatus(t("models.networkError"));
+    } finally {
+      setCwSaving(false);
     }
   };
 
@@ -602,11 +681,62 @@ export default function Models({ apiBase }: { apiBase: string }) {
                     style={{ marginTop: 4 }}
                   >{t("models.showMore", { n: remaining })}</button>
                 )}
+                {!isNative && (
+                  <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => cwOpen.has(provider) ? closeCtxWindowEditor(provider) : openCtxWindowEditor(provider)}
+                      disabled={cwSaving}
+                      aria-expanded={cwOpen.has(provider)}
+                    >
+                      <IconChevron style={{ width: 12, height: 12, color: "var(--muted)", transform: cwOpen.has(provider) ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+                      {t("models.contextWindowEdit")}
+                    </button>
+                    {cwOpen.has(provider) && (
+                      <div style={{ marginTop: 6 }}>
+                        <p className="muted text-caption" style={{ margin: "0 0 6px" }}>{t("models.contextWindowHint")}</p>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {rows.map(m => {
+                            const persisted = providerCtxWindows[provider]?.[m.id];
+                            const draftVal = cwDraft[provider]?.[m.id] ?? (persisted !== undefined ? String(persisted) : "");
+                            const hasOverride = persisted !== undefined;
+                            return (
+                              <div key={m.namespaced} className="row" style={{ gap: 8, alignItems: "center", padding: "2px 0" }}>
+                                <code className="mono text-caption" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.id}</code>
+                                {typeof m.contextWindow === "number" && m.contextWindow > 0 && !hasOverride && (
+                                  <span className="muted mono text-caption" title={t("models.contextWindowLive")}>{t("models.contextWindowLive")}: {fmtK(m.contextWindow)}</span>
+                                )}
+                                {hasOverride && (
+                                  <span className="mono text-caption" style={{ color: "var(--muted)" }}>{fmtK(persisted!)}</span>
+                                )}
+                                <input
+                                  className="input"
+                                  style={{ width: 120 }}
+                                  inputMode="numeric"
+                                  placeholder={typeof m.contextWindow === "number" && m.contextWindow > 0 ? fmtK(m.contextWindow) : t("models.contextWindowValue")}
+                                  value={draftVal}
+                                  onChange={e => setCtxWindowDraft(provider, m.id, e.target.value)}
+                                  disabled={cwSaving}
+                                  aria-label={`${t("models.contextWindowValue")} ${m.id}`}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+                          <button type="button" className="btn btn-sm" onClick={() => void saveContextWindows(provider)} disabled={cwSaving}>{t("models.contextWindowSave")}</button>
+                          {cwStatus && <span className="text-caption" style={{ color: cwOk ? "var(--ok, #30a46c)" : "var(--err, #e5484d)" }}>{cwStatus}</span>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        );
-      })}
+           )}
+         </div>
+       );
+     })}
       {groups.length === 0 && (
         <EmptyState icon={<IconBoxes />} title={t("models.noRouted")}>
           {t("models.noRoutedHint")}
