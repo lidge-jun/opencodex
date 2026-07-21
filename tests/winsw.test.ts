@@ -134,6 +134,18 @@ describe("winsw fail-closed lifecycle", () => {
     expect(probeScmRegistration(() => { throw new Error("spawn sc.exe ENOENT"); })).toBe("error");
   });
 
+  test("SCM probe detects 1060 under Bun exit-code truncation and localized sc.exe output", () => {
+    // Bun on Windows truncates exit codes to 8 bits: 1060 arrives as status 36 (#216).
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stderr: string }; e.status = 36; e.stderr = "[SC] OpenService FAILED 1060:"; throw e; })).toBe(false);
+    // Localized sc.exe output: the "FAILED" word changes, the numeric code does not.
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stderr: string }; e.status = 36; e.stderr = "[SC] OpenService FALHA 1060:"; throw e; })).toBe(false);
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stderr: string }; e.status = 1; e.stderr = "[SC] OpenService FEHLER 1060:"; throw e; })).toBe(false);
+    // Word boundary: a longer number containing 1060 is NOT proof of absence.
+    expect(probeScmRegistration(() => { const e = new Error("fail") as Error & { status: number; stderr: string }; e.status = 1; e.stderr = "[SC] OpenService FAILED 10600:"; throw e; })).toBe("error");
+    // Truncated status 36 alone (no 1060 in any stream) is NOT proof of absence.
+    expect(probeScmRegistration(() => { const e = new Error("denied") as Error & { status: number }; e.status = 36; throw e; })).toBe("error");
+  });
+
   test("uninstall removes a stale SCM registration via sc.exe when the exe is gone", () => {
     const winsw = readFileSync(new URL("../src/lib/winsw.ts", import.meta.url), "utf8");
     const fn = winsw.slice(winsw.indexOf("export function uninstallWinswService"), winsw.indexOf("export function winswStatusSummary"));

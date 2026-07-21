@@ -223,7 +223,12 @@ export function probeScmRegistration(run: () => string = queryScmForService): bo
     const text = [e.stderr, e.stdout, e.message]
       .map(v => (typeof v === "string" ? v : ""))
       .join("\n");
-    if (e.status === 1060 || /FAILED 1060/i.test(text)) return false;
+    // Two traps hide the 1060 signal:
+    // 1. Bun on Windows truncates exit codes to 8 bits, so 1060 arrives as status 36.
+    // 2. sc.exe localizes the "FAILED" prefix (pt-BR "FALHA 1060", de-DE "FEHLER 1060", ...).
+    // The numeric Win32 code itself is locale-independent and always printed, so match it
+    // with word boundaries (guards against 10600 etc.) anywhere in the captured output.
+    if (e.status === 1060 || /\b1060\b/.test(text)) return false;
     return "error";
   }
 }
