@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select } from "../ui";
-import { IconChevron, IconBoxes, IconInfo } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconShuffle } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
+import { type ComboItem, parseComboList } from "../combo-workspace-data";
 
 interface ModelRow {
   provider: string;
@@ -96,6 +97,30 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  // Combo summary section. null = loading or failed (section hidden on failure —
+  // an API error must never masquerade as "no combos configured").
+  const [combos, setCombos] = useState<ComboItem[] | null>(null);
+  const [combosError, setCombosError] = useState(false);
+  const [combosOpen, setCombosOpen] = useState(() => {
+    try { return localStorage.getItem("ocx-models-combos-open") === "1"; } catch { return false; }
+  });
+
+  const toggleCombosOpen = () => {
+    setCombosOpen(prev => {
+      const next = !prev;
+      try { localStorage.setItem("ocx-models-combos-open", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBase}/api/combos`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+      .then((j: unknown) => { if (!cancelled) { setCombos(parseComboList(j)); setCombosError(false); } })
+      .catch(() => { if (!cancelled) { setCombos(null); setCombosError(true); } });
+    return () => { cancelled = true; };
+  }, [apiBase]);
 
   const shadowModelOptions = useMemo(
     () => activeModelOptions(models, disabled),
@@ -530,6 +555,51 @@ export default function Models({ apiBase }: { apiBase: string }) {
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
         <span>{t("models.orderHint")}</span>
       </div>
+
+     {combos !== null && !combosError && combos.length === 0 && (
+       <div className="card" style={{ marginBottom: 10 }}>
+         <div className="row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 8 }}>
+           <div className="row" style={{ gap: 8, minWidth: 0 }}>
+             <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
+             <strong>{t("nav.combos")}</strong>
+             <span className="muted text-label">{t("models.combosEmpty")}</span>
+           </div>
+           <a className="btn btn-sm" href="#combos" style={{ flexShrink: 0 }}>{t("models.combosSetup")}</a>
+         </div>
+       </div>
+     )}
+     {combos !== null && !combosError && combos.length > 0 && (
+       <div className="card" style={{ marginBottom: 10 }}>
+         <div className={`row group-head${combosOpen ? " open" : ""}`} style={{ gap: 8 }}>
+           <button
+             type="button"
+             className="row"
+             aria-expanded={combosOpen}
+             onClick={toggleCombosOpen}
+             style={{ flex: 1, gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", minWidth: 0 }}
+           >
+             <IconChevron style={{ transform: combosOpen ? "rotate(90deg)" : undefined, transition: "transform .15s", flexShrink: 0 }} />
+             <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
+             <strong>{t("nav.combos")}</strong>
+             <span className="muted mono text-label">{t("models.combosActive", { count: combos.length })}</span>
+           </button>
+           <a className="btn btn-sm btn-ghost" href="#combos" style={{ flexShrink: 0 }}>{t("models.combosSetup")}</a>
+         </div>
+         {combosOpen && (
+           <div>
+             {combos.map(c => (
+               <div key={c.id} className="row" style={{ padding: "6px 12px 6px 34px", gap: 8 }}>
+                 <span className="mono">combo/{c.id}</span>
+                 <span className="muted text-label">{c.strategy} · {c.targets.length}</span>
+               </div>
+             ))}
+             <a className="row muted" href="#combos" style={{ padding: "8px 12px 10px 34px", gap: 6, textDecoration: "none" }}>
+               + {t("models.combosAdd")}
+             </a>
+           </div>
+         )}
+       </div>
+     )}
 
      {groups.map(([provider, rows]) => {
        const isCollapsed = collapsed.has(provider);

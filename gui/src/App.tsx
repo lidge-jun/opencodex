@@ -11,7 +11,7 @@ import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconTerminal, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -62,7 +62,6 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
-  { id: "combos", tkey: "nav.combos", Icon: IconShuffle },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "debug", tkey: "nav.debug", Icon: IconTerminal },
