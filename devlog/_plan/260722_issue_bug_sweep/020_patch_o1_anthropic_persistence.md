@@ -3,6 +3,7 @@
 - 소스 RCA: `004_rca_o_oauth_persistence_manual_code.md` O-1 절 (리뷰어 검증 완료)
 - 위험도: 중간 (자격 증명 라이프사이클 — 회귀 시 로그인 반복/계정 잠금 UX 악화)
 - 선행 조건: 없음. **주의**: #183(수동 코드)은 별도 단위 `022`로 분리됨(리뷰어 blocker 반영 — 별도 위협 모델).
+- **구현 완료 (2026-07-22)**: anthropic.ts:37 AnthropicTokenError(status+oauthError); index.ts:286 refreshAnthropicAccountWithLock(xAI 패턴 이식 — refresh-intent lock + generation CAS + 구조화 종단 분류 + local-cli adoption/lazy 복구); :357 anthropic 분기; local-token-detect.ts CLAUDE_CONFIG_DIR 우선. bounded retry는 연기(transient는 마킹 없이 요청 실패 — 수용 문구 허용). 검증: oauth-refresh+anthropic-hardening+xai-oauth-retry 28 pass, oauth-store-multi 13 pass, `bun x tsc --noEmit` exit 0. 커밋: WP-impl-4.
 
 ## 목표
 

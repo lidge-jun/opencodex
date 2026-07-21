@@ -3,12 +3,14 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getValidAccessToken } from "../src/oauth";
-import { getCredential, saveCredential } from "../src/oauth/store";
+import { getValidAccessToken, OAuthLoginRequiredError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../src/oauth";
+import { AnthropicTokenError } from "../src/oauth/anthropic";
+import { getAccountCredential, getAccountSet, getCredential, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
 const origRegion = process.env.KIRO_REGION;
+const origClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const origFetch = globalThis.fetch;
 const origWarn = console.warn;
 let tmp: string;
@@ -19,12 +21,14 @@ beforeEach(() => {
   process.env.HOME = tmp;
   process.env.OPENCODEX_HOME = join(tmp, "ocx");
   process.env.KIRO_REGION = "us-east-1";
+  process.env.CLAUDE_CONFIG_DIR = join(tmp, ".claude");
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
+  if (origClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
   globalThis.fetch = origFetch;
   console.warn = origWarn;
   rmSync(tmp, { recursive: true, force: true });
@@ -49,6 +53,14 @@ function seedGrokAuth(token: {
   const dir = join(tmp, ".grok");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "auth.json"), JSON.stringify({ "https://auth.x.ai::test": token }));
+}
+
+function seedClaudeCredentials(access: string, refresh: string, expires: number) {
+  const dir = join(tmp, ".claude");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".credentials.json"), JSON.stringify({
+    claudeAiOauth: { accessToken: access, refreshToken: refresh, expiresAt: expires },
+  }));
 }
 
 function xaiRefreshResponses(access = "xai-fresh", refresh = "rt-fresh"): Response[] {
@@ -256,5 +268,64 @@ describe("oauth refresh hardening", () => {
     expect(mock.discoveryCount()).toBe(1);
     expect(mock.tokenCount()).toBe(1);
     expect(getCredential("xai")?.source).toBe("oauth");
+  });
+
+  test("Anthropic transient failures do not mark needsReauth", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    for (const error of [
+      new AnthropicTokenError("server", 503, undefined),
+      new AnthropicTokenError("timeout", undefined, undefined),
+    ]) {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw error; } }, getAccountCredential("anthropic", id)!)).rejects.toBe(error);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    }
+  });
+
+  test("Anthropic confirmed invalid_grant marks needsReauth", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new AnthropicTokenError("bad grant", 400, "invalid_grant"); } }, credential)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  test("Anthropic late terminal failure does not mark a superseding generation", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    let reject!: () => void;
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const pending = refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: () => new Promise((_, rejectPromise) => { reject = () => rejectPromise(new AnthropicTokenError("late", 400, "invalid_grant")); started(); }),
+    }, credential);
+    await began;
+    await saveCredential("anthropic", { access: "new", refresh: "rt-new", expires: Date.now() + 3600_000, accountId: "acct" });
+    reject();
+    await expect(pending).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    expect(getCredential("anthropic")?.access).toBe("new");
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+  });
+
+  test("Anthropic adopts a newer Claude Code generation without refreshing", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
+    seedClaudeCredentials("disk", "rt-new", Date.now() + 3600_000);
+    const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
+    await expect(getValidAccessToken("anthropic")).resolves.toBe("disk");
+    expect(mock.count()).toBe(0);
+    expect(getCredential("anthropic")?.refresh).toBe("rt-new");
+  });
+
+  test("marked Anthropic local-cli account lazily recovers only from a newer disk generation", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    await markAccountNeedsReauth("anthropic", id, true);
+    seedClaudeCredentials("same", "rt-old", 1);
+    await expect(getValidAccessToken("anthropic")).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    seedClaudeCredentials("recovered", "rt-new", Date.now() + 3600_000);
+    await expect(getValidAccessToken("anthropic")).resolves.toBe("recovered");
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
   });
 });

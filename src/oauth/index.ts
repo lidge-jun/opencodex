@@ -5,7 +5,7 @@ import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
-import { ANTHROPIC_OAUTH_BETA, loginAnthropic, refreshAnthropicToken } from "./anthropic";
+import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
@@ -15,7 +15,7 @@ import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUr
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { effectiveGoogleMode } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 
 const REFRESH_SKEW_MS = 60_000;
 export interface OAuthAccessSnapshot {
@@ -29,6 +29,7 @@ const tokenRefreshes = new Map<string, Promise<OAuthAccessSnapshot>>();
 const XAI_PERMANENT_FAILURE_TTL_MS=30_000;
 const permanentRefreshFailures=new Map<string,number>();
 interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
+interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 
@@ -257,7 +258,11 @@ function isTerminalRefreshError(err: unknown): boolean {
     || msg.includes("access_denied")
     || msg.includes("expired_token");
 }
-function terminal(error:unknown):boolean{return error instanceof XaiTokenRequestError?["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??""):isTerminalRefreshError(error);}
+function terminal(error:unknown):boolean{
+  if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
+  if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
+  return isTerminalRefreshError(error);
+}
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
@@ -270,6 +275,67 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
   };
 }
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(!terminal(error))throw error;permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),now()+XAI_PERMANENT_FAILURE_TTL_MS);await markAccountNeedsReauthIfGeneration(provider,accountId,generation);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
+
+function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
+  if (stored.source !== "local-cli") return undefined;
+  const disk = detectClaudeCodeToken();
+  if (!disk || disk.expires <= now + REFRESH_SKEW_MS) return undefined;
+  return credentialGeneration(disk) !== credentialGeneration(stored) ? disk : undefined;
+}
+
+export async function refreshAnthropicAccountWithLock(
+  provider: string,
+  accountId: string,
+  def: OAuthProviderDef,
+  callerCredential: OAuthCredentials,
+  deps: AnthropicRefreshDeps = {},
+): Promise<string> {
+  const now = deps.now ?? Date.now;
+  const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
+  try {
+    const stored = getAccountCredential(provider, accountId);
+    if (!stored) throw new OAuthLoginRequiredError(provider);
+    const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
+    const disk = newerClaudeCredential(stored, now());
+    if (disk) {
+      const outcome = await mergeAccountCredential(provider, accountId, disk, {
+        expectedGeneration: credentialGeneration(stored),
+        afterPrePersistRead: deps.afterPrePersistRead,
+      });
+      if (outcome.superseded) {
+        if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
+        throw new OAuthLoginRequiredError(provider);
+      }
+      return disk.access;
+    }
+    if (account?.needsReauth && stored.source === "local-cli") {
+      throw new OAuthLoginRequiredError(provider);
+    }
+    if (credentialGeneration(stored) !== credentialGeneration(callerCredential) && stored.expires > now() + REFRESH_SKEW_MS) {
+      return stored.access;
+    }
+
+    const generation = credentialGeneration(stored);
+    try {
+      const fresh = merged(await def.refresh(stored.refresh), stored);
+      const outcome = await mergeAccountCredential(provider, accountId, fresh, {
+        expectedGeneration: generation,
+        afterPrePersistRead: deps.afterPrePersistRead,
+      });
+      if (outcome.superseded) {
+        if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
+        throw new OAuthLoginRequiredError(provider);
+      }
+      return fresh.access;
+    } catch (error) {
+      if (!terminal(error)) throw error;
+      await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      throw new OAuthLoginRequiredError(provider);
+    }
+  } finally {
+    guard.release();
+  }
+}
 
 async function refreshAndPersistAccessToken(
   provider: string,
@@ -288,6 +354,7 @@ async function refreshAndPersistAccessToken(
     }
   }
   if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred);
+  if (provider === "anthropic") return refreshAnthropicAccountWithLock(provider, accountId, def, cred);
   try {
     const fresh = await def.refresh(cred.refresh);
     const detachedLocalCli = provider === "xai" && cred.source === "local-cli";

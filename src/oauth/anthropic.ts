@@ -34,6 +34,17 @@ interface AnthropicTokenResponse {
   account?: { uuid?: string; email_address?: string };
 }
 
+export class AnthropicTokenError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number | undefined,
+    readonly oauthError: string | undefined,
+  ) {
+    super(message);
+    this.name = "AnthropicTokenError";
+  }
+}
+
 async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
   const response = await fetch(url, {
     method: "POST",
@@ -43,7 +54,18 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
   });
   const responseBody = await response.text();
   if (!response.ok) {
-    throw new Error(`Anthropic OAuth HTTP ${response.status}: ${responseBody}`);
+    let oauthError: string | undefined;
+    try {
+      const parsed = JSON.parse(responseBody) as { error?: unknown };
+      if (typeof parsed.error === "string") oauthError = parsed.error;
+    } catch {
+      // Best-effort only: malformed error bodies remain structured by HTTP status.
+    }
+    throw new AnthropicTokenError(
+      `Anthropic OAuth HTTP ${response.status}: ${responseBody}`,
+      response.status,
+      oauthError,
+    );
   }
   return responseBody;
 }
