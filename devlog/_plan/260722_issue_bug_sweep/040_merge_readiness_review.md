@@ -54,3 +54,21 @@
 - **머지 레디: 4/6 이슈 (#216, #199, #212, #183) + 조건부 2 (#186, #179 nits 수용 시)**.
 - **머지 차단: #202, #209** — 각각 별도 후속 PABCD 수정 사이클 필요.
 - 전체 스위트·tsc는 green이므로 브랜치 자체는 빌드/테스트 건전. 차단은 "해당 이슈가 실제로 닫히는가" 기준의 기능 갭.
+
+## 후속 수정 완료 + push + CI (2026-07-22)
+
+두 블로커를 수정하고 dev에 push, CI green 확인했다.
+
+| 항목 | 커밋 | 상태 |
+|------|------|------|
+| #202 Vertex defaultModel 카탈로그 fallback | 2e07c8bc | ✅ 해결 (리뷰어 2R FAIL→PASS) |
+| #209 Anthropic durable refresh-intent no-blind-replay | 0de138aa | ✅ 해결 (리뷰어 2R FAIL 2건→PASS) |
+| GUI lint (021/022 잔여: i18n effort-none + ref-in-render) | 49d8062c | ✅ push 게이트 통과 |
+| storage-scanner Windows CI flaky (5134ms>5000ms, 우리 변경과 무관) | 6d4cf859 | ✅ 15s timeout 안정화 |
+
+- 전체 스위트 `bun run test`(--isolate): 3353 pass / 0 fail. tsc exit 0.
+- push: origin dev (49d8062c, 6d4cf859) — pre-push 게이트(lint+tsc+test+privacy+doctor) 통과.
+- **CI green**: Cross-platform CI run 29854799555 = success (6/6 jobs: ubuntu/windows/macos + npm-global x3), Service lifecycle = success.
+- dev == origin/dev (동기화 완료).
+
+**남은 결정(사용자 보고 대기)**: dev → main/preview 머지. dev는 origin/main보다 36커밋, origin/preview보다 38커밋 앞. 머지는 사용자 승인 후 진행(이번 범위 밖).
