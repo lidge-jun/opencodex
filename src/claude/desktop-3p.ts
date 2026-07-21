@@ -280,7 +280,7 @@ export function writeDesktop3pConfig(
   apiKey?: string,
   mode: Desktop3pConfigMode = "static",
   profile?: OcxClaudeDesktopProfile,
-): { written: boolean; path: string; reason?: string } {
+): { written: boolean; path: string; reason?: string; fingerprint?: string } {
   const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
     || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
   const metadataPath = join(libraryPath, "_meta.json");
@@ -298,9 +298,16 @@ export function writeDesktop3pConfig(
       : [...metadata.entries, entry];
 
     const configJson = JSON.stringify(generateDesktop3pConfig(port, nativeSlugs, routedModels, apiKey, mode, profile), null, 2) + "\n";
-    atomicReplaceDesktopConfig(configPath, configJson);
-    atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
-    return { written: true, path: configPath };
+    const fingerprint = createHash("sha256").update(configJson).digest("hex").slice(0, 16);
+    const { backupPath } = atomicReplaceDesktopConfig(configPath, configJson);
+    try {
+      atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
+    } catch (metaError) {
+      // Rollback: restore the backed-up config if metadata write fails.
+      if (backupPath && existsSync(backupPath)) copyFileSync(backupPath, configPath);
+      throw metaError;
+    }
+    return { written: true, path: configPath, fingerprint };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { written: false, path: configPath, reason };

@@ -1145,7 +1145,53 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         state.profile,
       );
       if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
-      return jsonResponse({ ok: true, saved: true, applied: true, path: result.path });
+      // Persist applied fingerprint + timestamp so GUI can show saved-vs-applied state.
+      if (result.fingerprint) {
+        config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: { ...state.profile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
+        saveConfig(config);
+      }
+      return jsonResponse({ ok: true, saved: true, applied: true, path: result.path, fingerprint: result.fingerprint });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+
+  // Desktop applied-state + health status.
+  if (url.pathname === "/api/claude-desktop/status" && req.method === "GET") {
+    try {
+      const { readFileSync, existsSync } = await import("node:fs");
+      const { createHash } = await import("node:crypto");
+      const { join } = await import("node:path");
+      const { homedir } = await import("node:os");
+      const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
+        || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+      const metaPath = join(libraryPath, "_meta.json");
+      let onDiskFingerprint: string | null = null;
+      let configPath: string | null = null;
+      if (existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+          const entry = Array.isArray(meta.entries) ? meta.entries.find((e: { name?: string }) => e?.name === "opencodex") : undefined;
+          if (entry?.id) {
+            configPath = join(libraryPath, `${entry.id}.json`);
+            if (existsSync(configPath)) {
+              const onDisk = readFileSync(configPath, "utf8");
+              onDiskFingerprint = createHash("sha256").update(onDisk).digest("hex").slice(0, 16);
+            }
+          }
+        } catch { /* unreadable metadata */ }
+      }
+      const savedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
+      const appliedAt = config.claudeCode?.desktopProfile?.appliedAt ?? null;
+      const stale = savedFingerprint !== null && onDiskFingerprint !== null && savedFingerprint !== onDiskFingerprint;
+      return jsonResponse({
+        applied: savedFingerprint !== null,
+        appliedAt,
+        savedFingerprint,
+        onDiskFingerprint,
+        configPath,
+        stale,
+      });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

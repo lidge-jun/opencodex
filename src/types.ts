@@ -360,6 +360,10 @@ export interface OcxClaudeDesktopProfile {
   version: 1;
   assignments: Record<string, OcxClaudeDesktopAssignment>;
   defaults: Record<OcxClaudeDesktopFamily, string | null>;
+  /** SHA-256 fingerprint of the last successfully applied 3P config content. */
+  appliedFingerprint?: string;
+  /** ISO timestamp of the last successful apply. */
+  appliedAt?: string;
 }
 
 export interface OcxConfig {
