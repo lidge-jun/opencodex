@@ -92,6 +92,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
   const [codexActiveNeedsReauth, setCodexActiveNeedsReauth] = useState(false);
   const aliveRef = useRef(true);
+  const jsonEditorOpenRef = useRef(false);
   const removeBusyRef = useRef(false);
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
@@ -158,13 +159,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const data = await res.json();
       setConfig(data);
       // Never overwrite the draft while the JSON editor is open — that cleared dirty state.
-      if (!jsonEditorOpen) {
+      if (!jsonEditorOpenRef.current) {
         setDraft(JSON.stringify(data, null, 2));
       }
     } catch {
       notify(t("prov.loadConfigFail"), false);
     }
-  }, [apiBase, t, jsonEditorOpen]);
+  }, [apiBase, t]);
 
   // Load OAuth-capable providers + ChatGPT/Codex pool status (shared by all forward providers).
   const fetchOauth = useCallback(async () => {
@@ -455,6 +456,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         notify(t("prov.saved"), true);
         setEditing(false);
         setJsonEditorOpen(false);
+        jsonEditorOpenRef.current = false;
         setJsonLeaveOpen(false);
         setJsonBaseline(JSON.stringify(parsed, null, 2));
         fetchConfig();
@@ -479,11 +481,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setDraft(baseline);
     setJsonLeaveOpen(false);
     setJsonEditorOpen(true);
+    jsonEditorOpenRef.current = true;
   };
 
   const discardJsonEditor = () => {
     setJsonLeaveOpen(false);
     setJsonEditorOpen(false);
+    jsonEditorOpenRef.current = false;
     const baseline = config ? JSON.stringify(config, null, 2) : jsonBaseline;
     setJsonBaseline(baseline);
     setDraft(baseline);
