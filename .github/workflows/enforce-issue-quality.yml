@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Validate feature request quality
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const COMMENT_MARKER = "<!-- issue-quality-enforcer -->";
@@ -34,21 +34,26 @@ jobs:
             const issue = context.payload.issue;
             const issue_number = issue.number;
 
-            const labels = new Set(
-              (issue.labels ?? []).map(label =>
-                typeof label === "string" ? label : label.name
-              )
-            );
-
             /*
              * Only inspect feature requests.
              *
-             * The feature form applies the "enhancement" label and uses
-             * the "[Feature]:" title prefix.
+             * The feature form applies the "enhancement" label and uses the
+             * "[Feature]:" title prefix, but labels can be added manually to
+             * non-feature issues. Require the feature title prefix AND the
+             * feature-form section headings so a bug/support issue that merely
+             * carries the label is never validated as a feature request.
              */
-            const isFeatureRequest =
-              labels.has("enhancement") ||
+            const hasFeatureTitle =
               /^\[feature\]\s*:/i.test(issue.title);
+
+            const body = String(issue.body ?? "");
+
+            const hasFeatureFormSections =
+              /(?:^|\r?\n)###\s+Problem to solve\s*\r?\n/i.test(body) &&
+              /(?:^|\r?\n)###\s+Proposed solution\s*\r?\n/i.test(body);
+
+            const isFeatureRequest =
+              hasFeatureTitle && hasFeatureFormSections;
 
             if (!isFeatureRequest) {
               core.info("Not a feature request. Skipping.");
@@ -84,7 +89,7 @@ jobs:
             function normalise(value) {
               return clean(value)
                 .toLowerCase()
-                .replace(/[^a-z0-9]+/g, " ")
+                .replace(/[^\p{L}\p{N}]+/gu, " ")
                 .trim();
             }
 
@@ -108,14 +113,26 @@ jobs:
             function wordCount(value) {
               const normalised = normalise(value);
 
-              return normalised
-                ? normalised.split(/\s+/).length
-                : 0;
+              if (!normalised) {
+                return 0;
+              }
+
+              // Whitespace-tokenised count works for spaced scripts. CJK and
+              // other unspaced scripts collapse to a single "word", so fall back
+              // to a character count for those to avoid rejecting a detailed
+              // localized answer as too short.
+              const tokens = normalised.split(/\s+/);
+
+              if (tokens.length > 1) {
+                return tokens.length;
+              }
+
+              return [...normalised].length;
             }
 
             function getSection(heading) {
               const pattern = new RegExp(
-                `(?:^|\\r?\\n)###\\s+${escapeRegExp(heading)}\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n###\\s+|$)`,
+                `(?:^|\\r?\\n)###\\s+${escapeRegExp(heading)}\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n###\\s+(?:Problem to solve|Proposed solution|Alternatives considered|Additional context)\\s*(?:\\r?\\n|$)|$)`,
                 "i"
               );
 
@@ -341,8 +358,20 @@ jobs:
             /*
              * The author edited the issue sufficiently.
              * Reopen it only because this workflow previously closed it.
+             *
+             * Fetch the live issue state rather than trusting the event
+             * payload: a queued "edited" run can carry a stale state of
+             * "open" while a concurrent "opened" run has already closed it,
+             * which would otherwise skip the reopen and leave the bot state
+             * inactive so later valid edits never reopen automatically.
              */
-            if (issue.state === "closed") {
+            const { data: liveIssue } = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number
+            });
+
+            if (liveIssue.state === "closed") {
               await github.rest.issues.update({
                 owner,
                 repo,
