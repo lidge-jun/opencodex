@@ -164,7 +164,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
 
   return {
     ...provider,
-    adapter: registryEntry.adapter,
+    adapter: provider.adapter || registryEntry.adapter,
     baseUrl,
     authMode: canonicalAuthMode,
     apiKey: resolveEnvValue(provider.apiKey),
