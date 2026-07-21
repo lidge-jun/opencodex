@@ -12,6 +12,7 @@ import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../..
 import { useT } from "../../i18n";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
+import { parseManualModels } from "../../provider-payload";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import type { WorkspaceItem, ProviderUpdatePatch } from "./types";
@@ -38,6 +39,10 @@ export default function ProviderSettings({
   const [authMode, setAuthMode] = useState(initialAuth);
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
+  const [modelSource, setModelSource] = useState<"auto" | "manual">(
+    item.liveModels === false ? "manual" : "auto",
+  );
+  const [manualModels, setManualModels] = useState((item.models ?? []).join("\n"));
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
@@ -52,9 +57,11 @@ export default function ProviderSettings({
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
+    setModelSource(item.liveModels === false ? "manual" : "auto");
+    setManualModels((item.models ?? []).join("\n"));
     setMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note, item.allowPrivateNetwork, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note, item.allowPrivateNetwork, item.liveModels, item.models, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -87,7 +94,9 @@ export default function ProviderSettings({
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
     || note.trim() !== (item.note ?? "")
-    || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false);
+    || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
+    || modelSource !== (item.liveModels === false ? "manual" : "auto")
+    || (modelSource === "manual" && manualModels !== (item.models ?? []).join("\n"));
 
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
@@ -116,8 +125,29 @@ export default function ProviderSettings({
       ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
       : baseUrl.trim();
     if (!adapter.trim() || !nextBaseUrl) { setMsg({ ok: false, text: t("pws.adapterBaseRequired") }); return; }
+    let parsedManual: string[] = [];
+    if (modelSource === "manual") {
+      parsedManual = parseManualModels(manualModels);
+      if (parsedManual.length === 0) { setMsg({ ok: false, text: t("modal.manualModelsRequired") }); return; }
+      const trimmedDefault = defaultModel.trim();
+      if (trimmedDefault && !parsedManual.includes(trimmedDefault)) {
+        setMsg({ ok: false, text: t("modal.manualModelsDefaultError") });
+        return;
+      }
+    }
     setSaving(true); setMsg(null);
     const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork };
+    const itemModelSource = item.liveModels === false ? "manual" : "auto";
+    const modelDirty = modelSource !== itemModelSource
+      || (modelSource === "manual" && manualModels !== (item.models ?? []).join("\n"));
+    if (modelDirty) {
+      if (modelSource === "manual") {
+        patch.liveModels = false;
+        patch.models = parsedManual;
+      } else {
+        patch.liveModels = true;
+      }
+    }
     const res = await onUpdateProvider(item.name, patch);
     setSaving(false);
     setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
@@ -126,7 +156,10 @@ export default function ProviderSettings({
   const discard = () => {
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
-    setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setMsg(null);
+    setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
+    setModelSource(item.liveModels === false ? "manual" : "auto");
+    setManualModels((item.models ?? []).join("\n"));
+    setMsg(null);
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
   };
 
@@ -194,6 +227,36 @@ export default function ProviderSettings({
         ) : (
           <input className="input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)} placeholder={t("pws.optionalPlaceholder")} />
         )}
+      </label>
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">{t("modal.modelSource")}</span>
+        <select className="input" value={modelSource} onChange={e => setModelSource(e.target.value as "auto" | "manual")}>
+          <option value="auto">{t("modal.modelSourceAuto")}</option>
+          <option value="manual">{t("modal.modelSourceManual")}</option>
+        </select>
+        {modelSource === "auto" && (
+          <div className="pwi-settings-hint">{t("modal.modelSourceAutoHint")}</div>
+        )}
+        {modelSource === "manual" && (
+          <textarea
+            className="input pwi-settings-textarea"
+            rows={5}
+            value={manualModels}
+            onChange={e => setManualModels(e.target.value)}
+            placeholder={t("modal.manualModelsPlaceholder")}
+          />
+        )}
+        {modelSource === "manual" && (() => {
+          const parsed = parseManualModels(manualModels);
+          const trimmedDefault = defaultModel.trim();
+          if (parsed.length === 0) {
+            return <div className="pwi-settings-msg pwi-settings-msg--err">{t("modal.manualModelsRequired")}</div>;
+          }
+          if (trimmedDefault && !parsed.includes(trimmedDefault)) {
+            return <div className="pwi-settings-msg pwi-settings-msg--err">{t("modal.manualModelsDefaultError")}</div>;
+          }
+          return null;
+        })()}
       </label>
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.authMode")}</span>

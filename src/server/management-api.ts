@@ -670,6 +670,22 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
      next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
      touched = true;
    }
+    if (Object.hasOwn(rawBody, "liveModels")) {
+      if (typeof rawBody.liveModels !== "boolean") return jsonResponse({ error: "liveModels must be a boolean" }, 400);
+      if (rawBody.liveModels) delete next.liveModels;
+      else next.liveModels = false;
+      touched = true;
+    }
+    if (Object.hasOwn(rawBody, "models")) {
+      if (!Array.isArray(rawBody.models)
+          || !rawBody.models.every((m: unknown) => typeof m === "string" && m.trim().length > 0)) {
+        return jsonResponse({ error: "models must be an array of non-empty strings" }, 400);
+      }
+      const cleaned = Array.from(new Set((rawBody.models as string[]).map((m) => m.trim())));
+      if (cleaned.length > 0) next.models = cleaned;
+      else delete next.models;
+      touched = true;
+    }
 
     if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
 
