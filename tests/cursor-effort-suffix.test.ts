@@ -60,6 +60,12 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/glm-5.2", "max")).toBe("glm-5.2-max");
   });
 
+  test("grok-4.5-fast preserves its explicit code-backed tiers", () => {
+    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-fast-medium");
+    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-fast-high");
+    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-fast-xhigh");
+  });
+
   test("model ladders are deduped and sorted in canonical Codex order", () => {
     expect(cursorModelEffortLadder("claude-opus-4-8")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(cursorModelEffortLadder("glm-5.2")).toEqual(["high", "max"]);

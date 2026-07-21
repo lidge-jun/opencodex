@@ -8,7 +8,6 @@ import type {
 } from "../types";
 
 export const COMBO_NAMESPACE = "combo";
-export const COMBO_DEFAULT_EFFORT: OcxComboDefaultEffort = "medium";
 const COMBO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface ComboValidationIssue {
@@ -19,7 +18,7 @@ export interface ComboValidationIssue {
 export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
-  defaultEffort: OcxComboDefaultEffort;
+  defaultEffort: OcxComboDefaultEffort | null;
   targets: Array<Required<OcxComboTarget>>;
 }
 
@@ -81,6 +80,7 @@ export function comboConfigIssues(
     issues.push({ path: ["stickyLimit"], message: "stickyLimit must be an integer from 1 to 100" });
   }
   if (body.defaultEffort !== undefined
+    && body.defaultEffort !== null
     && (typeof body.defaultEffort !== "string" || !isCodexReasoningEffort(body.defaultEffort))) {
     issues.push({
       path: ["defaultEffort"],
@@ -164,7 +164,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
   return {
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
-    defaultEffort: raw.defaultEffort ?? COMBO_DEFAULT_EFFORT,
+    defaultEffort: raw.defaultEffort ?? null,
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),
@@ -179,7 +179,7 @@ export function comboDefaultEffort(
 ): OcxComboDefaultEffort | null {
   const combos = config.combos;
   if (!combos || !Object.hasOwn(combos, id)) return null;
-  const value: unknown = combos[id]!.defaultEffort ?? COMBO_DEFAULT_EFFORT;
+  const value: unknown = combos[id]!.defaultEffort ?? null;
   return typeof value === "string" && isCodexReasoningEffort(value)
     ? value as OcxComboDefaultEffort
     : null;

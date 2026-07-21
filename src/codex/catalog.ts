@@ -1284,11 +1284,18 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
   }
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
+  const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
+    ? "vertex-aiplatform"
+    : "provider-models";
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       markModelsFetchFailure(name);
       const stale = getStaleCached(name);
+      const fallback = stale ? "stale" : "configured";
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+      );
       return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
     }
     const json = await res.json() as unknown;
@@ -1341,9 +1348,13 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     }
     setCached(name, live);
     return live;
-  } catch {
+  } catch (error) {
     markModelsFetchFailure(name);
     const stale = getStaleCached(name);
+    const fallback = stale ? "stale" : "configured";
+    console.warn(
+      `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
+    );
     return stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap) : configured;
   }
 }
@@ -1441,11 +1452,12 @@ function intersectStrings(values: readonly string[][]): string[] {
 }
 
 function effectiveComboDefault(
-  configured: string | undefined,
+  configured: string | null | undefined,
   common: readonly string[],
 ): string | undefined {
+  if (!configured) return undefined;
   if (configured && common.includes(configured)) return configured;
-  const requestedRank = codexEffortRank(configured ?? "medium");
+  const requestedRank = codexEffortRank(configured);
   const ranked = common
     .map(effort => ({ effort, rank: codexEffortRank(effort) }))
     .filter(item => item.rank >= 0)
