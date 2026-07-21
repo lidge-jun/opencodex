@@ -252,6 +252,41 @@ describe("validateIssue - bug", () => {
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, true, `Expected valid but got reasons: ${result.reasons.join(", ")}`);
   });
+
+  it("accepts a legacy bug with _No response_ in old optional env fields", () => {
+    const body = [
+      "### Summary",
+      "Proxy crashes on startup.",
+      "### Reproduction",
+      "Run ocx start.",
+      "### Version",
+      "_No response_",
+      "### OS",
+      "_No response_",
+    ].join("\n");
+    const result = validateIssue({ title: "[Bug]: crash", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, true, `Expected valid but got: ${result.reasons.join(", ")}`);
+  });
+
+  it("rejects a new-form bug where env fields were actively cleared", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Summary",
+      "Proxy crashes.",
+      "### Reproduction",
+      "Run ocx start.",
+      "### Version",
+      "",
+      "### Operating system",
+      "",
+    ].join("\n");
+    const result = validateIssue({ title: "Crash", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("Version")));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -309,6 +344,33 @@ describe("validateIssue - provider-compatibility", () => {
     const result = validateIssue({ title: "System field stripped", body, labels: ["enhancement"] });
     assert.equal(result.kind, "provider-compatibility");
     assert.equal(result.valid, true);
+  });
+
+  it("rejects provider compat report when provider/endpoint fields are cleared", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Provider or upstream service",
+      "",
+      "### OpenCodex version",
+      "2.7.31",
+      "### Endpoint or capability",
+      "",
+      "### Current behaviour",
+      "Returns 400.",
+      "### Expected behaviour",
+      "Returns 200.",
+      "### Minimal redacted request or reproduction",
+      "curl ...",
+      "### Actual response or error",
+      "400 Bad Request",
+      "### Upstream documentation",
+      "https://docs.example.com",
+    ].join("\n");
+    const result = validateIssue({ title: "400 error", body, labels: ["provider-compatibility"] });
+    assert.equal(result.kind, "provider-compatibility");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("provider")));
   });
 });
 

@@ -187,6 +187,18 @@ function isPlaceholder(text) {
 }
 
 /**
+ * Check if raw section text is a GitHub "No response" placeholder variant
+ * without stripping it first. Used to distinguish intentionally blank optional
+ * fields from actively cleared required fields.
+ */
+function isRawPlaceholder(raw) {
+  if (raw === null) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  return /^[\s_*]*no response[\s_*]*$/i.test(trimmed);
+}
+
+/**
  * Validate an issue body for its detected kind.
  *
  * @param {{ title: string, body: string, labels: string[], storedKind?: string|null }} issue
@@ -256,7 +268,11 @@ function validateIssue(issue) {
     // Required environment fields removed after submission.
     // Only fire when the headings exist in the body (new form). Legacy bug
     // reports never had Version or OS fields, so null means absent, not removed.
-    if (version !== null && os !== null && isEmpty(version) && isEmpty(os)) {
+    // Skip when the raw value is a "No response" placeholder -- the old form had
+    // both fields as optional, so legacy issues legitimately contain those headings
+    // with the GitHub placeholder. Only close when the field was actively cleared.
+    if (version !== null && os !== null && isEmpty(version) && isEmpty(os) &&
+        !isRawPlaceholder(version) && !isRawPlaceholder(os)) {
       reasons.push("Version and Operating system are both missing.");
       guidance.push("Add your OpenCodex version and OS so we can reproduce the environment.");
     }
@@ -288,6 +304,13 @@ function validateIssue(issue) {
     const emptyCore = [];
     if (isEmpty(current)) emptyCore.push("current behaviour");
     if (isEmpty(expected)) emptyCore.push("expected behaviour");
+    // Metadata fields: provider, version, endpoint are required on the form.
+    const provider = extractSection(body, "Provider or upstream service");
+    const version = extractSection(body, "OpenCodex version");
+    const endpoint = extractSection(body, "Endpoint or capability");
+    if (provider !== null && isEmpty(provider)) emptyCore.push("provider or upstream service");
+    if (version !== null && isRawPlaceholder(version) === false && isEmpty(version)) emptyCore.push("OpenCodex version");
+    if (endpoint !== null && isEmpty(endpoint)) emptyCore.push("endpoint or capability");
     if (emptyCore.length > 0) {
       reasons.push(`Required sections are missing or empty: ${emptyCore.join(", ")}.`);
       guidance.push("Describe both the current and expected behaviour.");
@@ -381,4 +404,5 @@ module.exports = {
   detectIssueKind,
   validateIssue,
   shouldReopen,
+  isRawPlaceholder,
 };
