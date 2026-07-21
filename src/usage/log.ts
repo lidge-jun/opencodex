@@ -36,7 +36,7 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
-  surface?: "claude";
+  surface?: "claude" | "claude-desktop";
   resolvedModel?: string;
   requestedModel?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
@@ -217,7 +217,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
-    ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+    ...(entry.surface === "claude" || entry.surface === "claude-desktop" ? { surface: entry.surface } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort

@@ -33,7 +33,7 @@ export interface RequestLogContext {
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
-  surface?: "claude";
+  surface?: "claude" | "claude-desktop";
   requestedModel?: string;
   requestedEffort?: string;
   requestedServiceTier?: string;
@@ -74,7 +74,7 @@ export interface RequestLogEntry {
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
-  surface?: "claude";
+  surface?: "claude" | "claude-desktop";
   requestedModel?: string;
   requestedEffort?: string;
   requestedServiceTier?: string;
@@ -137,7 +137,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     model: entry.model,
     provider: entry.provider,
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
-    ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+    ...(entry.surface === "claude" || entry.surface === "claude-desktop" ? { surface: entry.surface } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
     ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
@@ -213,7 +213,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
-      ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+      ...(entry.surface === "claude" || entry.surface === "claude-desktop" ? { surface: entry.surface } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),

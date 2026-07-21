@@ -10,6 +10,7 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
 import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
@@ -546,6 +547,11 @@ export async function handleClaudeMessages(
         : undefined,
       req.headers.get("anthropic-beta") ?? undefined,
     );
+    // Client surface discrimination: Desktop 3P aliases resolve through the
+    // desktop registry; Code uses readable aliases or direct model names.
+    if (isRec(anthropicBody) && typeof anthropicBody.model === "string" && resolveDesktop3pAlias(anthropicBody.model)) {
+      logCtx.surface = "claude-desktop";
+    }
     if (isRec(anthropicBody) && wantsNativePassthrough(req, config, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
