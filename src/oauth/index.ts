@@ -3,7 +3,7 @@ import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
-import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration } from "./store";
+import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, clearOAuthRefreshIntent } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -296,6 +296,8 @@ export async function refreshAnthropicAccountWithLock(
     const stored = getAccountCredential(provider, accountId);
     if (!stored) throw new OAuthLoginRequiredError(provider);
     const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
+    const generation = credentialGeneration(stored);
+    const pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const disk = newerClaudeCredential(stored, now());
     if (disk) {
       const outcome = await mergeAccountCredential(provider, accountId, disk, {
@@ -303,33 +305,43 @@ export async function refreshAnthropicAccountWithLock(
         afterPrePersistRead: deps.afterPrePersistRead,
       });
       if (outcome.superseded) {
+        if (pendingIntent) clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
         if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
         throw new OAuthLoginRequiredError(provider);
       }
+      if (pendingIntent) clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
       return disk.access;
     }
-    if (account?.needsReauth && stored.source === "local-cli") {
+    if (pendingIntent?.uncertain || pendingIntent?.generation === generation) {
+      await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      throw new OAuthLoginRequiredError(provider);
+    }
+    if (pendingIntent) clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
+    if (account?.needsReauth) {
       throw new OAuthLoginRequiredError(provider);
     }
     if (credentialGeneration(stored) !== credentialGeneration(callerCredential) && stored.expires > now() + REFRESH_SKEW_MS) {
       return stored.access;
     }
 
-    const generation = credentialGeneration(stored);
     try {
+      writeOAuthRefreshIntent(provider, accountId, generation, now());
       const fresh = merged(await def.refresh(stored.refresh), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
       });
       if (outcome.superseded) {
+        clearOAuthRefreshIntent(provider, accountId, generation);
         if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
         throw new OAuthLoginRequiredError(provider);
       }
+      clearOAuthRefreshIntent(provider, accountId, generation);
       return fresh.access;
     } catch (error) {
       if (!terminal(error)) throw error;
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      clearOAuthRefreshIntent(provider, accountId, generation);
       throw new OAuthLoginRequiredError(provider);
     }
   } finally {

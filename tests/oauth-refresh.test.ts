@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getValidAccessToken, OAuthLoginRequiredError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../src/oauth";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
-import { getAccountCredential, getAccountSet, getCredential, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
+import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -271,14 +271,14 @@ describe("oauth refresh hardening", () => {
   });
 
   test("Anthropic transient failures do not mark needsReauth", async () => {
-    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
-    const id = getAccountSet("anthropic")!.activeAccountId;
-    for (const error of [
+    for (const [index, error] of [
       new AnthropicTokenError("server", 503, undefined),
       new AnthropicTokenError("timeout", undefined, undefined),
-    ]) {
+    ].entries()) {
+      await saveCredential("anthropic", { access: `old-${index}`, refresh: `rt-old-${index}`, expires: 1, accountId: `acct-${index}` });
+      const id = getAccountSet("anthropic")!.activeAccountId;
       await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw error; } }, getAccountCredential("anthropic", id)!)).rejects.toBe(error);
-      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
     }
   });
 
@@ -288,6 +288,83 @@ describe("oauth refresh hardening", () => {
     const credential = getAccountCredential("anthropic", id)!;
     await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new AnthropicTokenError("bad grant", 400, "invalid_grant"); } }, credential)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  test("Anthropic never replays an outstanding oauth-source generation across re-entry", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-consumed", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential), Date.now() - 120_001);
+    let refreshCalls = 0;
+
+    const attempt = () => refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { refreshCalls++; throw new Error("must not replay"); },
+    }, credential);
+
+    await expect(attempt()).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    await expect(attempt()).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+
+    expect(refreshCalls).toBe(0);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
+    expect(readOAuthRefreshIntent("anthropic", id)?.generation).toBe(credentialGeneration(credential));
+  });
+
+  test("Anthropic treats a corrupt durable intent as outstanding and never refreshes", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-consumed", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    writeFileSync(getAuthRefreshIntentPath("anthropic", id), "not-json");
+    let refreshCalls = 0;
+
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { refreshCalls++; throw new Error("must not replay"); },
+    }, credential)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+
+    expect(refreshCalls).toBe(0);
+    expect(readOAuthRefreshIntent("anthropic", id)?.uncertain).toBe(true);
+  });
+
+  test("Anthropic outstanding intent adopts a newer Claude credential without replay", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-consumed", expires: 1, source: "local-cli" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    seedClaudeCredentials("disk", "rt-new", Date.now() + 3600_000);
+    let refreshCalls = 0;
+
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { refreshCalls++; throw new Error("must not replay"); },
+    }, credential)).resolves.toBe("disk");
+
+    expect(refreshCalls).toBe(0);
+    expect(getAccountCredential("anthropic", id)?.refresh).toBe("rt-new");
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+  });
+
+  test("Anthropic successful refresh clears its intent and the new generation can refresh", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const calls: string[] = [];
+    const def = {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async (refresh: string) => {
+        calls.push(refresh);
+        return calls.length === 1
+          ? { access: "fresh-1", refresh: "rt-new-1", expires: 1 }
+          : { access: "fresh-2", refresh: "rt-new-2", expires: Date.now() + 3600_000 };
+      },
+    };
+
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, def, getAccountCredential("anthropic", id)!)).resolves.toBe("fresh-1");
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, def, getAccountCredential("anthropic", id)!)).resolves.toBe("fresh-2");
+
+    expect(calls).toEqual(["rt-old", "rt-new-1"]);
+    expect(getAccountCredential("anthropic", id)?.refresh).toBe("rt-new-2");
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
   });
 
   test("Anthropic late terminal failure does not mark a superseding generation", async () => {

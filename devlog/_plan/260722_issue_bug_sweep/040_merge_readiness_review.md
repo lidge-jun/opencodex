@@ -37,6 +37,8 @@
 
 ### B2 — #209 Anthropic: stale-lock이 소모된 회전 토큰 재전송 (High)
 
+> **해결됨 (2026-07-22, WP-fix-2)**: `store.ts`에 generation-bound durable refresh-intent 사이드카(`auth.refresh.<provider>.<hash>.lock.json`, 토큰 미저장, atomicWrite 0600) 도입. `refreshAnthropicAccountWithLock`이 `def.refresh` 전에 intent를 durable 기록하고, 진입 시 동일 generation intent가 있으면 재전송하지 않고 신규 Claude 자격 채택 또는 recovery(needsReauth, 소스 무관)로 해소. recovery 시 intent 유지(재진입 replay 차단), ENOENT만 부재로 처리(그 외 read/parse 실패는 uncertain=fail-closed). 회귀: 연속 2회 same-generation refreshCalls=0, corrupt-sidecar refreshCalls=0(둘 다 수정 전 RED). 리뷰어 2라운드(FAIL 2건→PASS). xAI 비회귀. oauth 45 pass, tsc 0.
+
 - 위치: `src/oauth/index.ts:320` 인접 + 락 프리미티브 `src/oauth/store.ts:79-85`.
 - 트리거: Anthropic이 회전 토큰을 소모한 뒤 `mergeAccountCredential` persist 전에 프로세스 종료/120s 락 stale.
 - 영향: 이후 프로세스가 stale 락 제거 후 옛 토큰 재제출 → invalid_grant로 영구 needsReauth, 이슈 재현·no-blind-replay 위반.
