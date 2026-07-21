@@ -155,7 +155,7 @@ Update the exact overlay count after the source edit, require `google/gemini-3.6
 
 ### `tests/codex-catalog.test.ts`
 
-Build the routed catalog from the canonical direct Google registry config and assert `google/gemini-3.6-flash` exposes exactly the Codex-facing `low`, `medium`, and `high` reasoning ladder. This closes the audit concern that registry `minimal` can travel through different catalog construction paths; `minimal` is accepted as an inbound provider option but is normalized to Codex `low` for the picker.
+Build the routed catalog from the canonical direct Google registry config and assert `google/gemini-3.6-flash` exposes exactly the repository-standard Codex ladder `low`, `medium`, `high`, `max`, `ultra`. This closes the audit concern that registry `minimal` can travel through different catalog construction paths: `minimal` is normalized to Codex `low`, while the common catalog layer appends mock `max`/`ultra` tiers and the adapter's configured-effort clamp maps either back to the real wire maximum `high`.
 
 ### `tests/oauth-provider-reconcile.test.ts` (NEW)
 

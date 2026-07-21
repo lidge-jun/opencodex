@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
+import { ANTIGRAVITY_MODELS } from "../src/providers/antigravity-models";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function parsed(text = "hello world", stream = false, modelId = "gemini-3-pro"): OcxParsedRequest {
@@ -52,15 +53,39 @@ describe("antigravity CCA envelope", () => {
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
   });
 
-  test("client-visible Antigravity aliases resolve to CCA wire model ids", async () => {
+  test("exposes only Gemini 3.6 Flash tiers while hidden compatibility aliases resolve to them", async () => {
+    expect(ANTIGRAVITY_MODELS).toEqual(expect.arrayContaining([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+    ]));
+    for (const hidden of [
+      "gemini-3.5-flash-extra-low",
+      "gemini-3.5-flash-low",
+      "gemini-3.5-flash-mid",
+      "gemini-3.5-flash-high",
+      "gemini-3-flash-agent",
+      "gemini-3.6-flash-tiered",
+    ]) {
+      expect(ANTIGRAVITY_MODELS).not.toContain(hidden);
+    }
+
     for (const [alias, wire] of [
-      ["gemini-3.5-flash-mid", "gemini-3.5-flash-low"],
-      ["gemini-3.5-flash-high", "gemini-3-flash-agent"],
+      ["gemini-3.5-flash-extra-low", "gemini-3.6-flash-low"],
+      ["gemini-3.5-flash-low", "gemini-3.6-flash-medium"],
+      ["gemini-3.5-flash-mid", "gemini-3.6-flash-medium"],
+      ["gemini-3.5-flash-high", "gemini-3.6-flash-high"],
+      ["gemini-3-flash-agent", "gemini-3.6-flash-high"],
       ["gemini-3.1-pro-high", "gemini-pro-agent"],
       ["gemini-3.1-pro-preview", "gemini-pro-agent"],
     ]) {
       const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, alias));
       expect(JSON.parse(req.body).model).toBe(wire);
+    }
+
+    for (const modelId of ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
+      const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, modelId));
+      expect(JSON.parse(req.body).model).toBe(modelId);
     }
   });
 

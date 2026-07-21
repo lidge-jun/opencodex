@@ -554,8 +554,21 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.5-flash-mid");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.5-flash-high");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash-medium");
+    for (const tier of ["low", "medium", "high"]) {
+      const modelId = `gemini-3.6-flash-${tier}`;
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain(modelId);
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.[modelId]).toBe(1_048_576);
+    }
+    for (const hidden of [
+      "gemini-3.5-flash-extra-low",
+      "gemini-3.5-flash-low",
+      "gemini-3.5-flash-mid",
+      "gemini-3.5-flash-high",
+      "gemini-3-flash-agent",
+    ]) {
+      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).not.toContain(hidden);
+    }
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-pro-high");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.1-pro-high"]).toBe(1_048_576);
   });

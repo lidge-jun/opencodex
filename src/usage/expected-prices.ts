@@ -30,8 +30,7 @@ export interface ExpectedPriceOverlay {
 }
 
 const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 };
-const GEMINI_35_FLASH: Cost4 = { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 };
-const GEMINI_3_FLASH: Cost4 = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
+const GEMINI_36_FLASH: Cost4 = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
 const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0.95 };
@@ -39,7 +38,7 @@ const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38,
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
 
-const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-06-18); cacheWrite=0: storage is billed per-hour, not per-token";
+const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
@@ -58,12 +57,16 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // base model's standard rate per the official Billing FAQ).
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-low", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-extra-low", cost4: GEMINI_35_FLASH, source: `derived: gemini-3.5-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-low", cost4: GEMINI_35_FLASH, source: `derived: gemini-3.5-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-mid", cost4: GEMINI_35_FLASH, source: `derived: gemini-3.5-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3.5-flash-high", cost4: GEMINI_35_FLASH, source: `derived: gemini-3.5-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-3-flash-agent", cost4: GEMINI_3_FLASH, source: `derived: gemini-3-flash + Agent billing principle ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  // Google Vertex/Gemini API current model (verified — published table).
+  { provider: "google-antigravity", modelId: "gemini-3.6-flash-low", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.6-flash-medium", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.6-flash-high", cost4: GEMINI_36_FLASH, source: `derived: gemini-3.6-flash ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.5-flash-extra-low", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-low ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.5-flash-low", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-medium ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.5-flash-mid", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-medium ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.5-flash-high", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-high ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3-flash-agent", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-high ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
+  // Direct Google Gemini API current model (verified — published table).
+  { provider: "google", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: GEMINI_PRICING, verifiedAt: "2026-07-22", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-preview", cost4: GEMINI_31_PRO, source: GEMINI_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   // Antigravity-bundled third-party models — derived from the underlying vendor's
   // official API price (Antigravity itself bills via subscription quota).

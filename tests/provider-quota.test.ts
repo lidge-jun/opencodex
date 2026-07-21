@@ -143,8 +143,8 @@ describe("fetchProviderQuotaReports", () => {
       if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
         return new Response(JSON.stringify({
           models: {
-            "gemini-3.5-flash-low": {
-              displayName: "Gemini 3.5 Flash Low",
+            "gemini-3.6-flash-medium": {
+              displayName: "Gemini 3.6 Flash (Medium)",
               quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
             },
             "claude-sonnet-4.6": {

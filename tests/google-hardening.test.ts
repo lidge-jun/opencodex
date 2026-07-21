@@ -111,14 +111,52 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {
+    const direct = createGoogleAdapter(provider({
+      modelReasoningEfforts: {
+        "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
+        "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+      },
+    }));
+    const high = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.6-flash",
+      options: { reasoning: "high" },
+    });
+    const unset = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.6-flash",
+    });
+    const legacy = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.5-flash",
+      options: { reasoning: "medium" },
+    });
+    const antigravity = await createGoogleAdapter(antigravityProvider()).buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.6-flash-high",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(high.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+    expect(JSON.parse(unset.body).generationConfig).toBeUndefined();
+    expect(JSON.parse(legacy.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "medium" });
+    expect(JSON.parse(antigravity.body).request.generationConfig).toBeUndefined();
+  });
+
   test("publishes audited AI Studio metadata while Vertex stays frozen", () => {
     const google = PROVIDER_REGISTRY.find(entry => entry.id === "google");
     const vertex = PROVIDER_REGISTRY.find(entry => entry.id === "google-vertex");
 
     expect(google?.defaultModel).toBe("gemini-3.5-flash");
-    expect(google?.models).toEqual(["gemini-3.5-flash", "gemini-3.1-pro-preview"]);
+    expect(google?.models).toEqual(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview"]);
+    expect(google?.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
     expect(google?.modelContextWindows?.["gemini-3.5-flash"]).toBe(1_000_000);
     expect(google?.modelContextWindows?.["gemini-3.1-pro-preview"]).toBeUndefined();
+    expect(google?.modelInputModalities?.["gemini-3.6-flash"]).toEqual(["text", "image"]);
+    expect(google?.modelReasoningEfforts?.["gemini-3.6-flash"]).toEqual([
+      "minimal", "low", "medium", "high",
+    ]);
     expect(google?.modelReasoningEfforts?.["gemini-3.5-flash"]).toEqual([
       "minimal", "low", "medium", "high",
     ]);

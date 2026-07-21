@@ -15,6 +15,7 @@ import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generate
 import { clearModelCache, getStaleCached, setCached } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
+import { enrichProviderFromRegistry } from "../src/providers/derive";
 
 const originalFetch = globalThis.fetch;
 
@@ -247,6 +248,30 @@ describe("combo catalog capability intersection", () => {
     expect(exactComboCatalogSlugs({ combos: { free: { targets: [{ provider: "a", model: "m1" }] } } }))
       .toEqual(new Set(["combo/free"]));
     expect(exactComboCatalogSlugs({})).toEqual(new Set());
+  });
+});
+
+describe("Google Gemini catalog metadata", () => {
+  test("normalizes Gemini 3.6 Flash to the repository-standard Codex reasoning ladder", async () => {
+    const google = {
+      adapter: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      authMode: "key" as const,
+      liveModels: false,
+    };
+    enrichProviderFromRegistry("google", google);
+    const models = await gatherRoutedModels({
+      port: 0,
+      defaultProvider: "google",
+      providers: { google },
+    });
+    const entry = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "google/gemini-3.6-flash");
+
+    expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "max", "ultra"]);
+    expect(entry?.input_modalities).toEqual(["text", "image"]);
+    expect(entry?.context_window).toBe(1_048_576);
   });
 });
 
