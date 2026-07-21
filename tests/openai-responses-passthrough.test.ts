@@ -41,6 +41,8 @@ describe("OpenAI Responses passthrough sanitization", () => {
       { item: { type: "tool_search_call", id: "tsc_1", call_id: "call_5", execution: "client", arguments: {} }, expectedId: "tsc_1" },
       { item: { type: "web_search_call", id: "fc_wrong", status: "completed" }, expectedId: undefined },
       { item: { type: "web_search_call", id: "ws_valid", status: "completed" }, expectedId: "ws_valid" },
+      { item: { type: "agent_message", id: "msg_wrong-dialect", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: undefined },
+      { item: { type: "agent_message", id: "amsg_1", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: "amsg_1" },
     ];
     const input = cases.map(({ item }) => item);
     const request = adapter.buildRequest({

@@ -57,6 +57,7 @@ function stripInvalidItemIds(body: unknown): unknown {
 
   const validPrefixes: Record<string, string> = {
     message: "msg_",
+    agent_message: "amsg_",
     reasoning: "rs_",
     function_call: "fc_",
     custom_tool_call: "ctc_",
