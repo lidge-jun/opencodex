@@ -27,6 +27,7 @@ import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
+import { imagesEndpoint } from "../adapters/openai-responses";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -116,8 +117,8 @@ export async function handleImages(
     if (provider.headers) Object.assign(headers, provider.headers);
     headers["authorization"] = `Bearer ${apiKey}`;
     logCtx.provider = providerName;
-    // Keyed providers tolerate baseUrl with or without /v1 (mirrors openai-responses.ts).
-    url = `${provider.baseUrl.replace(/\/v1\/?$/, "")}/v1/images/${endpoint}`;
+    // Keyed providers tolerate baseUrl with any trailing version segment (e.g. /v1, /v3).
+    url = imagesEndpoint(provider.baseUrl, endpoint);
   } else {
     return formatErrorResponse(
       401,

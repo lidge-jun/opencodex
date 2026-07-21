@@ -25,6 +25,61 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
+/**
+ * Strip a trailing version segment (e.g. "/v1", "/v3", "/api/v3") from the base URL and
+ * return the base without the trailing slash and the matched version segment separately.
+ *
+ * Some providers (notably Volcengine Ark) use a baseUrl ending in a version segment other
+ * than "/v1" (e.g. "/api/plan/v3"). The old code only stripped "/v1" via a narrow regex,
+ * so Ark's "/v3" survived and downstream code appended "/v1/responses", producing a
+ * non-existent "/v3/v1/responses" path (404). This function detects any trailing "/vN"
+ * so callers can build the correct versioned path.
+ *
+ * Returns `{ base, version }` where `version` is the matched segment without the leading
+ * slash (e.g. "v1", "v3") or `null` when no trailing version segment is present.
+ */
+export function stripVersionSegment(baseUrl: string): { base: string; version: string | null } {
+  const m = baseUrl.match(/\/(v\d+)\/?$/);
+  if (m) {
+    return { base: baseUrl.slice(0, baseUrl.length - m[0].length), version: m[1] };
+  }
+  return { base: baseUrl.replace(/\/$/, ""), version: null };
+}
+
+/**
+ * Build the Responses API endpoint URL from a provider baseUrl.
+ *
+ * When the baseUrl ends with a version segment ("/v1", "/v3", etc.) that segment is
+ * preserved and "/responses" is appended directly (e.g. "/api/plan/v3" ->
+ * "/api/plan/v3/responses"). This fixes providers like Volcengine Ark whose baseUrl
+ * ends in "/v3" instead of "/v1".
+ *
+ * When no version segment is present (e.g. a bare proxy URL) the legacy fallback
+ * "/v1/responses" is appended to preserve backward compatibility.
+ */
+export function responsesEndpoint(baseUrl: string): string {
+  const { base, version } = stripVersionSegment(baseUrl);
+  return version ? `${base}/${version}/responses` : `${base}/v1/responses`;
+}
+
+/**
+ * Build the Images API endpoint URL from a provider baseUrl and image endpoint name
+ * ("generations" or "edits"). Same version-segment-aware logic as {@link responsesEndpoint}.
+ */
+export function imagesEndpoint(baseUrl: string, endpoint: string): string {
+  const { base, version } = stripVersionSegment(baseUrl);
+  return version ? `${base}/${version}/images/${endpoint}` : `${base}/v1/images/${endpoint}`;
+}
+
+/**
+ * Build the Responses compact endpoint URL from a provider baseUrl. Same version-segment-aware
+ * logic as {@link responsesEndpoint} but appends "/responses/compact" instead of "/responses".
+ */
+export function compactEndpoint(baseUrl: string): string {
+  const { base, version } = stripVersionSegment(baseUrl);
+  return version ? `${base}/${version}/responses/compact` : `${base}/v1/responses/compact`;
+}
+
 function sanitizeReasoningInputContent(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -439,8 +494,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
       } else {
-        const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-        url = `${base}/v1/responses`;
+        url = responsesEndpoint(provider.baseUrl);
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }
