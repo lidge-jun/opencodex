@@ -3,6 +3,7 @@
 - 소스 RCA: `004_rca_o_oauth_persistence_manual_code.md` O-2 절 (리뷰어 검증 완료)
 - 위험도: 높음/C4 (인증 코드를 받는 신규 API 표면) — 020(Anthropic 지속성)과 별도 위협 모델이라 분리된 단위.
 - 선행 조건: 없음.
+- **구현 완료 (2026-07-22)**: auth-api.ts:766 `POST /api/codex-auth/login/code`(pending flowId 결속 + 4096자 제한 + `submitManualLoginCode("chatgpt")` 위임, 자체 교환 없음); AddCodexAccountModal.tsx 수동 붙여넣기 입력(autoComplete off, 제출/취소/만료/unmount 시 클리어, Enter 제출); 붙여넣은 값 무로깅, chatgpt는 isPublicOAuthProvider 제외 유지, raw-import 403 게이트(:141) 불변; 기존 prov.paste* i18n 재사용. 검증: codex-auth-api+oauth-manual-code 72 pass, `bun x tsc --noEmit` exit 0. 커밋: WP-impl-5.
 
 ## 목표와 비목표
 

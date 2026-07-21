@@ -763,6 +763,24 @@ export async function handleCodexAuthAPI(
     }
   }
 
+  if (url.pathname === "/api/codex-auth/login/code" && req.method === "POST") {
+    const body = (await req.json().catch(() => ({}))) as { flowId?: unknown; input?: unknown };
+    const flowId = typeof body.flowId === "string" ? body.flowId.trim() : "";
+    const input = typeof body.input === "string" ? body.input : "";
+    if (!flowId) return jsonResponse({ error: "flowId required" }, 400);
+    if (input.length > 4096) return jsonResponse({ error: "input too long" }, 400);
+
+    // Import may yield; validate afterwards so cancel/replace cannot race a stale flow through.
+    const { submitManualLoginCode } = await import("../oauth");
+    const flow = codexAuthLoginState.get(flowId);
+    if (!flow) return jsonResponse({ error: "login flow expired or unknown" }, 400);
+    if (flow.status !== "pending") return jsonResponse({ error: "login flow is not pending" }, 400);
+
+    const result = submitManualLoginCode("chatgpt", input);
+    if (!result.ok) return jsonResponse({ error: result.error }, 400);
+    return jsonResponse({ ok: true }, 202);
+  }
+
   if (url.pathname === "/api/codex-auth/login/cancel" && req.method === "POST") {
     const body = (await req.json().catch(() => ({}))) as { flowId?: string };
     const { cancelLoginFlow } = await import("../oauth");

@@ -806,6 +806,131 @@ describe("codex-auth API", () => {
     expect(data).toMatchObject({ status: "error", error: "Login cancelled" });
   });
 
+  describe("POST /api/codex-auth/login/code", () => {
+    async function startPendingFlow() {
+      const oauth = await import("../src/oauth");
+      const openUrlMod = await import("../src/lib/open-url");
+      const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "https://example.test/oauth" });
+      const statusSpy = spyOn(oauth, "getLoginStatus").mockReturnValue({
+        done: false,
+        loggedIn: false,
+      } as ReturnType<typeof oauth.getLoginStatus>);
+      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+      const req = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const data = await resp!.json() as { flowId: string };
+      return {
+        flowId: data.flowId,
+        oauth,
+        async cleanup() {
+          const cancelReq = new Request("http://localhost/api/codex-auth/login/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ flowId: data.flowId }),
+          });
+          await handleCodexAuthAPI(cancelReq, new URL(cancelReq.url), makeConfig());
+          startSpy.mockRestore();
+          statusSpy.mockRestore();
+          openSpy.mockRestore();
+        },
+      };
+    }
+
+    function codeRequest(body: Record<string, unknown>): Request {
+      return new Request("http://localhost/api/codex-auth/login/code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    test("accepts a manual code only for the pending flow without reflecting it", async () => {
+      const flow = await startPendingFlow();
+      const pasted = "http://localhost:1455/auth/callback?code=secret-code&state=expected";
+      const submitSpy = spyOn(flow.oauth, "submitManualLoginCode").mockReturnValue({ ok: true });
+      try {
+        const req = codeRequest({ flowId: flow.flowId, input: pasted });
+        const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+        expect(resp!.status).toBe(202);
+        const responseText = await resp!.text();
+        expect(JSON.parse(responseText)).toEqual({ ok: true });
+        expect(submitSpy).toHaveBeenCalledTimes(1);
+        expect(submitSpy).toHaveBeenCalledWith("chatgpt", pasted);
+        expect(responseText).not.toContain(pasted);
+      } finally {
+        submitSpy.mockRestore();
+        await flow.cleanup();
+      }
+    });
+
+    test("rejects missing and unknown flow ids before submitting", async () => {
+      const oauth = await import("../src/oauth");
+      const submitSpy = spyOn(oauth, "submitManualLoginCode");
+      try {
+        for (const body of [{ input: "code" }, { flowId: "", input: "code" }, { flowId: "unknown", input: "code" }]) {
+          const req = codeRequest(body);
+          const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+          expect(resp!.status).toBe(400);
+        }
+        expect(submitSpy).not.toHaveBeenCalled();
+      } finally {
+        submitSpy.mockRestore();
+      }
+    });
+
+    test("rejects expired or mismatched non-pending flow ids", async () => {
+      const flow = await startPendingFlow();
+      const submitSpy = spyOn(flow.oauth, "submitManualLoginCode");
+      await flow.cleanup();
+      try {
+        for (const flowId of [flow.flowId, `${flow.flowId}-mismatch`]) {
+          const req = codeRequest({ flowId, input: "code" });
+          const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+          expect(resp!.status).toBe(400);
+        }
+        expect(submitSpy).not.toHaveBeenCalled();
+      } finally {
+        submitSpy.mockRestore();
+      }
+    });
+
+    test("rejects empty input and no shared login in progress", async () => {
+      const flow = await startPendingFlow();
+      try {
+        for (const input of ["", "   ", "raw-code"]) {
+          const req = codeRequest({ flowId: flow.flowId, input });
+          const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+          expect(resp!.status).toBe(400);
+        }
+      } finally {
+        await flow.cleanup();
+      }
+    });
+
+    test("rejects input over 4096 characters and allows the 4096 boundary to reach shared validation", async () => {
+      const flow = await startPendingFlow();
+      const submitSpy = spyOn(flow.oauth, "submitManualLoginCode").mockReturnValue({ ok: true });
+      try {
+        const oversizedReq = codeRequest({ flowId: flow.flowId, input: "x".repeat(4097) });
+        const oversizedResp = await handleCodexAuthAPI(oversizedReq, new URL(oversizedReq.url), makeConfig());
+        expect(oversizedResp!.status).toBe(400);
+        expect(submitSpy).not.toHaveBeenCalled();
+
+        const boundaryReq = codeRequest({ flowId: flow.flowId, input: "x".repeat(4096) });
+        const boundaryResp = await handleCodexAuthAPI(boundaryReq, new URL(boundaryReq.url), makeConfig());
+        expect(boundaryResp!.status).toBe(202);
+        expect(submitSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        submitSpy.mockRestore();
+        await flow.cleanup();
+      }
+    });
+  });
+
   test("GET /api/codex-auth/login-status recovers done when a persisted account exists", async () => {
     saveCodexAccountCredential("pool-login-recovery", {
       accessToken: "tok",
