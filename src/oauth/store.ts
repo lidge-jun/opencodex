@@ -262,6 +262,9 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
     if (!set || SINGLE_SLOT_PROVIDERS.has(provider)) {
       const id = newAccountId(safe);
       store[provider] = { activeAccountId: id, accounts: [{ id, credential: safe, addedAt: Date.now() }] };
+      // Clear any stale marker for this deterministic id (same identity re-logging in after
+      // the provider's store was wiped, or a same-process re-add after removal).
+      inMemoryNeedsReauth.delete(needsReauthKey(provider, id));
       return;
     }
     if (identity) {
@@ -286,6 +289,11 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
       return;
+      // Clear any stale in-memory marker that might have been left by a previous
+      // process run (same deterministic id, same human re-logging in after the old
+      // provider set was wiped from this process's perspective).
+      inMemoryNeedsReauth.delete(needsReauthKey(provider, id));
+      return;
     }
     // No identity: replace the active slot in place (single-account semantics).
     const active = set.accounts.find(a => a.id === set.activeAccountId);
@@ -296,6 +304,7 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
       const id = newAccountId(safe);
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
+      inMemoryNeedsReauth.delete(needsReauthKey(provider, id));
     }
   });
 }
@@ -385,11 +394,42 @@ export async function removeAccount(provider: string, accountId: string): Promis
 export function markAccountNeedsReauth(provider: string, accountId: string, needsReauth: boolean): void {
   // Update in-memory marker (survives until process exit or credential save).
   const key = needsReauthKey(provider, accountId);
-  if (needsReauth) inMemoryNeedsReauth.add(key);
+  if (needsReauth) {
+    // Guard against marking a stale/non-existent account: if the account no longer
+    // exists in the store (e.g. removed or re-added under the same deterministic id
+    // in the same process), the marker would survive and overlay the fresh login.
+    const exists = loadAuthStore()[provider]?.accounts.some(a => a.id === accountId) ?? false;
+    if (exists) inMemoryNeedsReauth.add(key);
+  }
   else inMemoryNeedsReauth.delete(key);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;inMemoryNeedsReauth.delete(needsReauthKey(provider,accountId));return{superseded:false};});}
+export async function mergeAccountCredential(
+  provider: string,
+  accountId: string,
+  credential: OAuthCredentials,
+  opts: { expectedGeneration?: string; afterPrePersistRead?: () => void | Promise<void> } = {},
+): Promise<{ superseded: false } | { superseded: true; stored: OAuthCredentials }> {
+  const safe = normalizeCredential(credential);
+  if (!safe) throw new Error("Refusing to persist invalid OAuth credential");
+  // Keep the marker-clear outside the mutateStore callback so it only runs after the
+  // credential has been successfully persisted to disk. If persist() throws, the marker
+  // stays intact and the account remains blocked — which is the safe failure mode.
+  const result = await mutateStore(async store => {
+    await opts.afterPrePersistRead?.();
+    const account = store[provider]?.accounts.find(x => x.id === accountId);
+    if (!account) throw new Error(`OAuth account disappeared before persist: ${provider}`);
+    if (opts.expectedGeneration !== undefined && credentialGeneration(account.credential) !== opts.expectedGeneration)
+      return { superseded: true, stored: account.credential };
+    account.credential = safe;
+    return { superseded: false } as { superseded: false };
+  });
+  // Only clear the marker once the disk write has committed (mutateStore resolved without throwing).
+  if (!result.superseded) {
+    inMemoryNeedsReauth.delete(needsReauthKey(provider, accountId));
+  }
+  return result;
+}
 export function markAccountNeedsReauthIfGeneration(provider: string, accountId: string, generation: string): boolean {
   // Read the current credential generation without mutateStore: we only need to compare
   // the generation to guard against a concurrent rotation replacing the credential between
