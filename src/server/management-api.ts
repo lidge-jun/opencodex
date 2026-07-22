@@ -517,11 +517,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return jsonResponse({ ...tunnelPayload(), error: "Cloudflare setup is already in progress." }, 409);
     }
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
-    const unknownField = Object.keys(raw).find(field => field !== "enabled");
+    const unknownField = Object.keys(raw).find(field => field !== "enabled" && field !== "mode");
     if (unknownField) return jsonResponse({ error: `unknown field: ${unknownField}` }, 400);
-    const body = raw as { enabled?: unknown };
+    const body = raw as { enabled?: unknown; mode?: unknown };
     if (typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "enabled boolean is required" }, 400);
+    }
+    if (body.mode !== undefined && body.mode !== "quick" && body.mode !== "named") {
+      return jsonResponse({ error: "mode must be quick or named" }, 400);
     }
     if (body.enabled && !hasAdmissionSecret) {
       return jsonResponse({
@@ -529,7 +532,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         error: "Create an opencodex API key before enabling public access.",
       }, 409);
     }
-    if (body.enabled && !tunnelSetup.configured) {
+    const requestedQuick = body.enabled && body.mode === "quick";
+    if (body.enabled && !requestedQuick && !tunnelSetup.configured) {
       return jsonResponse({
         ...tunnelPayload(),
         error: "Configure a Named Cloudflare Tunnel before enabling public access.",
@@ -544,6 +548,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     };
 
     if (body.enabled) {
+      if (requestedQuick) {
+        config.cloudflareTunnel = {
+          ...config.cloudflareTunnel,
+          enabled: false,
+          mode: "quick",
+        };
+        tunnelSetup = resolveCloudflareTunnelSetup(config);
+      }
       const actualPort = deps.listenPort ?? config.port ?? 10100;
       try {
         await tunnelController.start({

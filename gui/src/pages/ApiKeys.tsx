@@ -5,6 +5,7 @@ import { apiErrorMessage } from "../api-error";
 import {
   STOPPED_CLOUDFLARE_TUNNEL,
   buildCloudflareTunnelSetupRequest,
+  buildCloudflareTunnelToggleRequest,
   canReconfigureTunnel,
   canToggleTunnel,
   endpointFromApiPayload,
@@ -156,8 +157,8 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     setTunnelSetupOpen(true);
   };
 
-  const handleTunnelToggle = async () => {
-    if (shouldOpenTunnelSetup(tunnel)) {
+  const handleTunnelToggle = async (mode?: "quick" | "named") => {
+    if (!mode && shouldOpenTunnelSetup(tunnel)) {
       openTunnelSetup();
       return;
     }
@@ -177,7 +178,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/cloudflare-tunnel`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify(buildCloudflareTunnelToggleRequest(enabled, mode)),
       });
       if (!res.ok) {
         setTunnel(previousTunnel);
@@ -280,6 +281,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const tunnelEnabled = isTunnelEnabled(tunnel);
   const tunnelNeedsSetup = shouldOpenTunnelSetup(tunnel);
   const tunnelCanProceed = tunnelNeedsSetup ? tunnel.canConfigure : tunnel.canEnable;
+  const tunnelCanUseQuick = !tunnelEnabled && (tunnel.canEnable || tunnel.canConfigure) && tunnel.configurationSource !== "environment";
   const tunnelBusy = tunnelRequestPending || isTunnelTransitioning(tunnel.status);
   const tunnelError = tunnelRequestError ?? tunnel.error;
   const tunnelButtonLabel = tunnel.status === "starting"
@@ -366,15 +368,30 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
             <button
               type="button"
               className={`btn ${tunnelEnabled ? "btn-ghost" : "btn-primary"}`}
-              onClick={handleTunnelToggle}
+              onClick={() => handleTunnelToggle()}
               disabled={!canToggleTunnel(tunnel, tunnelRequestPending)}
               aria-busy={tunnelBusy}
             >
               {tunnelBusy ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
               {tunnelButtonLabel}
             </button>
+            {tunnelCanUseQuick && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => handleTunnelToggle("quick")}
+                disabled={tunnelBusy || tunnelRequestPending}
+                aria-busy={tunnelBusy}
+              >
+                {tunnelBusy ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
+                {t("api.tunnelUseQuick")}
+              </button>
+            )}
           </div>
         </div>
+        {tunnelCanUseQuick && (
+          <p className="muted small api-tunnel-quick-note">{t("api.tunnelQuickNote")}</p>
+        )}
         {tunnelError && (
           <div className="notice notice-err api-tunnel-error" role="alert">
             <IconAlert /> <span>{tunnelError}</span>

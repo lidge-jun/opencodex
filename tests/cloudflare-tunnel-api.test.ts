@@ -106,6 +106,18 @@ describe("Cloudflare tunnel management API", () => {
     });
     expect(unknownResponse?.status).toBe(400);
     expect(await unknownResponse?.json()).toEqual({ error: "unknown field: token" });
+
+    const badModeReq = request("/api/cloudflare-tunnel", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, mode: "warp" }),
+    });
+    const badModeResponse = await handleManagementAPI(badModeReq, new URL(badModeReq.url), cfg, {
+      cloudflareTunnel: controller,
+      listenPort: 54321,
+    });
+    expect(badModeResponse?.status).toBe(400);
+    expect(await badModeResponse?.json()).toEqual({ error: "mode must be quick or named" });
   });
 
   test("uses the live listener port and swaps the API endpoint only while running", async () => {
@@ -250,6 +262,61 @@ describe("Cloudflare tunnel management API", () => {
       endpoint: "https://env-token.trycloudflare.com/v1/responses",
     });
     expect(starts).toBe(1);
+  });
+
+  test("allows Quick Tunnel as an explicit one-click option even before Named setup", async () => {
+    let status = stoppedStatus();
+    const starts: unknown[] = [];
+    const controller = {
+      getStatus: () => status,
+      start: async (options: unknown) => {
+        starts.push(options);
+        status = {
+          status: "running",
+          mode: "quick",
+          publicUrl: "https://debug.trycloudflare.com",
+          supportsSse: false,
+        };
+        return status;
+      },
+      stop: async () => stoppedStatus(),
+    } as unknown as CloudflareTunnelController;
+    const cfg = {
+      ...config(),
+      cloudflareTunnel: { enabled: false, mode: "named" as const },
+    };
+    const deps = { cloudflareTunnel: controller, listenPort: 54321 };
+
+    const namedReq = request("/api/cloudflare-tunnel", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const namedResponse = await handleManagementAPI(namedReq, new URL(namedReq.url), cfg, deps);
+    expect(namedResponse?.status).toBe(409);
+    expect(starts).toEqual([]);
+
+    const quickReq = request("/api/cloudflare-tunnel", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, mode: "quick" }),
+    });
+    const quickResponse = await handleManagementAPI(quickReq, new URL(quickReq.url), cfg, deps);
+    expect(quickResponse?.status).toBe(200);
+    expect(await quickResponse?.json()).toMatchObject({
+      status: "running",
+      mode: "quick",
+      supportsSse: false,
+      endpoint: "https://debug.trycloudflare.com/v1/responses",
+    });
+    expect(starts).toEqual([{
+      originUrl: "http://127.0.0.1:54321",
+      actualPort: 54321,
+      configuredPort: 10100,
+      mode: "quick",
+    }]);
+    expect(cfg.cloudflareTunnel?.mode).toBe("quick");
+    expect(cfg.cloudflareTunnel?.enabled).toBe(true);
   });
 
   test("returns sanitized controller failures without replacing the local endpoint", async () => {

@@ -584,6 +584,8 @@ export const de = {
   "api.tunnelRequestFailed": "Der öffentliche Cloudflare-Zugriff konnte nicht aktualisiert werden. Prüfe, ob der Proxy läuft, und versuche es erneut.",
   "api.tunnelConfigure": "Öffentlichen Zugriff einrichten",
   "api.tunnelReconfigure": "Neu konfigurieren",
+  "api.tunnelUseQuick": "Quick Tunnel verwenden",
+  "api.tunnelQuickNote": "Quick Tunnel ist eine temporäre Debugging-Option: keine Cloudflare-Einrichtung nötig, aber die Adresse ändert sich und SSE wird nicht unterstützt. Für produktiven öffentlichen API-Zugriff Named Tunnel verwenden.",
   "api.tunnelPublicUrl": "Öffentliche URL:",
   "api.tunnelOriginUrl": "Lokaler Ursprung:",
   "api.tunnelSetupTitle": "Named Tunnel einrichten",

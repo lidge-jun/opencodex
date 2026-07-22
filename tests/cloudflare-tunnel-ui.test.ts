@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   STOPPED_CLOUDFLARE_TUNNEL,
   buildCloudflareTunnelSetupRequest,
+  buildCloudflareTunnelToggleRequest,
   canReconfigureTunnel,
   canToggleTunnel,
   endpointFromApiPayload,
@@ -180,6 +181,16 @@ describe("Cloudflare tunnel UI state", () => {
       publicUrl: "https://api.example.com",
       tunnelToken: "cloudflared service install eyToken",
       enable: true,
+    });
+  });
+
+  test("builds a one-click Quick Tunnel enable request as an explicit mode", () => {
+    expect(buildCloudflareTunnelToggleRequest(true, "quick")).toEqual({
+      enabled: true,
+      mode: "quick",
+    });
+    expect(buildCloudflareTunnelToggleRequest(false, "quick")).toEqual({
+      enabled: false,
     });
   });
 

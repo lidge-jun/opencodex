@@ -886,6 +886,8 @@ export const ru: Record<TKey, string> = {
   "api.tunnelRequestFailed": "Не удалось обновить публичный доступ Cloudflare. Убедитесь, что прокси запущен, и повторите попытку.",
   "api.tunnelConfigure": "Настроить публичный доступ",
   "api.tunnelReconfigure": "Перенастроить",
+  "api.tunnelUseQuick": "Использовать Quick Tunnel",
+  "api.tunnelQuickNote": "Quick Tunnel — временный вариант для отладки: настройка Cloudflare не нужна, но адрес меняется и SSE не поддерживается. Для рабочего публичного API используйте Named Tunnel.",
   "api.tunnelPublicUrl": "Публичный URL:",
   "api.tunnelOriginUrl": "Локальный источник:",
   "api.tunnelSetupTitle": "Настройка Named Tunnel",

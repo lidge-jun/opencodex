@@ -604,6 +604,8 @@ export const zh: Record<TKey, string> = {
   "api.tunnelRequestFailed": "无法更新 Cloudflare 公网访问状态。请确认代理正在运行后重试。",
   "api.tunnelConfigure": "配置公网访问",
   "api.tunnelReconfigure": "重新配置",
+  "api.tunnelUseQuick": "使用 Quick Tunnel",
+  "api.tunnelQuickNote": "Quick Tunnel 是临时调试选项：不需要 Cloudflare 配置，但地址会变化且不支持 SSE；正式公网 API 请使用 Named Tunnel。",
   "api.tunnelPublicUrl": "公网地址：",
   "api.tunnelOriginUrl": "本地源站：",
   "api.tunnelSetupTitle": "配置 Named Tunnel",

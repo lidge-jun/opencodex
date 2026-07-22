@@ -54,6 +54,11 @@ export type CloudflareTunnelSetupRequest =
   | ({ method: "api"; enable: true } & CloudflareTunnelApiSetupInput)
   | ({ method: "token"; enable: true } & CloudflareTunnelTokenSetupInput);
 
+export interface CloudflareTunnelToggleRequest {
+  enabled: boolean;
+  mode?: CloudflareTunnelMode;
+}
+
 const STATUSES = new Set<CloudflareTunnelStatus>(["stopped", "starting", "running", "stopping", "error"]);
 const MODES = new Set<CloudflareTunnelMode>(["quick", "named"]);
 
@@ -176,6 +181,16 @@ export function buildCloudflareTunnelSetupRequest(
     publicUrl: token.publicUrl.trim(),
     tunnelToken: token.tunnelToken.trim(),
     enable: true,
+  };
+}
+
+export function buildCloudflareTunnelToggleRequest(
+  enabled: boolean,
+  mode?: CloudflareTunnelMode,
+): CloudflareTunnelToggleRequest {
+  return {
+    enabled,
+    ...(enabled && mode ? { mode } : {}),
   };
 }
 

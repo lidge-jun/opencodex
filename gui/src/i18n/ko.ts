@@ -604,6 +604,8 @@ export const ko: Record<TKey, string> = {
   "api.tunnelRequestFailed": "Cloudflare 공개 액세스 상태를 변경하지 못했습니다. 프록시가 실행 중인지 확인한 뒤 다시 시도하세요.",
   "api.tunnelConfigure": "공개 액세스 구성",
   "api.tunnelReconfigure": "다시 구성",
+  "api.tunnelUseQuick": "Quick Tunnel 사용",
+  "api.tunnelQuickNote": "Quick Tunnel은 임시 디버깅 옵션입니다. Cloudflare 설정은 필요 없지만 주소가 바뀌며 SSE를 지원하지 않습니다. 운영용 공개 API에는 Named Tunnel을 사용하세요.",
   "api.tunnelPublicUrl": "공개 URL:",
   "api.tunnelOriginUrl": "로컬 원본:",
   "api.tunnelSetupTitle": "Named Tunnel 설정",
