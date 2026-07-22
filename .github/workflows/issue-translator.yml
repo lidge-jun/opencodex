@@ -90,8 +90,12 @@ jobs:
               return;
             }
 
-            const title = (typeof parsed.translated_title === 'string'
-              ? parsed.translated_title.trim() : '').slice(0, 256); // GitHub title limit
+            // Slice at 256 chars but avoid splitting a UTF-16 surrogate pair (e.g. emoji)
+            const rawTitle = typeof parsed.translated_title === 'string'
+              ? parsed.translated_title.trim() : '';
+            const title = rawTitle.length <= 256
+              ? rawTitle
+              : rawTitle.slice(0, rawTitle[255] >= '\uD800' && rawTitle[255] <= '\uDBFF' ? 255 : 256);
             const body  = typeof parsed.translated_body  === 'string'
               ? parsed.translated_body.trim()  : '';
             const lang  = typeof parsed.detected_language === 'string'
@@ -122,7 +126,7 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100,
             });
-            if (comments.some(c => c.body?.includes(MARKER))) {
+            if (comments.some(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(MARKER))) {
               core.info('Translation comment already exists.');
               return;
             }
