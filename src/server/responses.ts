@@ -58,6 +58,7 @@ import {
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "./request-decompress";
@@ -311,6 +312,61 @@ function looksLikeBackendCiphertext(payload: string): boolean {
  * decryptable (backend) nor readable (model) as a whole.
  */
 const FERNET_TOKEN_RUN = /gAAAA[A-Za-z0-9_-]{60,}={0,2}/g;
+const FERNET_TOKEN_EXACT = /^gAAAA[A-Za-z0-9_-]{60,}={0,2}$/;
+
+/**
+ * V2 agent messages carry a readable routing envelope before the actual task. The
+ * envelope alone is not useful to a routed provider when the task remains a ChatGPT-
+ * backend Fernet token. Keep arbitrary plaintext (including payload text on the same
+ * line) readable; only strip the exact envelope form emitted by codex-rs.
+ */
+function readableAgentMessagePayload(content: unknown): string {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+        .flatMap(part => {
+          if (!part || typeof part !== "object") return [];
+          const record = part as { type?: unknown; text?: unknown };
+          return (
+            (record.type === "input_text" || record.type === "text" || record.type === "output_text")
+            && typeof record.text === "string"
+          ) ? [record.text] : [];
+        })
+        .join("\n")
+      : "";
+  if (!text.trim()) return "";
+
+  const envelopeStart = text.search(/(?:^|\n)Message Type\s*:/i);
+  if (envelopeStart >= 0) {
+    const marker = /(?:^|\n)Payload\s*:\s*(?:\n|$)/i.exec(text.slice(envelopeStart));
+    if (marker) return text.slice(envelopeStart + marker.index + marker[0].length).trim();
+  }
+  return text.trim();
+}
+
+/**
+ * True only for a V2 `agent_message` whose task contains a real backend-minted
+ * Fernet token but no provider-readable payload. Restricting inspection to the
+ * agent-message content means opaque reasoning signatures and compaction blobs are
+ * never mistaken for worker tasks.
+ */
+export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  return input.some(item => {
+    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "agent_message") {
+      return false;
+    }
+    const content = (item as { content?: unknown }).content;
+    const hasFernetTask = Array.isArray(content) && content.some(part => (
+      part && typeof part === "object"
+      && (part as { type?: unknown }).type === "encrypted_content"
+      && typeof (part as { encrypted_content?: unknown }).encrypted_content === "string"
+      && FERNET_TOKEN_EXACT.test((part as { encrypted_content: string }).encrypted_content)
+    ));
+    return hasFernetTask && readableAgentMessagePayload(content).length === 0;
+  });
+}
 
 /**
  * Split a non-ciphertext encrypted slot into ordered parts: prose becomes input_text,
@@ -864,6 +920,21 @@ export async function handleResponses(
       return comboUnavailableResponse(err.message);
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+
+  // ChatGPT can decrypt backend-minted V2 task tokens; external routed providers
+  // cannot. Stop before auth resolution, adapter construction, or network dispatch so
+  // a deterministic delivery mismatch cannot become a retry/provider-cost storm. The
+  // response deliberately contains no ciphertext or request-derived text.
+  const nativeChatGptRoute = isCanonicalOpenAiForwardProvider(route.provider);
+  if (!nativeChatGptRoute && hasUnreadableEncryptedAgentTask(
+    (body as { input?: unknown } | undefined)?.input,
+  )) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "Routed V2 worker task is encrypted for the native ChatGPT backend and cannot be read by the selected provider. Use plaintext V2 agent-message delivery or select a native ChatGPT model.",
+    );
   }
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace
