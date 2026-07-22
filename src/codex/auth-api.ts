@@ -591,7 +591,7 @@ export async function handleCodexAuthAPI(
       // The GUI's window.open is popup-blocked because it runs after an await, not a direct click.
       if (result.url) {
         const { openUrl } = await import("../lib/open-url");
-        openUrl(result.url);
+        setTimeout(() => openUrl(result.url), 1000);
       }
 
       (async () => {
@@ -599,7 +599,7 @@ export async function handleCodexAuthAPI(
         for (let i = 0; i < 150; i++) {
           await new Promise(r => setTimeout(r, 2000));
           const st = getLoginStatus("chatgpt");
-          if (st.done && st.loggedIn) {
+          if (st?.done && st?.loggedIn) {
             const { getCredential } = await import("../oauth/store");
             const cred = getCredential("chatgpt");
             if (cred) {

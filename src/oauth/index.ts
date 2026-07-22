@@ -695,7 +695,7 @@ export function cancelLoginFlow(provider: string): boolean {
   return true;
 }
 
-export async function startLoginFlow(provider: string, opts?: LoginOpts): Promise<{ url: string; instructions?: string }> {
+export async function startLoginFlow(provider: string, opts?: LoginOpts): Promise<{ url: string; instructions?: string; userCode?: string }> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const existing = loginState.get(provider);
@@ -709,9 +709,10 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
   return new Promise((resolve, reject) => {
     let urlResolved = false;
     const ctrl: OAuthController = {
-      onAuth: ({ url, instructions }) => {
+      onAuth: ({ url, instructions, userCode }) => {
         urlResolved = true;
-        resolve({ url, instructions });
+        const text = userCode ? `[Device Code: ${userCode}] ${instructions ?? `Enter code: ${userCode}`}` : instructions;
+        resolve({ url, instructions: text, userCode });
       },
       onProgress: () => {},
       // GUI fallback when the browser cannot hit the loopback callback server.

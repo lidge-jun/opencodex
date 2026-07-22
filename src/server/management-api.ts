@@ -1375,18 +1375,22 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         }
       }
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
-      const { url: authUrl, instructions } = await startLoginFlow(provider, {
+      const { url: authUrl, instructions, userCode } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
       });
       upsertOAuthProvider(config, provider); // mutate LIVE config — routing sees it without restart
       if (authUrl) {
-        // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
-        // window.open is popup-blocked because it runs after an await, not a direct click.
+        // Open the browser server-side (the proxy runs on the user's machine).
+        // Delay 1 second for device flow (github-copilot) so the UI displays the 8-digit code first.
         const { openUrl } = await import("../lib/open-url");
-        openUrl(authUrl);
+        if (userCode || provider === "github-copilot") {
+          setTimeout(() => openUrl(authUrl), 1000);
+        } else {
+          openUrl(authUrl);
+        }
       }
-      return jsonResponse({ url: authUrl, instructions });
+      return jsonResponse({ url: authUrl, instructions, ...(userCode ? { userCode } : {}) });
     } catch (err) {
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
     }

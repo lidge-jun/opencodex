@@ -34,7 +34,7 @@ export interface ProviderAccountSet {
 }
 
 export interface OAuthController {
-  onAuth?(info: { url: string; instructions?: string }): void;
+  onAuth?(info: { url: string; instructions?: string; userCode?: string }): void;
   onProgress?(message: string): void;
   onManualCodeInput?(expectedState?: string): Promise<string>;
   signal?: AbortSignal;

@@ -46,10 +46,24 @@ async function handleOAuthLogin(name: string): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     await runLogin(name, {
-      onAuth: ({ url, instructions }) => {
+      onAuth: ({ url, instructions, userCode }) => {
         console.log(`\n🔐 Opening browser for ${name} login...\n${url}\n`);
-        if (instructions) console.log(instructions);
-        openUrl(url);
+        if (userCode) {
+          console.log(`┌────────────────────────────────────────────────────────┐`);
+          console.log(`│  🔑 YOUR 8-DIGIT DEVICE CODE / 8位设备验证码:          │`);
+          console.log(`│                                                        │`);
+          console.log(`│           👉   ${userCode.padEnd(12)}   👈                 │`);
+          console.log(`│                                                        │`);
+          console.log(`│  (Paste this code in the browser tab to authenticate)  │`);
+          console.log(`└────────────────────────────────────────────────────────┘\n`);
+        } else if (instructions) {
+          console.log(instructions);
+        }
+        if (userCode || name === "github-copilot") {
+          setTimeout(() => openUrl(url), 1000);
+        } else {
+          openUrl(url);
+        }
       },
       onProgress: (m) => console.log(`   ${m}`),
       onManualCodeInput: () =>

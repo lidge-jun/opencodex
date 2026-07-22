@@ -34,6 +34,26 @@ function resolvedOpenAiAccountMode(provider: Config["providers"][string]): OpenA
   return provider.codexAccountMode === "direct" ? "direct" : "pool";
 }
 
+function openInBackgroundTab(url: string) {
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent || "");
+    const evt = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      metaKey: isMac,
+      ctrlKey: !isMac,
+    });
+    a.dispatchEvent(evt);
+  } catch {
+    window.open(url, "_blank");
+  }
+}
+
 // Friendly labels for the OAuth providers the proxy supports.
 const OAUTH_LABELS: Record<string, string> = {
   xai: "xAI (Grok)",
@@ -58,8 +78,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
-  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string } | null>(null);
+  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; userCode?: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -566,7 +587,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const data = await res.json();
       if (oauthLoginGenerationRef.current.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
-      if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
+      if (data.url || data.instructions || data.userCode) setLoginInfo({ provider, url: data.url, instructions: data.instructions, userCode: data.userCode });
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       // Poll until the loopback callback (or device flow / manual paste) completes.
       // Prefer s.done so cancel/timeout/error clear "waiting for browser" instead of hanging.
@@ -1067,10 +1088,50 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </button>
                   )}
                 </span>
-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
+                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || loginInfo.userCode || isBusy) && (
                   <span className="oauth-login-hint muted">
+                    {loginInfo.userCode && (
+                      <div className="device-code-banner" style={{
+                        background: "rgba(59, 130, 246, 0.12)",
+                        border: "1.5px solid var(--accent, #3b82f6)",
+                        borderRadius: "8px",
+                        padding: "10px 14px",
+                        margin: "8px 0",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "6px",
+                        alignItems: "center",
+                        width: "100%",
+                      }}>
+                        <div style={{ fontSize: "12px", opacity: 0.9, fontWeight: 500 }}>🔑 GitHub Device Code / 设备验证码</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <strong style={{ fontSize: "20px", letterSpacing: "3px", fontFamily: "monospace", color: "var(--accent, #3b82f6)" }}>
+                            {loginInfo.userCode}
+                          </strong>
+                          <button className="btn btn-sm btn-secondary" onClick={() => {
+                            if (loginInfo.userCode) {
+                              navigator.clipboard.writeText(loginInfo.userCode).then(() => {
+                                setCodeCopied(true);
+                                setTimeout(() => setCodeCopied(false), 2000);
+                              }).catch(() => {});
+                            }
+                          }} style={{ padding: "2px 8px", fontSize: "12px" }}>
+                            {codeCopied ? "✓ Copied" : "Copy Code"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     <span className="oauth-login-hint-links">
-                      {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal width={14} height={14} />{t("prov.didntOpen")}</a>}
+                      {loginInfo.url && (
+                        <button
+                          className="link-btn"
+                          type="button"
+                          onClick={() => loginInfo.url && openInBackgroundTab(loginInfo.url)}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                        >
+                          <IconExternal width={14} height={14} />在后台打开认证页 / Open Auth Page (Background Tab)
+                        </button>
+                      )}
                       <button className="link-btn" onClick={() => {
                         if (loginInfo?.url) {
                           navigator.clipboard.writeText(loginInfo.url).then(() => {
