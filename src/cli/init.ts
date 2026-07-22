@@ -1,6 +1,7 @@
 import * as readline from "node:readline";
+import { unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
-import { getDefaultConfig, isValidProviderName, saveConfig } from "../config";
+import { getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -136,6 +137,10 @@ export async function runInit(): Promise<void> {
   };
 
   saveConfig(config);
+  // Init writes a fresh config, so any pre-migration backup from a previous
+  // installation is orphaned. Remove it so the next `ocx start` does not crash
+  // on a stale-backup collision (issue #257).
+  try { unlinkSync(`${getConfigPath()}.pre-openai-tiers-v2.bak`); } catch { /* absent is fine */ }
   console.log(`\n✅ Config saved to ~/.opencodex/config.json`);
   if (oauthHint) console.log(`🔐 Authenticate this provider with:  ocx login ${providerName}`);
 

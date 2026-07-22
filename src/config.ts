@@ -178,7 +178,13 @@ export function backupConfigBeforeOpenAiTierMigration(
   // docs/fixtures and is never reused or overwritten as the v2 snapshot.
   const backup = `${source}.pre-openai-tiers-v2.bak`;
   if (io.exists(backup)) {
-    if (!sameBytes(original, io.read(backup))) throw new OpenAiTierBackupCollisionError();
+    if (!sameBytes(original, io.read(backup))) {
+      // The backup is a snapshot of a config that no longer exists (e.g. ocx init
+      // wrote a fresh config). Replace the stale backup instead of crashing.
+      console.warn("[openai-provider-migration] Replacing stale pre-migration backup (config was rewritten since last migration).");
+      io.write(backup, original);
+      io.harden(backup);
+    }
     return "reused";
   }
   const temp = `${backup}.ocx.${process.pid}.${++_atomicSeq}.tmp`;

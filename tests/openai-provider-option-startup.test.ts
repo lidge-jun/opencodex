@@ -5,7 +5,6 @@ import {
   AtomicWriteSecretResidualError,
   backupConfigBeforeOpenAiTierMigration,
   OpenAiTierBackupCleanupError,
-  OpenAiTierBackupCollisionError,
   OpenAiTierBackupRollbackError,
   OpenAiTierBackupSecretResidualError,
   type OpenAiTierBackupIO,
@@ -251,7 +250,7 @@ describe("OpenAI provider option startup coordinator", () => {
     expect(new TextDecoder().decode(state.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")?.bytes)).toBe("three-tier-state");
   });
 
-  test("backup reuses only byte-identical snapshots and rejects collisions", () => {
+  test("backup reuses byte-identical snapshots and replaces stale ones", () => {
     const equal = virtualBackupIO({
       "/virtual/config.json": "same",
       "/virtual/config.json.pre-openai-tiers-v2.bak": "same",
@@ -263,8 +262,9 @@ describe("OpenAI provider option startup coordinator", () => {
       "/virtual/config.json": "current",
       "/virtual/config.json.pre-openai-tiers-v2.bak": "older",
     });
-    expect(() => backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io))
-      .toThrow(OpenAiTierBackupCollisionError);
+    // Stale backup (config was rewritten by ocx init) is replaced, not a crash (issue #257).
+    expect(backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io)).toBe("reused");
+    expect(new TextDecoder().decode(different.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")!.bytes)).toBe("current");
   });
 
   test("an EEXIST publication race compares and reuses the winner", () => {
