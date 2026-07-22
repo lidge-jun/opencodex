@@ -10,7 +10,7 @@ import data from "../data/frontier-benchmarks.json";
 import { FRONTIER_STRINGS } from "../data/frontier-i18n";
 
 interface Props {
-  locale?: "en" | "ko" | "zh-cn" | "ru";
+  locale?: "en" | "ko" | "zh-cn" | "ru" | "ja";
   /** Comma-separated board ids to render; omit for all boards. */
   boards?: string;
   /** Show the page-level subtitle (overview pages only). */
@@ -26,7 +26,7 @@ const fill = (key: string, vars: Record<string, string>): string =>
   Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, v), t(key));
 
 // The PR i18n has no column-header key for "score" — keep a tiny local map.
-const SCORE_HEADER: Record<string, string> = { en: "Score", ko: "점수", "zh-cn": "得分", ru: "Балл" };
+const SCORE_HEADER: Record<string, string> = { en: "Score", ko: "점수", "zh-cn": "得分", ru: "Балл", ja: "スコア" };
 /** Dataset tags are kebab-case; i18n keys are camelCase (cheap-subagent → cheapSubagent). */
 const tagKey = (tag: string): string => tag.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
