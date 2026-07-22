@@ -127,6 +127,33 @@ Routed catalog entries also get their GPT-5 identity rewritten to the real upstr
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
 
+### Catalog troubleshooting
+
+If a model is missing from Codex, or the catalog order/visibility looks wrong, check in order:
+
+1. **`selectedModels`** on the provider — a non-empty allowlist exposes only those ids to Codex;
+   empty or omitted exposes all discovered models. An id not in the allowlist never reaches the
+   catalog.
+2. **`disabledModels`** (top level) — hides models from both the catalog and `/v1/models`, and flips
+   bare native GPT slugs to `visibility: "hide"`.
+3. **`liveModels: false` with empty `models`** — when live discovery is off and `models` is empty or
+   omitted, opencodex exposes no routed models for that provider.
+4. **Cursor `GetUsableModels`** — the Cursor adapter discovers models through its protobuf
+   `GetUsableModels` RPC, not `/models`, so a Cursor-side change can alter which ids are visible
+   independently of other providers.
+5. **Cache and `ocx sync`** — live catalogs are cached for about five minutes (`modelCacheTtlMs`,
+   default `300000`). Run `ocx sync` to force a fresh fetch and rewrite the catalog immediately.
+
+:::caution[Other local writers]
+Catalog writes (`opencodex-catalog.json`, `config.toml`) are atomic **inside** opencodex, which only
+prevents half-written files when two opencodex-owned writers race. That does **not** stop another
+local process, file watcher, or sync agent from rewriting catalog visibility or order after opencodex
+has written. Codex keeps its separate `models_cache.json` and can refresh it independently, changing
+the visible list without rewriting `opencodex-catalog.json`. If models flip unexpectedly while the
+proxy is running, stop or reconfigure the competing writers, then run `ocx sync` — this is an
+external-writer hazard, not a confirmed opencodex defect.
+:::
+
 ## The subagent picker
 
 Codex's `spawn_agent` advertises the first **5 picker-visible catalog models** after sorting by

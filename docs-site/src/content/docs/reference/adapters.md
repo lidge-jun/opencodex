@@ -99,8 +99,9 @@ streams the response back **untranslated**.
   discovers live Cursor models through the protobuf `GetUsableModels` RPC, and retries only before a
   run request is committed to the wire.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
-  and `desktopExecutor` integrations have separate opt-ins; `unsafeAllowNativeLocalExec` enables the
-  broader built-in executor and bypasses Codex approval/sandbox semantics.
+  and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
+  broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
+  `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
 
 ## `azure-openai` (alias: `azure`)
 

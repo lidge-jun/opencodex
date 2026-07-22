@@ -185,7 +185,8 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **Cursor only.** MCP servers started over stdio or reached over Streamable HTTP; fields are listed below. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor only.** External computer-use/record-screen commands; fields are listed below. |
-| `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor adapter only.** Opt-in escape hatch for Cursor server-driven local `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` execution. Defaults to `false` so remote Cursor messages cannot bypass Codex approval and sandbox enforcement. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
+| `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor adapter only.** Legacy compatibility boolean for the Cursor server-driven local `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` executor. Equivalent to `nativeLocalExec: "on"` when `nativeLocalExec` is unset; an explicit `nativeLocalExec` value always wins. Defaults to `false`. Prefer `nativeLocalExec` for new configs. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
+| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | **Cursor adapter only.** Native local exec policy for the Cursor server-driven executor. `"off"` (default) rejects it; `"on"` is the trusted-local opt-in; `"codex-sandbox"` is accepted for backwards compatibility but is fail-closed like `"off"`. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
 
 For broken `openai-responses` compatibility gateways, `responsesItemIdRepair` belongs on the
 provider object itself, for example:
@@ -216,9 +217,17 @@ The Cursor bridge is experimental. After `ocx login cursor`, add or edit the `cu
 `providers` in `~/.opencodex/config.json` (Windows: `%USERPROFILE%\.opencodex\config.json`).
 
 By default, Cursor's server-driven native local tools stay **disabled**. Codex keeps using its own
-tools (`apply_patch`, `exec_command`, and so on) with approval and sandbox policy. Set
-`unsafeAllowNativeLocalExec` only for trusted local experiments where you accept that Cursor may
-read, write, delete, list, grep, shell, or fetch on your machine **without** Codex's approval path.
+tools (`apply_patch`, `exec_command`, and so on) with approval and sandbox policy. Use the
+`nativeLocalExec` field to choose a policy:
+
+- **`"off"` (default, safest)** — rejects all Cursor server-driven local `read`, `write`, `delete`,
+  `ls`, `grep`, `shell`, and `fetch` execution. Use this unless you have deliberately opted in.
+- **`"on"` (trusted-local opt-in)** — always allows Cursor-native local execution for this provider.
+  Use it only for a trusted local experiment on a host where every data-plane caller is trusted.
+- **`"codex-sandbox"` (accepted, fail-closed)** — recognized for backwards compatibility, but
+  currently behaves like `"off"`. Responses `instructions` / `system` / `developer` text is
+  caller-controlled prose, and opencodex has no trustworthy per-request attestation that it reflects
+  a real Codex sandbox state, so it never authorizes native local exec.
 
 ```json
 {
@@ -228,21 +237,25 @@ read, write, delete, list, grep, shell, or fetch on your machine **without** Cod
       "baseUrl": "https://api2.cursor.sh",
       "authMode": "oauth",
       "defaultModel": "auto",
-      "unsafeAllowNativeLocalExec": true
+      "nativeLocalExec": "off"
     }
   }
 }
 ```
 
-The flag belongs on the **provider object** (`providers.cursor`), not at the top level of
+The field belongs on the **provider object** (`providers.cursor`), not at the top level of
 `config.json`.
 
 You can also set it from the [web dashboard](/opencodex/guides/web-dashboard/): **Providers →
-Cursor → Edit JSON**, add `"unsafeAllowNativeLocalExec": true`, save, then restart the proxy
-(`ocx restart` or `ocx stop` + `ocx start`).
+Cursor → Edit JSON**, set `"nativeLocalExec"` to `"off"`, `"on"`, or `"codex-sandbox"`, save, then
+restart the proxy (`ocx restart` or `ocx stop` + `ocx start`).
+
+The legacy `unsafeAllowNativeLocalExec: true` boolean is still accepted and is equivalent to
+`nativeLocalExec: "on"` when `nativeLocalExec` is unset; an explicit `nativeLocalExec` value always
+wins. Prefer `nativeLocalExec` for new configs.
 
 MCP, screen recording, and computer-use use separate `mcpServers` / `desktopExecutor` config and are
-not controlled by this flag.
+not controlled by this field.
 
 ### Cursor integration records
 
@@ -256,8 +269,11 @@ accept `headers?: Record<string,string>`. Both forms support `enabled?: boolean`
 one JSON request from stdin, and must write one JSON result to stdout.
 
 :::caution[Security]
-Leave `unsafeAllowNativeLocalExec` unset or `false` unless you explicitly want Cursor-native local
-execution that bypasses Codex approval and sandbox semantics.
+`"off"` is the safest default. The default loopback bind admits **any** local process without auth
+(including other local users on multi-user machines), and request text such as Codex sandbox
+markers never authorizes native local exec. Leave `nativeLocalExec` unset or set it to `"off"`
+unless you explicitly want Cursor-native local execution that bypasses Codex approval and sandbox
+semantics.
 :::
 
 ## OpenRouter provider routing
