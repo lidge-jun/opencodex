@@ -91,6 +91,7 @@ import {
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "./relay";
+import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "./responses-item-id-repair";
 
 export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
@@ -1222,6 +1223,7 @@ export async function handleResponses(
     // background for terminal-outcome/quota inspection only.
     if (upstreamResponse.ok && isEventStream && upstreamResponse.body) {
       const [nativeBody, inspectBody] = upstreamResponse.body.tee();
+      const repairConfig = route.provider.responsesItemIdRepair;
       const turnAc = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc);
@@ -1258,9 +1260,12 @@ export async function handleResponses(
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
-      const clientBody = process.platform === "win32"
+      const repairedBody = hasResponsesItemIdRepair(repairConfig)
+        ? relaySseWithResponsesItemIdRepair(nativeBody, repairConfig!)
+        : nativeBody;
+      const clientBody = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig)
         ? nativeBody
-        : relaySseWithFailedTail(nativeBody, upstream);
+        : relaySseWithFailedTail(repairedBody, upstream);
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,

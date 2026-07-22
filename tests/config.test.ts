@@ -140,6 +140,46 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("accepts the exact responsesItemIdRepair shape and rejects the old nested placeholderIds proposal", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesItemIdRepair: {
+            reasoning: ["rs_0"],
+            message: ["msg_0"],
+            repairMissingTerminalIds: true,
+          },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.custom.responsesItemIdRepair).toEqual({
+      reasoning: ["rs_0"],
+      message: ["msg_0"],
+      repairMissingTerminalIds: true,
+    });
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesItemIdRepair: {
+            placeholderIds: { reasoning: ["rs_0"] },
+          },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("responsesItemIdRepair");
+  });
+
   test("reads valid config diagnostics without mutation", () => {
     writeConfig({
       port: 12345,

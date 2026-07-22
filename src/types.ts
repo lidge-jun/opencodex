@@ -620,6 +620,15 @@ export interface OpenRouterProviderRouting {
   allowFallbacks?: boolean;
 }
 
+export interface ResponsesItemIdRepairConfig {
+  /** Exact `message` item ids that the proxy should rewrite to request-local canonical ids. */
+  message?: string[];
+  /** Exact `reasoning` item ids that the proxy should rewrite to request-local canonical ids. */
+  reasoning?: string[];
+  /** Backfill missing `output_item.done` / terminal snapshot ids from the matching output_index. */
+  repairMissingTerminalIds?: boolean;
+}
+
 export interface OcxProviderConfig {
   adapter: string;
   baseUrl: string;
@@ -744,6 +753,12 @@ export interface OcxProviderConfig {
    * fields. Default off; only enable for providers that document this parameter.
    */
   promptCacheKey?: boolean;
+  /**
+   * Provider-local passthrough SSE repair for broken openai-responses gateways that reuse exact
+   * placeholder message/reasoning ids or omit the terminal id after a stable added event.
+   * Disabled by default; function_call ids and call_id pairing are never rewritten.
+   */
+  responsesItemIdRepair?: ResponsesItemIdRepairConfig;
   /** Model ids whose tool_choice only accepts `auto` or `none`; forced/named choices are downgraded. */
   autoToolChoiceOnlyModels?: string[];
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */

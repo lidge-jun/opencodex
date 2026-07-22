@@ -134,9 +134,12 @@ const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 // Source invariant for tests/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // upstreamResponse.body.tee()
+// const repairConfig = route.provider.responsesItemIdRepair;
+// const repairedBody = hasResponsesItemIdRepair(repairConfig)
 // process.platform === "win32"
+// && !hasResponsesItemIdRepair(repairConfig)
 // ? nativeBody
-// relaySseWithFailedTail(nativeBody, upstream)
+// relaySseWithFailedTail(repairedBody, upstream)
 // new Response(clientBody
 // markNativePassthroughSseResponse
 // const body = relayWithAbort(upstreamResponse.body, upstream);

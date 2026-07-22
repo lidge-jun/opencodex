@@ -331,6 +331,11 @@ const providerConfigSchema = z.object({
   baseUrl: z.string().min(1),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
+  responsesItemIdRepair: z.object({
+    message: z.array(z.string().min(1)).optional(),
+    reasoning: z.array(z.string().min(1)).optional(),
+    repairMissingTerminalIds: z.boolean().optional(),
+  }).strict().optional(),
 }).passthrough();
 
 const RESERVED_PROVIDER_NAMES = new Set(["__proto__", "prototype", "constructor"]);

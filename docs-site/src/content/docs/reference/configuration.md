@@ -173,6 +173,7 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `parallelToolCalls?` | `boolean` | Enable/disable parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise support only on explicit `true`. |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | Provider-local, disabled-by-default passthrough SSE repair for exact `message` / `reasoning` placeholder ids and missing terminal ids. Downstream only; function-call ids and `call_id` are never rewritten. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Models whose `tool_choice` accepts only `auto` or `none`; forced/named choices are downgraded. |
 | `preserveReasoningContentModels?` | `string[]` | Models that require prior assistant `reasoning_content` to remain in chat history. |
 | `thinkingToggleModels?` | `string[]` | Chat models using a vendor `thinking.enabled` toggle instead of an effort ladder. |
@@ -185,6 +186,29 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **Cursor only.** MCP servers started over stdio or reached over Streamable HTTP; fields are listed below. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor only.** External computer-use/record-screen commands; fields are listed below. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor adapter only.** Opt-in escape hatch for Cursor server-driven local `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` execution. Defaults to `false` so remote Cursor messages cannot bypass Codex approval and sandbox enforcement. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
+
+For broken `openai-responses` compatibility gateways, `responsesItemIdRepair` belongs on the
+provider object itself, for example:
+
+```json
+{
+  "providers": {
+    "custom-gateway": {
+      "adapter": "openai-responses",
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "${GATEWAY_KEY}",
+      "responsesItemIdRepair": {
+        "reasoning": ["rs_0"],
+        "message": ["msg_0"],
+        "repairMissingTerminalIds": true
+      }
+    }
+  }
+}
+```
+
+The placeholder lists are exact string matches only. Leave the field unset for normal/stateful
+Responses providers so passthrough stays byte-for-byte identical to upstream.
 
 ## Cursor provider (`adapter: "cursor"`)
 

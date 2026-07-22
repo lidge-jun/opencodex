@@ -42,11 +42,15 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     );
 
     expect(sseBranch).toContain("upstreamResponse.body.tee()");
-    // win32 must receive the tee'd body untouched — no JS pull wrapper (Bun#32111 segfault).
+    // win32 must receive the tee'd body untouched when repair is disabled — no JS pull wrapper
+    // on the default path (Bun#32111 segfault).
+    expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
+    expect(sseBranch).toContain("const repairedBody = hasResponsesItemIdRepair(repairConfig)");
     expect(sseBranch).toContain('process.platform === "win32"');
+    expect(sseBranch).toContain("&& !hasResponsesItemIdRepair(repairConfig)");
     expect(sseBranch).toContain("? nativeBody");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
-    expect(sseBranch).toContain("relaySseWithFailedTail(nativeBody, upstream)");
+    expect(sseBranch).toContain("relaySseWithFailedTail(repairedBody, upstream)");
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
     expect(sseBranch).not.toContain("relaySseWithHeartbeat(");
