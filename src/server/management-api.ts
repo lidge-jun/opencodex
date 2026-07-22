@@ -553,9 +553,19 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     // doesn't send — merge it in so the sidecars are gated correctly.
     enrichProviderFromCatalog(name, prov);
     const { saveConfig: save } = await import("../config");
+    // The dashboard only receives a redacted provider DTO. Preserve values it is
+    // intentionally never allowed to round-trip when saving a provider edit.
+    const existing = config.providers[name];
+    if (existing) {
+      const next = prov as Record<string, unknown>;
+      const previous = existing as Record<string, unknown>;
+      for (const field of ["apiKey", "apiKeyPool", "headers", "googleMode", "modelMaxInputTokens"]) {
+        if (next[field] === undefined && previous[field] !== undefined) next[field] = previous[field];
+      }
+    }
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
     // let the (possibly new) apiKey join the pool as the active entry.
-    const existingPool = config.providers[name]?.apiKeyPool;
+    const existingPool = existing?.apiKeyPool;
     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault) config.defaultProvider = name;

@@ -20,8 +20,11 @@ import { apiErrorMessage } from "../api-error";
 
 interface Config {
   port: number;
+  hostname?: string;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
+  codexAutoStart?: boolean;
+  websockets?: boolean;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool"; [key: string]: unknown }>;
 }
 
 interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
@@ -462,27 +465,79 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const saveConfig = async (): Promise<boolean> => {
     setJsonSaving(true);
     try {
-      const parsed = JSON.parse(draft);
-      const res = await fetch(`${apiBase}/api/config`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed),
-      });
-      if (res.ok) {
-        notify(t("prov.saved"), true);
-        setEditing(false);
-        setJsonEditorOpen(false);
-        jsonEditorOpenRef.current = false;
-        setJsonLeaveOpen(false);
-        setJsonBaseline(JSON.stringify(parsed, null, 2));
-        fetchConfig();
-        fetchProviderQuotas(true);
-        setModelsRefreshToken(n => n + 1);
-        return true;
+      const parsed = JSON.parse(draft) as Config;
+      if (!parsed.providers || typeof parsed.providers !== "object" || !parsed.defaultProvider || !Object.hasOwn(parsed.providers, parsed.defaultProvider)) {
+        notify(t("prov.invalidJson"), false);
+        return false;
       }
-      const data = await res.json().catch(() => ({})) as { error?: string };
-      notify(data.error || t("prov.saveFailed"), false);
-      return false;
+
+      // The management API intentionally does not accept a full config PUT: the
+      // config returned to the browser masks credentials. Save the editable JSON
+      // as individual provider changes instead, so a browser can never erase a
+      // key or header that it was not allowed to read.
+      const current: Config = config
+        ? config
+        : await fetch(`${apiBase}/api/config`).then(r => r.json() as Promise<Config>);
+      const immutableSettingsChanged = parsed.port !== current.port
+        || (parsed.hostname ?? "127.0.0.1") !== (current.hostname ?? "127.0.0.1")
+        || (parsed.websockets ?? false) !== (current.websockets ?? false);
+      if (immutableSettingsChanged) {
+        notify("Port, hostname, and websockets must be changed outside the provider JSON editor.", false);
+        return false;
+      }
+
+      for (const [name, rawProvider] of Object.entries(parsed.providers)) {
+        const provider = { ...rawProvider } as Record<string, unknown>;
+        // These values are presentation-only signals returned by GET /api/config.
+        delete provider.hasApiKey;
+        delete provider.hasHeaders;
+        delete provider.note;
+        const res = await fetch(`${apiBase}/api/providers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, provider, setDefault: name === parsed.defaultProvider }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          notify(data.error || t("prov.saveFailed"), false);
+          return false;
+        }
+      }
+
+      // Add/update the next default first, then remove rows absent from the draft.
+      for (const name of Object.keys(current.providers)) {
+        if (Object.hasOwn(parsed.providers, name)) continue;
+        const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          notify(data.error || t("prov.saveFailed"), false);
+          return false;
+        }
+      }
+
+      if ((parsed.codexAutoStart ?? true) !== (current.codexAutoStart ?? true)) {
+        const res = await fetch(`${apiBase}/api/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codexAutoStart: parsed.codexAutoStart === true }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          notify(data.error || t("prov.saveFailed"), false);
+          return false;
+        }
+      }
+
+      notify(t("prov.saved"), true);
+      setEditing(false);
+      setJsonEditorOpen(false);
+      jsonEditorOpenRef.current = false;
+      setJsonLeaveOpen(false);
+      setJsonBaseline(JSON.stringify(parsed, null, 2));
+      fetchConfig();
+      fetchProviderQuotas(true);
+      setModelsRefreshToken(n => n + 1);
+      return true;
     } catch {
       notify(t("prov.invalidJson"), false);
       return false;
