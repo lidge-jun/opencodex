@@ -383,6 +383,8 @@ export const de = {
   "logs.tokens.reasoning": "Reasoning",
   "logs.tokens.noCache": "keine Cache-Daten",
   "logs.tokens.noCacheNote": "dieser Anbieter meldet keine Cache-Tokens",
+  "logs.tokens.noCacheCursor": "Cursor-Cache-Details nicht gemeldet",
+  "logs.tokens.noCacheCursorNote": "Cursor liefert keine Cache-Read/Write-Tokenzahlen; das ist unbekannt und kein bestätigter Cache-Miss",
   "logs.tokens.estimatedNote": "Schätzung (Anbieter meldet keine exakte Nutzung)",
   "logs.details": "Details",
   "logs.detailTitle": "Anfragedetails",

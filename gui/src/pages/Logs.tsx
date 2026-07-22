@@ -117,6 +117,10 @@ interface LogEntry {
   displayMetrics?: LogDisplayMetrics;
 }
 
+function isCursorUsageProvider(provider: string): boolean {
+  return provider === "cursor" || provider.startsWith("cursor-");
+}
+
 function tokensTitle(log: LogEntry, t: TFn): string | undefined {
   if (!log.usage) return undefined;
   const split = cacheSplit(log);
@@ -129,7 +133,7 @@ function tokensTitle(log: LogEntry, t: TFn): string | undefined {
   if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
   if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
   if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
-    parts.push(t("logs.tokens.noCacheNote"));
+    parts.push(t(isCursorUsageProvider(log.provider) ? "logs.tokens.noCacheCursorNote" : "logs.tokens.noCacheNote"));
   }
   return parts.join(" \xC2\xB7 ");
 }
@@ -428,7 +432,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                               )}
                               {(log.usageStatus === "estimated" && read === undefined && write === undefined) && (
                                 <span className="muted text-caption leading-tight">
-                                  {t("logs.tokens.noCache")}
+                                  {t(isCursorUsageProvider(log.provider) ? "logs.tokens.noCacheCursor" : "logs.tokens.noCache")}
                                 </span>
                               )}
                             </span>

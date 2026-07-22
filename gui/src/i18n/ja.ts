@@ -365,6 +365,8 @@ export const ja: Record<TKey, string> = {
   "logs.tokens.reasoning": "推論",
   "logs.tokens.noCache": "キャッシュデータなし",
   "logs.tokens.noCacheNote": "このプロバイダーはキャッシュトークンを報告しません",
+  "logs.tokens.noCacheCursor": "Cursor のキャッシュ詳細は未報告",
+  "logs.tokens.noCacheCursorNote": "Cursor はキャッシュ read/write トークン数を公開しません。これは不明という意味で、キャッシュミスの確定ではありません",
   "logs.tokens.estimatedNote": "推定(プロバイダーは正確な使用量を報告しません)",
   "logs.details": "詳細",
   "logs.detailTitle": "リクエストの詳細",

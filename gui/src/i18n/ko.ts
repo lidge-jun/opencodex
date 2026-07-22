@@ -395,6 +395,8 @@ export const ko: Record<TKey, string> = {
   "logs.tokens.reasoning": "추론",
   "logs.tokens.noCache": "캐시 미보고",
   "logs.tokens.noCacheNote": "이 프로바이더는 캐시 토큰 수치를 제공하지 않습니다",
+  "logs.tokens.noCacheCursor": "Cursor 캐시 상세 미보고",
+  "logs.tokens.noCacheCursorNote": "Cursor 프로토콜은 캐시 read/write 토큰 수치를 제공하지 않습니다. 캐시 미스가 확인됐다는 뜻은 아닙니다",
   "logs.tokens.estimatedNote": "추정치 (프로바이더가 정확한 사용량을 제공하지 않음)",
   "logs.details": "상세보기",
   "logs.detailTitle": "요청 상세",

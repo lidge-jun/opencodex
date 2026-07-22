@@ -400,6 +400,8 @@ export const en = {
   "logs.tokens.reasoning": "reasoning",
   "logs.tokens.noCache": "no cache data",
   "logs.tokens.noCacheNote": "this provider does not report cache tokens",
+  "logs.tokens.noCacheCursor": "Cursor cache detail unreported",
+  "logs.tokens.noCacheCursorNote": "Cursor does not expose cache read/write token counts; this is unknown, not a confirmed cache miss",
   "logs.tokens.estimatedNote": "estimated (provider reports no exact usage)",
   "logs.details": "Details",
   "logs.detailTitle": "Request details",
