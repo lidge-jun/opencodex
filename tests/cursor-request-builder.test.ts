@@ -38,6 +38,25 @@ describe("Cursor request builder", () => {
     expect(request.conversationId).toBe("cursor_stable");
   });
 
+  test("carries the last known active context into the next Cursor turn", () => {
+    const request = createCursorRequest({
+      ...base,
+      _cursorPreviousContextTokens: 120_000,
+      context: { messages: [{ role: "user", content: "next", timestamp: 1 }] },
+    });
+
+    expect(request.fallbackInputTokens).toBe(120_000);
+  });
+
+  test("estimates active input context when no preceding checkpoint is available", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: { messages: [{ role: "user", content: "x".repeat(4_000), timestamp: 1 }] },
+    });
+
+    expect(request.fallbackInputTokens).toBeGreaterThanOrEqual(1_000);
+  });
+
   test("maps system, developer, user, assistant, and tool result text", () => {
     const request = createCursorRequest({
       ...base,

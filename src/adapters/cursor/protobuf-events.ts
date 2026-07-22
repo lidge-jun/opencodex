@@ -16,6 +16,8 @@ export interface CursorProtobufEventState {
    * share one field, or Codex double-counts (e.g. 10000 then 10300 surfacing as 20300).
    */
   contextTokens?: number;
+  /** Best-effort active input context used only when Cursor never emits a checkpoint this turn. */
+  fallbackInputTokens?: number;
   openToolCalls: Map<string, { name: string; args: string }>;
   completedToolCalls: Set<string>;
   /** Set once a terminal `done`/truncation has been emitted, so post-terminal frames stay inert. */
@@ -29,11 +31,12 @@ export interface CursorProtobufEventState {
   cursorToolNameMap?: Map<string, string>;
 }
 
-export function createCursorProtobufEventState(options: { clientToolNames?: Iterable<string>; parallelToolCalls?: boolean; toolSchemas?: Map<string, unknown>; cursorToolNameMap?: Map<string, string> } = {}): CursorProtobufEventState {
+export function createCursorProtobufEventState(options: { clientToolNames?: Iterable<string>; parallelToolCalls?: boolean; toolSchemas?: Map<string, unknown>; cursorToolNameMap?: Map<string, string>; fallbackInputTokens?: number } = {}): CursorProtobufEventState {
   return {
     // Cursor provides no authoritative usage frame; token counts are heuristic estimates from
     // checkpoint/delta events, so mark estimated from the start.
     usage: { inputTokens: 0, outputTokens: 0, estimated: true },
+    ...(options.fallbackInputTokens !== undefined ? { fallbackInputTokens: options.fallbackInputTokens } : {}),
     openToolCalls: new Map(),
     completedToolCalls: new Set(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
@@ -304,6 +307,12 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
         inputTokens: Math.max(0, state.contextTokens - state.usage.outputTokens),
         totalTokens: state.contextTokens,
       }
+    : state.fallbackInputTokens !== undefined
+      ? {
+          ...state.usage,
+          inputTokens: state.fallbackInputTokens,
+          totalTokens: state.fallbackInputTokens + state.usage.outputTokens,
+        }
     : { ...state.usage };
   return [{ type: "done", usage }];
 }

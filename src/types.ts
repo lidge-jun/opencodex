@@ -9,6 +9,8 @@ export interface OcxParsedRequest {
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
   _cursorConversationId?: string;
+  /** Last reported active Cursor context from the preceding Responses turn, used as a usage floor. */
+  _cursorPreviousContextTokens?: number;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and

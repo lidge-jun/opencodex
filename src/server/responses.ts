@@ -7,7 +7,7 @@ import {
 import { parseRequest } from "../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../adapters/openai-responses";
-import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
+import { expandPreviousResponseInput, previousResponseConversationId, previousResponseCursorContextTokens, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
 import {
   advanceComboAfterFailure,
@@ -829,6 +829,12 @@ export async function handleResponses(
     parsed = parseRequest(body);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     parsed._cursorConversationId = previousResponseConversationId(parsed.previousResponseId);
+    // A compaction request intentionally resets active-context accounting. Normal Cursor turns carry
+    // the preceding reported total as a floor so an early client-tool finalize cannot make Codex's
+    // Context left jump back toward 100% when no fresh checkpoint arrives.
+    if (!parsed._compactionRequest) {
+      parsed._cursorPreviousContextTokens = previousResponseCursorContextTokens(parsed.previousResponseId);
+    }
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }

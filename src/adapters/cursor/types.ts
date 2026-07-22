@@ -10,6 +10,8 @@ export interface CursorRunRequest {
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;
+  /** Best-effort active input context used when this turn is finalized before a Cursor checkpoint. */
+  fallbackInputTokens?: number;
 }
 
 export interface CursorRequestMessage {

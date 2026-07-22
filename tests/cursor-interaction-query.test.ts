@@ -168,6 +168,19 @@ describe("partialUsageFromEventState", () => {
     expect(partialUsageFromEventState(state)).toEqual({ inputTokens: 0, outputTokens: 7, estimated: true });
   });
 
+  test("uses the input fallback for a failed turn without a checkpoint", async () => {
+    const { partialUsageFromEventState } = await import("../src/adapters/cursor/live-transport");
+    const { createCursorProtobufEventState } = await import("../src/adapters/cursor/protobuf-events");
+    const state = createCursorProtobufEventState({ fallbackInputTokens: 120_000 });
+    state.usage.outputTokens = 7;
+    expect(partialUsageFromEventState(state)).toEqual({
+      inputTokens: 120_000,
+      outputTokens: 7,
+      totalTokens: 120_007,
+      estimated: true,
+    });
+  });
+
   test("returns undefined when the stream died before any token signal", async () => {
     const { partialUsageFromEventState } = await import("../src/adapters/cursor/live-transport");
     const { createCursorProtobufEventState } = await import("../src/adapters/cursor/protobuf-events");

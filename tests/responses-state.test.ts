@@ -10,6 +10,7 @@ import {
   expandPreviousResponseInput,
   flushResponseState,
   previousResponseConversationId,
+  previousResponseCursorContextTokens,
   rememberResponseState,
 } from "../src/responses/state";
 
@@ -232,6 +233,19 @@ describe("Responses previous_response_id state", () => {
     rememberResponseState(firstBody, first, "cursor_conversation_1");
 
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conversation_1");
+  });
+
+  test("stores the last reported Cursor context total alongside the Responses chain", () => {
+    const first = buildResponseJSON([
+      { type: "text_delta", text: "done" },
+      { type: "done", usage: { inputTokens: 119_900, outputTokens: 100, totalTokens: 120_000, estimated: true } },
+    ], "cursor/grok-4.5");
+
+    rememberResponseState({ model: "cursor/grok-4.5", input: "work" }, first, "cursor_conversation_1");
+    flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    expect(previousResponseCursorContextTokens(first.id as string)).toBe(120_000);
   });
 
   test("preserves provider conversation id after a client tool-call response (multi-turn continuation)", () => {

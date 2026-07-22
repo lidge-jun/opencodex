@@ -409,6 +409,7 @@ class LiveCursorTransport implements CursorTransport {
           framesReceived: this.framesReceived,
           outputTokens: state.usage.outputTokens,
           contextTokens: state.contextTokens,
+          fallbackInputTokens: state.fallbackInputTokens,
           firstFrameMs: this.firstFrameAt ? this.firstFrameAt - this.turnStartedAt : undefined,
           elapsedMs: this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined,
           classified: classifyCursorError(err.message),
@@ -452,6 +453,7 @@ class LiveCursorTransport implements CursorTransport {
       parallelToolCalls: request.parallelToolCalls,
       toolSchemas,
       cursorToolNameMap,
+      fallbackInputTokens: request.fallbackInputTokens,
     });
 
     this.open(request, signal, state, push, err => {
@@ -553,10 +555,15 @@ class LiveCursorTransport implements CursorTransport {
       const terminal = finalizeAfterDrain(state);
       if (terminal.length === 0) return;
       for (const event of terminal) push(event);
+      const done = terminal.find(event => event.type === "done");
       debugProviderDiagnostic("cursor", "client-tool-suspend", {
         reason: "Responses bridge owns client tools; ending turn without fake mcpResult",
         framesReceived: this.framesReceived,
         elapsedMs: Date.now() - this.turnStartedAt,
+        checkpointTokens: state.contextTokens,
+        fallbackInputTokens: state.fallbackInputTokens,
+        outputTokens: state.usage.outputTokens,
+        reportedTotalTokens: done?.type === "done" ? done.usage?.totalTokens : undefined,
       });
       this.cancelCursorRun();
     }, this.activeClientToolFinalizeGraceMs);
@@ -782,10 +789,15 @@ class LiveCursorTransport implements CursorTransport {
 export function partialUsageFromEventState(state: ReturnType<typeof createCursorProtobufEventState>): OcxUsage | undefined {
   const out = state.usage.outputTokens;
   const ctx = state.contextTokens;
-  if (ctx === undefined && out <= 0) return undefined;
-  return ctx !== undefined
-    ? { ...state.usage, inputTokens: Math.max(0, ctx - out), totalTokens: ctx, estimated: true }
-    : { ...state.usage, estimated: true };
+  const fallback = state.fallbackInputTokens;
+  if (ctx === undefined && fallback === undefined && out <= 0) return undefined;
+  if (ctx !== undefined) {
+    return { ...state.usage, inputTokens: Math.max(0, ctx - out), totalTokens: ctx, estimated: true };
+  }
+  if (fallback !== undefined) {
+    return { ...state.usage, inputTokens: fallback, totalTokens: fallback + out, estimated: true };
+  }
+  return { ...state.usage, estimated: true };
 }
 
 /**

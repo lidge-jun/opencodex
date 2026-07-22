@@ -7,6 +7,7 @@ import type {
   OcxToolResultMessage,
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
+import { estimateTokens } from "../../lib/token-estimate";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
 import { cursorCodexToWireModelId } from "./discovery";
 import { cursorEffortSuffix } from "./effort-map";
@@ -166,6 +167,14 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
+  const system = [...(parsed.context.systemPrompt ?? []), ...(limitNote ? [limitNote] : [])];
+  // Cursor can end a client-tool turn before sending conversationCheckpointUpdate. Estimate the
+  // complete input that is actually serialized for this turn and never let it fall below the last
+  // reported active context from the Responses chain. finalizeTurnEvents adds the current output.
+  const fallbackInputTokens = Math.max(
+    parsed._cursorPreviousContextTokens ?? 0,
+    estimateTokens(JSON.stringify({ system, messages, tools: budget.tools }), parsed.modelId),
+  );
   return {
     modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
     // The Cursor conversation id comes ONLY from remembered state (_cursorConversationId). Do NOT fall
@@ -173,9 +182,10 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
     // different namespace and would start an unrelated Cursor conversation, breaking tool-result
     // continuation. If we have no remembered Cursor conversation, start a fresh one.
     conversationId: parsed._cursorConversationId ?? generatedCursorConversationId(),
-    system: [...(parsed.context.systemPrompt ?? []), ...(limitNote ? [limitNote] : [])],
+    system,
     messages,
     rawMessages: parsed.context.messages,
+    fallbackInputTokens,
     ...(budget.tools.length ? { tools: budget.tools } : {}),
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),

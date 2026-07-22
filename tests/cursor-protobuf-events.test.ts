@@ -464,6 +464,24 @@ describe("Cursor protobuf tool-call events", () => {
     expect(state.terminated).toBe(true);
   });
 
+  test("uses the seeded input fallback when a client-tool turn ends before any checkpoint", () => {
+    const state = createCursorProtobufEventState({ fallbackInputTokens: 120_000 });
+    const turnEnd = create(AgentServerMessageSchema, {
+      message: { case: "interactionUpdate", value: create(InteractionUpdateSchema, {
+        message: { case: "turnEnded", value: {} },
+      }) },
+    });
+
+    mapCursorProtobufServerMessage(
+      interaction({ case: "tokenDelta", value: create(TokenDeltaUpdateSchema, { tokens: 42 }) }),
+      state,
+    );
+
+    expect(mapCursorProtobufServerMessage(turnEnd, state)).toEqual([
+      { type: "done", usage: { inputTokens: 120_000, outputTokens: 42, totalTokens: 120_042, estimated: true } },
+    ]);
+  });
+
   test("checkpoint usage clamps inferred input when output delta exceeds context", () => {
     const state = createCursorProtobufEventState();
     const checkpoint = create(AgentServerMessageSchema, {

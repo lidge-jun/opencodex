@@ -14,6 +14,7 @@ interface StoredResponseState {
   createdAt: number;
   items: unknown[];
   conversationId?: string;
+  cursorContextTokens?: number;
   cursorCheckpointUsable?: boolean;
 }
 
@@ -144,9 +145,17 @@ export function previousResponseConversationId(responseId: string | undefined): 
   return states.get(responseId)?.conversationId;
 }
 
+/** Last active Cursor context reported on the preceding Responses turn. */
+export function previousResponseCursorContextTokens(responseId: string | undefined): number | undefined {
+  if (!responseId) return undefined;
+  ensureLoaded();
+  pruneResponses();
+  return states.get(responseId)?.cursorContextTokens;
+}
+
 export function rememberResponseState(
   requestBody: unknown,
-  response: { id?: unknown; output?: unknown; status?: unknown },
+  response: { id?: unknown; output?: unknown; status?: unknown; usage?: unknown },
   conversationId?: string,
   opts?: { force?: boolean },
 ): void {
@@ -160,6 +169,17 @@ export function rememberResponseState(
   if (request.store === false && !opts?.force) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
   if (response.status !== undefined && response.status !== "completed") return;
+  const rawContextTokens = conversationId
+    && response.usage
+    && typeof response.usage === "object"
+    && !Array.isArray(response.usage)
+    ? (response.usage as { total_tokens?: unknown }).total_tokens
+    : undefined;
+  const cursorContextTokens = typeof rawContextTokens === "number"
+    && Number.isFinite(rawContextTokens)
+    && rawContextTokens > 0
+    ? Math.floor(rawContextTokens)
+    : undefined;
   ensureLoaded();
   states.set(response.id, {
     createdAt: now(),
@@ -170,6 +190,7 @@ export function rememberResponseState(
     // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
     // checkpoint must not be reused — but the conversation id string itself is still valid.
     ...(conversationId ? { conversationId } : {}),
+    ...(cursorContextTokens !== undefined ? { cursorContextTokens } : {}),
     cursorCheckpointUsable: !response.output.some(item => {
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     }),

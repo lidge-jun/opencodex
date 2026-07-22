@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createLiveCursorTransport, CursorMissingCredentialError, parseConnectEndStreamError, resolveCursorToken } from "../src/adapters/cursor/live-transport";
+import { createLiveCursorTransport, CursorMissingCredentialError, finalizeAfterDrain, parseConnectEndStreamError, resolveCursorToken } from "../src/adapters/cursor/live-transport";
+import type { CursorProtobufEventState } from "../src/adapters/cursor/protobuf-events";
+import type { CursorServerMessage } from "../src/adapters/cursor/types";
 
 describe("Cursor live transport", () => {
   test("fails before network when no Cursor credential is configured", () => {
@@ -25,6 +27,42 @@ describe("Cursor live transport", () => {
     expect(transport).toHaveProperty("run");
     expect(JSON.stringify(transport)).not.toContain("secret-cursor-token");
     transport.close?.();
+  });
+
+  test("seeds early-finalize usage from the request fallback before opening the wire", async () => {
+    const transport = createLiveCursorTransport({
+      provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+      headers: new Headers(),
+    });
+    const internals = transport as unknown as {
+      open(
+        request: unknown,
+        signal: AbortSignal | undefined,
+        state: CursorProtobufEventState,
+        push: (event: CursorServerMessage) => void,
+        fail: (error: Error) => void,
+        finish: () => void,
+      ): void;
+    };
+    internals.open = (_request, _signal, state, push, _fail, finish) => {
+      state.usage.outputTokens = 42;
+      for (const event of finalizeAfterDrain(state)) push(event);
+      finish();
+    };
+
+    const events: CursorServerMessage[] = [];
+    for await (const event of transport.run({
+      modelId: "grok-4.5",
+      conversationId: "cursor-context-fallback",
+      system: [],
+      messages: [{ role: "user", content: "use a tool" }],
+      fallbackInputTokens: 120_000,
+    })) events.push(event);
+
+    expect(events).toEqual([
+      { type: "done", usage: { inputTokens: 120_000, outputTokens: 42, totalTokens: 120_042, estimated: true } },
+    ]);
+    await transport.close?.();
   });
 
   test("fails the turn when MCP preparation rejects", async () => {
