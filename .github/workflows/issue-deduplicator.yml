@@ -1,4 +1,4 @@
-﻿name: Issue Deduplicator
+name: Issue Deduplicator
 
 on:
   issues:
@@ -163,6 +163,7 @@ jobs:
         if: github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # Only swallow 404 "label not found"; propagate auth/API/runner failures
           output=$(gh issue edit "${{ github.event.issue.number }}" --remove-label "codex-deduplicate" 2>&1) && exit 0 || {
