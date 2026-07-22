@@ -23,7 +23,7 @@ jobs:
         uses: actions/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9 # v1
         with:
           model: openai/gpt-4o-mini
-          max-completion-tokens: 4000
+          max-tokens: 4000
           system-prompt: >
             You are a GitHub issue translator. Your only job is to detect the
             primary language of the issue and, when it is not English, produce
@@ -102,9 +102,13 @@ jobs:
               return;
             }
 
-            // Update the title so duplicate detection and search work in English
-            const current = context.payload.issue.title;
-            if (current !== title) {
+            // Fetch live issue before updating title — the payload title is from
+            // the original opened event and may be stale on a re-run
+            const { data: liveIssue } = await github.rest.issues.get({ owner, repo, issue_number });
+            const originalTitle = context.payload.issue.title;
+            if (liveIssue.title !== originalTitle) {
+              core.info('Title was already edited after the event; skipping title update.');
+            } else if (liveIssue.title !== title) {
               await github.rest.issues.update({ owner, repo, issue_number, title });
               core.info(`Title updated to: ${title}`);
             }
