@@ -339,18 +339,31 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const setCtxWindowDraft = (provider: string, modelId: string, value: string) => {
     setCwDraft(prev => {
       const cur = { ...(prev[provider] ?? {}) };
-      if (value.trim() === "") delete cur[modelId]; else cur[modelId] = value;
+      // Keep an explicit "" so a cleared override stays visible instead of
+      // falling back to the persisted value on the next render.
+      cur[modelId] = value;
       return { ...prev, [provider]: cur };
     });
   };
   const saveContextWindows = async (provider: string) => {
-    // Build the final map from the draft: blank/non-numeric/non-positive entries are dropped,
-    // valid positive integers are kept. An all-empty draft sends null to clear the field.
+    // Build the final map from the draft: blank entries mean clear, valid positive integers
+    // are kept. Invalid nonblank entries are rejected so users fix them before saving.
     const draft = cwDraft[provider] ?? {};
     const map: Record<string, number> = {};
+    const invalid: string[] = [];
     for (const [id, raw] of Object.entries(draft)) {
+      if (raw.trim() === "") continue;
       const n = Number(raw.replace(/[_,\s]/g, ""));
-      if (Number.isFinite(n) && n > 0 && Number.isInteger(n)) map[id] = Math.floor(n);
+      if (Number.isFinite(n) && n > 0 && Number.isInteger(n)) {
+        map[id] = Math.floor(n);
+      } else {
+        invalid.push(id);
+      }
+    }
+    if (invalid.length > 0) {
+      setCwOk(false);
+      setCwStatus(t("models.contextWindowInvalid"));
+      return;
     }
     setCwSaving(true); setCwStatus("");
     try {

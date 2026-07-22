@@ -81,6 +81,10 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
     if (parsedModels.length > 0) {
       provider.models = parsedModels;
     }
+  } else if (form.modelSource === "auto") {
+    // Explicit true prevents registry enrichment from restoring a preset's liveModels: false
+    // when the user chose Auto-discover for a catalog provider whose seed is static.
+    provider.liveModels = true;
   }
 
   return provider;

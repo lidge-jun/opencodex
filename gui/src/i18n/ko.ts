@@ -262,6 +262,7 @@ export const ko: Record<TKey, string> = {
   "models.contextWindowSave": "저장",
   "models.contextWindowApplied": "컨텍스트 윈도우 저장됨 - 다음 카탈로그 동기화 시 적용됩니다.",
   "models.contextWindowCleared": "컨텍스트 윈도우가 삭제되었습니다.",
+  "models.contextWindowInvalid": "잘못된 값: 양의 정수를 입력하거나 비워두세요.",
   "models.custom": "직접 입력…",
   "models.customApply": "적용",
   "models.customPlaceholder": "토큰 (예: 420000)",

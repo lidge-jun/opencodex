@@ -254,6 +254,7 @@ export const de = {
   "models.contextWindowSave": "Speichern",
   "models.contextWindowApplied": "Kontextfenster gespeichert - gilt bei der nächsten Katalog-Synchronisierung.",
   "models.contextWindowCleared": "Kontextfenster gelöscht.",
+  "models.contextWindowInvalid": "Ungültiger Wert: positive Ganzzahl eingeben oder leer lassen.",
   "models.custom": "Benutzerdefiniert…",
   "models.customApply": "Anwenden",
   "models.customPlaceholder": "Tokens (z. B. 420000)",

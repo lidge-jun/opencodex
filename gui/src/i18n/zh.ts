@@ -262,6 +262,7 @@ export const zh: Record<TKey, string> = {
   "models.contextWindowSave": "保存",
   "models.contextWindowApplied": "上下文窗口已保存 - 下次目录同步生效。",
   "models.contextWindowCleared": "上下文窗口已清除。",
+  "models.contextWindowInvalid": "无效值：请输入正整数或留空。",
   "models.custom": "自定义…",
   "models.customApply": "应用",
   "models.customPlaceholder": "令牌 (例如 420000)",

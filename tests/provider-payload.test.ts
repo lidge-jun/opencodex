@@ -203,7 +203,7 @@ describe("manual model entry (liveModels: false)", () => {
     });
   });
 
-  test("buildProviderPayload with modelSource auto writes no liveModels/models", () => {
+  test("buildProviderPayload with modelSource auto writes explicit liveModels true", () => {
     expect(buildProviderPayload({
       name: "xai",
       adapter: "openai-chat",
@@ -219,6 +219,7 @@ describe("manual model entry (liveModels: false)", () => {
       authMode: "key",
       apiKey: "key",
       defaultModel: "grok-4.5",
+      liveModels: true,
     });
   });
 

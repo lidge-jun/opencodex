@@ -267,6 +267,7 @@ export const en = {
   "models.contextWindowSave": "Save",
   "models.contextWindowApplied": "Context windows saved - applies on the next catalog sync.",
   "models.contextWindowCleared": "Context windows cleared.",
+  "models.contextWindowInvalid": "Invalid value: enter a positive integer or leave blank.",
   "models.custom": "Custom…",
   "models.customApply": "Apply",
   "models.customPlaceholder": "Tokens (e.g. 420000)",

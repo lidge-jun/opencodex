@@ -269,6 +269,7 @@ export const ru: Record<TKey, string> = {
   "models.contextWindowSave": "Сохранить",
   "models.contextWindowApplied": "Контекстные окна сохранены — применятся при следующей синхронизации каталога.",
   "models.contextWindowCleared": "Контекстные окна очищены.",
+  "models.contextWindowInvalid": "Недопустимое значение: введите положительное целое число или оставьте пустым.",
   "models.custom": "Другое…",
   "models.customApply": "Применить",
   "models.customPlaceholder": "Токены (напр. 420000)",

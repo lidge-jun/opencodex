@@ -673,7 +673,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
    }
     if (Object.hasOwn(rawBody, "liveModels")) {
       if (typeof rawBody.liveModels !== "boolean") return jsonResponse({ error: "liveModels must be a boolean" }, 400);
-      if (rawBody.liveModels) delete next.liveModels;
+      if (rawBody.liveModels) next.liveModels = true;
       else next.liveModels = false;
       touched = true;
     }

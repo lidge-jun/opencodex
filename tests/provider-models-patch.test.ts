@@ -69,14 +69,14 @@ describe("PATCH /api/providers manual model list (liveModels / models)", () => {
     }
   });
 
-  test("liveModels true re-enables auto-discovery and clears the manual flag", async () => {
+  test("liveModels true persists explicit true so registry enrichment cannot restore false", async () => {
     const server = startServer(0);
     try {
       await patch("opencode-go", { liveModels: false, models: ["m1"] }, server.url);
       const reenable = await patch("opencode-go", { liveModels: true }, server.url);
       expect(reenable.status).toBe(200);
       const persisted = loadConfig().providers["opencode-go"]!;
-      expect(persisted.liveModels).toBeUndefined();
+      expect(persisted.liveModels).toBe(true);
     } finally {
       await server.stop(true);
     }
