@@ -17,7 +17,13 @@ import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
-import { addFinalRequestLog, type RequestLogContext } from "./request-log";
+import {
+  addFinalRequestLog,
+  httpStatusForTerminalStatus,
+  recordFirstOutput,
+  type RequestLogContext,
+  type RequestLogEntry,
+} from "./request-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 
@@ -58,7 +64,8 @@ export async function handleChatCompletions(
   // for non-streaming clients.
   internalBody.stream = true;
 
-  let _nativeRoute = false;
+  let nativeRoute = false;
+  let directRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string);
     logCtx.model = route.modelId;
@@ -66,7 +73,8 @@ export async function handleChatCompletions(
     logCtx.requestedModel = requestedModel;
     logCtx.provider = route.providerName;
     if (route.provider.adapter === "openai-responses") {
-      _nativeRoute = true;
+      nativeRoute = true;
+      directRoute = route.codexAccountMode === "direct";
       // ChatGPT backend rejects store:true and unsupported sampling knobs.
       internalBody.store = false;
       delete internalBody.max_output_tokens;
@@ -76,6 +84,10 @@ export async function handleChatCompletions(
       delete internalBody.user;
     } else if (internalBody.store === undefined) {
       internalBody.store = false;
+    }
+    if (route.provider.adapter === "openai-chat" && internalBody.text !== undefined) {
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, "response_format is not supported for routed openai-chat models");
     }
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       const raw = chatBody as Rec;
@@ -92,16 +104,16 @@ export async function handleChatCompletions(
   } catch {
     /* unknown model: let handleResponses shape the 404 */
   }
-  void _nativeRoute;
+  void nativeRoute;
 
   const headers = new Headers({ "content-type": "application/json" });
   for (const name of FORWARD_HEADERS) {
-    if (name === "authorization") continue;
+    if (name === "authorization" && !directRoute) continue;
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
   // Prefer main ChatGPT auth so OpenAI-backed sidecars remain reachable on routed turns.
-  try {
+  if (!directRoute) try {
     const { getMainAccountToken } = await import("../codex/main-account");
     const token = getMainAccountToken();
     if (token) {
@@ -118,8 +130,17 @@ export async function handleChatCompletions(
     body: JSON.stringify(internalBody),
   });
 
+  let nativeLogged = false;
+  const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" }) => {
+    if (!logIds || nativeLogged) return;
+    nativeLogged = true;
+    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
+  };
   const upstream = await handleResponses(internalReq, config, logCtx, {
     abortSignal: req.signal,
+    ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
+    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
+    onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
   const response = logIds
     ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx)
@@ -222,5 +243,4 @@ export async function handleChatCompletions(
     },
   });
 }
-
 

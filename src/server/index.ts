@@ -249,7 +249,7 @@ export function startServer(port?: number) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
-        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        const apiAuthError = requireResponsesApiAuth(req, config);
         if (apiAuthError) return withCors(apiAuthError, req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
@@ -475,7 +475,7 @@ export function startServer(port?: number) {
         if (isDraining()) {
           return new Response("Service shutting down", { status: 503, headers: { ...corsHeaders(req, config), "Retry-After": "5" } });
         }
-        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        const apiAuthError = requireResponsesApiAuth(req, config);
         if (apiAuthError) return withCors(apiAuthError, req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);

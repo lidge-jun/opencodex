@@ -162,9 +162,13 @@ function toolChoiceToResponses(choice: unknown, body: Rec): void {
 }
 
 function responseFormatToText(format: unknown): Rec | undefined {
-  if (!isRec(format)) return undefined;
+  if (format === undefined) return undefined;
+  if (!isRec(format)) throw new ChatCompletionsRequestError("response_format must be an object");
   if (format.type === "json_object") return { format: { type: "json_object" } };
-  if (format.type === "json_schema" && isRec(format.json_schema)) {
+  if (format.type === "json_schema") {
+    if (!isRec(format.json_schema)) {
+      throw new ChatCompletionsRequestError("response_format.json_schema is required for type json_schema");
+    }
     const schema = format.json_schema;
     return {
       format: {
@@ -176,7 +180,8 @@ function responseFormatToText(format: unknown): Rec | undefined {
       },
     };
   }
-  return undefined;
+  if (format.type === "text") return undefined;
+  throw new ChatCompletionsRequestError(`unsupported response_format.type: ${String(format.type)}`);
 }
 
 function resolveReasoningEffort(raw: Rec): string | undefined {

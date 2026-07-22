@@ -45,13 +45,23 @@ provider that uses a Copilot subscription as a backend.
 OpenCodex translates Chat Completions into its internal Responses path, so all
 existing providers, routing, OAuth, and sidecars apply.
 
+## Supported fields
+
+The compatibility surface supports `model`, `messages`, `stream`, function tools
+and tool choice, token limits, temperature/top-p/stop, reasoning effort, parallel
+tool calls, prompt cache keys, metadata, and `response_format` on native Responses
+routes. Routed `openai-chat` models reject `response_format` with HTTP 400 because
+their structured-output support is not verified. Other Chat Completions fields,
+including penalties, `n`, and logprobs, are not currently supported.
+
 ## Troubleshooting
 
 - **No models configured** — ensure the proxy is up, base URL ends with `/v1`
   (not `/v1/chat/completions`), and `GET /v1/models` returns a non-empty `data`
   array. Add/enable providers in the OpenCodex dashboard, then sync again.
-- **401** — remote (non-loopback) binds require an admission token as
-  `Authorization: Bearer …` or `x-opencodex-api-key`.
+- **401** — remote (non-loopback) binds require the OpenCodex admission token in
+  `x-opencodex-api-key`. `Authorization` remains the upstream identity for native
+  direct-account mode.
 - **404 on chat** — older OpenCodex builds lacked `/v1/chat/completions`; upgrade
   to a build that includes this surface.
 - **Model ids with `/`** — prefer the namespaced `provider/model` form returned

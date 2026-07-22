@@ -95,6 +95,7 @@ export function responsesSseToChatCompletionsSse(
   const created = Math.floor(Date.now() / 1000);
   // tool call_id -> streaming index (OpenAI requires stable indices per tool call)
   const toolIndexByCallId = new Map<string, number>();
+  const toolIndexByItemId = new Map<string, number>();
   let nextToolIndex = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -172,6 +173,7 @@ export function responsesSseToChatCompletionsSse(
               toolIndex = nextToolIndex++;
               toolIndexByCallId.set(callId, toolIndex);
             }
+            if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
             const frame = chunkBase(id, model, created);
             frame.choices = [{
               index: 0,
@@ -190,12 +192,9 @@ export function responsesSseToChatCompletionsSse(
           }
           case "response.function_call_arguments.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;
-            // Prefer item_id matching when present; otherwise use the last open tool index.
-            let toolIndex = nextToolIndex > 0 ? nextToolIndex - 1 : 0;
             const itemId = typeof data.item_id === "string" ? data.item_id : undefined;
-            if (itemId) {
-              // Some bridges put call_id on the item, not item_id; keep last index.
-            }
+            const toolIndex = (itemId ? toolIndexByItemId.get(itemId) : undefined)
+              ?? (nextToolIndex > 0 ? nextToolIndex - 1 : 0);
             ensureRole();
             const frame = chunkBase(id, model, created);
             frame.choices = [{

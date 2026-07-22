@@ -207,3 +207,202 @@ test("invalid chat completions body returns OpenAI-style 400", async () => {
     upstream.stop(true);
   }
 });
+
+
+test("chatCompletionsToResponsesBody maps response_format and rejects unknown types", () => {
+  const jsonObject = chatCompletionsToResponsesBody({
+    model: "mock/test-model",
+    messages: [{ role: "user", content: "hi" }],
+    response_format: { type: "json_object" },
+  });
+  expect(jsonObject.text).toEqual({ format: { type: "json_object" } });
+
+  expect(() => chatCompletionsToResponsesBody({
+    model: "mock/test-model",
+    messages: [{ role: "user", content: "hi" }],
+    response_format: { type: "xml" },
+  })).toThrow(ChatCompletionsRequestError);
+});
+
+test("responsesSseToChatCompletionsSse routes parallel tool argument deltas by item_id", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "alpha", arguments: "" } })}\n\n`,
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "beta", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"a":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_b", delta: '{"b":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "1}" })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
+  ];
+  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const frame of frames) controller.enqueue(enc.encode(frame));
+      controller.close();
+    },
+  }), "mock/test-model");
+  const text = await new Response(stream).text();
+  const chunks = text.split("\n\n")
+    .map(block => block.trim())
+    .filter(block => block.startsWith("data: ") && !block.includes("[DONE]"))
+    .map(block => JSON.parse(block.slice(6)) as {
+      choices?: Array<{ delta?: { tool_calls?: Array<{ index?: number; function?: { arguments?: string } }> } }>;
+    });
+  const argDeltas = chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls ?? [])
+    .filter(tc => typeof tc.function?.arguments === "string" && tc.function.arguments.length > 0);
+  expect(argDeltas.map(tc => ({ index: tc.index, arguments: tc.function?.arguments }))).toEqual([
+    { index: 0, arguments: '{"a":' },
+    { index: 1, arguments: '{"b":' },
+    { index: 0, arguments: "1}" },
+  ]);
+});
+
+test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
+  const upstream = mockChatUpstream();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+        response_format: { type: "json_object" },
+      }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string; type: string } };
+    expect(json.error.message).toContain("response_format");
+    expect(json.error.type).toBe("invalid_request_error");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/chat/completions direct mode forwards caller Authorization", async () => {
+  const seen: Array<{ authorization: string | null }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push({ authorization: req.headers.get("authorization") });
+      return Response.json({
+        id: "resp_direct",
+        object: "response",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(`${url.pathname.slice("/backend-api/codex".length)}${url.search}`, upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: ["Bear" + "er", "caller-direct-token"].join(" "),
+      },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(seen.some(hit => hit.authorization === ["Bear" + "er", "caller-direct-token"].join(" "))).toBe(true);
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("POST /v1/chat/completions finalizes native passthrough request logs", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
+  clearRequestLogsForTests();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      const frames = [
+        `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: "resp_log" } })}\n\n`,
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "hi" })}\n\n`,
+        `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "resp_log", status: "completed", usage: { input_tokens: 3, output_tokens: 2 } } })}\n\n`,
+      ];
+      return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(`${url.pathname.slice("/backend-api/codex".length)}${url.search}`, upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: ["Bear" + "er", "caller-direct-token"].join(" "),
+      },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("hi");
+    await Bun.sleep(50);
+    const entry = getRequestLogEntries().findLast(e =>
+      e.path === "/v1/chat/completions" || e.model === "gpt-test" || e.requestedModel === "gpt-test"
+    );
+    expect(entry).toBeTruthy();
+    expect(entry?.status).toBe(200);
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+    globalThis.fetch = originalFetch;
+    clearRequestLogsForTests();
+  }
+});
