@@ -106,4 +106,42 @@ describe("/api/injection-model reasoning effort", () => {
     const res = await put(config, { model: "anthropic/claude-sonnet-5" });
     expect(await res.json()).toEqual({ ok: true, model: "anthropic/claude-sonnet-5", effort: "ultra", prompt: null });
   });
+
+  test("GET round-trips combo aliases and excludes an alias-disabled combo", async () => {
+    const alias = "deepseek-v4-flash";
+    const config = makeConfig({
+      defaultProvider: "a",
+      providers: {
+        a: {
+          adapter: "openai-chat",
+          baseUrl: "https://a.example/v1",
+          liveModels: false,
+          models: ["m1"],
+          modelContextWindows: { m1: 128_000 },
+        },
+      },
+      combos: {
+        free: { alias, targets: [{ provider: "a", model: "m1" }] },
+      },
+      injectionModel: alias,
+    });
+
+    let response = await handleManagementAPI(
+      new Request("http://localhost/api/injection-model"), new URL("http://localhost/api/injection-model"), config,
+    );
+    let data = await response!.json() as {
+      model: string | null;
+      available: Array<{ provider: string; model: string; namespaced: string }>;
+    };
+    expect(data.model).toBe(alias);
+    expect(data.available).toContainEqual({ provider: "combo", model: "free", namespaced: alias });
+    expect(data.available.some(model => model.namespaced === "combo/free")).toBe(false);
+
+    config.disabledModels = [alias];
+    response = await handleManagementAPI(
+      new Request("http://localhost/api/injection-model"), new URL("http://localhost/api/injection-model"), config,
+    );
+    data = await response!.json() as typeof data;
+    expect(data.available.some(model => model.namespaced === alias)).toBe(false);
+  });
 });

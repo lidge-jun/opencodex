@@ -158,6 +158,11 @@ codex -m "ollama/llama3" "Refactor this function"
 
 When you omit the `provider/` prefix, opencodex routes to the default provider — or auto-matches based on the model name pattern (e.g., `claude-*` routes to Anthropic, `gpt-*` routes to OpenAI).
 
+Combo aliases are exact public model ids and may be bare names or use a custom namespace. If a
+combo alias exactly matches a configured non-OpenAI `provider/model` selector, the combo
+intentionally takes precedence in routing, `/v1/models`, and the Codex catalog. Renaming that
+alias or deleting the combo immediately restores the physical provider selector.
+
 Routed models also appear in the **Codex App** model picker with per-model reasoning effort controls:
 
 Current Codex builds can expose `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` reasoning

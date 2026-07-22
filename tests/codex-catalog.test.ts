@@ -32,6 +32,7 @@ function normalizedCombo(
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: "medium",
+    alias: null,
     targets: [
       { provider: "a", model: "m1", weight: 1 },
       { provider: "b", model: "m2", weight: 1 },
@@ -148,6 +149,164 @@ describe("combo catalog capability intersection", () => {
     expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "medium"]);
     expect(row?.input_modalities).toEqual(["text"]);
+    expect(row?.owned_by).toBe("combo");
+  });
+
+  test("treats bare and slashed combo aliases as routed catalog rows", () => {
+    for (const alias of ["deepseek-v4-flash", "vendor/deepseek-v4-flash"]) {
+      const model = deriveComboCatalogModel(
+        "mixed",
+        normalizedCombo({ alias }),
+        [memberA, memberB],
+      )!;
+      const row = buildCatalogEntries(nativeTemplate(), [], [model], undefined, false, "default", new Set([alias]))[0]!;
+
+      expect(row.slug).toBe(alias);
+      expect(row.display_name).toBe(alias);
+      expect(row.owned_by).toBe("combo");
+      expect(row.base_instructions).toContain("mixed");
+      expect(row).not.toHaveProperty("model_messages");
+      expect(row).not.toHaveProperty("tool_mode");
+      expect(row.web_search_tool_type).toBe("text_and_image");
+      expect(row.supports_search_tool).toBe(true);
+    }
+  });
+
+  test("preserves exact combo capabilities under an alias", () => {
+    const alias = "deepseek-v4-flash";
+    const model = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias }),
+      [memberA, memberB],
+    )!;
+    const row = buildCatalogEntries(null, [], [model], undefined, false, "default", new Set([alias]))[0]!;
+
+    expect((row.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium"]);
+    expect(row.input_modalities).toEqual(["text"]);
+  });
+
+  test("restores a non-OpenAI catalog row after its shadowing combo alias is renamed or deleted", () => {
+    const alias = "deepseek/deepseek-chat";
+    const provider = { provider: "deepseek", id: "deepseek-chat", owned_by: "deepseek" };
+    const comboFor = (publicAlias: string) => deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias: publicAlias }),
+      [memberA, memberB],
+    )!;
+    const rowsFor = (comboAlias?: string) => buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      comboAlias ? [provider, comboFor(comboAlias)] : [provider],
+      undefined,
+      false,
+      "default",
+      comboAlias ? new Set([comboAlias]) : new Set(),
+    );
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const collided = rowsFor(alias);
+      expect(collided.filter(row => row.slug === alias)).toHaveLength(1);
+      expect(collided.find(row => row.slug === alias)?.owned_by).toBe("combo");
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      const renamed = rowsFor("fast-chat");
+      expect(renamed.find(row => row.slug === alias)).toMatchObject({
+        slug: alias,
+        description: expect.stringContaining("deepseek"),
+      });
+      expect(renamed.find(row => row.slug === alias)?.owned_by).not.toBe("combo");
+      expect(renamed.find(row => row.slug === "fast-chat")?.owned_by).toBe("combo");
+
+      const deleted = rowsFor();
+      expect(deleted.filter(row => row.slug === alias)).toHaveLength(1);
+      expect(deleted.find(row => row.slug === alias)).toMatchObject({
+        slug: alias,
+        description: expect.stringContaining("deepseek"),
+      });
+      expect(deleted.find(row => row.slug === alias)?.owned_by).not.toBe("combo");
+
+      rowsFor(alias);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("removes stale combo alias rows after removal or rename", () => {
+    for (const slug of ["deepseek-v4-flash", "vendor/deepseek-v4-flash"]) {
+      const stale = {
+        slug,
+        owned_by: "combo",
+        input_modalities: ["text"],
+        supported_reasoning_levels: [{ effort: "low" }],
+      };
+      const merged = mergeCatalogEntriesForSync(
+        [stale], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
+        "default", new Set(), false,
+      );
+      expect(merged.some(entry => entry.slug === slug)).toBe(false);
+    }
+  });
+
+  test("filters aliased combos by public or canonical disabled model ids", () => {
+    const combo = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias: "deepseek-v4-flash" }),
+      [memberA, memberB],
+    )!;
+    const provider = { provider: "vendor", id: "deepseek-v4-flash" };
+    const config = (disabledModels: string[]) => ({
+      disabledModels,
+      providers: { vendor: {}, combo: {} },
+    });
+
+    expect(filterCatalogVisibleModels([combo, provider], config(["deepseek-v4-flash"])))
+      .toEqual([provider]);
+    expect(filterCatalogVisibleModels([combo, provider], config(["combo/mixed"])))
+      .toEqual([provider]);
+    expect(filterCatalogVisibleModels([provider], config(["deepseek-v4-flash"])))
+      .toEqual([provider]);
+    expect(filterCatalogVisibleModels([provider], config(["vendor/deepseek-v4-flash"])))
+      .toEqual([]);
+  });
+
+  test("repairs a provider row after its shadowing combo alias is disabled", () => {
+    const alias = "vendor/deepseek-v4-flash";
+    const combo = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias }),
+      [memberA, memberB],
+    )!;
+    const provider = {
+      provider: "vendor",
+      id: "deepseek-v4-flash",
+      reasoningEfforts: ["low", "medium"],
+    };
+    const config = {
+      combos: {
+        mixed: { alias, targets: [{ provider: "a", model: "m1" }] },
+      },
+      disabledModels: ["combo/mixed"],
+      providers: { vendor: {}, combo: {} },
+    };
+
+    const visible = filterCatalogVisibleModels([provider, combo], config);
+    const rows = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      visible,
+      undefined,
+      false,
+      "default",
+      exactComboCatalogSlugs(config),
+    );
+    const levels = (rows.find(row => row.slug === alias)?.supported_reasoning_levels ?? []) as Array<{ effort: string }>;
+    const efforts = levels.map(level => level.effort);
+
+    expect(visible).toEqual([provider]);
+    expect(exactComboCatalogSlugs(config)).toEqual(new Set());
+    expect(efforts).toEqual(["low", "medium", "max", "ultra"]);
   });
 
   test("never repairs an exact combo with an empty modality intersection", () => {
@@ -245,8 +404,21 @@ describe("combo catalog capability intersection", () => {
   });
 
   test("exact combo slugs come only from current config", () => {
-    expect(exactComboCatalogSlugs({ combos: { free: { targets: [{ provider: "a", model: "m1" }] } } }))
-      .toEqual(new Set(["combo/free"]));
+    expect(exactComboCatalogSlugs({ combos: {
+      free: { targets: [{ provider: "a", model: "m1" }] },
+      bare: { alias: "  deepseek-v4-flash  ", targets: [{ provider: "a", model: "m1" }] },
+      slashed: { alias: "vendor/flash", targets: [{ provider: "a", model: "m1" }] },
+      empty: { alias: "   ", targets: [{ provider: "a", model: "m1" }] },
+    } }))
+      .toEqual(new Set(["combo/free", "deepseek-v4-flash", "vendor/flash", "combo/empty"]));
+    expect(exactComboCatalogSlugs({
+      disabledModels: ["combo/free", "deepseek-v4-flash"],
+      combos: {
+        free: { targets: [{ provider: "a", model: "m1" }] },
+        bare: { alias: "deepseek-v4-flash", targets: [{ provider: "a", model: "m1" }] },
+        slashed: { alias: "vendor/flash", targets: [{ provider: "a", model: "m1" }] },
+      },
+    })).toEqual(new Set(["vendor/flash"]));
     expect(exactComboCatalogSlugs({})).toEqual(new Set());
   });
 });

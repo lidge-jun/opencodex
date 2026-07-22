@@ -9,6 +9,18 @@ import type {
 
 export const COMBO_NAMESPACE = "combo";
 const COMBO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/**
+ * Public alias shape: one optional "/" segment, each segment id-shaped. Bare aliases
+ * (no "/") are the masquerade case — the combo answers to a mandated model id with no
+ * `combo/` prefix. Codex-facing slugs tolerate at most one "/", so deeper paths reject.
+ */
+const COMBO_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
+/**
+ * Bare aliases in the OpenAI native family (gpt-*, o1-*, o3-*, o4-*, codex-*) are
+ * rejected: they collide with native catalog rows and the canonical-OpenAI routing
+ * branch, which cannot be shadowed honestly.
+ */
+const NATIVE_OPENAI_FAMILY_PATTERN = /^(?:gpt-|o1-|o3-|o4-|codex-)/;
 
 export interface ComboValidationIssue {
   path: Array<string | number>;
@@ -19,6 +31,8 @@ export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
   defaultEffort: OcxComboDefaultEffort | null;
+  /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
+  alias: string | null;
   targets: Array<Required<OcxComboTarget>>;
 }
 
@@ -37,11 +51,88 @@ export function comboModelId(id: string): string {
   return `${COMBO_NAMESPACE}/${id}`;
 }
 
+/** Public model id clients request: the alias when set, else the default `combo/<id>`. */
+export function comboPublicModelId(id: string, combo: { alias?: string | null }): string {
+  const alias = typeof combo.alias === "string" ? combo.alias.trim() : "";
+  return alias || comboModelId(id);
+}
+
+/**
+ * Resolve a client-requested model id to a combo config key. The canonical `combo/<id>`
+ * form wins first (back-compat); otherwise an exact alias match across configured combos.
+ */
+export function resolveComboId(
+  config: { combos?: Record<string, OcxComboConfig> },
+  modelId: string,
+): string | null {
+  const direct = parseComboModelId(modelId);
+  if (direct) return direct;
+  const combos = config.combos;
+  if (!combos) return null;
+  for (const [id, raw] of Object.entries(combos)) {
+    if (!raw || typeof raw !== "object") continue;
+    const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
+    if (alias && alias === modelId) return id;
+  }
+  return null;
+}
+
+/**
+ * Cross-combo alias checks that need the full combos map (uniqueness). Kept separate
+ * from `comboConfigIssues` so config-file validation and the management API share it.
+ */
+export function comboAliasIssues(
+  id: string,
+  alias: string,
+  combos: Record<string, OcxComboConfig> | undefined,
+  options: { excludeComboId?: string } = {},
+): ComboValidationIssue[] {
+  const issues: ComboValidationIssue[] = [];
+  if (!COMBO_ALIAS_PATTERN.test(alias)) {
+    issues.push({
+      path: ["alias"],
+      message: "alias must use letters, numbers, dot, underscore, or hyphen, with at most one \"/\" segment",
+    });
+    return issues;
+  }
+  if (alias === COMBO_NAMESPACE || alias.startsWith(`${COMBO_NAMESPACE}/`)) {
+    issues.push({
+      path: ["alias"],
+      message: `alias must not use the reserved "${COMBO_NAMESPACE}/" namespace`,
+    });
+  }
+  if (!alias.includes("/") && NATIVE_OPENAI_FAMILY_PATTERN.test(alias)) {
+    issues.push({
+      path: ["alias"],
+      message: "bare aliases in the OpenAI native family (gpt-*, o1-*, o3-*, o4-*, codex-*) are not allowed",
+    });
+  }
+  for (const [otherId, other] of Object.entries(combos ?? {})) {
+    if (otherId === id || otherId === options.excludeComboId) continue;
+    const otherAlias = typeof other?.alias === "string" ? other.alias.trim() : "";
+    if (otherAlias && otherAlias === alias) {
+      issues.push({
+        path: ["alias"],
+        message: `alias "${alias}" is already used by combo "${otherId}"`,
+      });
+    }
+  }
+  return issues;
+}
+
+export interface ComboValidationOptions {
+  requireEnabledTarget?: boolean;
+  /** Full combos map for alias uniqueness checks; omitted during early config load. */
+  combos?: Record<string, OcxComboConfig>;
+  /** Combo being renamed — its stored alias is excluded from uniqueness checks. */
+  excludeComboId?: string;
+}
+
 export function comboConfigIssues(
   id: string,
   raw: unknown,
   providers: Record<string, OcxProviderConfig>,
-  options: { requireEnabledTarget?: boolean } = {},
+  options: ComboValidationOptions = {},
 ): ComboValidationIssue[] {
   const issues: ComboValidationIssue[] = [];
   if (!isValidComboId(id)) {
@@ -86,6 +177,15 @@ export function comboConfigIssues(
       path: ["defaultEffort"],
       message: "defaultEffort must be one of: low, medium, high, xhigh, max, ultra",
     });
+  }
+
+  if (body.alias !== undefined) {
+    if (typeof body.alias !== "string") {
+      issues.push({ path: ["alias"], message: "alias must be a string" });
+    } else {
+      const alias = body.alias.trim();
+      if (alias) issues.push(...comboAliasIssues(id, alias, options.combos, options));
+    }
   }
 
   if (!Array.isArray(body.targets) || body.targets.length === 0) {
@@ -155,16 +255,18 @@ export function comboConfigError(
   id: string,
   raw: unknown,
   providers: Record<string, OcxProviderConfig>,
-  options: { requireEnabledTarget?: boolean } = {},
+  options: ComboValidationOptions = {},
 ): string | null {
   return comboConfigIssues(id, raw, providers, options)[0]?.message ?? null;
 }
 
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
+  const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   return {
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
     defaultEffort: raw.defaultEffort ?? null,
+    alias: alias || null,
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),

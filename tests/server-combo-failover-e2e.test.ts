@@ -20,6 +20,7 @@ import { responseWithDeferredRequestLog } from "../src/server/relay";
 import { readUsageEntries } from "../src/usage/log";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { formatCodexProviderForLog } from "../src/codex/routing";
+import { startServer } from "../src/server";
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -375,6 +376,127 @@ describe("server combo failover 030 activation matrix", () => {
           { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
         ],
       });
+    }
+  });
+
+  test("bare alias runs full failover and preserves structural combo log identity", async () => {
+    const targetBodies: Array<{ provider: string; model?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "a", model: body.model });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "b", model: body.model });
+      return chatSuccess("alias backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, undefined, { alias: "deepseek-v4-flash" });
+    const response = await postLogged(config, { model: "deepseek-v4-flash" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("alias backup");
+    expect(targetBodies).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "deepseek-v4-flash",
+        requestedModel: "deepseek-v4-flash",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 503 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+    }
+  });
+
+  test("ordinary /v1/models restores a non-OpenAI selector after combo alias rename and deletion", async () => {
+    const selector = "deepseek/deepseek-chat";
+    const combo = {
+      strategy: "failover" as const,
+      targets: [{ provider: "deepseek", model: "deepseek-chat" }],
+      alias: selector,
+    };
+    const config = comboConfig({
+      deepseek: provider("openai-chat", "http://127.0.0.1:1/v1", "key-deepseek", {
+        liveModels: false,
+        models: ["deepseek-chat"],
+        modelContextWindows: { "deepseek-chat": 128_000 },
+      }),
+    }, combo.targets, { alias: combo.alias });
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const publicRows = async () => {
+        const response = await fetch(new URL("/v1/models", server.url));
+        expect(response.status).toBe(200);
+        const payload = await response.json() as {
+          data: Array<{ id: string; owned_by: string }>;
+        };
+        return payload.data;
+      };
+      const updateAlias = async (alias: string) => fetch(new URL("/api/combos", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "free", combo: { ...combo, alias } }),
+      });
+
+      expect((await publicRows()).filter(model => model.id === selector)).toEqual([
+        { id: selector, object: "model", created: 0, owned_by: "combo" },
+      ]);
+
+      const renamed = await updateAlias("fast-chat");
+      expect(renamed.status).toBe(200);
+      const renamedRows = await publicRows();
+      expect(renamedRows.filter(model => model.id === selector)).toEqual([
+        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
+      ]);
+      expect(renamedRows.filter(model => model.id === "fast-chat")).toEqual([
+        { id: "fast-chat", object: "model", created: 0, owned_by: "combo" },
+      ]);
+
+      const restored = await updateAlias(selector);
+      expect(restored.status).toBe(200);
+      const deleted = await fetch(new URL("/api/combos?id=free", server.url), { method: "DELETE" });
+      expect(deleted.status).toBe(200);
+      const deletedRows = await publicRows();
+      expect(deletedRows.filter(model => model.id === selector)).toEqual([
+        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
+      ]);
+      expect(deletedRows.some(model => model.owned_by === "combo")).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("ordinary /v1/models preserves raw nested selectors while an exact combo alias wins", async () => {
+    const config = comboConfig({
+      a: provider("openai-chat", "http://127.0.0.1:1/v1", "key-a", {
+        liveModels: false,
+        models: ["vendor/model", "vendor-model"],
+        modelContextWindows: { "vendor/model": 128_000, "vendor-model": 128_000 },
+      }),
+    }, [{ provider: "a", model: "vendor/model" }], { alias: "a/vendor-model" });
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/models", server.url));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as {
+        data: Array<{ id: string; owned_by: string }>;
+      };
+      expect(payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+        { id: "a/vendor-model", object: "model", created: 0, owned_by: "combo" },
+        { id: "a/vendor/model", object: "model", created: 0, owned_by: "a" },
+      ]);
+    } finally {
+      await server.stop(true);
     }
   });
 

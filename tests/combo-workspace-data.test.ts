@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type ComboItem,
   buildComboAttention,
+  comboPublicModelId,
   draftEquals,
   emptyDraft,
   filterCombos,
@@ -24,6 +25,7 @@ function combo(overrides: Partial<ComboItem> = {}): ComboItem {
   return {
     id: "free",
     model: "combo/free",
+    alias: null,
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: "medium",
@@ -39,12 +41,14 @@ function validate(
   item: ComboItem,
   options: {
     existingIds?: readonly string[];
+    existingAliases?: readonly string[];
     isCreate?: boolean;
     providers?: Readonly<Record<string, { disabled?: boolean }>>;
   } = {},
 ) {
   return validateComboDraft(item, {
     existingIds: options.existingIds ?? [],
+    existingAliases: options.existingAliases ?? [],
     isCreate: options.isCreate ?? false,
     providers: options.providers ?? configuredProviders,
   });
@@ -80,6 +84,7 @@ describe("combo-workspace-data", () => {
       {
         id: "fallback",
         model: "combo/fallback",
+        alias: null,
         strategy: "failover",
         stickyLimit: 1,
         defaultEffort: null,
@@ -88,6 +93,7 @@ describe("combo-workspace-data", () => {
       {
         id: "weighted",
         model: "combo/weighted",
+        alias: null,
         strategy: "round-robin",
         stickyLimit: 4,
         defaultEffort: "high",
@@ -99,6 +105,35 @@ describe("combo-workspace-data", () => {
     ]);
     expect(parseComboList([])).toEqual([]);
     expect(parseComboList({ combos: "invalid" })).toEqual([]);
+  });
+
+  test("parseComboList normalizes aliases and derives the public model name", () => {
+    const items = parseComboList({
+      combos: [
+        {
+          id: "masked",
+          alias: " deepseek-v4-flash ",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+        {
+          id: "plain",
+          alias: "   ",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+        {
+          id: "serverwins",
+          model: "server/public-name",
+          alias: "ignored-by-model",
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      ],
+    });
+
+    expect(items.map((item) => [item.id, item.model, item.alias])).toEqual([
+      ["masked", "deepseek-v4-flash", "deepseek-v4-flash"],
+      ["plain", "combo/plain", null],
+      ["serverwins", "server/public-name", "ignored-by-model"],
+    ]);
   });
 
   test("group and filter cover id, wire model, provider, and target model", () => {
@@ -134,7 +169,7 @@ describe("combo-workspace-data", () => {
     ]);
   });
 
-  test("validates combo id boundaries and duplicate create ids", () => {
+  test("validates combo id boundaries and duplicate ids on create and rename", () => {
     expect(isValidComboId("a")).toBe(true);
     expect(isValidComboId(`a${"x".repeat(63)}`)).toBe(true);
     expect(isValidComboId(`a${"x".repeat(64)}`)).toBe(false);
@@ -144,7 +179,41 @@ describe("combo-workspace-data", () => {
     expect(validate(combo({ id: "" }))).toBe("missingId");
     expect(validate(combo({ id: "-bad" }))).toBe("invalidId");
     expect(validate(combo(), { existingIds: ["free"], isCreate: true })).toBe("duplicateId");
-    expect(validate(combo(), { existingIds: ["free"], isCreate: false })).toBeNull();
+    // Edit callers pass OTHER combos' ids: keeping the current id passes, renaming
+    // into an occupied id fails.
+    expect(validate(combo(), { existingIds: ["other"], isCreate: false })).toBeNull();
+    expect(validate(combo({ id: "other" }), { existingIds: ["other"], isCreate: false })).toBe("duplicateId");
+  });
+
+  test("validates public alias shape, namespace, family, and uniqueness", () => {
+    expect(validate(combo({ alias: "deepseek-v4-flash" }))).toBeNull();
+    expect(validate(combo({ alias: "vendor/deepseek-v4-flash" }))).toBeNull();
+    expect(validate(combo({ alias: "  " }))).toBeNull();
+    expect(validate(combo({ alias: "bad alias" }))).toBe("invalidAlias");
+    expect(validate(combo({ alias: "a/b/c" }))).toBe("invalidAlias");
+    expect(validate(combo({ alias: "-leading-hyphen" }))).toBe("invalidAlias");
+    expect(validate(combo({ alias: "combo/other" }))).toBe("aliasReservedNamespace");
+    expect(validate(combo({ alias: "combo" }))).toBe("aliasReservedNamespace");
+    expect(validate(combo({ alias: "gpt-5" }))).toBe("aliasNativeFamily");
+    expect(validate(combo({ alias: "codex-latest" }))).toBe("aliasNativeFamily");
+    // Slashed ids in the same families are fine — only BARE names collide with natives.
+    expect(validate(combo({ alias: "openai/gpt-5" }))).toBeNull();
+    expect(validate(combo({ alias: "taken" }), { existingAliases: ["taken"] })).toBe("duplicateAlias");
+    expect(validate(combo({ alias: "taken" }), { existingAliases: ["other"] })).toBeNull();
+  });
+
+  test("create drafts support bare, custom-prefixed, and default public names", () => {
+    expect(comboPublicModelId("aka", "aka")).toBe("aka");
+    expect(comboPublicModelId("aka", "vendor/aka")).toBe("vendor/aka");
+    expect(comboPublicModelId("aka", null)).toBe("combo/aka");
+
+    const bare = combo({ id: "aka", model: "aka", alias: "aka" });
+    expect(validate(bare, { isCreate: true })).toBeNull();
+    expect(toPutBody(bare).combo.alias).toBe("aka");
+
+    const defaultName = combo({ id: "aka", model: "combo/aka", alias: null });
+    expect(validate(defaultName, { isCreate: true })).toBeNull();
+    expect("alias" in toPutBody(defaultName).combo).toBe(false);
   });
 
   test("toPutBody emits the exact plain-object PUT contract", () => {
@@ -195,6 +264,28 @@ describe("combo-workspace-data", () => {
     expect(emptyDraft().defaultEffort).toBeNull();
     const draft = combo({ defaultEffort: null });
     expect(toPutBody(draft).combo.defaultEffort).toBeNull();
+  });
+
+  test("toPutBody carries alias and renameFrom only when set", () => {
+    const aliased = toPutBody(combo({ alias: " deepseek-v4-flash " }));
+    expect(aliased).toEqual({
+      id: "free",
+      combo: {
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2" },
+        ],
+        strategy: "failover",
+        defaultEffort: "medium",
+        alias: "deepseek-v4-flash",
+      },
+    });
+    expect("renameFrom" in aliased).toBe(false);
+
+    const renamed = toPutBody(combo({ id: "new-name" }), { renameFrom: "free" });
+    expect(renamed.id).toBe("new-name");
+    expect(renamed.renameFrom).toBe("free");
+    expect("alias" in renamed.combo).toBe(false);
   });
 
   test("rejects duplicate targets", () => {
@@ -276,5 +367,17 @@ describe("combo-workspace-data", () => {
       ...baseline,
       targets: [{ ...baseline.targets[0]!, weight: 4 }, baseline.targets[1]!],
     })).toBe(false);
+  });
+
+  test("draftEquals tracks id and alias edits for rename and public-name flows", () => {
+    const baseline = combo();
+
+    expect(draftEquals(baseline, { ...baseline })).toBe(true);
+    expect(draftEquals(baseline, { ...baseline, id: "renamed" })).toBe(false);
+    expect(draftEquals(baseline, { ...baseline, alias: "deepseek-v4-flash" })).toBe(false);
+    expect(draftEquals(
+      { ...baseline, alias: "deepseek-v4-flash" },
+      { ...baseline, alias: null },
+    )).toBe(false);
   });
 });

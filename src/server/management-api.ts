@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../codex/catalog";
-import { invalidateCodexModelsCache, nativeModelRows } from "../codex/catalog";
+import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -813,21 +813,29 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
       };
     });
-    // Custom metadata wins when a live/static routed row resolves to the same Codex-facing slug.
-    const customNamespaced = new Set(customModels.map(c => c.namespaced));
-    const dedupedRouted = models.map(m => {
+    const publicModels = uniqueCatalogModelsForPublicList(models);
+    const comboNamespaced = new Set(
+      publicModels.filter(model => model.provider === "combo").map(catalogModelSlug),
+    );
+    const visibleCustomModels = customModels.filter(model => !comboNamespaced.has(model.namespaced));
+    // Custom metadata wins when a physical live/static row resolves to the same Codex-facing
+    // slug, while a combo keeps the same precedence it has in routing and /v1/models.
+    const customNamespaced = new Set(visibleCustomModels.map(c => c.namespaced));
+    const dedupedRouted = publicModels.map(m => {
       // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
-      const namespaced = routedSlug(m.provider, m.id);
-      if (customNamespaced.has(namespaced)) return null;
+      const namespaced = catalogModelSlug(m);
+      if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
       const contextCap = providerContextCap(config, m.provider);
       return {
         ...m,
         namespaced,
-        disabled: [...disabled].some(stored => slugEquals(stored, m.provider, m.id)),
+        disabled: [...disabled].some(stored => (
+          stored === namespaced || slugEquals(stored, m.provider, m.id)
+        )),
         ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
       };
     }).filter(Boolean);
-    return jsonResponse([...native, ...dedupedRouted, ...customModels]);
+    return jsonResponse([...native, ...dedupedRouted, ...visibleCustomModels]);
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
@@ -1091,9 +1099,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const nativeModels = listCatalogNativeSlugs()
       .filter(slug => !disabled.has(slug))
       .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
-    const routedModels = models
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: routedSlug(m.provider, m.id) }))
-      .filter(m => ![...disabled].some(stored => slugEquals(stored, m.provider, m.model)));
+    const routedModels = uniqueCatalogModelsForPublicList(models)
+      .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
+      .filter(m => ![...disabled].some(stored => (
+        stored === m.namespaced || slugEquals(stored, m.provider, m.model)
+      )));
     return jsonResponse({
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
@@ -1169,9 +1179,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../codex/catalog");
-    const visibleRouted = models
-      .filter(m => ![...disabled].some(stored => slugEquals(stored, m.provider, m.id)))
-      .map(m => routedSlug(m.provider, m.id));
+    const visibleRouted = [...new Set(models
+      .filter(m => ![...disabled].some(stored =>
+        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
+      ))
+      .map(catalogModelSlug))];
     const available = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
       ...visibleRouted,
@@ -1692,12 +1704,15 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   if (url.pathname === "/api/combos" && req.method === "GET") {
-    const { comboModelId, getCombo, listComboIds } = await import("../combos");
-    return jsonResponse({ combos: listComboIds(config).map(id => ({
-      id,
-      model: comboModelId(id),
-      ...getCombo(config, id)!,
-    })) });
+    const { comboPublicModelId, getCombo, listComboIds } = await import("../combos");
+    return jsonResponse({ combos: listComboIds(config).map(id => {
+      const combo = getCombo(config, id)!;
+      return {
+        id,
+        model: comboPublicModelId(id, combo),
+        ...combo,
+      };
+    }) });
   }
 
   if (url.pathname === "/api/combos" && req.method === "PUT") {
@@ -1711,18 +1726,109 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return jsonResponse({ error: "id is required and must be a string" }, 400);
     }
     const id = body.id.trim();
-    const { comboConfigError, normalizeComboConfig, comboModelId, clearComboSelectionState, clearComboTargetCooldowns } = await import("../combos");
+    let renameFrom: string | undefined;
+    if (body.renameFrom !== undefined) {
+      if (typeof body.renameFrom !== "string" || !body.renameFrom.trim()) {
+        return jsonResponse({ error: "renameFrom must be a non-empty string" }, 400);
+      }
+      renameFrom = body.renameFrom.trim();
+      if (renameFrom === id) {
+        return jsonResponse({ error: "renameFrom must differ from id" }, 400);
+      }
+      if (!Object.hasOwn(config.combos ?? {}, renameFrom)) {
+        return jsonResponse({ error: `combo "${renameFrom}" does not exist` }, 400);
+      }
+      if (Object.hasOwn(config.combos ?? {}, id)) {
+        return jsonResponse({ error: `combo "${id}" already exists` }, 400);
+      }
+    }
+    const {
+      clearComboSelectionState,
+      clearComboTargetCooldowns,
+      comboConfigError,
+      comboModelId,
+      comboPublicModelId,
+      normalizeComboConfig,
+    } = await import("../combos");
     const error = comboConfigError(id, body.combo, config.providers, {
       requireEnabledTarget: true,
+      combos: config.combos,
+      excludeComboId: renameFrom ?? id,
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../types").OcxComboConfig);
-    config.combos = { ...(config.combos ?? {}), [id]: normalized };
+    const stored: import("../types").OcxComboConfig = normalized.alias === null
+      ? (({ alias: _alias, ...rest }) => rest)(normalized)
+      : normalized;
+    const sourceId = renameFrom ?? id;
+    const previous = config.combos?.[sourceId];
+    const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
+    const newPublicModel = comboPublicModelId(id, normalized);
+    const nextCombos = { ...(config.combos ?? {}) };
+    if (renameFrom) delete nextCombos[renameFrom];
+    nextCombos[id] = stored;
+    config.combos = nextCombos;
+    let shouldSyncClaudeAgentDefs = false;
+    const migratedModels = new Set<string>();
+    if (oldPublicModel && oldPublicModel !== newPublicModel) {
+      migratedModels.add(oldPublicModel);
+    }
+    if (renameFrom) migratedModels.add(comboModelId(renameFrom));
+    if (migratedModels.size > 0) {
+      const migrateReference = (model: string): string => (
+        migratedModels.has(model) ? newPublicModel : model
+      );
+      const migrateAgentReference = (model: string): string => {
+        const migrated = migrateReference(model);
+        if (migrated !== model) shouldSyncClaudeAgentDefs = true;
+        return migrated;
+      };
+      const migrateReferences = (models: string[]): string[] => [
+        ...new Set(models.map(migrateReference)),
+      ];
+      if (config.disabledModels) {
+        config.disabledModels = migrateReferences(config.disabledModels);
+      }
+      if (config.subagentModels) {
+        config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
+      }
+      if (config.injectionModel && migratedModels.has(config.injectionModel)) {
+        config.injectionModel = newPublicModel;
+      }
+      if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
+        config.shadowCallIntercept = {
+          ...config.shadowCallIntercept,
+          model: newPublicModel,
+        };
+      }
+      if (config.claudeCode) {
+        const claudeCode = { ...config.claudeCode };
+        for (const field of ["model", "smallFastModel"] as const) {
+          if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
+        }
+        if (claudeCode.tierModels) {
+          claudeCode.tierModels = Object.fromEntries(
+            Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
+          );
+        }
+        if (claudeCode.modelMap) {
+          claudeCode.modelMap = Object.fromEntries(
+            Object.entries(claudeCode.modelMap).map(([source, model]) => [source, migrateAgentReference(model)]),
+          );
+        }
+        config.claudeCode = claudeCode;
+      }
+    }
     saveConfig(config);
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
+    if (renameFrom) {
+      clearComboSelectionState(renameFrom);
+      clearComboTargetCooldowns(renameFrom);
+    }
     await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, id, model: comboModelId(id), combo: normalized });
+    if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: normalized });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {

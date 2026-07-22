@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import ComboWorkspace from "../components/ComboWorkspace";
 import {
   type ComboItem,
+  comboModelId,
   parseComboList,
   toPutBody,
 } from "../combo-workspace-data";
@@ -140,12 +141,12 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timer);
   }, [fetchAll]);
 
-  const saveCombo = async (item: ComboItem, isCreate: boolean) => {
+  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
     try {
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(toPutBody(item)),
+        body: JSON.stringify(toPutBody(item, renameFrom ? { renameFrom } : {})),
       });
       const data = await res.json() as unknown;
       const serverError = responseError(data);
@@ -155,7 +156,12 @@ export default function Combos({ apiBase }: { apiBase: string }) {
         return { ok: false as const, error: err };
       }
       await fetchAll();
-      notify(isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"), true);
+      notify(
+        renameFrom
+          ? t("cws.renamed", { from: comboModelId(renameFrom), to: item.model })
+          : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
+        true,
+      );
       return { ok: true as const };
     } catch {
       const err = t("cws.saveFailed");

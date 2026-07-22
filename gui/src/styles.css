@@ -106,6 +106,12 @@
   --motion-fast: 120ms;
   --motion-normal: 180ms;
 
+  /* stacking: sticky chrome < overlay hosts < popovers/drawers < modals */
+  --z-sticky: 20;
+  --z-overlay: 30;
+  --z-popover: 40;
+  --z-modal: 50;
+
   --shadow: 0 1px 2px light-dark(rgba(16, 24, 40, 0.06), rgba(0, 0, 0, 0.5)), 0 10px 28px light-dark(rgba(16, 24, 40, 0.07), rgba(0, 0, 0, 0.30));
   --shadow-sm: 0 1px 2px light-dark(rgba(16, 24, 40, 0.06), rgba(0, 0, 0, 0.4));
 
@@ -209,6 +215,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 .sidebar {
   position: sticky; top: 0; align-self: start; height: 100dvh;
+  z-index: var(--z-overlay);
   display: flex; flex-direction: column; gap: 4px;
   padding: 18px 14px;
   border-right: 1px solid var(--border);
@@ -270,7 +277,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .menu-toggle:hover { background: var(--accent-soft); color: var(--text); }
 .menu-toggle svg { width: 20px; height: 20px; }
 .drawer-scrim {
-  display: none; position: fixed; inset: 0; z-index: 30;
+  display: none; position: fixed; inset: 0; z-index: var(--z-overlay);
   background: light-dark(rgba(20, 20, 20, 0.32), rgba(0, 0, 0, 0.52));
 }
 
@@ -454,6 +461,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .group-head { padding: 10px 12px; cursor: pointer; background: var(--surface); transition: background var(--motion-fast); }
 .group-head:hover { background: var(--hover); }
 .group-head.open { border-bottom: 1px solid var(--border-soft); }
+.models-combos-card { overflow: hidden; }
+.models-combo-row {
+  min-height: var(--control-lg);
+  padding: 0 var(--space-3) 0 calc(var(--space-8) + var(--space-0-5));
+  gap: var(--space-2);
+  align-items: center;
+}
 .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .model-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; transition: border-color var(--motion-fast), background var(--motion-fast); }
 .model-card:hover { border-color: var(--faint); background: var(--hover); }
@@ -532,7 +546,7 @@ select.input { appearance: none; }
 .select-trigger:hover:not(:disabled) { border-color: var(--faint); box-shadow: 0 2px 12px rgb(0 0 0 / 0.10); }
 .select-trigger:disabled { opacity: 0.5; cursor: default; }
 .select-dropdown {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 40;
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--z-popover);
   min-width: 100%; max-height: 280px; overflow-y: auto;
   background: color-mix(in oklab, canvas 84%, transparent);
   backdrop-filter: blur(20px) saturate(1.4);
@@ -634,7 +648,7 @@ select.input { appearance: none; }
 
 /* ---- modal ---- */
 /* Liquid-glass modal: heavy tint + blur so background content is unreadable */
-.modal-overlay { position: fixed; inset: 0; background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82)); backdrop-filter: blur(40px) saturate(1.2); -webkit-backdrop-filter: blur(40px) saturate(1.2); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; z-index: 50; }
+.modal-overlay { position: fixed; inset: 0; background: light-dark(rgba(17, 19, 28, 0.78), rgba(0, 0, 0, 0.82)); backdrop-filter: blur(40px) saturate(1.2); -webkit-backdrop-filter: blur(40px) saturate(1.2); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; z-index: var(--z-modal); }
 /* Native <dialog>.showModal() UA styles (solid border + ::backdrop) stack on top of
    .modal-overlay and produce a white frame + double dim. Reset when the dialog IS the overlay. */
 dialog.modal-overlay {
@@ -851,7 +865,7 @@ button.prov-account-row.active { cursor: default; }
      leftover viewport height between the two rows and inflates the top bar */
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .mobile-topbar {
-    position: sticky; top: 0; z-index: 20;
+    position: sticky; top: 0; z-index: var(--z-sticky);
     display: flex; align-items: center; gap: 2px;
     padding: 4px 10px; min-width: 0;
     border-bottom: 1px solid var(--border);
@@ -864,7 +878,7 @@ button.prov-account-row.active { cursor: default; }
   .menu-toggle { display: inline-flex; }
   /* drawer: the desktop sidebar kept intact (nav groups + foot + GitHub link), off-canvas */
   .sidebar {
-    position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-popover);
     width: min(280px, 84vw); height: 100dvh;
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
     /* overlay glass: near-opaque so content behind never reads through — the blur

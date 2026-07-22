@@ -35,6 +35,8 @@ export interface RequestLogContext {
   firstOutputMs?: number;
   surface?: "claude";
   requestedModel?: string;
+  /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
+  comboId?: string;
   requestedEffort?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
@@ -564,8 +566,7 @@ export function addFinalRequestLog(
     recoveryKinds: [...attempt.recoveryKinds],
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
   }));
-  const isCombo = (logCtx.requestedModel ?? "").startsWith("combo/")
-    && (attempts?.length ?? 0) > 0;
+  const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
   const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;

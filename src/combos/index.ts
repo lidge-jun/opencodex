@@ -1,14 +1,17 @@
 export {
   COMBO_NAMESPACE,
+  comboAliasIssues,
   comboConfigError,
   comboConfigIssues,
   comboDefaultEffort,
   comboModelId,
+  comboPublicModelId,
   getCombo,
   isValidComboId,
   listComboIds,
   normalizeComboConfig,
   parseComboModelId,
+  resolveComboId,
   targetKey,
 } from "./types";
 export {

@@ -684,7 +684,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       </div>
 
      {combos !== null && !combosError && combos.length === 0 && (
-       <div className="card" style={{ marginBottom: 10 }}>
+       <div className="card models-combos-card" style={{ marginBottom: 10 }}>
          <div className="row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 8 }}>
            <div className="row" style={{ gap: 8, minWidth: 0 }}>
              <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
@@ -696,7 +696,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
        </div>
      )}
      {combos !== null && !combosError && combos.length > 0 && (
-       <div className="card" style={{ marginBottom: 10 }}>
+       <div className="card models-combos-card" style={{ marginBottom: 10 }}>
          <div className={`row group-head${combosOpen ? " open" : ""}`} style={{ gap: 8 }}>
            <button
              type="button"
@@ -715,8 +715,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
          {combosOpen && (
            <div>
              {combos.map(c => (
-               <div key={c.id} className="row" style={{ padding: "6px 12px 6px 34px", gap: 8 }}>
-                 <span className="mono">combo/{c.id}</span>
+               <div key={c.id} className="row models-combo-row">
+                 <span className="mono leading-ui">{c.model}</span>
                  <span className="muted text-label">{c.strategy} · {c.targets.length}</span>
                </div>
              ))}
