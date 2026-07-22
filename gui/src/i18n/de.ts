@@ -575,7 +575,7 @@ export const de = {
   "api.tunnelStatusError": "Fehler",
   "api.tunnelModeQuick": "Quick Tunnel · Nur für erweitertes Debugging. Die Adresse ist temporär, Anfragen sind begrenzt und SSE wird nicht unterstützt.",
   "api.tunnelModeNamed": "Named Tunnel · Der Standard für öffentlichen Zugriff mit stabilem Hostnamen und vollständiger SSE-Unterstützung.",
-  "api.tunnelNeedsKey": "Erstelle zuerst einen API-Schlüssel, bevor du den öffentlichen Zugriff aktivierst.",
+  "api.tunnelNeedsKey": "Erstelle zuerst einen API-Schlüssel für Named Tunnel. Quick Tunnel kann direkt für temporäres Debugging genutzt werden.",
   "api.tunnelEnvironmentManaged": "Die Cloudflare-Konfiguration wird über Umgebungsvariablen verwaltet. Vervollständige oder entferne sie, bevor du diesen Assistenten verwendest.",
   "api.tunnelEnable": "Öffentlichen Zugriff aktivieren",
   "api.tunnelDisable": "Öffentlichen Zugriff deaktivieren",

@@ -264,7 +264,7 @@ describe("Cloudflare tunnel management API", () => {
     expect(starts).toBe(1);
   });
 
-  test("allows Quick Tunnel as an explicit one-click option even before Named setup", async () => {
+  test("allows Quick Tunnel as an explicit one-click option even before Named setup or API keys", async () => {
     let status = stoppedStatus();
     const starts: unknown[] = [];
     const controller = {
@@ -282,7 +282,7 @@ describe("Cloudflare tunnel management API", () => {
       stop: async () => stoppedStatus(),
     } as unknown as CloudflareTunnelController;
     const cfg = {
-      ...config(),
+      ...config(false),
       cloudflareTunnel: { enabled: false, mode: "named" as const },
     };
     const deps = { cloudflareTunnel: controller, listenPort: 54321 };
@@ -294,6 +294,9 @@ describe("Cloudflare tunnel management API", () => {
     });
     const namedResponse = await handleManagementAPI(namedReq, new URL(namedReq.url), cfg, deps);
     expect(namedResponse?.status).toBe(409);
+    expect(await namedResponse?.json()).toMatchObject({
+      error: "Create an opencodex API key before enabling public access.",
+    });
     expect(starts).toEqual([]);
 
     const quickReq = request("/api/cloudflare-tunnel", {

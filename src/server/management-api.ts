@@ -526,13 +526,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (body.mode !== undefined && body.mode !== "quick" && body.mode !== "named") {
       return jsonResponse({ error: "mode must be quick or named" }, 400);
     }
-    if (body.enabled && !hasAdmissionSecret) {
+    const requestedQuick = body.enabled && body.mode === "quick";
+    if (body.enabled && !requestedQuick && !hasAdmissionSecret) {
       return jsonResponse({
         ...tunnelPayload(),
         error: "Create an opencodex API key before enabling public access.",
       }, 409);
     }
-    const requestedQuick = body.enabled && body.mode === "quick";
     if (body.enabled && !requestedQuick && !tunnelSetup.configured) {
       return jsonResponse({
         ...tunnelPayload(),

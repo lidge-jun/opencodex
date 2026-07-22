@@ -877,7 +877,7 @@ export const en = {
   "api.tunnelStatusError": "Error",
   "api.tunnelModeQuick": "Quick Tunnel · Advanced debugging only. It uses a temporary address, limits in-flight requests, and does not support SSE.",
   "api.tunnelModeNamed": "Named Tunnel · The default public access mode, with a stable hostname and full SSE streaming support.",
-  "api.tunnelNeedsKey": "Generate an API key before enabling public access.",
+  "api.tunnelNeedsKey": "Generate an API key before enabling Named Tunnel. Quick Tunnel can be used directly for temporary debugging.",
   "api.tunnelEnvironmentManaged": "Cloudflare settings are controlled by environment variables. Complete or remove them before using this setup.",
   "api.tunnelEnable": "Enable public access",
   "api.tunnelDisable": "Disable public access",

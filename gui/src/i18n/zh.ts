@@ -595,7 +595,7 @@ export const zh: Record<TKey, string> = {
   "api.tunnelStatusError": "错误",
   "api.tunnelModeQuick": "Quick Tunnel · 仅用于高级调试，地址临时、并发受限且不支持 SSE。",
   "api.tunnelModeNamed": "Named Tunnel · 默认公网访问模式，提供稳定域名并完整支持 SSE 流式传输。",
-  "api.tunnelNeedsKey": "请先生成 API 密钥，再开启公网访问。",
+  "api.tunnelNeedsKey": "Named Tunnel 请先生成 API 密钥；Quick Tunnel 可直接用于临时调试。",
   "api.tunnelEnvironmentManaged": "Cloudflare 配置由环境变量管理。请先补全或移除这些环境变量，再使用页面向导。",
   "api.tunnelEnable": "开启公网访问",
   "api.tunnelDisable": "关闭公网访问",

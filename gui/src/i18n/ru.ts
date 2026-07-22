@@ -877,7 +877,7 @@ export const ru: Record<TKey, string> = {
   "api.tunnelStatusError": "Ошибка",
   "api.tunnelModeQuick": "Quick Tunnel · Только для расширенной отладки. Адрес временный, число запросов ограничено, SSE не поддерживается.",
   "api.tunnelModeNamed": "Named Tunnel · Режим публичного доступа по умолчанию со стабильным именем и полной поддержкой SSE.",
-  "api.tunnelNeedsKey": "Перед включением публичного доступа создайте API-ключ.",
+  "api.tunnelNeedsKey": "Для Named Tunnel сначала создайте API-ключ. Quick Tunnel можно использовать сразу для временной отладки.",
   "api.tunnelEnvironmentManaged": "Настройки Cloudflare управляются переменными окружения. Заполните или удалите их перед использованием мастера.",
   "api.tunnelEnable": "Включить публичный доступ",
   "api.tunnelDisable": "Отключить публичный доступ",

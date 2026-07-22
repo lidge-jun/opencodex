@@ -295,7 +295,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const tunnelEnabled = isTunnelEnabled(tunnel);
   const tunnelNeedsSetup = shouldOpenTunnelSetup(tunnel);
   const tunnelCanProceed = tunnelNeedsSetup ? tunnel.canConfigure : tunnel.canEnable;
-  const tunnelCanUseQuick = !tunnelEnabled && (tunnel.canEnable || tunnel.canConfigure) && tunnel.configurationSource !== "environment";
+  const tunnelCanUseQuick = !tunnelEnabled && tunnel.configurationSource !== "environment";
   const tunnelBusy = tunnelRequestPending || isTunnelTransitioning(tunnel.status);
   const tunnelError = tunnelRequestError ?? tunnel.error;
   const tunnelButtonLabel = tunnel.status === "starting"

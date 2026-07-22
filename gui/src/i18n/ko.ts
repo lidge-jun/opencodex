@@ -595,7 +595,7 @@ export const ko: Record<TKey, string> = {
   "api.tunnelStatusError": "오류",
   "api.tunnelModeQuick": "Quick Tunnel · 고급 디버깅 전용입니다. 주소가 임시이고 요청 수가 제한되며 SSE를 지원하지 않습니다.",
   "api.tunnelModeNamed": "Named Tunnel · 안정적인 호스트 이름과 완전한 SSE 스트리밍을 지원하는 기본 공개 액세스 모드입니다.",
-  "api.tunnelNeedsKey": "공개 액세스를 켜기 전에 API 키를 먼저 생성하세요.",
+  "api.tunnelNeedsKey": "Named Tunnel을 켜기 전에 API 키를 생성하세요. Quick Tunnel은 임시 디버깅용으로 바로 사용할 수 있습니다.",
   "api.tunnelEnvironmentManaged": "Cloudflare 설정이 환경 변수로 관리되고 있습니다. 이 마법사를 사용하기 전에 변수를 완성하거나 제거하세요.",
   "api.tunnelEnable": "공개 액세스 켜기",
   "api.tunnelDisable": "공개 액세스 끄기",
