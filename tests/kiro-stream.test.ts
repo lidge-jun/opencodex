@@ -312,6 +312,41 @@ describe("kiro adapter — parseStream", () => {
     });
   });
 
+  test.each([
+    ["plain text", [eventFrame({ content: "  I am   checking.\n" })]],
+    ["private completion", completionFrames(" I am checking. ")],
+  ])("suppresses a whitespace-equivalent repeated %s fallback", async (_label, frames) => {
+    globalThis.fetch = (async () => new Response(streamOf(...frames))) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "I am checking." }),
+    ))));
+
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "I am checking.", phase: "commentary" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+    expect(JSON.stringify(events)).not.toContain(KIRO_COMPLETION_TOOL_NAME);
+  });
+
+  test("keeps a distinct private-completion fallback as the final answer", async () => {
+    globalThis.fetch = (async () => new Response(streamOf(...completionFrames("Done.")))) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "I am checking." }),
+    ))));
+
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "I am checking.", phase: "commentary" },
+      { type: "text_delta", text: "Done.", phase: "final_answer" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
   test("reasoning-only required response receives one fallback and can finish in plain text", async () => {
     let fetches = 0;
     globalThis.fetch = (async () => {

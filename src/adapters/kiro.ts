@@ -517,6 +517,10 @@ function retryableKiroIncomplete(
   };
 }
 
+function normalizedKiroAnswer(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
 async function* parseKiroAttempt(
   response: Response,
   mode: KiroCompletionMode,
@@ -525,6 +529,7 @@ async function* parseKiroAttempt(
   contextWindow: number | undefined,
   nameMap: Map<string, string> | undefined,
   conversationId: string | undefined,
+  previousAssistantText?: string,
 ): AsyncGenerator<AdapterEvent, KiroAttemptResult> {
   const emptyResult = (): KiroAttemptResult => ({ assistantText: "", sawReasoning: false });
   if (!response.body) {
@@ -841,7 +846,9 @@ async function* parseKiroAttempt(
     if (mode === "text_fallback") {
       if (completionAnswer !== undefined) {
         for (const event of fallbackEvents) yield event;
-        yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
+        if (normalizedKiroAnswer(completionAnswer) !== normalizedKiroAnswer(previousAssistantText ?? "")) {
+          yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
+        }
         return {
           assistantText,
           sawReasoning,
@@ -857,8 +864,10 @@ async function* parseKiroAttempt(
         };
       }
       if (sawText) {
+        const repeated = normalizedKiroAnswer(assistantText) === normalizedKiroAnswer(previousAssistantText ?? "");
         for (const event of fallbackEvents) {
-          yield event.type === "text_delta" ? { ...event, phase: "final_answer" } : event;
+          if (event.type !== "text_delta") yield event;
+          else if (!repeated) yield { ...event, phase: "final_answer" };
         }
         return {
           assistantText,
@@ -1019,6 +1028,7 @@ export async function* parseKiroStream(
     contextWindow,
     fallback.nameMap,
     fallback.conversationId,
+    firstResult.assistantText,
   );
   let secondNext = await second.next();
   while (!secondNext.done) {

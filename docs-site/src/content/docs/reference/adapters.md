@@ -103,7 +103,9 @@ emits its answer as final text, and never exposes the private tool to Codex or C
 If Kiro emits progress without calling the completion tool, the adapter makes one continuation. That
 single retry may finish with a validated private completion or plain final text. It cannot recurse:
 an empty or reasoning-only retry is returned as retryable incomplete, while a real client tool call
-keeps the turn open. Tool-free requests retain normal text completion behavior.
+keeps the turn open. If the retry only repeats the preceding commentary after whitespace
+normalization, the duplicate output is suppressed while the turn still completes. Tool-free
+requests retain normal text completion behavior.
 
 ### Reasoning effort
 
