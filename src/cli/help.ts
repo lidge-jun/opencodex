@@ -94,9 +94,18 @@ const helpEntries: Record<string, HelpEntry> = {
     ],
   },
   models: {
-    usage: "ocx models [--provider <name>] [--json]",
-    summary: "List available models from configured providers.",
-    details: ["Shows statically configured models. Providers with liveModels may have additional models at runtime."],
+    usage: "ocx models [list] [--provider <name>] [--json] | add <provider> <modelId> [opts] | remove <id|provider/modelId> [--yes] | list-custom [--json]",
+    summary: "List models and manage custom (manually registered) models.",
+    details: [
+      "List available models from static config with no subcommand (liveModels may add more at runtime).",
+      "add: register a model the provider catalog does not advertise yet.",
+      "  --display-name <name>     Human label (no slashes).",
+      "  --context-window <tokens> e.g. 200000.",
+      "  --modalities text,image   Comma-separated (text|image|audio).",
+      "remove: delete a custom model by UUID or <provider>/<modelId>.",
+      "list-custom: show all custom models.",
+      "Changes apply immediately to a running proxy (catalog sync).",
+    ],
   },
   claude: {
     usage: "ocx claude [claude args...]",
@@ -112,6 +121,11 @@ const helpEntries: Record<string, HelpEntry> = {
   restart: {
     usage: "ocx restart",
     summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
+  },
+  v2: {
+    usage: "ocx v2 <status|on|off>",
+    summary: "Toggle the Codex multi_agent_v2 feature (multi-agent surface).",
+    details: ["Preserves the active thread limit while moving between v1/v2 modes."],
   },
   health: {
     usage: "ocx health [--json]",
@@ -156,10 +170,11 @@ Usage:
   ocx gui                     Open the opencodex dashboard
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
+  ocx v2 <status|on|off>      Toggle Codex multi_agent_v2 (multi-agent surface)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
   ocx provider <sub>          Manage providers (list|add|remove|show|set-default)
   ocx account <sub>           Accounts/keys (list|current|use|refresh|auto-switch|remove|add-key)
-  ocx models [--json]         List available models from configured providers
+  ocx models <sub>            List models; manage custom models (add|remove|list-custom)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx help [command]          Show help
   ocx --version | -v          Print version
