@@ -807,8 +807,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
                             );
                           })}
                         </div>
-                        <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
-                          <button type="button" className="btn btn-sm" onClick={() => void saveContextWindows(provider)} disabled={cwSaving}>{t("models.contextWindowSave")}</button>
+                        <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                          <button type="button" className="btn btn-primary btn-sm" onClick={() => void saveContextWindows(provider)} disabled={cwSaving}>{t("models.contextWindowSave")}</button>
                           {cwStatus && <span className="text-caption" style={{ color: cwOk ? "var(--ok, #30a46c)" : "var(--err, #e5484d)" }}>{cwStatus}</span>}
                         </div>
                       </div>
