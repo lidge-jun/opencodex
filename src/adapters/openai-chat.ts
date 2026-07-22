@@ -337,6 +337,28 @@ function isXaiSchemaTarget(provider: OcxProviderConfig): boolean {
   }
 }
 
+function isKimiSchemaTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return new URL(provider.baseUrl).hostname === "api.kimi.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kimi requires function.parameters.type to be exactly "object" at the root.
+ * Codex tools with oneOf/anyOf schemas omit the root type, causing 400 errors.
+ * Add type: "object" at the root while preserving oneOf, $defs, and other schema keys.
+ */
+function ensureKimiRootObjectType(parameters: unknown): Record<string, unknown> {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return { type: "object", properties: {} };
+  }
+  const obj = parameters as Record<string, unknown>;
+  if (obj.type === "object") return obj;
+  return { ...obj, type: "object" };
+}
+
 function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
   const obj = schema as Record<string, unknown>;
@@ -379,8 +401,13 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
+  const kimiTarget = isKimiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
-    const parameters = xaiTarget ? normalizeXaiToolParameters(t.parameters) : t.parameters;
+    const parameters = xaiTarget
+      ? normalizeXaiToolParameters(t.parameters)
+      : kimiTarget
+        ? ensureKimiRootObjectType(t.parameters)
+        : t.parameters;
     if (parameters === undefined) return [];
     return [{
     type: "function",
