@@ -1,0 +1,63 @@
+name: Issue quality tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/scripts/issue-quality.cjs"
+      - ".github/scripts/issue-quality.test.cjs"
+      - ".github/workflows/enforce-issue-quality.yml"
+      - ".github/workflows/issue-quality-tests.yml"
+  push:
+    paths:
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/scripts/issue-quality.cjs"
+      - ".github/scripts/issue-quality.test.cjs"
+      - ".github/workflows/enforce-issue-quality.yml"
+      - ".github/workflows/issue-quality-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Run validator tests
+        run: node --test .github/scripts/issue-quality.test.cjs
+
+      - name: Validate issue-form YAML
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const dir = '.github/ISSUE_TEMPLATE';
+            const files = fs.readdirSync(dir).filter(f => f.endsWith('.yml') && f !== 'config.yml');
+            const VALID_TYPES = new Set(['markdown','textarea','input','dropdown','checkboxes']);
+            let ok = true;
+            for (const file of files) {
+              const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+              // Minimal YAML validation: check for required keys and valid types.
+              if (!raw.includes('name:')) { console.error(file + ': missing name'); ok = false; }
+              if (!raw.includes('description:')) { console.error(file + ': missing description'); ok = false; }
+              if (!raw.includes('body:')) { console.error(file + ': missing body'); ok = false; }
+              // Check element types.
+              const types = [...raw.matchAll(/type:\s*(\w+)/g)].map(m => m[1]);
+              for (const t of types) {
+                if (!VALID_TYPES.has(t)) { console.error(file + ': unsupported element type: ' + t); ok = false; }
+              }
+              // Check unique IDs.
+              const ids = [...raw.matchAll(/id:\s*([\w-]+)/g)].map(m => m[1]);
+              const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+              if (dupes.length) { console.error(file + ': duplicate IDs: ' + dupes.join(', ')); ok = false; }
+              console.log(file + ': ' + types.length + ' elements, ' + ids.length + ' IDs — OK');
+            }
+            if (!ok) process.exit(1);
+            console.log('All issue forms valid.');
+          "

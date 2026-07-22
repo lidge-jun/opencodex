@@ -1,34 +1,92 @@
-name: Feature request
-description: Propose a new capability or workflow improvement.
-title: "[Feature]: "
+name: Feature proposal
+description: Propose a new capability or workflow improvement for OpenCodex.
 labels:
   - enhancement
 body:
-  - type: textarea
-    id: problem
+  - type: markdown
     attributes:
-      label: Problem to solve
-      description: What workflow or limitation are you trying to improve?
-      placeholder: I want opencodex to ...
+      value: |
+        Describe the workflow you need and what OpenCodex should do. Concrete examples help us evaluate and implement your proposal faster.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of OpenCodex does this proposal affect?
+      options:
+        - CLI
+        - Proxy and routing
+        - Dashboard
+        - Provider adapters
+        - Authentication and account pool
+        - Installation or packaging
+        - Service lifecycle
+        - Documentation
+        - Multiple areas
+        - Other
     validations:
       required: true
 
   - type: textarea
-    id: proposal
+    id: goal
     attributes:
-      label: Proposed solution
-      description: Describe the behavior you want, including any CLI, GUI, or config surface.
+      label: What are you trying to accomplish?
+      description: Describe the user workflow or outcome you need.
+      placeholder: I need to route requests from ... so that ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: blocker
+    attributes:
+      label: What prevents this today?
+      description: What is the current limitation, missing capability, or inefficient workaround?
+      placeholder: Currently the proxy does not support ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What should OpenCodex do?
+      description: Describe the observable behaviour you expect, not internal implementation details.
+      placeholder: When I send ... the proxy should ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage or interface
+      description: |
+        Provide at least one concrete example: a CLI command, configuration fragment, API exchange, UI workflow, or before/after comparison.
+      placeholder: |
+        ```bash
+        ocx config set routing.fallback_provider anthropic
+        ```
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-      description: What workarounds or competing approaches did you try?
+      label: Alternatives or workarounds
+      description: What workarounds or competing approaches have you tried or considered?
 
   - type: textarea
     id: context
     attributes:
       label: Additional context
-      description: Link docs, screenshots, example configs, or upstream APIs if helpful.
+      description: Related issues, upstream specifications, screenshots, or design references.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: This request describes a concrete OpenCodex workflow rather than merely naming a desired technology.
+          required: true
+        - label: I removed secrets and personal data.
+          required: true

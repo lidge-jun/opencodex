@@ -1,0 +1,281 @@
+name: Enforce issue quality
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-quality-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Validate issue quality
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const {
+              detectIssueKind,
+              validateIssue,
+              shouldReopen,
+            } = require(path.join(process.cwd(), ".github", "scripts", "issue-quality.cjs"));
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            const actor = context.actor;
+            const eventType = context.eventName === "issues"
+              ? context.payload.action
+              : "";
+
+            // -----------------------------------------------------------------
+            // Fetch live issue state
+            // -----------------------------------------------------------------
+            const { data: issue } = await github.rest.issues.get({
+              owner, repo, issue_number,
+            });
+
+            // -----------------------------------------------------------------
+            // Trusted-user exemption
+            // -----------------------------------------------------------------
+            const authorAssoc = issue.author_association;
+            const trustedAuthor = ["OWNER", "MEMBER", "COLLABORATOR"].includes(authorAssoc);
+
+            let actorIsMaintainer = false;
+            try {
+              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner, repo, username: actor,
+              });
+              actorIsMaintainer = ["admin", "maintain", "write"].includes(perm.permission);
+            } catch { /* non-collaborator actor */ }
+
+            // -----------------------------------------------------------------
+            // Bot comment state
+            // -----------------------------------------------------------------
+            const BOT_MARKER = "<!-- opencodex-issue-quality-bot -->";
+            const STATE_RE = /<!-- opencodex-issue-quality-state:([\s\S]*?) -->/;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const botComment = comments.find(
+              (c) => c.user?.login === "github-actions[bot]" && c.body?.includes(BOT_MARKER),
+            );
+
+            let botState = null;
+            if (botComment) {
+              const m = botComment.body.match(STATE_RE);
+              if (m) {
+                try { botState = JSON.parse(m[1]); } catch { /* corrupt state */ }
+              }
+            }
+
+            function stateTag(state) {
+              return "<!-- opencodex-issue-quality-state:" + JSON.stringify(state) + " -->";
+            }
+
+            async function upsertComment(body) {
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner, repo, comment_id: botComment.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number, body,
+                });
+              }
+            }
+
+            // -----------------------------------------------------------------
+            // Detect kind (use stored kind if available)
+            // -----------------------------------------------------------------
+            const labels = (issue.labels || []).map((l) =>
+              typeof l === "string" ? l : l.name,
+            );
+            const kind = detectIssueKind({
+              title: issue.title,
+              body: issue.body || "",
+              labels,
+              storedKind: botState?.kind || null,
+            });
+
+            // If headings were stripped but the form label is still present,
+            // treat the issue as that kind so contributors cannot bypass
+            // validation by editing out headings after submission.
+            const labelBasedKind = (() => {
+              if (labels.includes("bug")) return "bug";
+              if (labels.includes("provider-compatibility")) return "provider-compatibility";
+              if (labels.includes("documentation")) return "documentation";
+              if (labels.includes("enhancement")) return "feature";
+              return null;
+            })();
+            if (!kind && !labelBasedKind) {
+              core.info("Issue is not a structured form; skipping validation.");
+              return;
+            }
+            const resolvedKind = kind ?? labelBasedKind;
+
+            // -----------------------------------------------------------------
+            // Validate
+            // -----------------------------------------------------------------
+            const result = validateIssue({
+              title: issue.title,
+              body: issue.body || "",
+              labels,
+              storedKind: botState?.kind || resolvedKind || null,
+            });
+
+            // -----------------------------------------------------------------
+            // VALID issue
+            // -----------------------------------------------------------------
+            if (result.valid) {
+              // If the bot previously closed it, consider reopening.
+              if (botState?.active && issue.state === "closed") {
+                // Normalise closed_by from the API object to a plain login string.
+                const issueForDecision = {
+                  state: issue.state,
+                  closed_at: issue.closed_at,
+                  state_reason: issue.state_reason,
+                  closed_by: issue.closed_by?.login ?? null,
+                };
+                const canReopen = shouldReopen(botState, issueForDecision, actorIsMaintainer && eventType === "reopened");
+
+                if (canReopen) {
+                  await github.rest.issues.update({
+                    owner, repo, issue_number, state: "open",
+                  });
+                  const doneState = { ...botState, active: false };
+                  await upsertComment([
+                    BOT_MARKER,
+                    stateTag(doneState),
+                    "",
+                    "### Issue reopened",
+                    "",
+                    "The report now contains the information required by the automated check. Thanks for updating it.",
+                  ].join("\n"));
+                } else if (actorIsMaintainer) {
+                  // Maintainer changed the state — respect it, mark inactive.
+                  const doneState = { ...botState, active: false };
+                  await upsertComment([
+                    BOT_MARKER,
+                    stateTag(doneState),
+                    "",
+                    "### Automated check passed",
+                    "",
+                    "The report now passes the automated issue-quality check. It remains closed because its state was changed by a maintainer after the automated closure.",
+                  ].join("\n"));
+                }
+              } else if (botState?.active && issue.state === "open") {
+                // Already open and valid — deactivate bot state silently.
+                const doneState = { ...botState, active: false };
+                await upsertComment([
+                  BOT_MARKER,
+                  stateTag(doneState),
+                  "",
+                  "### Issue reopened",
+                  "",
+                  "The report now contains the information required by the automated check. Thanks for updating it.",
+                ].join("\n"));
+              }
+              return;
+            }
+
+            // -----------------------------------------------------------------
+            // INVALID issue
+            // -----------------------------------------------------------------
+
+            // Trusted authors are exempt.
+            if (trustedAuthor) {
+              core.info("Issue author is a trusted collaborator; skipping enforcement.");
+              return;
+            }
+
+            // Maintainer intentionally reopened — do not close again.
+            if (eventType === "reopened" && actorIsMaintainer) {
+              core.info("Maintainer reopened the issue; respecting their decision.");
+              if (botState?.active) {
+                const doneState = { ...botState, active: false };
+                await upsertComment([
+                  BOT_MARKER,
+                  stateTag(doneState),
+                  "",
+                  "### Maintainer decision respected",
+                  "",
+                  "A maintainer has reopened this issue. The automated closure has been deactivated.",
+                ].join("\n"));
+              }
+              return;
+            }
+
+            // Close (or re-close) the issue.
+            const reasonList = result.reasons.map((r) => `- ${r}`).join("\n");
+            const guidanceList = result.guidance.map((g) => `- ${g}`).join("\n");
+
+            // Close as not_planned.
+            await github.rest.issues.update({
+              owner, repo, issue_number, state: "closed", state_reason: "not_planned",
+            });
+
+            // Fetch the live issue to capture the exact closed_at timestamp.
+            const { data: closedIssue } = await github.rest.issues.get({
+              owner, repo, issue_number,
+            });
+
+            const newBotState = {
+              version: 2,
+              active: true,
+              kind,
+              closedAt: closedIssue.closed_at,
+              stateReason: closedIssue.state_reason || "not_planned",
+            };
+
+            await upsertComment([
+              BOT_MARKER,
+              stateTag(newBotState),
+              "",
+              "### Issue closed: insufficient detail",
+              "",
+              "Thanks for taking the time to submit this issue. It was closed automatically because the structured report is missing information needed to evaluate or reproduce it.",
+              "",
+              reasonList,
+              "",
+              "Please edit the issue to add:",
+              "",
+              guidanceList,
+              "",
+              "See the [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details.",
+              "",
+              "Once the report passes the automated checks, it will be reopened automatically unless a maintainer has changed its state.",
+            ].join("\n"));
+            // If headings were stripped but the form label is still present,
+            // treat the issue as that kind so contributors cannot bypass
+            // validation by editing out headings after submission.
+            const labelBasedKind = (() => {
+              if (labels.includes("bug")) return "bug";
+              if (labels.includes("provider-compatibility")) return "provider-compatibility";
+              if (labels.includes("documentation")) return "documentation";
+              if (labels.includes("enhancement")) return "feature";
+              return null;
+            })();
+            if (!kind && !labelBasedKind) {
+              core.info("Issue is not a structured form; skipping validation.");
+              return;
+            }
+            const resolvedKind = kind ?? labelBasedKind;
