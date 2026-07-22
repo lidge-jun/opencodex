@@ -1,0 +1,107 @@
+---
+title: 仕組み
+description: opencodex のリクエストライフサイクル全体 — parse, route, adapt, bridge, stream。
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Server-Sent Events で届く
+`POST /v1/responses` リクエストを受け付け、同じパスの WebSocket upgrade もオプションでサポートします。
+リクエストはプロバイダーの wire フォーマットに、レスポンスは再び Responses イベントに変換されるため、Codex 側は
+非 OpenAI モデルと通信していることを知る必要はありません。
+
+```
+            ┌──────────────────────────── opencodex ────────────────────────────┐
+            │                                                                     │
+ Codex ──▶  │  parser ──▶ router ──▶ [vision] ──▶ adapter ──▶ provider           │  ──▶ Codex
+ (/v1/      │     │          │          │            │           │                │   (SSE / WS)
+  responses)│   OcxParsed  provider   describe    buildRequest  parseStream       │
+            │   Request    +adapter   images       + fetch      AdapterEvent[]    │
+            │                                          │           │              │
+            │                                  [web-search loop]  bridge ─▶ SSE   │
+            └─────────────────────────────────────────────────────────────────────┘
+```
+
+![Codex マルチアカウントルーティング: 既存スレッドは同じ ChatGPT アカウントを維持し、新規セッションはクォータを照会して使用量の少ない健全なアカウントを選択できます。](../../../../assets/multi-auth-routing.svg)
+
+## Codex 認証アカウントの選択
+
+選択されたプロバイダーが ChatGPT/Codex パススルーのとき、opencodex は上流に転送する前に保存された
+プールアカウントを選べます。ルールは意図的に 2 つに分かれています。
+
+- **既存 thread ID は同じアカウントを維持します。** thread は開始時に選択されたアカウント世代に
+  紐付きます。そのため SSH、tmux、モバイル接続に続く長い Codex セッションは会話の途中で別アカウントに
+  再配分されません。
+- **新規セッションは再配分できます。** 新しい thread では 5 時間、週間、30 日クォータの既知の
+  使用量を比較し、再認証が必要またはクールダウン中のアカウントをスキップした上で、アクティブアカウントが設定した
+  しきい値を超えると使用量のより少ない健全なアカウントに切り替えられます。
+- **クォータと失敗シグナルがルーティングに反映されます。** ダッシュボードは
+  `GET /api/codex-auth/accounts?refresh=1` でクォータを強制再照会できます。成功した上流
+  応答はクォータヘッダーを保存し、429 はアカウントをクールダウンに置き、401/403 は再認証必要状態としてマークします。
+
+## サブエージェントモデルの選択
+
+新規インストールすると `subagentModels` のデフォルトで `gpt-5.5`、GPT-5.6 Sol/Terra/Luna の 3 モデル、
+`gpt-5.4-mini` が Codex のサブエージェントピッカーに表示されます。ダッシュボードでネイティブモデルとルーティング
+モデルを合わせて最大 5 つまで並び替えや入れ替えができます。v1 コラボリクエストではオプションの
+`injectionModel` と `injectionEffort` を開発者メッセージに追加し、`spawn_agent` が使うモデルと
+推論負荷を伝えます。v2 リクエストは Codex が提供するマルチエージェントガイダンスをそのまま使います。
+
+## ライフサイクル
+
+<Steps>
+
+1. **Parse** — `responses/parser.ts` が Zod スキーマ(`responses/schema.ts`)でリクエストを検証し、
+   これを内部 `OcxParsedRequest` に変換します: システムプロンプト、正規化されたメッセージ一覧
+   (テキスト、画像、ツール呼び出し、ツール結果)、ツール定義、生成オプション、そして
+   `_webSearch`(ホスト型ウェブ検索が要求された)や `_structuredOutput`(JSON スキーマ /
+   JSON-object `text.format` が設定された)のような機能フラグ。画像は実際のコンテンツパートとして保存され、
+   base64 テキストとしてインライン化されることはありません。
+
+2. **Route** — `router.ts` が固定の優先順位に従って要求されたモデル ID を設定されたプロバイダーに
+   マッピングします: 明示的 `provider/model` → プロバイダーの `defaultModel` → 組み込みプレフィックスパターン
+   (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → プロバイダーの `models[]` →
+   `defaultProvider` フォールバック。[モデルルーティング](/opencodex/ja/guides/model-routing/)を参照してください。
+
+3. **Authenticate** — `oauth` プロバイダーの場合、opencodex が新しく自動更新された access
+   トークンを bearer キーに差し替えるため、既存のアダプターは変更なく認証されます。ChatGPT/Codex プール
+   アカウントでは `codex/auth-context.ts` がまずアカウントを解決し、必要なプール認証情報がない場合は
+   パススルーアダプターは進みません。
+
+4. **Vision サイドカー(任意)** — ルーティングされたモデルが `provider.noVisionModels` に列挙されており
+   リクエストに画像が含まれる場合、opencodex は設定された ChatGPT vision サイドカーで各画像を説明した
+   後テキストに置き換えます。これによりテキスト専用モデルでも該当画像を推論できます。
+   [サイドカー](/opencodex/ja/guides/sidecars/)を参照してください。
+
+5. **パススルーの高速経路** — Responses パススルーアダプター(`openai-responses` または
+   `azure-openai`)では Responses 本体を維持しつつルーティングと互換性に必要な部分だけ修正します。
+   プロバイダー応答は `AdapterEvent` に変換せずそのまま渡します。
+
+6. **ウェブ検索サイドカー(任意)** — Codex がホスト型 `web_search` を有効化したがルーティングされたモデルが
+   OpenAI ではない場合、opencodex は合成 `web_search` function tool を公開し、モデルを小さな
+   エージェントループで実行しながら、デフォルトの `gpt-5.6-luna` を ChatGPT ログインで呼び出して実際の検索を行い、
+   その結果をツール結果として再注入します。
+
+7. **Compact(要求時)** — Codex v1 は `POST /v1/responses/compact` を呼び出し、v2 は Responses
+   turn に `compaction_trigger` を追加します。ネイティブパススルーでは上流にそのまま渡し、
+   ルーティングモデルではツールなしで要約を実行し Codex が要求する代替会話履歴形式を返します。
+
+8. **Adapt** — それ以外の場合、選ばれたアダプターの `buildRequest()` がプロバイダーのネイティブ
+   フォーマットで上流 HTTP リクエスト(URL、ヘッダー、本体)を生成し、opencodex がこれを `fetch` します。
+
+9. **Bridge** — アダプターの `parseStream()`(または `parseResponse()`)が内部 `AdapterEvent` を
+   生成します(テキスト、推論、ツール呼び出し start/delta/end、done、error)。`bridge.ts` はそのストリームを
+   再び Responses SSE イベントに変換します — `response.output_text.delta`、`response.reasoning_summary_text.delta`、
+   `response.function_call_arguments.delta`、`response.completed` など。WebSocket をオンにした場合も同じイベント
+   payload が text frame として送信されます。
+
+</Steps>
+
+## なぜ Codex フォークではなくプロキシなのか?
+
+Codex は Responses API をハードコーディングしています。opencodex はプロトコル境界で変換を行うことで
+Codex **CLI、App、SDK** を変更なくそのままサポートし、Codex の更新の影響を受けず、
+Codex 自体を触らずにリクエストごとにプロバイダーを切り替えられます。この変換は双方向で
+ストリーミングに忠実です: 推論要約、MCP ツール名前空間、自由形式(`apply_patch`)ツール、
+`tool_search` ディスカバリがすべて正確に往復します。イベントごとのマッピングは[アーキテクチャリファレンス](/opencodex/ja/reference/architecture/)を
+参照してください。
