@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# CodeRabbit configuration for opencodex.
+# This file is the single source of truth for CodeRabbit behavior; prefer editing
+# this file over the dashboard so settings are versioned and reviewable.
+
+language: en-US
+tone_instructions: >-
+  Always review in English. Be very detailed and specific: cite exact files and
+  lines, explain the failure mode, and propose a concrete fix. Prefer
+  evidence-backed findings over style nitpicks.
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+    # Default branch (main) is included automatically; these are additional
+    # base branches (anchored regex).
+    base_branches:
+      - "^dev$"
+      - "^preview$"
+  path_instructions:
+    - path: "src/**"
+      instructions: >-
+        Runtime is Bun-native TypeScript (no separate compile step). Flag
+        Node-only APIs that break under Bun, provider/adapter contract drift,
+        and changes that bypass the shared routing/config layers. Watch for
+        credential handling: tokens and OAuth material must never be logged or
+        serialized into responses.
+    - path: "tests/**"
+      instructions: >-
+        Tests are flat Bun tests under tests/. A behavior change in src/ should
+        come with a focused regression test near the existing tests for that
+        subsystem. Flag PRs that change shared routing, adapters, config, or
+        server behavior without touching tests.
+    - path: "gui/**"
+      instructions: >-
+        React dashboard built with Vite. Check that GUI state changes stay
+        consistent with the management API responses and that user-visible
+        strings go through the i18n locale files rather than hardcoded text.
+    - path: ".github/**"
+      instructions: >-
+        Security boundary. Workflow changes, release automation, and dependency
+        installation steps require explicit security review per MAINTAINERS.md.
+        Flag any new secret usage, permission escalation, or third-party action
+        pinned to a mutable ref.
+    - path: "scripts/**"
+      instructions: >-
+        scripts/release.ts is the release authority and a security boundary.
+        Flag changes that weaken CI gating, alter npm publish behavior, or
+        bypass the release workflow's dry-run default.
+    - path: "docs-site/**"
+      instructions: >-
+        Astro + Starlight docs site. Check that user-facing docs stay in sync
+        with actual CLI/API behavior and that translated locale pages (ja, ko,
+        ru, zh-cn) are not left contradicting the English source.
+
+issue_enrichment:
+  auto_enrich:
+    enabled: true
+  planning:
+    enabled: true
+    auto_planning:
+      enabled: true
+      labels:
+        - plan-me
+
+chat:
+  auto_reply: true
