@@ -1,5 +1,5 @@
 /**
- * Copy missing keys from en.ts into de/ko/zh (English fallback for new keys).
+ * Copy missing keys from en.ts into de/ko/zh/ru/ja (English fallback for new keys).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { en } from "../src/i18n/en.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-for (const loc of ["de", "ko", "zh", "ru"]) {
+for (const loc of ["de", "ko", "zh", "ru", "ja"]) {
   const path = join(root, "src", "i18n", `${loc}.ts`);
   let text = readFileSync(path, "utf8");
   const missing = Object.entries(en).filter(([key]) => !text.includes(`"${key}":`));
