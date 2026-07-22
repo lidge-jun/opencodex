@@ -1635,7 +1635,7 @@ export async function handleResponses(
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 
-  return formatErrorResponse(500, "internal_error", "Non-streaming not supported by this adapter");
+  return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");
 }
 
 export function linkAbortSignal(upstream: AbortController, signal?: AbortSignal): () => void {
