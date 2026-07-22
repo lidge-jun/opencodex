@@ -175,11 +175,25 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     }));
 
     try {
-      const res = await fetch(`${apiBase}/api/cloudflare-tunnel`, {
+      const requestTunnelToggle = (body: unknown) => fetch(`${apiBase}/api/cloudflare-tunnel`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildCloudflareTunnelToggleRequest(enabled, mode)),
+        body: JSON.stringify(body),
       });
+      let res = await requestTunnelToggle(buildCloudflareTunnelToggleRequest(enabled, mode));
+      if (!res.ok && enabled && mode) {
+        try {
+          const payload = await res.clone().json();
+          if (payload?.error === "unknown field: mode") {
+            // Older local management servers do not yet accept the explicit mode field. Retry
+            // with the legacy body so existing Quick Tunnel configs keep working while the
+            // backend rolls forward.
+            res = await requestTunnelToggle(buildCloudflareTunnelToggleRequest(enabled));
+          }
+        } catch {
+          // Non-JSON errors fall through to the normal localized error path below.
+        }
+      }
       if (!res.ok) {
         setTunnel(previousTunnel);
         setTunnelRequestError(await apiErrorMessage(res, t("api.tunnelRequestFailed")));
