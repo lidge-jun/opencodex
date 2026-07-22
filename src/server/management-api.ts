@@ -714,6 +714,22 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       }
     }
 
+    if (Object.hasOwn(rawBody, "noVisionModels")) {
+      const raw = (rawBody as { noVisionModels?: unknown }).noVisionModels;
+      if (raw == null) {
+        delete next.noVisionModels;
+        touched = true;
+      } else {
+        if (!Array.isArray(raw) || !raw.every((m: unknown) => typeof m === "string" && m.trim().length > 0)) {
+          return jsonResponse({ error: "noVisionModels must be an array of non-empty strings" }, 400);
+        }
+        const cleaned = Array.from(new Set((raw as string[]).map(m => m.trim())));
+        if (cleaned.length > 0) next.noVisionModels = cleaned;
+        else delete next.noVisionModels;
+        touched = true;
+      }
+    }
+
     if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
 
     // A disabled-only toggle preserves the v2 fast lane: it changes routing eligibility,

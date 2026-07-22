@@ -23,7 +23,7 @@ interface ProviderContextCapsResponse {
   caps?: Record<string, number>;
 }
 interface ProviderConfigDTO {
-  providers?: Record<string, { modelContextWindows?: Record<string, number> }>;
+  providers?: Record<string, { modelContextWindows?: Record<string, number>; noVisionModels?: string[] }>;
 }
 
 interface V2Status {
@@ -110,6 +110,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [cwStatus, setCwStatus] = useState("");
   const [cwOk, setCwOk] = useState(false);
   const [cwStatusProvider, setCwStatusProvider] = useState("");
+  // Per-provider set of model ids flagged as text-only (noVisionModels).
+  const [providerNoVision, setProviderNoVision] = useState<Record<string, Set<string>>>({});
   // Combo summary section. null = loading or failed (section hidden on failure —
   // an API error must never masquerade as "no combos configured").
   const [combos, setCombos] = useState<ComboItem[] | null>(null);
@@ -187,10 +189,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
       try {
         const cfg = await fetch(`${apiBase}/api/config`).then(r => r.json()) as ProviderConfigDTO;
         const out: Record<string, Record<string, number>> = {};
+        const nvOut: Record<string, Set<string>> = {};
         for (const [name, prov] of Object.entries(cfg.providers ?? {})) {
           if (prov.modelContextWindows) out[name] = { ...prov.modelContextWindows };
+          if (prov.noVisionModels) nvOut[name] = new Set(prov.noVisionModels);
         }
         setProviderCtxWindows(out);
+        setProviderNoVision(nvOut);
       } catch { /* old server / network: editor shows live values only */ }
     } catch {
       setOk(false); setStatus(t("models.loadFail"));
@@ -388,6 +393,40 @@ export default function Models({ apiBase }: { apiBase: string }) {
       setCwOk(false); setCwStatus(t("models.networkError"));
     } finally {
       setCwSaving(false);
+    }
+  };
+
+  // Toggle a model in/out of the provider's noVisionModels list (immediate save).
+  const toggleNoVision = async (providerName: string, modelId: string) => {
+    const current = providerNoVision[providerName] ?? new Set<string>();
+    const next = new Set(current);
+    if (next.has(modelId)) next.delete(modelId); else next.add(modelId);
+    const list = [...next];
+    setBusy(true);
+    busyRef.current = true;
+    setStatus("");
+    try {
+      const r = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(providerName)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noVisionModels: list.length > 0 ? list : null }),
+      });
+      if (r.ok) {
+        setProviderNoVision(prev => {
+          const c = { ...prev };
+          if (list.length > 0) c[providerName] = next; else delete c[providerName];
+          return c;
+        });
+        setOk(true);
+        setStatus(t("models.noVisionApplied"));
+      } else {
+        setOk(false); setStatus(t("models.saveFailed"));
+      }
+    } catch {
+      setOk(false); setStatus(t("models.networkError"));
+    } finally {
+      setBusy(false);
+      busyRef.current = false;
     }
   };
 
@@ -748,8 +787,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
                  />
                )}
                 {!isNative && (
-                  <div className="row" style={{ padding: "2px 0 4px" }}>
+                  <div className="row" style={{ padding: "2px 0 4px", gap: 8 }}>
                     <div style={{ flex: 1 }} />
+                    <span className="muted text-caption" title={t("models.noVisionHint")} style={{ whiteSpace: "nowrap" }}>{t("models.noVisionLabel")}</span>
                     <span className="muted text-caption" title={t("models.contextWindowHint")} style={{ width: 100, textAlign: "right" }}>{t("models.contextWindowEdit")}</span>
                   </div>
                 )}
@@ -766,6 +806,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
                       {!isNative && (
                         <>
                           <div style={{ flex: 1 }} />
+                          <input
+                            type="checkbox"
+                            checked={providerNoVision[provider]?.has(m.id) ?? false}
+                            onChange={() => void toggleNoVision(provider, m.id)}
+                            disabled={busy}
+                            title={t("models.noVisionHint")}
+                            aria-label={t("models.noVisionLabel")}
+                            style={{ margin: 0, cursor: "pointer", accentColor: "var(--accent)" }}
+                          />
                           <input
                             className="input"
                             style={{ width: 100, ...(cwHasValue ? { borderColor: "var(--accent)" } : {}) }}
