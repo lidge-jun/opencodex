@@ -129,6 +129,14 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
+  if (req.method === "PUT" && url.pathname === "/api/codex-auth/accounts/alias") {
+    const payload = body as { id: string; alias: string };
+    const account = codexAccounts.find(entry => entry.id === payload.id);
+    if (!account) return json({ error: "account not found" }, 404);
+    account.alias = payload.alias;
+    return json({ ok: true, id: payload.id, alias: payload.alias || null });
+  }
+
   if (url.pathname === "/api/codex-auth/active") {
     if (req.method === "PUT") {
       const accountId = (body as { accountId?: string }).accountId;
@@ -197,6 +205,14 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ ok: true, activeAccountId: accountId });
   }
 
+  if (req.method === "PUT" && url.pathname === "/api/oauth/accounts/alias") {
+    const payload = body as { accountId: string; alias: string };
+    const account = oauthAccounts.find(entry => entry.id === payload.accountId);
+    if (!account) return json({ error: "account not found" }, 404);
+    account.alias = payload.alias;
+    return json({ ok: true });
+  }
+
   if (req.method === "DELETE" && url.pathname === "/api/oauth/accounts") {
     if (deleteFailure) return json({ error: deleteFailure.error }, deleteFailure.status);
     const id = url.searchParams.get("id");
@@ -224,6 +240,14 @@ async function mockManagementApi(req: Request): Promise<Response> {
   }
 
   if (req.method === "PUT" && url.pathname === "/api/providers/keys/active") {
+    return json({ ok: true });
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/providers/keys/alias") {
+    const payload = body as { id: string; alias: string };
+    const entry = keyEntries.find(key => key.id === payload.id);
+    if (!entry) return json({ error: "key not found" }, 404);
+    entry.label = payload.alias;
     return json({ ok: true });
   }
 
@@ -910,5 +934,18 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(failed.code).toBe(1);
     expect(failed.stdout).toBe("");
     expect(JSON.parse(failed.stderr)).toEqual({ error: "json delete failed" });
+  });
+
+  test("37: alias updates Codex, OAuth, and API-key display names without changing ids", async () => {
+    const codex = await run(["alias", "openai", "chatgpt_1", "Work Plus", "--json"]);
+    const oauth = await run(["alias", "anthropic", "acct_1", "Work Claude"]);
+    const key = await run(["rename", "openrouter", "key_1", "Production"]);
+    expect(codex.code).toBe(0);
+    expect(JSON.parse(codex.stdout)).toEqual({ ok: true, provider: "openai", id: "chatgpt_1", alias: "Work Plus" });
+    expect(oauth.code).toBe(0);
+    expect(key.code).toBe(0);
+    expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/codex-auth/accounts/alias" }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/oauth/accounts/alias" }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "PUT", path: "/api/providers/keys/alias" }));
   });
 });

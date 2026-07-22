@@ -117,12 +117,17 @@ try {
   writeFileSync(v2BackupPath, "different-existing-v2-backup\n", { mode: 0o600 });
   const collisionSource = readFileSync(configPath, "utf8");
   let collisionFailsBeforeSave = false;
+  // Capture warnings from the first migration run before testing the collision scenario.
+  const firstMigrationWarnings = [...warnings];
+  warnings.length = 0;
   try {
     startupModule.runOpenAiTierStartupMigration(configModule.loadConfig());
   } catch (error) {
     collisionFailsBeforeSave = error instanceof configModule.OpenAiTierBackupCollisionError
       && readFileSync(configPath, "utf8") === collisionSource;
   }
+  // With the stale-backup fix (issue #257), a differing backup is replaced instead of
+  // throwing. The migration completes and saves. collisionFailsBeforeSave stays false.
 
   const expectedKnownReferences = {
     disabledModels: ["gpt-disabled", "custom/custom-model"],
@@ -150,8 +155,10 @@ try {
     claudeWeb: first.claudeCode?.webSearchSidecar?.model,
     claudeVision: first.claudeCode?.visionSidecar?.model,
   };
-  const warningPathsOnly = warnings.length === 2
-    && warnings.every(warning => warning === "[openai-provider-migration] providerContextCaps.openai + providerContextCaps.openai-multi: kept lower positive cap");
+  // Filter out the stale backup replacement warning (issue #257) before checking.
+  const relevantWarnings = firstMigrationWarnings.filter(w => !w.includes("Replacing stale pre-migration backup"));
+  const warningPathsOnly = relevantWarnings.length === 2
+    && relevantWarnings.every(warning => warning === "[openai-provider-migration] providerContextCaps.openai + providerContextCaps.openai-multi: kept lower positive cap");
 
   process.stdout.write(JSON.stringify({
     backupMatchesOriginal: backupBytes === original,

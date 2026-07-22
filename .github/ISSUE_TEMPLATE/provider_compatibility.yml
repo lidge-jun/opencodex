@@ -1,0 +1,120 @@
+name: Provider or API compatibility
+description: Report an incompatible provider, endpoint, request shape, response shape, or client integration.
+labels:
+  - provider-compatibility
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when a provider endpoint, request format, response format, or client integration does not work correctly through the OpenCodex proxy.
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client or integration
+      description: Which client or SDK did you observe the incompatibility in?
+      options:
+        - Codex CLI
+        - Codex App
+        - Codex SDK
+        - Claude Code
+        - OpenAI-compatible SDK
+        - Direct HTTP client
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider or upstream service
+      description: Name of the provider or upstream API.
+      placeholder: "anthropic, google-ai, xai, mistral"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: OpenCodex version
+      description: Installed `@bitkyc08/opencodex` version or commit SHA.
+      placeholder: "2.7.31"
+    validations:
+      required: true
+
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint or capability
+      description: "Examples: /v1/responses, /v1/chat/completions, /v1/messages, image generation, tool calls, streaming, model discovery, authentication, reasoning metadata."
+      placeholder: "/v1/responses"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-behaviour
+    attributes:
+      label: Current behaviour
+      description: What does the proxy currently return or do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behaviour
+    attributes:
+      label: Expected behaviour
+      description: What should the proxy return or do, based on the upstream specification or client requirement?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal redacted request or reproduction
+      description: A redacted curl command, SDK snippet, or configuration that triggers the problem.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: response
+    attributes:
+      label: Actual response or error
+      description: The redacted response body, status code, or error message the proxy returned.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: upstream-docs
+    attributes:
+      label: Upstream documentation
+      description: |
+        URL to the provider or protocol specification. If no public specification exists, state that clearly.
+      placeholder: "https://docs.anthropic.com/en/api/messages"
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Suggested mapping or implementation notes
+      description: Optional notes on how the proxy could map or translate the request/response.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context and attachments
+      description: Related issues, screenshots, HAR files, or other supporting material.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing provider and compatibility issues.
+          required: true
+        - label: The request and response were redacted.
+          required: true
+        - label: The expected behaviour is based on an upstream specification or a concrete client requirement.
+          required: true

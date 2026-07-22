@@ -211,7 +211,7 @@ export type AdapterEvent =
   // the SAME output index, so the activity animates instead of flashing completed instantly.
   | { type: "web_search_call_begin"; id: string }
   | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
-  | { type: "done"; usage?: OcxUsage }
+  | { type: "done"; usage?: OcxUsage; stopReason?: string }
   // `usage` carries best-effort partial consumption when a turn dies before a clean done
   // (e.g. cursor upstream 502 mid-stream), so failed requests can log real token counts.
   | { type: "error"; message: string; usage?: OcxUsage };
@@ -347,6 +347,24 @@ export interface OcxClaudeCodeConfig {
   visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
 }
 
+/** 사용자가 대시보드에서 직접 추가한 커스텀 모델 정의. */
+export interface OcxCustomModel {
+  /** 고유 ID (crypto.randomUUID()) */
+  id: string;
+  /** 프로바이더 키 (기존 providers[name]) */
+  provider: string;
+  /** 모델 슬러그 (프로바이더 접두사 없는 bare id) */
+  modelId: string;
+  /** 인간 가독 표시명 (선택, 슬래시 불가) */
+  displayName?: string;
+  /** 컨텍스트 윈도우 (토큰) */
+  contextWindow?: number;
+  /** 입력 모달리티 (선택, 기본 ["text"]) */
+  inputModalities?: string[];
+  /** 추가 시각 (ISO 8601) */
+  addedAt?: string;
+}
+
 export interface OcxConfig {
   port: number;
   providers: Record<string, OcxProviderConfig>;
@@ -402,6 +420,8 @@ export interface OcxConfig {
    * are omitted from the bare /v1/models list.
    */
   disabledModels?: string[];
+  /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
+  customModels?: OcxCustomModel[];
   /**
    * Shadow call intercept: redirect Codex Desktop's hard-coded gpt-5.4-mini helper calls
    * (title generation, commit messages, skill orchestration) to a user-chosen model.
@@ -585,6 +605,15 @@ export interface OcxWebSearchSidecarConfig {
   routedModelStallTimeoutMs?: number;
 }
 
+export interface OpenRouterProviderRouting {
+  /** OpenRouter provider slugs to try first, in priority order. */
+  order?: string[];
+  /** Restrict routing to these OpenRouter provider slugs. */
+  only?: string[];
+  /** Whether OpenRouter may use providers outside `order`. Defaults to OpenRouter's policy. */
+  allowFallbacks?: boolean;
+}
+
 export interface OcxProviderConfig {
   adapter: string;
   baseUrl: string;
@@ -633,6 +662,10 @@ export interface OcxProviderConfig {
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   headers?: Record<string, string>;
+  /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
+  openRouterRouting?: OpenRouterProviderRouting;
+  /** Exact model-id overrides for `openRouterRouting`. Each matching entry replaces the default. */
+  modelOpenRouterRouting?: Record<string, OpenRouterProviderRouting>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).
@@ -774,6 +807,8 @@ export const OPENAI_PROVIDER_TIER_VERSION = 2 as const;
 export interface CodexAccount {
   id: string;
   email: string;
+  /** User-owned display label; never participates in routing or identity checks. */
+  alias?: string;
   plan?: string;
   chatgptAccountId?: string;
   logLabel?: string;

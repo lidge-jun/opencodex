@@ -25,7 +25,7 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
-function sanitizeReasoningInputContent(body: unknown): unknown {
+export function sanitizeReasoningInputContent(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
   if (!Array.isArray(raw.input)) return body;

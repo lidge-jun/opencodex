@@ -2,7 +2,7 @@
 import { loadConfig } from "../config";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
-import { cmdAddKey, cmdAutoSwitch, cmdRefresh, cmdRemove } from "./account-extended";
+import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdRefresh, cmdRemove } from "./account-extended";
 import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
@@ -21,6 +21,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account use <provider> <account-or-key-id|main> [--json]
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
   ocx account remove <provider> <account-or-key-id|main> --yes [--json]
   ocx account add-key <provider> [--label <label>] [--json]
 
@@ -254,6 +255,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "use") return await cmdUse(rest, deps);
     if (sub === "refresh") return await cmdRefresh(rest, deps);
     if (sub === "auto-switch") return await cmdAutoSwitch(rest, deps);
+    if (sub === "alias" || sub === "rename") return await cmdAlias(rest, deps);
     if (sub === "remove") return await cmdRemove(rest, deps);
     if (sub === "add-key") return await cmdAddKey(rest, deps);
     console.error(ACCOUNT_USAGE);

@@ -50,7 +50,9 @@ export function readKiroCliSqlite(): ImportedKiroToken | null {
 
 /**
  * Import-first login: kiro-cli SQLite → KIRO_ACCESS_TOKEN env → manual paste (CLI only).
- * In GUI (no onManualCodeInput) with no SQLite token and no env, throws a clear error — never hangs.
+ * When no local token is available, resolves the login flow via onAuth with instructions
+ * so the GUI renders the paste-input field, then blocks on onManualCodeInput for the token.
+ * If neither onAuth nor onManualCodeInput is available, throws a clear error.
  */
 export async function loginKiro(ctrl: OAuthController): Promise<OAuthCredentials> {
   const imported = readImportedKiroCredential();
@@ -71,6 +73,15 @@ export async function loginKiro(ctrl: OAuthController): Promise<OAuthCredentials
   }
 
   if (ctrl.onManualCodeInput) {
+    // Resolve the login flow immediately so the GUI receives instructions and
+    // shows the paste-input field. Without this, onManualCodeInput blocks
+    // forever and the HTTP response never reaches the dashboard.
+    ctrl.onAuth?.({
+      url: "",
+      instructions:
+        "No kiro-cli token found. Paste a Kiro access token below (starts with 'aoa'). " +
+        "Run `kiro-cli login` first, or set KIRO_ACCESS_TOKEN.",
+    });
     ctrl.onProgress?.("No kiro-cli token found. Paste a Kiro access token (starts with 'aoa').");
     const raw = (await ctrl.onManualCodeInput()).trim();
     if (raw) return { access: raw, refresh: "", expires: Date.now() + 3600_000, source: "manual" };

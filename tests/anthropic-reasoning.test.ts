@@ -64,6 +64,33 @@ describe("anthropic extended-thinking gate", () => {
   });
 
   test.each([
+    ["high", 24_576],
+    ["xhigh", 32_000],
+    ["max", 32_000],
+  ])("adaptive-thinking %s effort reserves visible-output headroom", async (effort, expected) => {
+    const b = await bodyOf(parsed(effort, {}, "claude-fable-5"));
+    expect(b.max_tokens).toBe(expected);
+  });
+
+  test("Anthropic streaming and JSON responses preserve max_tokens stop reasons", async () => {
+    const adapter = createAnthropicAdapter(provider);
+    const sse = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":8192}}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+      "",
+    ].join("\n\n");
+    const streamed = [];
+    for await (const event of adapter.parseStream(new Response(sse))) streamed.push(event);
+    expect(streamed.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens" });
+
+    const json = await adapter.parseResponse(new Response(JSON.stringify({
+      content: [], stop_reason: "max_tokens", usage: { input_tokens: 1, output_tokens: 8192 },
+    })));
+    expect(json.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens" });
+  });
+
+  test.each([
     "claude-haiku-4-5",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",

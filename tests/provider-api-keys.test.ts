@@ -73,6 +73,13 @@ describe("provider API key pool", () => {
       expect(cfg.providers["opencode-go"].apiKey).toBe("key-second-444555666777");
 
       const firstId = list.keys.find(k => k.id !== secondId)!.id;
+      const rename = await fetch(new URL("/api/providers/keys/alias", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "opencode-go", id: secondId, alias: "Work key" }),
+      });
+      expect(rename.status).toBe(200);
+      const renamed = await fetch(new URL("/api/providers/keys?name=opencode-go", server.url)).then(r => r.json()) as { keys: Array<{ id: string; label?: string }> };
+      expect(renamed.keys.find(key => key.id === secondId)?.label).toBe("Work key");
       const put = await fetch(new URL("/api/providers/keys/active", server.url), {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "opencode-go", id: firstId }),

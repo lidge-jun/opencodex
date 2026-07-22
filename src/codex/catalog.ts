@@ -1510,7 +1510,16 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     else warnUncataloguedComboOnce(id, combo, members);
   }
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
-  return all;
+  const customModels = (config.customModels ?? []).map(cm => ({
+    id: cm.modelId,
+    provider: cm.provider,
+    ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
+    ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+  }));
+  // Custom rows override discovered rows that encode to the same Codex-facing slug.
+  const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
+  const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
+  return [...deduped, ...customModels];
 }
 
 const openAiApiCollisionWarnings = new Set<string>();

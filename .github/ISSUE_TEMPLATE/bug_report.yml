@@ -1,20 +1,53 @@
 name: Bug report
-description: Report a reproducible defect in the proxy, CLI, dashboard, docs, or packaging.
-title: "[Bug]: "
+description: Report a defect in the proxy, CLI, dashboard, provider adapter, or packaging.
 labels:
   - bug
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Please include a minimal reproduction and the exact environment details.
+        Thanks for the report. Include a minimal reproduction and exact environment details so we can confirm and fix the problem quickly.
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client or integration
+      description: Which client or surface did you observe the problem in?
+      options:
+        - Codex CLI
+        - Codex App
+        - Codex SDK
+        - Claude Code
+        - Direct HTTP/API client
+        - OpenCodex dashboard
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of OpenCodex is affected?
+      options:
+        - CLI
+        - Proxy and routing
+        - Dashboard
+        - Provider adapter
+        - Authentication and account pool
+        - Installation or packaging
+        - Service lifecycle
+        - Documentation
+        - Other
+    validations:
+      required: true
 
   - type: textarea
     id: summary
     attributes:
       label: Summary
       description: What happened, and what did you expect instead?
-      placeholder: A clear and concise description of the bug.
+      placeholder: The proxy returns 502 when ...; I expected ...
     validations:
       required: true
 
@@ -22,34 +55,12 @@ body:
     id: reproduction
     attributes:
       label: Reproduction
-      description: List the exact steps, commands, and config shape needed to reproduce the problem.
+      description: |
+        Exact commands, steps, configuration shape, and inputs. If the problem is intermittent or not yet consistently reproducible, explain what you have observed and under which conditions.
       placeholder: |
-        1. Run `ocx init`
-        2. Start the proxy with ...
-        3. Open ...
-        4. Observe ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: logs
-    attributes:
-      label: Logs and screenshots
-      description: Paste relevant logs, stack traces, request IDs, or screenshots.
-      render: shell
-
-  - type: dropdown
-    id: area
-    attributes:
-      label: Area
-      options:
-        - CLI
-        - Proxy runtime
-        - GUI dashboard
-        - Docs
-        - Packaging or install
-        - Provider adapter
-        - Other
+        1. ocx start --port 10100
+        2. Send a request to /v1/responses with ...
+        3. Observe ...
     validations:
       required: true
 
@@ -57,20 +68,44 @@ body:
     id: version
     attributes:
       label: Version
-      description: The installed `@bitkyc08/opencodex` version or commit SHA.
-      placeholder: 2.7.7
+      description: Installed `@bitkyc08/opencodex` version or commit SHA.
+      placeholder: "2.7.31"
+    validations:
+      required: true
 
   - type: input
     id: os
     attributes:
-      label: OS
-      description: Operating system and version.
-      placeholder: Windows 11, macOS 15, Ubuntu 24.04
+      label: Operating system
+      description: OS name and version.
+      placeholder: Windows 11 24H2, macOS 15.5, Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: provider-model
+    attributes:
+      label: Provider and model
+      description: Required only when the problem is provider-specific.
+      placeholder: "anthropic / claude-sonnet-4-20250514"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Paste relevant logs, stack traces, or request IDs.
+      render: shell
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots and supporting files
+      description: Drag screenshots, videos, logs, or minimal reproduction archives here.
 
   - type: textarea
     id: config
     attributes:
-      label: Config shape
+      label: Redacted configuration
       description: Share a redacted config snippet if the bug depends on provider or routing setup.
       render: json
 
@@ -79,7 +114,7 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I searched existing issues and docs first.
+        - label: I searched existing issues and documentation.
           required: true
-        - label: I removed secrets, tokens, and personal data from logs and screenshots.
+        - label: I removed secrets, tokens, account details, request credentials, and personal data.
           required: true

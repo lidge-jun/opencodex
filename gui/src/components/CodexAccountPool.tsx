@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
 
 export interface CodexAccountEntry {
-  id: string; email: string; plan?: string; isMain: boolean;
+  id: string; alias?: string; email: string; plan?: string; isMain: boolean;
   hasCredential: boolean; quota: AccountQuota | null;
   needsReauth?: boolean;
 }
@@ -145,6 +145,24 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     } finally {
       setSwitchingId(null);
     }
+  };
+
+  const editAlias = async (account: CodexAccountEntry) => {
+    const entered = window.prompt(t("prov.aliasPrompt"), account.alias ?? "");
+    if (entered === null) return;
+    const response = await fetch(`${apiBase}/api/codex-auth/accounts/alias`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: account.id, alias: entered.trim() }),
+    });
+    if (!response.ok) {
+      setToastError(true);
+      setToast(t("prov.aliasSaveFailed"));
+      return;
+    }
+    await load();
+    setToastError(false);
+    setToast(t("prov.aliasSaved"));
   };
 
   const remove = async (id: string) => {
@@ -320,7 +338,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         <div key={a.id} className={`card ${isNext(a.id) ? "card-active" : ""}`} style={{ marginBottom: 8 }}>
           <div className="card-head">
             <span className={`dot ${a.needsReauth ? "dot-amber" : isNext(a.id) ? "dot-blue" : "dot-muted"}`} />
-            <strong>{a.email}</strong>
+            <strong>{a.alias ?? a.email}</strong>
             <span className="card-badges">
               {a.plan && <span className="badge badge-green">{a.plan}</span>}
               <TicketBadge t={t} account={a} onClick={() => openResetPopup(a)} />
@@ -341,6 +359,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
                 {t("codexAuth.reauthenticate")}
               </button>
             )}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void editAlias(a)}>
+              {t("prov.editAlias")}
+            </button>
             <button
               className="btn-icon btn-icon-danger card-right"
               aria-label={`${t("common.remove")} — ${a.email}`}
@@ -350,6 +371,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
               <IconX width={14} />
             </button>
           </div>
+          <div className="card-sub">{a.email}{a.plan ? ` · ${a.plan}` : ""} · {t("prov.accountId")}: {a.id}</div>
           {a.needsReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
             : <QuotaBars quota={a.quota} plan={a.plan} threshold={autoThreshold} t={t} />}

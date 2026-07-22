@@ -709,6 +709,23 @@ describe("codex-auth API", () => {
     expect(config.activeCodexAccountId).toBe("pool-next");
   });
 
+  test("PUT /api/codex-auth/accounts/alias changes display metadata only", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "work", email: "work@example.test", plan: "plus", isMain: false }],
+      activeCodexAccountId: "work",
+    });
+    const req = new Request("http://localhost/api/codex-auth/accounts/alias", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "work", alias: "Work Plus" }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(200);
+    expect(config.codexAccounts?.[0]?.alias).toBe("Work Plus");
+    expect(config.codexAccounts?.[0]?.id).toBe("work");
+    expect(config.activeCodexAccountId).toBe("work");
+  });
+
   test("PUT /api/codex-auth/auto-switch mutates live runtime config", async () => {
     const config = makeConfig({ autoSwitchThreshold: 80 });
     const req = new Request("http://localhost/api/codex-auth/auto-switch", {

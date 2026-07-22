@@ -102,6 +102,18 @@ export function setActiveProviderApiKey(config: OcxConfig, name: string, id: str
   return true;
 }
 
+/** Rename a key slot without changing its id, secret, or active routing state. */
+export function setProviderApiKeyLabel(config: OcxConfig, name: string, id: string, label: string | undefined): boolean {
+  const provider = config.providers[name];
+  if (!provider || !isKeyAuthProvider(provider)) return false;
+  const entry = ensurePool(provider).find(e => e.id === id);
+  if (!entry) return false;
+  if (label) entry.label = label;
+  else delete entry.label;
+  saveConfig(config);
+  return true;
+}
+
 /** Remove one key; removing the active one promotes the first remaining. Persists config. */
 export function removeProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
   const provider = config.providers[name];

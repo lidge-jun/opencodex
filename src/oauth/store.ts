@@ -179,6 +179,7 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   const credential = normalizeCredential(candidate.credential);
   if (!credential) return null;
   const account: ProviderAccount = { id: candidate.id, credential };
+  if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
   if (candidate.needsReauth === true) account.needsReauth = true;
   if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
   return account;
@@ -337,6 +338,16 @@ export async function setActiveAccount(provider: string, accountId: string): Pro
     const set = store[provider];
     if (!set || !set.accounts.some(a => a.id === accountId)) return false;
     set.activeAccountId = accountId;
+    return true;
+  });
+}
+
+export async function setAccountAlias(provider: string, accountId: string, alias: string | undefined): Promise<boolean> {
+  return await mutateStore(store => {
+    const account = store[provider]?.accounts.find(a => a.id === accountId);
+    if (!account) return false;
+    if (alias) account.alias = alias;
+    else delete account.alias;
     return true;
   });
 }

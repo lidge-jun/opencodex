@@ -395,6 +395,7 @@ export async function loginGithubCopilot(ctrl: OAuthController): Promise<OAuthCr
   ctrl.onAuth?.({
     url: device.verifyUrl,
     instructions: `Enter code: ${device.userCode}`,
+    deviceCode: device.userCode,
   });
   ctrl.onProgress?.("Waiting for GitHub device authorization…");
   const github = await pollGithubDeviceToken(

@@ -101,7 +101,7 @@ export default function AddCodexAccountModal({
     setError("");
     try {
       const accountId = reauthAccountId ?? requestedId?.trim() ?? "";
-      const resp = await fetch(`${apiBase}/api/codex-auth/login`, {
+      const requestLogin = () => fetch(`${apiBase}/api/codex-auth/login`, {
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -111,11 +111,25 @@ export default function AddCodexAccountModal({
             : (accountId ? { id: accountId } : {}),
         ),
       });
-      const data = await resp.json() as { url?: string; flowId?: string; error?: string; status?: string };
+      let resp = await requestLogin();
+      let data = await resp.json() as { url?: string; flowId?: string; error?: string; status?: string };
       if (!aliveRef.current) return;
       if (resp.status === 409) {
-        setError(t("codexAuth.oauthAlreadyInProgress"));
-        return;
+        // A newly mounted modal has no flow id for an abandoned server-side login.
+        // Cancel that scratch flow and retry once so interruption never leaves the
+        // account pool permanently stuck behind "already in progress".
+        await fetch(`${apiBase}/api/codex-auth/login/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        if (!aliveRef.current || controller.signal.aborted) return;
+        resp = await requestLogin();
+        data = await resp.json() as typeof data;
+        if (resp.status === 409) {
+          setError(t("codexAuth.oauthAlreadyInProgress"));
+          return;
+        }
       }
       if (data.url) {
         flowRef.current = data.flowId ?? null;

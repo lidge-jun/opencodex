@@ -82,6 +82,14 @@ describe("sanitizeGeminiToolParameters", () => {
     expect(props.n.exclusiveMinimum).toBeUndefined();
   });
 
+  test("deduplicates required names for Claude-on-Antigravity", () => {
+    expect(sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query", "query", 42],
+    }).required).toEqual(["query"]);
+  });
+
   test("inlines local $ref into $defs and removes the defs bag", () => {
     const out = sanitizeGeminiToolParameters({
       type: "object",

@@ -1,6 +1,7 @@
 import * as readline from "node:readline";
+import { constants as fsConstants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
-import { getDefaultConfig, isValidProviderName, saveConfig } from "../config";
+import { classifyOpenAiTierBackup, getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -42,7 +43,7 @@ const KIND_HEADING: Record<InitKind, string> = {
 };
 
 function printMenu(providers: InitProvider[]): void {
-  console.log("Available providers:");
+  console.log("Choose your default provider (you can add more later):");
   let lastKind: InitKind | null = null;
   providers.forEach((p, i) => {
     if (p.kind !== lastKind) { console.log(`\n  ${KIND_HEADING[p.kind]}:`); lastKind = p.kind; }
@@ -53,6 +54,33 @@ function printMenu(providers: InitProvider[]): void {
 
 const envKeyFor = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
 
+/** Post-init cleanup of `.pre-openai-tiers-v2.bak` with rollback preservation (issue #257). */
+export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): void {
+  const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+  try {
+    if (!existsSync(backup)) return;
+    if (classifyOpenAiTierBackup(readFileSync(backup)) === "stale") {
+      unlinkSync(backup);
+      return;
+    }
+    // Publish the preserved snapshot with a no-replace copy (COPYFILE_EXCL) so a
+    // destination collision (frozen/rolled-back clock, pre-created file) can never
+    // silently overwrite another rollback snapshot; retry with a sequence suffix.
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
+      try {
+        copyFileSync(backup, preserved, fsConstants.COPYFILE_EXCL);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw error;
+      }
+      unlinkSync(backup);
+      console.warn(`⚠️  Kept your pre-migration config rollback snapshot at ${preserved}`);
+      return;
+    }
+  } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
+}
+
 export async function runInit(): Promise<void> {
   const prompt = createPrompt();
   console.log("\n🔧 opencodex (ocx) setup\n");
@@ -60,7 +88,7 @@ export async function runInit(): Promise<void> {
   const providers = buildInitProviders();
   printMenu(providers);
 
-  const choice = await prompt.ask("\nSelect provider (number): ");
+  const choice = await prompt.ask("\nSelect default provider (number): ");
   const idx = parseInt(choice, 10) - 1;
 
   let providerName: string;
@@ -136,6 +164,13 @@ export async function runInit(): Promise<void> {
   };
 
   saveConfig(config);
+  // Init writes a fresh config, so a stale pre-migration backup from a previous
+  // installation would make the next `ocx start` crash on a stale-backup
+  // collision (issue #257). But only a STALE backup (unparseable, or already a
+  // post-migration v2 snapshot) may be deleted; a backup that still parses as a
+  // valid pre-migration (v1) config is a user-intentional rollback point and is
+  // preserved by renaming it out of the collision path (sol review 260722).
+  cleanupOpenAiTierBackupAfterInit();
   console.log(`\n✅ Config saved to ~/.opencodex/config.json`);
   if (oauthHint) console.log(`🔐 Authenticate this provider with:  ocx login ${providerName}`);
 

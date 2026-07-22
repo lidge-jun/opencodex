@@ -73,7 +73,12 @@ export function buildClaudeEnv(config: OcxConfig, port: number, base: ClaudeLaun
   // setDefault: an explicit user export (e.g. =0, isEnvTruthy-false) still wins.
   // Intentional contract change: settings.env model slots are also stripped in
   // ocx claude runs — use the top-level settings "model" field or opt out.
-  setDefault("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+  // Claude Code 2.1.206+ also treats this as a host-auth assertion. Injecting it
+  // without a host token makes a valid claude.ai subscription look logged out,
+  // so the guard is only safe when opencodex actually owns authentication.
+  if (env.ANTHROPIC_AUTH_TOKEN) {
+    setDefault("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+  }
   // Opt-in effort forcing (devlog 136 B6): opus-shaped aliases already carry
   // output_config.effort, so this is OFF unless the user enables it in config.
   if (config.claudeCode?.alwaysEnableEffort === true) {

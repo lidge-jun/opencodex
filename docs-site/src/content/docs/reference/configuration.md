@@ -156,6 +156,8 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `modelContextWindows?` | `Record<string,number>` | Model-specific context-window caps. These override `contextWindow` for matching model ids and never raise smaller live metadata. |
 | `modelInputModalities?` | `Record<string,string[]>` | Model-specific catalog input hints such as `["text"]` or `["text", "image"]`. |
 | `headers?` | `Record<string,string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid header names are rejected. |
+| `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter provider preferences. Supports `order`, `only`, and `allowFallbacks`; valid only with the canonical OpenRouter base URL and `openai-chat` adapter. |
+| `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | Exact model-id overrides for `openRouterRouting`. A matching entry replaces the provider-wide default. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | How to authenticate (default `key`). See [Providers](/opencodex/guides/providers/#auth-modes). |
 | `codexAccountMode?` | `"pool" \| "direct"` | Only for canonical `openai`; defaults to Pool when omitted. Direct short-circuits pool state. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
@@ -230,6 +232,44 @@ one JSON request from stdin, and must write one JSON result to stdout.
 Leave `unsafeAllowNativeLocalExec` unset or `false` unless you explicitly want Cursor-native local
 execution that bypasses Codex approval and sandbox semantics.
 :::
+
+## OpenRouter provider routing
+
+OpenRouter can serve one model through multiple inference providers. Use `openRouterRouting` to
+keep requests on preferred providers, or `modelOpenRouterRouting` when different models need
+different endpoints. This is especially useful for prompt-cache affinity: cache support, hit rates,
+retention, and pricing can differ substantially between providers, and automatic provider changes
+may turn expected cache hits into full-price uncached requests.
+
+The configuration mirrors OpenRouter's provider-selection fields. Provider names are OpenRouter
+provider slugs. `allowFallbacks: false` makes the preference fail closed; `true` lets OpenRouter use
+other eligible providers after the ordered list. An `only` list is always an allowlist.
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "openRouterRouting": {
+        "order": ["deepseek"],
+        "allowFallbacks": false
+      },
+      "modelOpenRouterRouting": {
+        "anthropic/claude-sonnet-5": {
+          "only": ["anthropic"],
+          "allowFallbacks": false
+        }
+      }
+    }
+  }
+}
+```
+
+Model keys are exact OpenRouter model ids, without the outer OpenCodex provider prefix. With the
+example above, select `openrouter/anthropic-claude-sonnet-5` in Codex; OpenCodex restores the native
+`anthropic/claude-sonnet-5` id before applying the model-specific rule.
 
 ## Static model allowlists
 

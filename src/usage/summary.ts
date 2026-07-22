@@ -63,6 +63,7 @@ export interface UsageModel {
   inputTokens: number;
   outputTokens: number;
   shareRatio: number;
+  estimatedCostUsd?: number;
 }
 
 export interface UsageProvider {
@@ -74,6 +75,7 @@ export interface UsageProvider {
   estimatedRequests: number;
   totalTokens: number;
   shareRatio: number;
+  estimatedCostUsd?: number;
 }
 
 export interface UsageSummary {
@@ -350,6 +352,29 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
       else if (status === "estimated") model.estimatedRequests += 1;
     }
   }
+  // Accumulate per-model estimated cost
+  for (const entry of entries) {
+    const estimate = entry.attempts?.length
+      ? estimateComboCost(entry.attempts)
+      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+    if (!estimate) continue;
+
+    if (entry.attempts?.length && estimate.attempts) {
+      // Combo: attribute each attempt's cost to its own model
+      for (const attemptEst of estimate.attempts) {
+        const aProviderKey = baseProviderLabel(attemptEst.provider);
+        const aKey = `${aProviderKey}${attemptEst.model}`;
+        const m = byKey.get(aKey);
+        if (m) m.estimatedCostUsd = (m.estimatedCostUsd ?? 0) + attemptEst.cost.total;
+      }
+    } else {
+      // Single-target: attribute to the entry's model
+      const providerKey = baseProviderLabel(entry.provider);
+      const key = `${providerKey}${entry.model}`;
+      const m = byKey.get(key);
+      if (m) m.estimatedCostUsd = (m.estimatedCostUsd ?? 0) + estimate.cost.total;
+    }
+  }
   const models = [...byKey.values()];
   for (const m of models) m.shareRatio = totalTokens === 0 ? 0 : m.totalTokens / totalTokens;
   return models.sort((a, b) => b.requests - a.requests);
@@ -394,6 +419,24 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
       if (isMeasuredStatus(status)) provider.measuredRequests += 1;
       if (status === "reported") provider.reportedRequests += 1;
       else if (status === "estimated") provider.estimatedRequests += 1;
+    }
+  }
+  for (const entry of entries) {
+    const estimate = entry.attempts?.length
+      ? estimateComboCost(entry.attempts)
+      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+    if (!estimate) continue;
+
+    if (entry.attempts?.length && estimate.attempts) {
+      for (const attemptEst of estimate.attempts) {
+        const aProviderKey = baseProviderLabel(attemptEst.provider);
+        const p = byKey.get(aProviderKey);
+        if (p) p.estimatedCostUsd = (p.estimatedCostUsd ?? 0) + attemptEst.cost.total;
+      }
+    } else {
+      const providerKey = baseProviderLabel(entry.provider);
+      const p = byKey.get(providerKey);
+      if (p) p.estimatedCostUsd = (p.estimatedCostUsd ?? 0) + estimate.cost.total;
     }
   }
   const providers = [...byKey.values()];

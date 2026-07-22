@@ -554,13 +554,31 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash-medium");
-    for (const tier of ["low", "medium", "high"]) {
-      const modelId = `gemini-3.6-flash-${tier}`;
-      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain(modelId);
-      expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.[modelId]).toBe(1_048_576);
-    }
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash");
+    // Collapsed picker: base models only, no effort-suffix variants.
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.6-flash");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-pro");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-sonnet-4-6");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-opus-4-6-thinking");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gpt-oss-120b-medium");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toHaveLength(5);
+    // Effort ladders on collapsed base models.
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.6-flash"]).toEqual(["low", "medium", "high"]);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.1-pro"]).toEqual(["low", "high"]);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["claude-opus-4-6-thinking"]).toEqual(["low", "medium", "high", "max"]);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["claude-sonnet-4-6"]).toEqual(["low", "medium", "high", "max"]);
+    // Context windows on collapsed base models.
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.1-pro"]).toBe(1_048_576);
+    // Suffix and compat IDs are NOT in the picker list.
     for (const hidden of [
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+      "gemini-3.1-pro-low",
+      "gemini-pro-agent",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-preview",
       "gemini-3.5-flash-extra-low",
       "gemini-3.5-flash-low",
       "gemini-3.5-flash-mid",
@@ -569,8 +587,6 @@ describe("provider registry parity", () => {
     ]) {
       expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).not.toContain(hidden);
     }
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-pro-high");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.1-pro-high"]).toBe(1_048_576);
   });
 
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {

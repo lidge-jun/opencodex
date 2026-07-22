@@ -6,6 +6,7 @@ export type ProviderAuthSurface = "codex-accounts" | "oauth-accounts" | "api-key
 
 export interface OAuthAccountIdentity {
   id: string;
+  alias?: string;
   email?: string;
 }
 
@@ -33,6 +34,8 @@ export function oauthAccountDisplayLabel<T extends OAuthAccountIdentity>(
   account: OAuthAccountIdentity,
   t: TFn,
 ): string {
+  const alias = account.alias?.trim();
+  if (alias) return alias;
   const email = account.email?.trim();
   if (email) return email;
   const index = accounts.findIndex(candidate => candidate.id === account.id);

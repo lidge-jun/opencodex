@@ -19,13 +19,14 @@ import ProviderAuthPanel from "./ProviderAuthPanel";
 import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { AccountLoadState, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
+import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch } from "./types";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
 export default function ProviderDetails({
   item,
   usageTotals,
+  modelUsage,
   quotaReport,
   availableModels,
   selectedModels,
@@ -51,6 +52,7 @@ export default function ProviderDetails({
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
+  modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   availableModels: string[];
   selectedModels: string[];
@@ -239,7 +241,7 @@ export default function ProviderDetails({
           />
         )}
         {tab === "usage" && (
-          <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} />
+          <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} modelUsage={modelUsage} />
         )}
         {tab === "accounts" && (
           <ProviderAuthPanel

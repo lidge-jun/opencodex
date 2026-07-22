@@ -143,6 +143,7 @@ export interface ProviderQuotaReportDto {
 
 interface CodexAccountDto {
   id: string;
+  alias?: string;
   email?: string;
   plan?: string;
   isMain?: boolean;
@@ -189,7 +190,7 @@ export async function fetchCodexRows(
     provider: "openai",
     type: "codex" as const,
     id: a.id,
-    label: a.plan ?? a.email,
+    label: a.alias ?? a.plan ?? a.email,
     email: a.email,
     plan: a.plan,
     active: a.id === activeId,
@@ -201,6 +202,7 @@ export async function fetchCodexRows(
 
 interface OAuthAccountDto {
   id: string;
+  alias?: string;
   email?: string;
   active?: boolean;
   needsReauth?: boolean;
@@ -216,7 +218,7 @@ async function fetchOAuthRows(deps: AccountDeps, baseUrl: string, name: string):
     provider: name,
     type: "oauth" as const,
     id: a.id,
-    label: a.email ?? `Account ${i + 1}`,
+    label: a.alias ?? a.email ?? `Account ${i + 1}`,
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,

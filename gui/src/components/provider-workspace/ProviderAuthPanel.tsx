@@ -31,6 +31,7 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
 
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
@@ -97,6 +98,18 @@ export default function ProviderAuthPanel({
                 <span className="pwi-spin-inline" aria-hidden="true" />
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
+                  {hintForThis.deviceCode && (
+                    <div className="pwi-device-code-wrap">
+                      <span>{t("prov.deviceCode")}</span>
+                      <code className="pwi-device-code">{hintForThis.deviceCode}</code>
+                      <button type="button" className="btn btn-primary btn-sm" onClick={() => {
+                        navigator.clipboard.writeText(hintForThis.deviceCode ?? "").then(() => {
+                          setDeviceCodeCopied(true);
+                          setTimeout(() => setDeviceCodeCopied(false), 2500);
+                        }).catch(() => {});
+                      }}>{deviceCodeCopied ? t("prov.codeCopied") : t("prov.copyCode")}</button>
+                    </div>
+                  )}
                   {hintForThis.url && (
                     <a href={hintForThis.url} target="_blank" rel="noreferrer" className="pwi-auth-open-link">
                       <IconExternal style={{ width: 13, height: 13 }} /> {t("prov.didntOpen")}
@@ -139,7 +152,10 @@ export default function ProviderAuthPanel({
                       aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
                       disabled={Boolean(account.needsReauth || (switchingAccountId && !switching))}>
                       <span className={`pwi-auth-dot ${account.needsReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <span className="pwi-auth-row-label">{label}</span>
+                      <span className="pwi-auth-row-copy">
+                        <span className="pwi-auth-row-label">{label}</span>
+                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${account.id}`].filter(Boolean).join(" · ")}</span>
+                      </span>
                       {account.needsReauth && <span className="badge badge-amber">{t("pws.reauth")}</span>}
                       {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                       {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
@@ -154,6 +170,10 @@ export default function ProviderAuthPanel({
                         {t("pws.reauthenticate")}
                       </button>
                     )}
+                    <button type="button" className="btn btn-ghost btn-sm"
+                      onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
+                      {t("prov.editAlias")}
+                    </button>
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
                       aria-label={`${t("common.remove")} — ${label}`}
                       title={`${t("common.remove")} — ${label}`}
@@ -188,8 +208,15 @@ export default function ProviderAuthPanel({
                       onClick={() => void authHandlers.onSwitchApiKey(item.name, entry)}
                       disabled={entry.active}>
                       <span className={`pwi-auth-dot ${entry.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <code className="pwi-auth-row-label">{entry.masked}</code>
+                      <span className="pwi-auth-row-copy">
+                        <span className="pwi-auth-row-label">{entry.label ?? entry.masked}</span>
+                        {entry.label && <code className="pwi-auth-row-secondary">{entry.masked} · {t("prov.accountId")}: {entry.id}</code>}
+                      </span>
                       {entry.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm"
+                      onClick={() => void authHandlers.onEditAlias(item.name, "api-key", entry.id, entry.label)}>
+                      {t("prov.editAlias")}
                     </button>
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
                       aria-label={`${t("common.remove")} — ${entry.label ?? entry.masked}`}

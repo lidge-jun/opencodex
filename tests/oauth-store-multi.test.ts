@@ -11,6 +11,7 @@ import {
   removeCredential,
   saveAccountCredential,
   saveCredential,
+  setAccountAlias,
   setActiveAccount,
 } from "../src/oauth/store";
 
@@ -118,6 +119,16 @@ describe("multi-account auth store", () => {
     expect(await setActiveAccount("anthropic", idA)).toBe(true);
     expect(getCredential("anthropic")?.access).toBe("access-a");
     expect(await setActiveAccount("anthropic", "nope")).toBe(false);
+  });
+
+  test("account aliases persist independently from identity and routing", async () => {
+    await saveCredential("anthropic", cred({ email: "alias@example.test", accountId: "alias-id" }));
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    expect(await setAccountAlias("anthropic", id, "Work Claude")).toBe(true);
+    expect(listAccounts("anthropic")[0]?.alias).toBe("Work Claude");
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(id);
+    expect(await setAccountAlias("anthropic", id, undefined)).toBe(true);
+    expect(listAccounts("anthropic")[0]?.alias).toBeUndefined();
   });
 
   test("saveAccountCredential persists refresh for a non-active account without switching active", async () => {

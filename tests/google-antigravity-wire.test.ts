@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
-import { ANTIGRAVITY_MODELS } from "../src/providers/antigravity-models";
+import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS } from "../src/providers/antigravity-models";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function parsed(text = "hello world", stream = false, modelId = "gemini-3-pro"): OcxParsedRequest {
@@ -13,12 +13,26 @@ function parsed(text = "hello world", stream = false, modelId = "gemini-3-pro"):
   } as unknown as OcxParsedRequest;
 }
 
+function parsedWithEffort(modelId: string, effort?: string): OcxParsedRequest {
+  return {
+    modelId,
+    stream: false,
+    context: { messages: [{ role: "user", content: "test" }], systemPrompt: [], tools: [] },
+    options: effort ? { reasoning: effort } : {},
+  } as unknown as OcxParsedRequest;
+}
+
 const provider = {
   adapter: "google",
   baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   googleMode: "cloud-code-assist",
   project: "proj-123",
   apiKey: "ya29.token",
+} as OcxProviderConfig;
+
+const effortProvider = {
+  ...provider,
+  modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS,
 } as OcxProviderConfig;
 
 describe("antigravity CCA envelope", () => {
@@ -54,12 +68,22 @@ describe("antigravity CCA envelope", () => {
   });
 
   test("exposes only Gemini 3.6 Flash tiers while hidden compatibility aliases resolve to them", async () => {
-    expect(ANTIGRAVITY_MODELS).toEqual(expect.arrayContaining([
+    // Collapsed picker: base models only.
+    expect(ANTIGRAVITY_MODELS).toEqual([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
+    for (const hidden of [
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-high",
-    ]));
-    for (const hidden of [
+      "gemini-3.1-pro-low",
+      "gemini-pro-agent",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-preview",
       "gemini-3.5-flash-extra-low",
       "gemini-3.5-flash-low",
       "gemini-3.5-flash-mid",
@@ -130,6 +154,147 @@ describe("antigravity CCA envelope", () => {
     const req = await createGoogleAdapter(provider).buildRequest(withTools);
     const env = JSON.parse(req.body);
     expect(env.request.toolConfig?.functionCallingConfig?.mode).toBeUndefined();
+  });
+
+  // ── Effort routing: base model + effort → wire model ID + thinkingConfig ──
+
+  test("gemini-3.6-flash with effort=high routes to gemini-3.6-flash-high + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.6-flash with effort=low routes to gemini-3.6-flash-low + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash", "low"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-low");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
+  });
+
+  test("gemini-3.6-flash with no effort defaults to medium wire ID, no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-medium");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("gemini-3.6-flash with effort=max clamps to high", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash", "max"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.1-pro with effort=low routes to gemini-3.1-pro-low + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.1-pro", "low"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.1-pro-low");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
+  });
+
+  test("gemini-3.1-pro with effort=high routes to gemini-pro-agent + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.1-pro", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-pro-agent");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.1-pro with no effort defaults to gemini-pro-agent (high)", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.1-pro"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-pro-agent");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("gemini-3.1-pro with effort=medium clamps to low", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.1-pro", "medium"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.1-pro-low");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
+  });
+
+  // ── Suffix-ID precedence: suffix IS the effort, no thinkingConfig ──
+
+  test("suffix ID gemini-3.6-flash-low with effort=high keeps suffix, no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash-low", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-low");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("suffix ID gemini-3.6-flash-low with no effort keeps suffix, no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash-low"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-low");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("legacy compat alias gemini-3.5-flash-high resolves to gemini-3.6-flash-high, no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.5-flash-high", "low"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.6-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  // ── Claude Opus effort via thinkingConfig (no suffix variants) ──
+
+  test("claude-opus-4-6-thinking with effort=high sends thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-opus-4-6-thinking");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("claude-opus-4-6-thinking with effort=max sends thinkingConfig max", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "max"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-opus-4-6-thinking");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+  });
+
+  test("claude-opus-4-6-thinking with effort=ultra clamps to max", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "ultra"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-opus-4-6-thinking");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+  });
+
+  test("claude-opus-4-6-thinking with no effort sends no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-opus-4-6-thinking");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  // ── Non-effort models: no thinkingConfig regardless of effort ──
+
+  test("claude-sonnet-4-6 with effort=high sends thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-sonnet-4-6");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("claude-sonnet-4-6 with effort=max sends thinkingConfig max", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "max"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-sonnet-4-6");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+  });
+
+  test("claude-sonnet-4-6 with no effort sends no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("claude-sonnet-4-6");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("gpt-oss-120b-medium with any effort sends no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gpt-oss-120b-medium", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gpt-oss-120b-medium");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
   });
 });
 

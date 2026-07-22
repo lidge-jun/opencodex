@@ -21,6 +21,8 @@ export type OAuthCredentials = {
 export interface ProviderAccount {
   /** Stable short id, generated once at append time; never re-derived after rotation. */
   id: string;
+  /** User-owned display label; never participates in auth identity or routing. */
+  alias?: string;
   credential: OAuthCredentials;
   /** Terminal refresh failure (invalid_grant / reused / revoked) — re-login required. */
   needsReauth?: boolean;
@@ -34,7 +36,7 @@ export interface ProviderAccountSet {
 }
 
 export interface OAuthController {
-  onAuth?(info: { url: string; instructions?: string }): void;
+  onAuth?(info: { url: string; instructions?: string; deviceCode?: string }): void;
   onProgress?(message: string): void;
   onManualCodeInput?(expectedState?: string): Promise<string>;
   signal?: AbortSignal;

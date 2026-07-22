@@ -41,6 +41,18 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
     expect(terminals).toEqual(["completed"]);
   });
 
+  test("max_tokens done becomes response.incomplete instead of a false completion", async () => {
+    const terminals: string[] = [];
+    const names = await collectEventNames(bridgeToResponsesSSE(replay([
+      { type: "done", stopReason: "max_tokens" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onTerminal: status => terminals.push(status),
+    }));
+    expect(names).toContain("response.incomplete");
+    expect(names).not.toContain("response.completed");
+    expect(terminals).toEqual(["incomplete"]);
+  });
+
   test("terminal callback reports failed for adapter errors", async () => {
     const terminals: string[] = [];
     await collectEventNames(bridgeToResponsesSSE(replay([

@@ -37,9 +37,12 @@ export function buildManualEnv(state: ClaudeManualEnvState): string {
       ? ["export ANTHROPIC_AUTH_TOKEN=opencodex-proxy"]
       : ["# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active"]),
     "export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
-    // Host-managed routing guard (devlog 260720 020): CONDITIONAL so a shell where
-    // the user already exported =0 keeps its opt-out even after pasting this block.
-    '[ -z "${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST+x}" ] && export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1',
+    // The flag is an auth assertion in current Claude Code. It belongs only to
+    // proxy mode, where the same block supplies a host-managed token. The
+    // conditional form still preserves an explicit user opt-out (=0).
+    ...(state.authMode === "proxy"
+      ? ['[ -z "${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST+x}" ] && export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1']
+      : []),
     ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? 350000}`] : []),
     ...modelEnvExports,
     "claude",

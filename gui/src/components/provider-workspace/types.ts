@@ -24,9 +24,22 @@ export interface ProviderUsageTotals {
   totalTokens?: number;
 }
 
+/** Per-model usage row from /api/usage, filtered by provider. */
+export interface ProviderModelUsageRow {
+  model: string;
+  resolvedModel?: string;
+  requests: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  shareRatio: number;
+  estimatedCostUsd?: number;
+}
+
 // Auth types consumed by ProviderAuthPanel (WP091).
 export type OAuthAccountRow = {
   id: string;
+  alias?: string;
   email?: string;
   active: boolean;
   needsReauth?: boolean;
@@ -43,6 +56,7 @@ export type LoginHint = {
   provider: string;
   url?: string;
   instructions?: string;
+  deviceCode?: string;
 };
 
 export type AccountLoadState = "idle" | "loading" | "ready" | "error";
@@ -58,6 +72,7 @@ export interface ProviderAuthHandlers {
   onAddApiKey: (provider: string, key: string) => Promise<boolean>;
   onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
   onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
+  onEditAlias: (provider: string, type: "oauth" | "api-key", id: string, current?: string) => void | Promise<void>;
 }
 
 export type ProviderUpdatePatch = {

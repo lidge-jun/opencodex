@@ -1,0 +1,71 @@
+name: Documentation
+description: Report missing, incorrect, outdated, or confusing documentation, broken examples, or broken links.
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us keep the documentation accurate and useful. Point to the exact location and describe what needs to change.
+
+  - type: dropdown
+    id: problem-type
+    attributes:
+      label: Documentation problem type
+      options:
+        - Missing documentation
+        - Incorrect documentation
+        - Outdated documentation
+        - Confusing documentation
+        - Broken example or command
+        - Broken link
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      description: Public documentation URL or repository path.
+      placeholder: "https://lidge-jun.github.io/opencodex/providers/ or docs/providers.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: Describe the gap, error, or confusion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should the documentation explain instead?
+      description: Describe the correct or complete information.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested wording or example
+      description: Optional draft text, corrected command, or example.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context or attachments
+      description: Related issues, screenshots, or references.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing documentation issues.
+          required: true
+        - label: No secrets or personal information are included.
+          required: true

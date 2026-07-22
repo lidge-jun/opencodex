@@ -95,6 +95,20 @@ and synthesizing explicit "no tool result was recorded" answers only when no rea
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+## OpenRouter provider routing
+
+The canonical OpenRouter `openai-chat` transport may carry optional provider-routing preferences
+from `OcxProviderConfig.openRouterRouting`, with exact model-id replacements in
+`modelOpenRouterRouting`. The adapter maps camel-case config to OpenRouter's request wire
+(`order`, `only`, `allow_fallbacks`) after the Codex-facing routed slug has been decoded to the
+native model id.
+
+Preferences are accepted only for `https://openrouter.ai/api/v1` (an optional trailing slash is
+equivalent) and the `openai-chat` adapter. Alternate ports, credentials, query strings, fragments,
+lookalike hosts, and custom proxy paths fail validation. A model override replaces rather than
+merges the provider-wide default, keeping precedence deterministic. With no preference configured,
+the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:

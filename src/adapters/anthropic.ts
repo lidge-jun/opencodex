@@ -629,9 +629,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (typeof parsed.options.reasoning === "string" && parsed.options.reasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
-          // `thinking.type: "enabled"` outright — no budget/max_tokens re-sizing needed.
+          // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
+          // output, so high effort needs the same total-token headroom as budget thinking or a
+          // default 8192-token request can spend everything on thought and return empty text.
           body.thinking = { type: "adaptive" };
           body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
+          const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+          body.max_tokens = Math.min(
+            REASONING_MAX_TOKENS_CEILING,
+            Math.max(maxOut, reasoningBudget(adaptiveEffort(parsed.options.reasoning)) + OUTPUT_HEADROOM),
+          );
         } else {
           // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
@@ -713,12 +720,17 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let currentToolCallId = "";
       let currentToolCallName = "";
       let pendingUsage: Record<string, number> | undefined;
+      let pendingStopReason: string | undefined;
       let emittedDone = false;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
         emittedDone = true;
-        yield { type: "done", usage: usageFromAnthropic(pendingUsage) };
+        yield {
+          type: "done",
+          usage: usageFromAnthropic(pendingUsage),
+          ...(pendingStopReason ? { stopReason: pendingStopReason } : {}),
+        };
       };
 
       try {
@@ -796,6 +808,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               case "message_delta": {
                 const usage = data.usage as Record<string, number> | undefined;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, usage);
+                const delta = data.delta as { stop_reason?: unknown } | undefined;
+                if (typeof delta?.stop_reason === "string") pendingStopReason = delta.stop_reason;
                 break;
               }
               case "message_stop": {
@@ -843,6 +857,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       events.push({
         type: "done",
         usage: usageFromAnthropic(usage),
+        ...(typeof json.stop_reason === "string" ? { stopReason: json.stop_reason } : {}),
       });
       return events;
     },

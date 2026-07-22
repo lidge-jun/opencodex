@@ -209,7 +209,7 @@ function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][]
 
 export class NoEnabledOpenAiProviderError extends Error {
   constructor(modelId: string) {
-    super(`No enabled canonical OpenAI provider for model: ${modelId}`);
+    super(`No enabled OpenAI provider for model: ${modelId}. Run 'ocx init' to configure a provider, or check that your config has an enabled 'openai' provider.`);
     this.name = "NoEnabledOpenAiProviderError";
   }
 }

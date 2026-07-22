@@ -21,7 +21,7 @@ import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignat
 import { sanitizeGeminiToolParameters } from "./google-tool-schema";
 import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
-import { resolveAntigravityWireModelId } from "../providers/antigravity-models";
+import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { mapReasoningEffort } from "../reasoning-effort";
 
@@ -249,9 +249,17 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const project = provider.project;
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
-        const wireModelId = resolveAntigravityWireModelId(parsed.modelId);
+        const mappedEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+        const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(parsed.modelId, mappedEffort);
         antigravityModel = wireModelId;
         antigravitySession = sessionId;
+        // Effort → thinkingConfig for CCA (CLIProxyAPI proven: request.generationConfig.thinkingConfig).
+        // Suffix/compat IDs return thinkingLevel=undefined — the suffix IS the effort, no contradiction.
+        if (thinkingLevel) {
+          const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
+          gc.thinkingConfig = { thinkingLevel };
+          body.generationConfig = gc;
+        }
         // Reasoning continuity: Gemini models re-inject cached thoughtSignatures; Claude-on-Antigravity
         // sanitizes signatures inline (no cache). Both guard against the upstream 400 on bad signatures.
         if (Array.isArray((body as { contents?: unknown[] }).contents)) {

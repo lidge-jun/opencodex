@@ -4,6 +4,7 @@ import {
   AtomicWriteResidualTempError,
   AtomicWriteSecretResidualError,
   backupConfigBeforeOpenAiTierMigration,
+  getDefaultConfig,
   OpenAiTierBackupCleanupError,
   OpenAiTierBackupCollisionError,
   OpenAiTierBackupRollbackError,
@@ -11,7 +12,7 @@ import {
   type OpenAiTierBackupIO,
 } from "../src/config";
 import { runOpenAiTierStartupMigration } from "../src/providers/openai-tier-startup";
-import { OpenAiTierMigrationCollisionError } from "../src/providers/openai-tiers";
+import { OpenAiTierMigrationCollisionError, projectOpenAiTierMigration } from "../src/providers/openai-tiers";
 import type { OcxConfig } from "../src/types";
 
 const config: OcxConfig = {
@@ -109,6 +110,14 @@ function virtualBackupIO(initial: Record<string, string>, fail: {
 }
 
 describe("OpenAI provider option startup coordinator", () => {
+  test("fresh default config is already marked with the current OpenAI tier schema", () => {
+    expect(getDefaultConfig().openaiProviderTierVersion).toBe(2);
+    expect(runOpenAiTierStartupMigration(getDefaultConfig(), {
+      project: projectOpenAiTierMigration,
+      backup: () => { throw new Error("fresh config must not be backed up"); },
+      save: () => { throw new Error("fresh config must not be rewritten"); },
+    }).openaiProviderTierVersion).toBe(2);
+  });
   test("uses project -> backup -> save order and returns the projection", () => {
     const calls: string[] = [];
     const projected = { ...config, openaiProviderTierVersion: 2 as const };
@@ -251,7 +260,7 @@ describe("OpenAI provider option startup coordinator", () => {
     expect(new TextDecoder().decode(state.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")?.bytes)).toBe("three-tier-state");
   });
 
-  test("backup reuses only byte-identical snapshots and rejects collisions", () => {
+  test("backup reuses byte-identical snapshots and replaces stale ones", () => {
     const equal = virtualBackupIO({
       "/virtual/config.json": "same",
       "/virtual/config.json.pre-openai-tiers-v2.bak": "same",
@@ -263,8 +272,35 @@ describe("OpenAI provider option startup coordinator", () => {
       "/virtual/config.json": "current",
       "/virtual/config.json.pre-openai-tiers-v2.bak": "older",
     });
-    expect(() => backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io))
-      .toThrow(OpenAiTierBackupCollisionError);
+    // Stale backup (config was rewritten by ocx init) is deleted and recreated atomically
+    // with proper permissions, not written in-place (issue #257).
+    expect(backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io)).toBe("created");
+    expect(new TextDecoder().decode(different.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")!.bytes)).toBe("current");
+  });
+
+  test("backup throws collision for a differing v1 JSON backup (not silently replaced)", () => {
+    // A backup that parses as a valid pre-migration (v1) config is a legitimate rollback
+    // point. Silently replacing it could destroy the user's intended restore snapshot.
+    const v1Backup = JSON.stringify({ openaiProviderTierVersion: 1, port: 10100, defaultProvider: "openai", providers: {} });
+    const io = virtualBackupIO({
+      "/virtual/config.json": "current-config",
+      "/virtual/config.json.pre-openai-tiers-v2.bak": v1Backup,
+    });
+    expect(() => backupConfigBeforeOpenAiTierMigration("/virtual/config.json", io.io)).toThrow(OpenAiTierBackupCollisionError);
+    // The original backup must remain intact.
+    expect(new TextDecoder().decode(io.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")!.bytes)).toBe(v1Backup);
+  });
+
+  test("backup replaces a differing v2 JSON backup (post-migration config was rewritten)", () => {
+    // A backup whose openaiProviderTierVersion is 2 was created from an already-migrated
+    // config, meaning ocx init or another process replaced config.json after migration.
+    const v2Backup = JSON.stringify({ openaiProviderTierVersion: 2, port: 10100, defaultProvider: "openai", providers: {} });
+    const io = virtualBackupIO({
+      "/virtual/config.json": "current-config",
+      "/virtual/config.json.pre-openai-tiers-v2.bak": v2Backup,
+    });
+    expect(backupConfigBeforeOpenAiTierMigration("/virtual/config.json", io.io)).toBe("created");
+    expect(new TextDecoder().decode(io.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")!.bytes)).toBe("current-config");
   });
 
   test("an EEXIST publication race compares and reuses the winner", () => {

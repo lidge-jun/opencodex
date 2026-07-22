@@ -26,7 +26,7 @@ interface Config {
 
 interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
 interface ProviderQuotaReport { provider: string; quota: AccountQuota; source: string; updatedAt: number }
-interface OAuthAccount { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
+interface OAuthAccount { id: string; alias?: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
 type OpenAiAccountMode = "pool" | "direct";
 
@@ -58,8 +58,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
-  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string } | null>(null);
+  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -388,6 +389,25 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     if (ok) setNewKeyValue("");
   };
 
+  const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
+    const entered = window.prompt(t("prov.aliasPrompt"), current ?? "");
+    if (entered === null) return;
+    const alias = entered.trim();
+    const response = await fetch(type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(type === "oauth" ? { provider, accountId: id, alias } : { name: provider, id, alias }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      notify(data.error || t("prov.aliasSaveFailed"), false);
+      return;
+    }
+    if (type === "oauth") await fetchAccountSets([provider]);
+    else await fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]);
+    notify(t("prov.aliasSaved"), true);
+  };
+
   const removeAccount = async (provider: string, account: OAuthAccount) => {
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
     if (!window.confirm(t("prov.accountRemoveConfirm", { email: label }))) return;
@@ -566,7 +586,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const data = await res.json();
       if (oauthLoginGenerationRef.current.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
-      if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
+      if (data.url || data.instructions || data.deviceCode) {
+        setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode });
+      }
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       // Poll until the loopback callback (or device flow / manual paste) completes.
       // Prefer s.done so cancel/timeout/error clear "waiting for browser" instead of hanging.
@@ -822,18 +844,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     ...[...oauthProviders]
       .sort((a, b) => a.localeCompare(b))
       .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
-    ...Object.entries(config.providers)
-      .filter(([name, prov]) =>
-        (prov.hasApiKey || prov.keyOptional)
-        && prov.authMode !== "oauth"
-        && prov.authMode !== "forward"
-        && !oauthProviders.includes(name))
-      .map(([name, prov]) => ({
-        id: name,
-        label: name,
-        kind: "key" as const,
-        statusLabel: prov.keyOptional && !prov.hasApiKey ? t("modal.badge.free") : t("prov.hasApiKey"),
-      })),
   ];
 
   const isForwardProvider = (name: string) => config.providers[name]?.authMode === "forward";
@@ -911,6 +921,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               key={item.name}
               item={item}
               usageTotals={data.usageTotals}
+              modelUsage={data.modelUsage}
               quotaReport={data.quotaReport}
               availableModels={data.availableModels}
               selectedModels={data.selectedModels}
@@ -938,6 +949,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                 onAddApiKey: addApiKeyValue,
                 onSwitchApiKey: switchApiKey,
                 onRemoveApiKey: removeApiKey,
+                onEditAlias: editCredentialAlias,
               }}
               isDefault={item.name === config.defaultProvider}
               onRemoveProvider={removeProvider}
@@ -1067,8 +1079,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                     </button>
                   )}
                 </span>
-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
+                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || loginInfo.deviceCode || isBusy) && (
                   <span className="oauth-login-hint muted">
+                    {loginInfo.deviceCode && (
+                      <span className="oauth-device-code-wrap">
+                        <span className="oauth-device-code-label">{t("prov.deviceCode")}</span>
+                        <code className="oauth-device-code">{loginInfo.deviceCode}</code>
+                        <button className="btn btn-primary btn-sm" type="button" onClick={() => {
+                          navigator.clipboard.writeText(loginInfo.deviceCode ?? "").then(() => {
+                            setDeviceCodeCopied(true);
+                            setTimeout(() => setDeviceCodeCopied(false), 2500);
+                          }).catch(() => {});
+                        }}>{deviceCodeCopied ? t("prov.codeCopied") : t("prov.copyCode")}</button>
+                      </span>
+                    )}
                     <span className="oauth-login-hint-links">
                       {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal width={14} height={14} />{t("prov.didntOpen")}</a>}
                       <button className="link-btn" onClick={() => {
@@ -1081,7 +1105,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                       }} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                         <IconLink width={14} height={14} />{linkCopied ? t("prov.linkCopied") : t("prov.copyLink")}
                       </button>
-                      {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
+                      {loginInfo.instructions && !loginInfo.deviceCode && <span>{loginInfo.instructions}</span>}
                       {isBusy && (
                         <button className="btn btn-ghost btn-sm" type="button" onClick={() => void cancelLoginOAuth(p)}>
                           {t("common.cancel")}

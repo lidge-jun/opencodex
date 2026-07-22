@@ -6,6 +6,7 @@ import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { neutralizeIdentity } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
+import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 
 // Providers may opt into stripping one trailing "[...]" group from the wire model id.
 // Z.AI needs this because its OpenAI path rejects glm-5.2[1m] with 400 code 1211;
@@ -337,6 +338,28 @@ function isXaiSchemaTarget(provider: OcxProviderConfig): boolean {
   }
 }
 
+function isKimiSchemaTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return new URL(provider.baseUrl).hostname === "api.kimi.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kimi requires function.parameters.type to be exactly "object" at the root.
+ * Codex tools with oneOf/anyOf schemas omit the root type, causing 400 errors.
+ * Add type: "object" at the root while preserving oneOf, $defs, and other schema keys.
+ */
+function ensureKimiRootObjectType(parameters: unknown): Record<string, unknown> {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return { type: "object", properties: {} };
+  }
+  const obj = parameters as Record<string, unknown>;
+  if (obj.type === "object") return obj;
+  return { ...obj, type: "object" };
+}
+
 function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
   const obj = schema as Record<string, unknown>;
@@ -379,8 +402,13 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
+  const kimiTarget = isKimiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
-    const parameters = xaiTarget ? normalizeXaiToolParameters(t.parameters) : t.parameters;
+    const parameters = xaiTarget
+      ? normalizeXaiToolParameters(t.parameters)
+      : kimiTarget
+        ? ensureKimiRootObjectType(t.parameters)
+        : t.parameters;
     if (parameters === undefined) return [];
     return [{
     type: "function",
@@ -467,6 +495,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
+      const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
+      if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
       if (tools) body.tools = tools;
       if (tools && toolChoice !== undefined) {
         body.tool_choice = modelInList(provider.autoToolChoiceOnlyModels, parsed.modelId)

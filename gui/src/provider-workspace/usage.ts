@@ -186,3 +186,12 @@ export function formatRequestCount(n: number | undefined, locale = "en"): string
 export function formatTokenCount(n: number | undefined, locale = "en"): string {
   return formatRequestCount(n, locale);
 }
+
+/** Format a USD cost estimate for display. Returns "—" when unavailable. */
+export function formatCostUsd(value: number | null | undefined, locale = "en"): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return "\u2014";
+  return `~$${new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value)}`;
+}

@@ -17,6 +17,7 @@ const AUTO_NOTE = "auto (no pin — lowest-usage account is selected per request
 const EXTENDED_USAGE = `Usage:
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <id|main> <display-name|-> [--json]
   ocx account remove <provider> <id|main> --yes [--json]
   ocx account add-key <provider> [--label <label>] [--json]`;
 const PIPE_GUIDANCE = `Pipe the API key on stdin, for example:
@@ -278,5 +279,38 @@ export async function cmdAddKey(args: string[], deps: AccountDeps): Promise<numb
   const output = wantsJson ? JSON.stringify(result, null, 2)
     : `${name}: added API key ${id ?? ""}${safeLabel ? ` (${safeLabel})` : ""}`.trim();
   console.log(output.replaceAll(key, "[redacted]"));
+  return 0;
+}
+
+export async function cmdAlias(args: string[], deps: AccountDeps): Promise<number> {
+  const wantsJson = flag(args, "--json");
+  const name = args.shift();
+  const requestedId = args.shift();
+  const requestedAlias = args.shift();
+  if (!name || !requestedId || requestedAlias === undefined || args.length) return usage();
+  const classified = configAndType(deps, name);
+  if ("error" in classified) return usage(`Error: ${classified.error}`);
+  const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
+  if (id === MAIN_ID) return usage("Error: the main Codex App login cannot be renamed");
+  const alias = requestedAlias === "-" ? "" : requestedAlias.trim();
+  if (alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) return usage("Error: alias must be at most 80 printable characters");
+  const baseUrl = await resolveBaseUrl(deps);
+  if (!baseUrl) return proxyUnreachable();
+  const path = classified.type === "codex"
+    ? "/api/codex-auth/accounts/alias"
+    : classified.type === "oauth"
+      ? "/api/oauth/accounts/alias"
+      : "/api/providers/keys/alias";
+  const body = classified.type === "codex"
+    ? { id, alias }
+    : classified.type === "oauth"
+      ? { provider: name, accountId: id, alias }
+      : { name, id, alias };
+  const response = await apiJson(deps, baseUrl, "PUT", path, body);
+  if (response.status === 0) return proxyUnreachable();
+  if (response.status !== 200) return apiError(response.json, `failed to rename ${requestedId}`);
+  const result = { ok: true, provider: name, id, alias: alias || null };
+  if (wantsJson) console.log(JSON.stringify(result, null, 2));
+  else console.log(alias ? `${name}: ${requestedId} is now “${alias}”` : `${name}: cleared alias for ${requestedId}`);
   return 0;
 }

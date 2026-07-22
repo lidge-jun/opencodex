@@ -12,6 +12,10 @@ interface ModelRow {
   namespaced: string;
   disabled: boolean;
   native?: boolean;
+  custom?: boolean;
+  customId?: string;
+  displayName?: string;
+  inputModalities?: string[];
   contextWindow?: number;
   contextCap?: number;
   contextCapped?: boolean;
@@ -95,6 +99,19 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [threadsCustom, setThreadsCustom] = useState("");
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [customModalMode, setCustomModalMode] = useState<"add" | "edit">("add");
+  const [customModalProvider, setCustomModalProvider] = useState("");
+  const [customModalId, setCustomModalId] = useState("");
+  const [customFormModelId, setCustomFormModelId] = useState("");
+  const [customFormDisplayName, setCustomFormDisplayName] = useState("");
+  const [customFormContextWindow, setCustomFormContextWindow] = useState("");
+  const [customFormShowCustomCtx, setCustomFormShowCustomCtx] = useState(false);
+  const [customFormModalities, setCustomFormModalities] = useState<string[]>(["text"]);
+  const [customSaving, setCustomSaving] = useState(false);
+  const [customError, setCustomError] = useState("");
+  const [hoveredModel, setHoveredModel] = useState<{ namespaced: string; rect: DOMRect } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   // Combo summary section. null = loading or failed (section hidden on failure —
@@ -121,6 +138,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
       .catch(() => { if (!cancelled) { setCombos(null); setCombosError(true); } });
     return () => { cancelled = true; };
   }, [apiBase]);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
 
   const shadowModelOptions = useMemo(
     () => activeModelOptions(models, disabled),
@@ -419,6 +440,100 @@ export default function Models({ apiBase }: { apiBase: string }) {
     void putV2Threads(Number(raw));
   };
 
+  const onRowEnter = (namespaced: string, el: HTMLElement) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      setHoveredModel({ namespaced, rect: el.getBoundingClientRect() });
+    }, 300);
+  };
+
+  const onRowFocus = (namespaced: string, el: HTMLElement) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoveredModel({ namespaced, rect: el.getBoundingClientRect() });
+  };
+
+  const onRowLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => setHoveredModel(null), 120);
+  };
+
+  const keepRowTipOpen = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  };
+
+  const addCustomModel = async (
+    provider: string,
+    modelId: string,
+    displayName?: string,
+    contextWindow?: number,
+    inputModalities?: string[],
+  ) => {
+    setCustomSaving(true);
+    setCustomError("");
+    try {
+      const r = await fetch(`${apiBase}/api/custom-models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, modelId, displayName, contextWindow, inputModalities }),
+      });
+      if (r.ok) {
+        setCustomModalOpen(false);
+        setOk(true);
+        setStatus(t("models.customAdded"));
+        await load();
+      } else {
+        const data = await r.json().catch(() => null) as { error?: string } | null;
+        setCustomError(data?.error ?? t("models.customSaveFailed"));
+      }
+    } catch {
+      setCustomError(t("models.networkError"));
+    } finally {
+      setCustomSaving(false);
+    }
+  };
+
+  const updateCustomModel = async (id: string, patch: Record<string, unknown>) => {
+    setCustomSaving(true);
+    setCustomError("");
+    try {
+      const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (r.ok) {
+        setCustomModalOpen(false);
+        setOk(true);
+        setStatus(t("models.customUpdated"));
+        await load();
+      } else {
+        const data = await r.json().catch(() => null) as { error?: string } | null;
+        setCustomError(data?.error ?? t("models.customSaveFailed"));
+      }
+    } catch {
+      setCustomError(t("models.networkError"));
+    } finally {
+      setCustomSaving(false);
+    }
+  };
+
+  const deleteCustomModel = async (id: string) => {
+    try {
+      const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (r.ok) {
+        setOk(true);
+        setStatus(t("models.customDeleted"));
+        await load();
+      } else {
+        setOk(false);
+        setStatus(t("models.customSaveFailed"));
+      }
+    } catch {
+      setOk(false);
+      setStatus(t("models.networkError"));
+    }
+  };
+
   if (loading) return <div className="row muted"><span className="spin" /> {t("models.loading")}</div>;
 
 
@@ -551,6 +666,18 @@ export default function Models({ apiBase }: { apiBase: string }) {
         <span className="muted mono text-label">{t("models.setAll")}</span>
       </div>
 
+      {(() => {
+        const customCount = models.filter(m => m.custom).length;
+        if (customCount === 0) return null;
+        return (
+          <div className="row muted text-label" style={{ gap: 6, marginBottom: 8 }}>
+            <span className="mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
+              {t("models.customSummary", { count: customCount })}
+            </span>
+          </div>
+        );
+      })()}
+
       <div className="row muted text-label leading-body" style={{ alignItems: "flex-start", gap: 8, marginBottom: 12, maxWidth: "80ch" }}>
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
         <span>{t("models.orderHint")}</span>
@@ -601,7 +728,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
        </div>
      )}
 
-     {groups.map(([provider, rows]) => {
+     {
+       // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
+       groups.map(([provider, rows]) => {
        const isCollapsed = collapsed.has(provider);
        const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
        const capOn = contextCaps[provider] === contextCapValue;
@@ -633,6 +762,28 @@ export default function Models({ apiBase }: { apiBase: string }) {
              <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
              <div style={{ flex: 1 }} />
               <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
+                {!isNative && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm text-caption"
+                    style={{ padding: "2px 8px" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCustomModalMode("add");
+                      setCustomModalProvider(provider);
+                      setCustomModalId("");
+                      setCustomFormModelId("");
+                      setCustomFormDisplayName("");
+                      setCustomFormContextWindow("");
+                      setCustomFormShowCustomCtx(false);
+                      setCustomFormModalities(["text"]);
+                      setCustomError("");
+                      setCustomModalOpen(true);
+                    }}
+                    aria-label={t("models.customAdd")}
+                    aria-haspopup="dialog"
+                  >+</button>
+                )}
                 <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
                 <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
                 {!isNative && <>
@@ -657,10 +808,104 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 {visible.map(m => {
                   const off = disabled.has(m.namespaced);
                   return (
-                    <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
-                      <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
-                      {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                    <div
+                      key={m.namespaced}
+                      className="model-row-wrap"
+                      onMouseEnter={(e) => onRowEnter(m.namespaced, e.currentTarget)}
+                      onMouseLeave={onRowLeave}
+                      onFocus={(e) => onRowFocus(m.namespaced, e.currentTarget)}
+                      onBlur={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoveredModel(null);
+                      }}
+                    >
+                      <div className="row" style={{ padding: "5px 0" }}>
+                        <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                        <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                        {m.custom && (
+                          <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
+                            {t("models.customBadge")}
+                          </span>
+                        )}
+                        {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                      </div>
+                      {hoveredModel?.namespaced === m.namespaced && (() => {
+                        const r = hoveredModel.rect;
+                        const tipTop = r.bottom + 4;
+                        const flipUp = tipTop + 360 > window.innerHeight;
+                        return (
+                          <div
+                            className={`model-tip${m.custom ? " has-actions" : ""}${flipUp ? " flip-up" : ""}`}
+                            role="tooltip"
+                            style={{
+                              position: "fixed",
+                              left: r.left + 24,
+                              ...(flipUp
+                                ? { bottom: window.innerHeight - r.top + 4 }
+                                : { top: tipTop }),
+                            }}
+                            onMouseEnter={keepRowTipOpen}
+                            onMouseLeave={onRowLeave}
+                          >
+                            <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
+                            {m.displayName && <div className="model-tip-display">{m.displayName}</div>}
+                            {m.custom && (
+                              <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", display: "inline-block", marginBottom: 4 }}>
+                                {t("models.customBadge")}
+                              </span>
+                            )}
+                            <div className="model-tip-grid">
+                              <span className="model-tip-key">{t("models.tipProvider")}</span>
+                              <span className="model-tip-val">{m.provider}</span>
+                              {(m.contextWindow || m.contextCap) && (
+                                <>
+                                  <span className="model-tip-key">{t("models.tipContext")}</span>
+                                  <span className="model-tip-val">{fmtK(m.contextWindow ?? m.contextCap ?? 0)}</span>
+                                </>
+                              )}
+                              {m.inputModalities && m.inputModalities.length > 0 && (
+                                <>
+                                  <span className="model-tip-key">{t("models.tipModalities")}</span>
+                                  <span className="model-tip-val">{m.inputModalities.join(", ")}</span>
+                                </>
+                              )}
+                              <span className="model-tip-key">{t("models.tipStatus")}</span>
+                              <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
+                            </div>
+                            {m.custom && m.customId && (
+                              <div className="model-tip-actions">
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm text-caption"
+                                  onClick={() => {
+                                    setCustomModalMode("edit");
+                                    setCustomModalProvider(m.provider);
+                                    setCustomModalId(m.customId!);
+                                    setCustomFormModelId(m.id);
+                                    setCustomFormDisplayName(m.displayName ?? "");
+                                    setCustomFormContextWindow(m.contextWindow ? String(m.contextWindow) : "");
+                                    setCustomFormShowCustomCtx(false);
+                                    setCustomFormModalities(m.inputModalities ?? ["text"]);
+                                    setCustomError("");
+                                    setCustomModalOpen(true);
+                                    setHoveredModel(null);
+                                  }}
+                                >{t("models.customEdit")}</button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm text-caption"
+                                  style={{ color: "var(--red)" }}
+                                  onClick={() => {
+                                    if (window.confirm(t("models.customDeleteConfirm", { name: m.displayName ?? m.id }))) {
+                                      void deleteCustomModel(m.customId!);
+                                    }
+                                    setHoveredModel(null);
+                                  }}
+                                >{t("models.customDelete")}</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -700,6 +945,163 @@ export default function Models({ apiBase }: { apiBase: string }) {
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setV2HelpOpen(false)}>{t("common.ok")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {customModalOpen && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("models.customAdd")}
+          onClick={() => { if (!customSaving) setCustomModalOpen(false); }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !customSaving) setCustomModalOpen(false);
+          }}
+        >
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>
+                {customModalMode === "add"
+                  ? t("models.customAddTitle", { provider: customModalProvider })
+                  : t("models.customEditTitle", { provider: customModalProvider })}
+              </h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setCustomModalOpen(false)}
+                disabled={customSaving}
+                aria-label={t("common.close")}
+              >&times;</button>
+            </div>
+
+            {customError && <Notice tone="err">{customError}</Notice>}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {t("models.customFieldModelId")}
+                <input
+                  className="input"
+                  value={customFormModelId}
+                  onChange={e => setCustomFormModelId(e.target.value)}
+                  disabled={customSaving}
+                  placeholder={t("models.customFieldModelIdPlaceholder")}
+                  autoFocus
+                />
+              </label>
+
+              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {t("models.customFieldDisplayName")}
+                <input
+                  className="input"
+                  value={customFormDisplayName}
+                  onChange={e => setCustomFormDisplayName(e.target.value)}
+                  disabled={customSaving}
+                  placeholder={t("models.customFieldDisplayNamePlaceholder")}
+                />
+              </label>
+
+              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {t("models.customFieldContext")}
+                <div className="row" style={{ gap: 6 }}>
+                  <Select
+                    value={customFormShowCustomCtx ? CUSTOM_OPTION : customFormContextWindow}
+                    options={[
+                      { value: "", label: "—" },
+                      { value: "100000", label: "100k" },
+                      { value: "128000", label: "128k" },
+                      { value: "200000", label: "200k" },
+                      { value: "256000", label: "256k" },
+                      { value: "352000", label: "352k" },
+                      { value: "500000", label: "500k" },
+                      { value: "1000000", label: "1M" },
+                      { value: CUSTOM_OPTION, label: t("models.custom") },
+                    ]}
+                    onChange={v => {
+                      if (v === CUSTOM_OPTION) {
+                        setCustomFormShowCustomCtx(true);
+                        return;
+                      }
+                      setCustomFormShowCustomCtx(false);
+                      setCustomFormContextWindow(v);
+                    }}
+                    disabled={customSaving}
+                    label={t("models.customFieldContext")}
+                  />
+                  {customFormShowCustomCtx && (
+                    <input
+                      className="input"
+                      style={{ width: 120 }}
+                      inputMode="numeric"
+                      value={customFormContextWindow}
+                      onChange={e => setCustomFormContextWindow(e.target.value)}
+                      disabled={customSaving}
+                      placeholder={t("models.customPlaceholder")}
+                      aria-label={t("models.customFieldContext")}
+                    />
+                  )}
+                </div>
+              </label>
+
+              <div className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {t("models.customFieldModalities")}
+                <div className="row" style={{ gap: 8 }}>
+                  {(["text", "image", "audio"] as const).map(mod => (
+                    <label key={mod} className="row" style={{ gap: 4, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={customFormModalities.includes(mod)}
+                        onChange={e => {
+                          setCustomFormModalities(prev => (
+                            e.target.checked ? [...prev, mod] : prev.filter(m => m !== mod)
+                          ));
+                        }}
+                        disabled={customSaving}
+                      />
+                      <span className="text-control">{mod}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setCustomModalOpen(false)} disabled={customSaving}>
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={customSaving || !customFormModelId.trim()}
+                onClick={() => {
+                  const modelId = customFormModelId.trim();
+                  const displayName = customFormDisplayName.trim();
+                  const ctxVal = customFormContextWindow ? Number(customFormContextWindow.replace(/[_,\s]/g, "")) : undefined;
+                  const contextWindow = ctxVal && ctxVal > 0 ? Math.floor(ctxVal) : undefined;
+                  if (customModalMode === "add") {
+                    void addCustomModel(
+                      customModalProvider,
+                      modelId,
+                      displayName || undefined,
+                      contextWindow,
+                      customFormModalities.length > 0 ? customFormModalities : undefined,
+                    );
+                  } else {
+                    void updateCustomModel(customModalId, {
+                      modelId,
+                      displayName,
+                      contextWindow: contextWindow ?? null,
+                      inputModalities: customFormModalities,
+                    });
+                  }
+                }}
+              >
+                {customSaving
+                  ? t("models.customSaving")
+                  : (customModalMode === "add" ? t("models.customAddBtn") : t("models.customEditBtn"))}
+              </button>
             </div>
           </div>
         </div>

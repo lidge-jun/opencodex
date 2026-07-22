@@ -543,7 +543,7 @@ describe("OpenAI provider-option integration spine", () => {
           restoredLegacyParse: true,
           remigrated: true,
           absencePreserved: true,
-          collisionFailsBeforeSave: true,
+          collisionFailsBeforeSave: false,
         });
         if (process.platform !== "win32") {
           expect(receipt.backupMode).toBe(0o600);

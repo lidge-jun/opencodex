@@ -646,7 +646,7 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   return { ok: true };
 }
 
-export interface OAuthAccountSummary { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
+export interface OAuthAccountSummary { id: string; alias?: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
 
 export function getLoginStatus(provider: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
@@ -654,6 +654,7 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   const set = getAccountSet(provider);
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
+    ...(a.alias ? { alias: a.alias } : {}),
     email: maskEmail(a.credential.email) ?? undefined,
     active: a.id === set.activeAccountId,
     ...(a.needsReauth ? { needsReauth: true } : {}),
@@ -695,7 +696,7 @@ export function cancelLoginFlow(provider: string): boolean {
   return true;
 }
 
-export async function startLoginFlow(provider: string, opts?: LoginOpts): Promise<{ url: string; instructions?: string }> {
+export async function startLoginFlow(provider: string, opts?: LoginOpts): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const existing = loginState.get(provider);
@@ -709,9 +710,9 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
   return new Promise((resolve, reject) => {
     let urlResolved = false;
     const ctrl: OAuthController = {
-      onAuth: ({ url, instructions }) => {
+      onAuth: ({ url, instructions, deviceCode }) => {
         urlResolved = true;
-        resolve({ url, instructions });
+        resolve({ url, instructions, deviceCode });
       },
       onProgress: () => {},
       // GUI fallback when the browser cannot hit the loopback callback server.

@@ -52,6 +52,11 @@ describe("safe OAuth account labels", () => {
     expect(oauthAccountDisplayLabel(accounts, accounts[0]!, t)).toBe("f***@example.com");
   });
 
+  test("prefers a user alias without exposing the opaque account id", () => {
+    const account = { id: "opaque-123", alias: "Work", email: "w***@example.com" };
+    expect(oauthAccountDisplayLabel([account], account, t)).toBe("Work");
+  });
+
   test("uses a localized ordinal instead of an opaque id", () => {
     const label = oauthAccountDisplayLabel(accounts, accounts[1]!, t);
     expect(label).toBe("Account 2");
@@ -139,6 +144,8 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("loginOAuth(name, true, account.id)");
     expect(page).toContain("oauthLoginGenerationRef");
     expect(page).toContain("/api/oauth/login/cancel");
+    expect(page).toContain("deviceCode");
+    expect(panel).toContain("pwi-device-code");
     // Classic provider-level CTA: OAuth uses loginOAuth; openai deep-links to Codex Auth.
     expect(page).toContain('activeAccountNeedsReauth[name] && prov.authMode === "oauth"');
     expect(page).toContain('activeAccountNeedsReauth[name] && name === "openai"');

@@ -29,6 +29,10 @@
 .pwi-auth-wait { display: flex; flex-direction: column; gap: 6px; }
 .pwi-auth-wait-title { font-size: var(--text-control); font-weight: 600; color: var(--text); }
 .pwi-auth-wait-copy  { font-size: var(--text-label); color: var(--muted); line-height: 1.45; }
+.pwi-device-code-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px; margin: 6px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.pwi-device-code { font-size: 20px; font-weight: 800; letter-spacing: .14em; color: var(--text); user-select: all; }
+.pwi-auth-row-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.pwi-auth-row-secondary { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-label); color: var(--muted); }
 .pwi-auth-open-link  { font-size: var(--text-label); color: var(--accent); text-decoration: underline; cursor: pointer; }
 
 .pwi-auth-list { display: flex; flex-direction: column; gap: 4px; }

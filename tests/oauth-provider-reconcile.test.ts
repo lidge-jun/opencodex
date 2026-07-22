@@ -47,14 +47,19 @@ describe("OAuth provider reconciliation", () => {
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     const provider = config.providers["google-antigravity"];
-    expect(provider.defaultModel).toBe("gemini-3.6-flash-medium");
-    expect(provider.models).toEqual(expect.arrayContaining([
-      "gemini-3.6-flash-low",
-      "gemini-3.6-flash-medium",
-      "gemini-3.6-flash-high",
-    ]));
+    expect(provider.defaultModel).toBe("gemini-3.6-flash");
+    expect(provider.models).toEqual([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
     expect(provider.models).not.toContain("gemini-3.5-flash-low");
-    expect(provider.modelContextWindows?.["gemini-3.6-flash-medium"]).toBe(1_048_576);
+    expect(provider.models).not.toContain("gemini-3.6-flash-low");
+    expect(provider.models).not.toContain("gemini-3.6-flash-medium");
+    expect(provider.models).not.toContain("gemini-3.6-flash-high");
+    expect(provider.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
     expect(provider.project).toBe("config-project-sentinel");
     expect(provider.note).toBe("user-owned-note");
     expect(getCredential("google-antigravity")).toMatchObject({
@@ -64,7 +69,7 @@ describe("OAuth provider reconciliation", () => {
     });
 
     const persisted = loadConfig();
-    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.6-flash-medium");
+    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.6-flash");
     expect(reconcileOAuthProviders(config)).toBe(false);
   });
 });

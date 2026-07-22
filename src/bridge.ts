@@ -634,12 +634,17 @@ export function bridgeToResponsesSSE(
                 finishedItems.push(item as OutputItem);
                 outputIndex++;
               }
-              const response = { ...responseSnapshot("completed", finishedItems), usage: responsesUsage(event.usage) };
+              const truncated = event.stopReason === "max_tokens";
+              const response = {
+                ...responseSnapshot(truncated ? "incomplete" : "completed", finishedItems),
+                usage: responsesUsage(event.usage),
+                ...(truncated ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+              };
               options?.onCompletedResponse?.(response);
-              emit("response.completed", {
+              emit(truncated ? "response.incomplete" : "response.completed", {
                 response,
               });
-              reportTerminal("completed");
+              reportTerminal(truncated ? "incomplete" : "completed");
               terminated = true;
               break;
             }
@@ -737,6 +742,7 @@ export function buildResponseJSON(
   const output: OutputItem[] = [];
   let usage: OcxUsage | undefined;
   let errorMessage: string | undefined;
+  let stopReason: string | undefined;
   let compactionText = "";
 
   let currentText = "";
@@ -911,6 +917,7 @@ export function buildResponseJSON(
         break;
       case "done":
         usage = e.usage;
+        stopReason = e.stopReason;
         break;
     }
   }
@@ -925,9 +932,10 @@ export function buildResponseJSON(
   return {
     id: responseId, object: "response",
     created_at: Math.floor(Date.now() / 1000),
-    status: errorMessage ? "failed" : "completed",
+    status: errorMessage ? "failed" : stopReason === "max_tokens" ? "incomplete" : "completed",
     model: modelId, output,
     ...(errorMessage ? { error: { message: errorMessage } } : {}),
+    ...(!errorMessage && stopReason === "max_tokens" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
     usage: responsesUsage(usage),
   };
 }

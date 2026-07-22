@@ -41,9 +41,20 @@ describe("ocx claude env assembly", () => {
 
   // Host-managed routing guard (devlog 260720_claude_authmode_persist/020):
   // defends the spawn env against leftover cc-switch/CCR settings.json env hijack.
-  test("sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 by default", () => {
+  test("subscription mode leaves the host-managed auth assertion unset", () => {
     const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
-    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+  });
+
+  test("proxy-owned authentication sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1", () => {
+    const proxy = buildClaudeEnv(cfg({ claudeCode: { authMode: "proxy" } }), 10100, {});
+    expect(proxy.ANTHROPIC_AUTH_TOKEN).toBe("opencodex-proxy");
+    expect(proxy.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+
+    const admission = buildClaudeEnv(cfg({
+      apiKeys: [{ id: "1", name: "main", key: "sk-ocx-123", createdAt: "2026-01-01" }],
+    }), 10100, {});
+    expect(admission.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
   });
 
   test("a user pre-export of the host-managed flag wins (opt-out preserved)", () => {
@@ -59,11 +70,11 @@ describe("ocx claude env assembly", () => {
     // the intentional contract: settings.env slots are stripped by Claude Code,
     // so users migrate to config model or the top-level settings "model" field.
     const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
-    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(env.ANTHROPIC_MODEL).toBeUndefined();
     // And with a configured model both coexist.
     const withModel = buildClaudeEnv(cfg({ claudeCode: { model: "mock/test-model" } }), 10100, {});
-    expect(withModel.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(withModel.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(withModel.ANTHROPIC_MODEL).toBe("mock/test-model");
   });
 

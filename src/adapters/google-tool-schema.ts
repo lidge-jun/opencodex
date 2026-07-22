@@ -73,6 +73,10 @@ function sanitize(node: unknown, defs: Map<string, unknown>, depth: number): unk
     if (key === "const") { out.enum = [value]; continue; }
     if (key === "exclusiveMinimum" && typeof value === "number") { out.minimum = value; continue; }
     if (key === "exclusiveMaximum" && typeof value === "number") { out.maximum = value; continue; }
+    if (key === "required" && Array.isArray(value)) {
+      out.required = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+      continue;
+    }
     if (key === "additionalProperties") {
       // A boolean additionalProperties is accepted, but a nested schema is only meaningful with
       // its own sanitize pass.

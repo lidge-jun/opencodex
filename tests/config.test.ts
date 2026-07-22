@@ -369,6 +369,43 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxInputTokens");
   });
 
+  test("disk config preserves valid OpenRouter routing and rejects invalid destinations", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openrouter: {
+          adapter: "openai-chat",
+          baseUrl: "https://openrouter.ai/api/v1",
+          openRouterRouting: { order: ["deepseek"], allowFallbacks: false },
+          modelOpenRouterRouting: { "anthropic/claude-sonnet-5": { only: ["anthropic"] } },
+        },
+      },
+      defaultProvider: "openrouter",
+    });
+    expect(loadConfig().providers.openrouter).toMatchObject({
+      openRouterRouting: { order: ["deepseek"], allowFallbacks: false },
+      modelOpenRouterRouting: { "anthropic/claude-sonnet-5": { only: ["anthropic"] } },
+    });
+
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          openRouterRouting: { only: ["deepseek"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics()).toMatchObject({
+      source: "fallback",
+      error: expect.stringContaining("canonical https://openrouter.ai/api/v1"),
+    });
+  });
+
   test("disk config rejects forged registry-only virtual model maps", () => {
     writeConfig({
       port: 10100,

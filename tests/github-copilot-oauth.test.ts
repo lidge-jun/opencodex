@@ -111,14 +111,14 @@ describe("github-copilot login + refresh", () => {
       return new Response("no", { status: 404 });
     });
 
-    const opened: string[] = [];
+    const opened: Array<{ url: string; deviceCode?: string }> = [];
     const ctrl: OAuthController = {
-      onAuth: ({ url }) => {
-        opened.push(url);
+      onAuth: ({ url, deviceCode }) => {
+        opened.push({ url, deviceCode });
       },
     };
     const cred = await loginGithubCopilot(ctrl);
-    expect(opened).toEqual(["https://github.com/login/device?user_code=ABCD-1234"]);
+    expect(opened).toEqual([{ url: "https://github.com/login/device?user_code=ABCD-1234", deviceCode: "ABCD-1234" }]);
     expect(cred.access).toBe(COPILOT_TOKEN);
     expect(cred.refresh).toBe(GH_REFRESH);
     expect(cred.apiBaseUrl).toBe("https://api.githubcopilot.com");

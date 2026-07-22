@@ -77,6 +77,7 @@ function poolAccountDto(
   return {
     id: account.id,
     email: maskEmail(account.email) ?? account.email,
+    ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(account.plan !== undefined ? { plan: account.plan } : {}),
     ...(account.logLabel !== undefined ? { logLabel: account.logLabel } : {}),
     isMain: false,
@@ -168,9 +169,13 @@ async function verifyCodexAccountWarmup(
 }
 
 function expireCodexAuthFlow(flowId: string | null, error = "Login cancelled"): void {
-  if (!flowId) return;
-  codexAuthLoginState.set(flowId, { status: "error", error, doneAt: Date.now() });
-  setTimeout(() => codexAuthLoginState.delete(flowId), 30_000);
+  const ids = flowId
+    ? [flowId]
+    : [...codexAuthLoginState].filter(([, state]) => state.status === "pending").map(([id]) => id);
+  for (const id of ids) {
+    codexAuthLoginState.set(id, { status: "error", error, doneAt: Date.now() });
+    setTimeout(() => codexAuthLoginState.delete(id), 30_000);
+  }
 }
 
 let mainAccountCache: { email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null; ts: number } | null = null;
@@ -258,6 +263,7 @@ interface PoolQuotaResult {
 
 export interface CodexAuthAccountDto {
   id: string;
+  alias?: string;
   email: string;
   plan?: string | null;
   logLabel?: string;
@@ -440,6 +446,24 @@ export async function handleCodexAuthAPI(
     deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true });
+  }
+
+  if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
+    const body = await req.json().catch(() => ({})) as { id?: unknown; alias?: unknown };
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const alias = typeof body.alias === "string" ? body.alias.trim() : "";
+    if (!id || !ACCOUNT_ID_RE.test(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
+    if (id === MAIN_CODEX_ACCOUNT_ID) return jsonResponse({ error: "Main Codex account alias is not configurable" }, 400);
+    if (typeof body.alias !== "string" || alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) {
+      return jsonResponse({ error: "Alias must be a string of at most 80 printable characters" }, 400);
+    }
+    const runtimeConfig = getRuntimeConfig(config);
+    const account = (runtimeConfig.codexAccounts ?? []).find(candidate => candidate.id === id && !candidate.isMain);
+    if (!account) return jsonResponse({ error: "Account not found" }, 404);
+    if (alias) account.alias = alias;
+    else delete account.alias;
+    saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({ ok: true, id, alias: alias || null });
   }
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "PUT") {

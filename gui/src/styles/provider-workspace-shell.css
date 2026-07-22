@@ -925,10 +925,31 @@
   margin-top: 16px;
 }
 
+.pws-usage-metrics-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.pws-cost-disclaimer {
+  font-size: 0.75rem;
+  margin-top: 8px;
+}
+.pws-model-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.pws-model-table th { text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.pws-model-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-faint, rgba(128,128,128,0.1)); }
+.pws-model-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.pws-model-table .mono { font-family: var(--font-mono, monospace); font-size: 0.78rem; }
+.pws-model-row:hover { background: var(--bg-subtle, rgba(128,128,128,0.05)); }
+.pws-share-bar { height: 6px; background: var(--border-faint, rgba(128,128,128,0.15)); border-radius: 3px; min-width: 60px; }
+.pws-share-bar-fill { height: 100%; background: var(--green, #22c55e); border-radius: 3px; }
+.pws-model-detail { background: var(--bg-subtle, rgba(128,128,128,0.05)); }
+.pws-model-detail td { padding: 8px 8px 8px 24px; }
+.pws-model-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 24px; font-size: 0.8rem; }
+@media (max-width: 600px) {
+  .pws-usage-metrics-3 { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 640px) {
   .pws-usage-metrics {
     grid-template-columns: 1fr;
     gap: 16px;
   }
 }
-

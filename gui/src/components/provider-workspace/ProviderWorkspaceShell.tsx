@@ -23,7 +23,7 @@ import { countAvailableModels, parseAvailableModels, parseSelectedModels, type P
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
-import type { PricingFilter, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
+import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
 import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
 
@@ -32,6 +32,7 @@ export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: 
 /** Detail-slot data plumbed per selected provider (props-down; no shared hook). */
 export interface DetailSlotData {
   usageTotals?: import("./types").ProviderUsageTotals;
+  modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   availableModels: string[];
   selectedModels: string[];
@@ -91,6 +92,7 @@ export default function ProviderWorkspaceShell({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
+  const [usageModels, setUsageModels] = useState<Record<string, ProviderModelUsageRow[]>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>({});
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
@@ -136,11 +138,31 @@ export default function ProviderWorkspaceShell({
     let cancelled = false;
     fetch(`${apiBase}/api/usage?range=30d`)
       .then(r => r.ok ? r.json() : null)
-      .then((data: { providers?: Array<{ provider: string; requests: number; totalTokens?: number }> } | null) => {
+      .then((data: {
+        providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
+        models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
+      } | null) => {
         if (cancelled || !data) return;
         const byProvider: Record<string, ProviderUsageTotals> = {};
         for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, totalTokens: p.totalTokens };
         setUsageTotals(byProvider);
+        // Group model rows by provider
+        const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
+        for (const m of data.models ?? []) {
+          const key = m.provider;
+          if (!byProviderModels[key]) byProviderModels[key] = [];
+          byProviderModels[key].push({
+            model: m.model,
+            ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+            requests: m.requests,
+            totalTokens: m.totalTokens,
+            inputTokens: m.inputTokens,
+            outputTokens: m.outputTokens,
+            shareRatio: m.shareRatio,
+            ...(m.estimatedCostUsd !== undefined ? { estimatedCostUsd: m.estimatedCostUsd } : {}),
+          });
+        }
+        setUsageModels(byProviderModels);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -421,6 +443,7 @@ export default function ProviderWorkspaceShell({
         ) : selectedItem ? (
           detail?.(selectedItem, {
             usageTotals: usageTotals[selectedItem.name],
+            modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
             availableModels: availableModels[selectedItem.name] ?? [],
             selectedModels: selectedModels[selectedItem.name] ?? [],
