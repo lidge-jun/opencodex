@@ -102,14 +102,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   // Per-model context-window overrides (modelContextWindows). providerCtxWindows is the
   // persisted source-of-truth from /api/config; cwDraft is the in-flight edit buffer keyed by
-  // provider then model id (string values for input control); cwOpen tracks which provider's
-  // editor is expanded; cwSaving/cwStatus/cwOk mirror the disabled-toggle lifecycle.
+  // provider then model id (string values for input control); cwSaving/cwStatus/cwOk mirror
+  // the disabled-toggle lifecycle. cwStatusProvider scopes the status line to one provider.
   const [providerCtxWindows, setProviderCtxWindows] = useState<Record<string, Record<string, number>>>({});
   const [cwDraft, setCwDraft] = useState<Record<string, Record<string, string>>>({});
-  const [cwOpen, setCwOpen] = useState<Set<string>>(new Set());
   const [cwSaving, setCwSaving] = useState(false);
   const [cwStatus, setCwStatus] = useState("");
   const [cwOk, setCwOk] = useState(false);
+  const [cwStatusProvider, setCwStatusProvider] = useState("");
   // Combo summary section. null = loading or failed (section hidden on failure —
   // an API error must never masquerade as "no combos configured").
   const [combos, setCombos] = useState<ComboItem[] | null>(null);
@@ -321,21 +321,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
   // --- Per-model context-window overrides (modelContextWindows) ---
-  const openCtxWindowEditor = (provider: string) => {
-    if (cwOpen.has(provider)) { closeCtxWindowEditor(provider); return; }
-    const next = new Set(cwOpen); next.add(provider);
-    setCwOpen(next);
-    // Seed the draft from the persisted overrides so the editor opens with committed state.
-    const persisted = providerCtxWindows[provider] ?? {};
-    const draft: Record<string, string> = {};
-    for (const [id, v] of Object.entries(persisted)) draft[id] = String(v);
-    setCwDraft(prev => ({ ...prev, [provider]: draft }));
-  };
-  const closeCtxWindowEditor = (provider: string) => {
-    const next = new Set(cwOpen); next.delete(provider); setCwOpen(next);
-    setCwDraft(prev => { if (!prev[provider]) return prev; const c = { ...prev }; delete c[provider]; return c; });
-    setCwStatus("");
-  };
   const setCtxWindowDraft = (provider: string, modelId: string, value: string) => {
     setCwDraft(prev => {
       const cur = { ...(prev[provider] ?? {}) };
@@ -345,14 +330,27 @@ export default function Models({ apiBase }: { apiBase: string }) {
       return { ...prev, [provider]: cur };
     });
   };
+  // True when the in-flight draft for *provider* diverges from persisted overrides.
+  const cwDirty = (provider: string): boolean => {
+    const draft = cwDraft[provider];
+    if (!draft) return false;
+    const persisted = providerCtxWindows[provider] ?? {};
+    for (const [id, raw] of Object.entries(draft)) {
+      const pv = persisted[id] !== undefined ? String(persisted[id]) : "";
+      if (raw.trim() !== pv) return true;
+    }
+    return false;
+  };
   const saveContextWindows = async (provider: string) => {
-    // Build the final map from the draft: blank entries mean clear, valid positive integers
-    // are kept. Invalid nonblank entries are rejected so users fix them before saving.
+    // Merge draft changes onto persisted overrides so models outside the current
+    // visible page (pagination) are not silently dropped. Blank draft entries clear.
     const draft = cwDraft[provider] ?? {};
+    const persisted = providerCtxWindows[provider] ?? {};
     const map: Record<string, number> = {};
+    for (const [id, v] of Object.entries(persisted)) map[id] = v;
     const invalid: string[] = [];
     for (const [id, raw] of Object.entries(draft)) {
-      if (raw.trim() === "") continue;
+      if (raw.trim() === "") { delete map[id]; continue; }
       const n = Number(raw.replace(/[_,\s]/g, ""));
       if (Number.isFinite(n) && n > 0 && Number.isInteger(n)) {
         map[id] = Math.floor(n);
@@ -362,10 +360,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
     if (invalid.length > 0) {
       setCwOk(false);
+      setCwStatusProvider(provider);
       setCwStatus(t("models.contextWindowInvalid"));
       return;
     }
-    setCwSaving(true); setCwStatus("");
+    setCwSaving(true); setCwStatus(""); setCwStatusProvider(provider);
     try {
       const r = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(provider)}`, {
         method: "PATCH",
@@ -378,6 +377,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
           if (Object.keys(map).length > 0) c[provider] = map; else delete c[provider];
           return c;
         });
+        // Clear the draft so the dirty flag resets; display falls back to persisted values.
+        setCwDraft(prev => { const c = { ...prev }; delete c[provider]; return c; });
         setCwOk(true);
         setCwStatus(Object.keys(map).length > 0 ? t("models.contextWindowApplied") : t("models.contextWindowCleared"));
       } else {
@@ -746,13 +747,37 @@ export default function Models({ apiBase }: { apiBase: string }) {
                    aria-label={t("models.search")}
                  />
                )}
+                {!isNative && (
+                  <div className="row" style={{ padding: "2px 0 4px" }}>
+                    <div style={{ flex: 1 }} />
+                    <span className="muted text-caption" title={t("models.contextWindowHint")} style={{ width: 100, textAlign: "right" }}>{t("models.contextWindowEdit")}</span>
+                  </div>
+                )}
                 {visible.map(m => {
                   const off = disabled.has(m.namespaced);
+                  const cwPersisted = providerCtxWindows[provider]?.[m.id];
+                  const cwDraftVal = cwDraft[provider]?.[m.id] ?? (cwPersisted !== undefined ? String(cwPersisted) : "");
+                  const cwHasValue = cwDraftVal.trim() !== "";
                   return (
                     <div key={m.namespaced} className="row" style={{ padding: "5px 0" }}>
                       <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
                       {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                      {!isNative && (
+                        <>
+                          <div style={{ flex: 1 }} />
+                          <input
+                            className="input"
+                            style={{ width: 100, ...(cwHasValue ? { borderColor: "var(--accent)" } : {}) }}
+                            inputMode="numeric"
+                            placeholder={typeof m.contextWindow === "number" && m.contextWindow > 0 ? fmtK(m.contextWindow) : t("models.contextWindowValue")}
+                            value={cwDraftVal}
+                            onChange={e => setCtxWindowDraft(provider, m.id, e.target.value)}
+                            disabled={cwSaving}
+                            aria-label={`${t("models.contextWindowValue")} ${m.id}`}
+                          />
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -764,55 +789,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
                     style={{ marginTop: 4 }}
                   >{t("models.showMore", { n: remaining })}</button>
                 )}
-                {!isNative && (
-                  <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => cwOpen.has(provider) ? closeCtxWindowEditor(provider) : openCtxWindowEditor(provider)}
-                      disabled={cwSaving}
-                      aria-expanded={cwOpen.has(provider)}
-                    >
-                      <IconChevron style={{ width: 12, height: 12, color: "var(--muted)", transform: cwOpen.has(provider) ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-                      {t("models.contextWindowEdit")}
-                    </button>
-                    {cwOpen.has(provider) && (
-                      <div style={{ marginTop: 6 }}>
-                        <p className="muted text-caption" style={{ margin: "0 0 6px" }}>{t("models.contextWindowHint")}</p>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                          {rows.map(m => {
-                            const persisted = providerCtxWindows[provider]?.[m.id];
-                            const draftVal = cwDraft[provider]?.[m.id] ?? (persisted !== undefined ? String(persisted) : "");
-                            const hasOverride = persisted !== undefined;
-                            return (
-                              <div key={m.namespaced} className="row" style={{ gap: 8, alignItems: "center", padding: "2px 0" }}>
-                                <code className="mono text-caption" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.id}</code>
-                                {typeof m.contextWindow === "number" && m.contextWindow > 0 && !hasOverride && (
-                                  <span className="muted mono text-caption" title={t("models.contextWindowLive")}>{t("models.contextWindowLive")}: {fmtK(m.contextWindow)}</span>
-                                )}
-                                {hasOverride && (
-                                  <span className="mono text-caption" style={{ color: "var(--muted)" }}>{fmtK(persisted!)}</span>
-                                )}
-                                <input
-                                  className="input"
-                                  style={{ width: 120 }}
-                                  inputMode="numeric"
-                                  placeholder={typeof m.contextWindow === "number" && m.contextWindow > 0 ? fmtK(m.contextWindow) : t("models.contextWindowValue")}
-                                  value={draftVal}
-                                  onChange={e => setCtxWindowDraft(provider, m.id, e.target.value)}
-                                  disabled={cwSaving}
-                                  aria-label={`${t("models.contextWindowValue")} ${m.id}`}
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center", justifyContent: "flex-end" }}>
-                          <button type="button" className="btn btn-primary btn-sm" onClick={() => void saveContextWindows(provider)} disabled={cwSaving}>{t("models.contextWindowSave")}</button>
-                          {cwStatus && <span className="text-caption" style={{ color: cwOk ? "var(--ok, #30a46c)" : "var(--err, #e5484d)" }}>{cwStatus}</span>}
-                        </div>
-                      </div>
-                    )}
+                {!isNative && (cwDirty(provider) || (cwStatusProvider === provider && cwStatus)) && (
+                  <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={() => void saveContextWindows(provider)} disabled={cwSaving || !cwDirty(provider)}>{t("models.contextWindowSave")}</button>
+                    {cwStatusProvider === provider && cwStatus && <span className="text-caption" style={{ color: cwOk ? "var(--ok, #30a46c)" : "var(--err, #e5484d)" }}>{cwStatus}</span>}
                   </div>
                 )}
               </div>
