@@ -421,6 +421,80 @@ describe("combo catalog capability intersection", () => {
     })).toEqual(new Set(["vendor/flash"]));
     expect(exactComboCatalogSlugs({})).toEqual(new Set());
   });
+
+  test("issue #268: combos with a native OpenAI (Codex-login) target are catalogued", async () => {
+    // The "openai" provider uses forward-auth (Codex login passthrough) — fetchProviderModels
+    // returns [] for it, so native slugs only surface through nativeOpenAiSlugs(). Before the
+    // fix, memberByKey never contained openai/<slug>, so combos with a native-openai target were
+    // silently dropped from the catalog.
+    globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        openrouter: {
+          adapter: "openai-chat",
+          baseUrl: "https://openrouter.ai/v1",
+          liveModels: false,
+          models: ["openai/gpt-5.6-sol"],
+          modelContextWindows: { "openai/gpt-5.6-sol": 372_000 },
+          modelInputModalities: { "openai/gpt-5.6-sol": ["text", "image"] },
+          modelReasoningEfforts: { "openai/gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+        },
+      },
+      combos: {
+        auto: {
+          strategy: "failover",
+          targets: [
+            { provider: "openai", model: "gpt-5.6-sol" },
+            { provider: "openrouter", model: "openai/gpt-5.6-sol" },
+          ],
+        },
+      },
+    };
+    const rows = await gatherRoutedModels(config);
+    const comboRow = rows.find(r => r.provider === "combo" && r.id === "auto");
+    expect(comboRow).toBeDefined();
+    expect(comboRow!.contextWindow).toBe(372_000);
+    expect(comboRow!.inputModalities).toEqual(["text", "image"]);
+    // Reasoning efforts should be the intersection of the two members.
+    expect(comboRow!.reasoningEfforts).toContain("low");
+    expect(comboRow!.reasoningEfforts).toContain("max");
+  });
+
+  test("issue #268: native OpenAI members do not appear as standalone routed rows", async () => {
+    // The synthetic entries are injected into memberByKey for combo resolution only —
+    // they must NOT leak into the returned all[] array (they are already emitted via the
+    // native catalog / /v1/models path).
+    globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      combos: {
+        solo: {
+          strategy: "failover",
+          targets: [{ provider: "openai", model: "gpt-5.6-sol" }],
+        },
+      },
+    };
+    const rows = await gatherRoutedModels(config);
+    // Only the combo row should exist — no openai/gpt-5.6-sol routed row.
+    const openaiRows = rows.filter(r => r.provider === "openai");
+    expect(openaiRows).toEqual([]);
+    expect(rows.some(r => r.provider === "combo" && r.id === "solo")).toBe(true);
+  });
 });
 
 describe("Google Gemini catalog metadata", () => {

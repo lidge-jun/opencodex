@@ -138,6 +138,54 @@ export function nativeOpenAiContextWindow(slug: string): number | undefined {
       : undefined);
 }
 
+/* ── Native-slug capability helpers for combo member resolution (issue #268) ── */
+
+/** Input modalities for a native OpenAI slug, defaulting to the GPT family baseline. */
+function nativeInputModalities(slug: string): string[] {
+  const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
+  if (Array.isArray(upstream?.input_modalities) && upstream!.input_modalities!.length > 0) {
+    return [...upstream!.input_modalities as string[]];
+  }
+  // gpt-5.3-codex-spark is not in the upstream snapshot; all supported natives are
+  // text+image capable, so default to the family baseline rather than text-only.
+  return ["text", "image"];
+}
+
+/** Reasoning effort ladder for a native OpenAI slug, mirroring the catalog emission path. */
+function nativeReasoningEfforts(slug: string): string[] {
+  const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
+  const levels = Array.isArray(upstream?.supported_reasoning_levels)
+    ? upstream!.supported_reasoning_levels as Array<{ effort?: string }>
+    : [];
+  if (levels.length > 0) {
+    const efforts = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
+    // gpt-5.6 natives get max+ultra restored (ensureGpt56ReasoningLevels catalog path does
+    // the same); older natives (gpt-5.5/5.4/5.4-mini/5.3-codex-spark) stop at xhigh per
+    // upstream snapshot.
+    if (isGpt56NativeSlug(slug)) {
+      const set = new Set(efforts);
+      for (const e of ["max", "ultra"]) set.add(e);
+      return [...set];
+    }
+    return efforts;
+  }
+  // gpt-5.3-codex-spark is not in upstream snapshot — use the standard old-ladder default.
+  return ["low", "medium", "high", "xhigh"];
+}
+
+/** Whether a native OpenAI slug supports parallel tool calls (per upstream snapshot). */
+function nativeParallelToolCalls(slug: string): boolean {
+  return UPSTREAM_NATIVE_ENTRIES.get(slug)?.supports_parallel_tool_calls === true
+    || false;
+}
+
+/** Quick check whether the config has any combo targets at all. */
+function hasComboTargets(config: { combos?: Record<string, { targets?: unknown[] }> }): boolean {
+  const combos = config.combos;
+  if (!combos) return false;
+  return Object.values(combos).some(c => Array.isArray(c?.targets) && c!.targets!.length > 0);
+}
+
 /**
  * Bare (slash-free) entries of `disabledModels` — the native GPT half of the single
  * enable/disable choke point. Routed ids are always namespaced `provider/id`, so bare
@@ -1521,6 +1569,51 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
     .filter(shouldExposeRoutedModel);
   const memberByKey = new Map(all.map(model => [`${model.provider}/${model.id}`, model]));
+  // [Decision Log]
+  // - 목적과 의도: 콤보 타겟에 native OpenAI(Codex login) 모델이 포함될 때 카탈로그에서
+  //   누락되는 버그(issue #268)를 수정. "openai" provider는 forward-auth(Codex login
+  //   passthrough)이므로 fetchProviderModels가 항상 []를 반환하고, native slugs는
+  //   별도 정적 경로(nativeOpenAiSlugs)로만 노출됨. 따라서 memberByKey에
+  //   openai/<slug> 키가 존재하지 않아 콤보가 조용히 drop됨.
+  // - 기존 구현 및 제약 조건: memberByKey는 routed provider /models fetch 결과로만 구성.
+  // - 검토한 주요 대안: (A) native slugs를 all 배열에 직접 push — /v1/models와 온디스크
+  //   카탈로그에서 native 모델이 중복 노출되는 부작용 발생. (B) memberByKey에만 synthetic
+  //   CatalogModel을 주입 — 콤보 멤버 해석에만 사용하고 all에는 추가하지 않으므로 기존
+  //   노출 경로에 영향 없음.
+  // - 선택한 방식: (B) — synthetic entries를 memberByKey에만 주입.
+  // - 다른 대안 대신 이 방식을 선택한 이유: 기존 native 모델 노출 경로(/v1/models, 온디스크
+  //   카탈로그 sync, management API)를 전혀 변경하지 않고 콤보 resolution만 수선하기 때문.
+  // - 장점, 단점 및 영향: 장점 — 최소 수정, 기존 경로 무변경. 단점 — synthetic entries의
+  //   capability 데이터가 static/upstream snapshot 기반이므로, 사용자가 커스텀 config
+  //   힌트(modelContextWindows 등)로 native 모델의 context window를 오버라이드한 경우
+  //   반영되지 않음. 하지만 nativeOpenAiContextWindow가 이미 config 오버라이드를
+  //   우선시하므로 실제 충돌 가능성은 낮음.
+  if (!hasComboTargets(config)) {
+    // Skip the native slug injection entirely when no combos are configured — avoids
+    // calling nativeOpenAiSlugs() (which reads the live Codex catalog from disk) for
+    // configs that will never need it.
+  } else {
+    const disabled = disabledNativeSlugs(config);
+    for (const slug of nativeOpenAiSlugs()) {
+      if (disabled.has(slug)) continue;
+      const contextWindow = nativeOpenAiContextWindow(slug);
+      if (contextWindow === undefined) continue;
+      const synthetic: CatalogModel = {
+        provider: "openai",
+        id: slug,
+        owned_by: "openai",
+        contextWindow,
+        maxInputTokens: contextWindow,
+        inputModalities: nativeInputModalities(slug),
+        reasoningEfforts: nativeReasoningEfforts(slug),
+        ...(nativeParallelToolCalls(slug) ? { parallelToolCalls: true } : {}),
+      };
+      const key = `openai/${slug}`;
+      // Only inject when not already present from a routed provider (an API-key
+      // "openai" provider could shadow the native one).
+      if (!memberByKey.has(key)) memberByKey.set(key, synthetic);
+    }
+  }
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
