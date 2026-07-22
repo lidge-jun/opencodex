@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   STOPPED_CLOUDFLARE_TUNNEL,
+  buildCloudflareTunnelSetupRequest,
+  canReconfigureTunnel,
   canToggleTunnel,
   endpointFromApiPayload,
   isTunnelEnabled,
   isTunnelTransitioning,
+  shouldOpenTunnelSetup,
   tunnelFromApiPayload,
   tunnelStatusTone,
 } from "../gui/src/cloudflare-tunnel";
@@ -12,12 +15,19 @@ import {
 describe("Cloudflare tunnel UI state", () => {
   test("reads tunnel state from both management API response shapes", () => {
     const running = {
+      ...STOPPED_CLOUDFLARE_TUNNEL,
       status: "running",
       mode: "named",
       publicUrl: "https://api.example.com",
+      configuredPublicUrl: "https://api.example.com",
+      originUrl: "http://127.0.0.1:10100",
+      configurationSource: "api",
       supportsSse: true,
       enabled: true,
       canEnable: true,
+      canConfigure: true,
+      configured: true,
+      setupRequired: false,
     } as const;
 
     expect(tunnelFromApiPayload({ tunnel: running })).toEqual(running);
@@ -26,12 +36,16 @@ describe("Cloudflare tunnel UI state", () => {
 
   test("keeps the last valid state when a partial payload omits fields", () => {
     const fallback = {
+      ...STOPPED_CLOUDFLARE_TUNNEL,
       status: "running",
       mode: "named",
       publicUrl: "https://api.example.com",
       supportsSse: true,
       enabled: true,
       canEnable: true,
+      canConfigure: true,
+      configured: true,
+      setupRequired: false,
     } as const;
 
     expect(tunnelFromApiPayload({ status: "stopping" }, fallback)).toEqual({
@@ -39,6 +53,36 @@ describe("Cloudflare tunnel UI state", () => {
       status: "stopping",
     });
     expect(tunnelFromApiPayload(null)).toEqual(STOPPED_CLOUDFLARE_TUNNEL);
+  });
+
+  test("defaults unconfigured public access to a streaming-capable Named Tunnel", () => {
+    expect(STOPPED_CLOUDFLARE_TUNNEL).toMatchObject({
+      mode: "named",
+      supportsSse: true,
+      configured: false,
+      setupRequired: true,
+    });
+    expect(shouldOpenTunnelSetup(STOPPED_CLOUDFLARE_TUNNEL)).toBe(true);
+    expect(shouldOpenTunnelSetup({
+      ...STOPPED_CLOUDFLARE_TUNNEL,
+      configured: true,
+      setupRequired: false,
+    })).toBe(false);
+  });
+
+  test("keeps an explicitly selected legacy Quick Tunnel usable for advanced debugging", () => {
+    const quick = tunnelFromApiPayload({
+      status: "stopped",
+      mode: "quick",
+      publicUrl: null,
+      supportsSse: false,
+      enabled: false,
+      canEnable: true,
+    });
+
+    expect(quick).toMatchObject({ configured: true, setupRequired: false, canConfigure: true });
+    expect(shouldOpenTunnelSetup(quick)).toBe(false);
+    expect(canToggleTunnel(quick, false)).toBe(true);
   });
 
   test("uses only the backend endpoint and preserves the previous value when absent", () => {
@@ -58,9 +102,16 @@ describe("Cloudflare tunnel UI state", () => {
     };
 
     expect(isTunnelTransitioning(starting.status)).toBe(true);
-    const canEnable = { ...STOPPED_CLOUDFLARE_TUNNEL, canEnable: true };
+    const canConfigure = { ...STOPPED_CLOUDFLARE_TUNNEL, canConfigure: true };
+    const canEnable = {
+      ...STOPPED_CLOUDFLARE_TUNNEL,
+      configured: true,
+      setupRequired: false,
+      canEnable: true,
+    };
     expect(canToggleTunnel(starting, false)).toBe(false);
     expect(canToggleTunnel(STOPPED_CLOUDFLARE_TUNNEL, false)).toBe(false);
+    expect(canToggleTunnel(canConfigure, false)).toBe(true);
     expect(canToggleTunnel(canEnable, false)).toBe(true);
     expect(isTunnelEnabled(running)).toBe(true);
     expect(canToggleTunnel(running, false)).toBe(true);
@@ -76,6 +127,60 @@ describe("Cloudflare tunnel UI state", () => {
 
     expect(isTunnelEnabled(failed)).toBe(true);
     expect(canToggleTunnel(failed, false)).toBe(true);
+    expect(shouldOpenTunnelSetup(failed)).toBe(false);
+  });
+
+  test("allows local Named credentials to be rotated only while public access is inactive", () => {
+    const local = {
+      ...STOPPED_CLOUDFLARE_TUNNEL,
+      canConfigure: true,
+      canEnable: true,
+      configured: true,
+      setupRequired: false,
+      configurationSource: "local",
+      configuredPublicUrl: "https://api.example.com",
+    };
+    expect(canReconfigureTunnel(local, false)).toBe(true);
+    expect(canReconfigureTunnel(local, true)).toBe(false);
+    expect(canReconfigureTunnel({ ...local, enabled: true }, false)).toBe(false);
+    expect(canReconfigureTunnel({ ...local, configurationSource: "environment" }, false)).toBe(false);
+    expect(canReconfigureTunnel({ ...local, configurationEditable: false }, false)).toBe(false);
+  });
+
+  test("builds the automatic Named Tunnel setup request without retaining whitespace", () => {
+    expect(buildCloudflareTunnelSetupRequest("api", {
+      accountId: " account-id ",
+      zoneId: " zone-id ",
+      hostname: " api.example.com ",
+      apiToken: " token ",
+      tunnelName: "  ",
+    })).toEqual({
+      method: "api",
+      accountId: "account-id",
+      zoneId: "zone-id",
+      hostname: "api.example.com",
+      apiToken: "token",
+      enable: true,
+    });
+    expect(buildCloudflareTunnelSetupRequest("api", {
+      accountId: "account-id",
+      zoneId: "zone-id",
+      hostname: "new.example.com",
+      apiToken: "token",
+      replaceExisting: true,
+    })).toMatchObject({ replaceExisting: true, enable: true });
+  });
+
+  test("builds setup for an existing tunnel from a token or install command", () => {
+    expect(buildCloudflareTunnelSetupRequest("token", {
+      publicUrl: " https://api.example.com ",
+      tunnelToken: " cloudflared service install eyToken ",
+    })).toEqual({
+      method: "token",
+      publicUrl: "https://api.example.com",
+      tunnelToken: "cloudflared service install eyToken",
+      enable: true,
+    });
   });
 
   test("maps every status to a semantic badge tone", () => {

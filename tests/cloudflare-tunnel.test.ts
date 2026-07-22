@@ -145,6 +145,63 @@ describe("Cloudflare Tunnel launch configuration", () => {
     expect("error" in mismatch ? mismatch.error : "").toContain("fallback port");
   });
 
+  test("uses explicit local Named Tunnel overrides without putting the runner token in argv", () => {
+    const tokenFile = "/isolated-opencodex/cloudflare-tunnel-token";
+    const localRunnerToken = `eyJ${"l".repeat(64)}`;
+    const launch = buildCloudflaredLaunch({
+      ...startOptions,
+      mode: "named",
+      namedTunnel: {
+        publicUrl: "https://api.example.com",
+        tokenFile,
+      },
+    }, {
+      env: {
+        OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN: "stale-environment-token",
+        OPENCODEX_CLOUDFLARE_PUBLIC_URL: "https://stale.example.com",
+      },
+      readFile: path => {
+        expect(path).toBe(tokenFile);
+        return `${localRunnerToken}\n`;
+      },
+    });
+
+    expect(launch).toMatchObject({
+      mode: "named",
+      publicUrl: "https://api.example.com",
+      supportsSse: true,
+      args: [
+        "tunnel", "--no-autoupdate", "--loglevel", "info", "--protocol", "auto",
+        "--metrics", "127.0.0.1:0", "run",
+      ],
+    });
+    if (!("status" in launch)) {
+      expect(launch.args.join(" ")).not.toContain("stale-environment-token");
+      expect(launch.args.join(" ")).not.toContain(localRunnerToken);
+      expect(launch.env.TUNNEL_TOKEN).toBe(localRunnerToken);
+      expect(launch.env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN).toBeUndefined();
+    }
+  });
+
+  test("honors an explicit Quick Tunnel opt-in even when Named credentials are ambient", () => {
+    const launch = buildCloudflaredLaunch({ ...startOptions, mode: "quick" }, {
+      env: {
+        OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN: "ambient-runner-token",
+        OPENCODEX_CLOUDFLARE_PUBLIC_URL: "https://ambient.example.com",
+      },
+      homeDir: "/isolated-home",
+      exists: () => false,
+    });
+
+    expect(launch).toMatchObject({ mode: "quick", supportsSse: false, publicUrl: null });
+    if (!("status" in launch)) {
+      expect(launch.args).toContain("--url");
+      expect(launch.args).not.toContain("--token-file");
+      expect(launch.env.TUNNEL_TOKEN).toBeUndefined();
+      expect(launch.env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN).toBeUndefined();
+    }
+  });
+
   test("validates Named Tunnel public URLs as exact HTTPS origins", () => {
     expect(normalizeNamedPublicUrl("https://ocx.example.com/"))
       .toBe("https://ocx.example.com");

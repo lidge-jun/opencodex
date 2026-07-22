@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
-import { IconPlus, IconX, IconCheck, IconGlobe, IconAlert } from "../icons";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { IconPlus, IconX, IconCheck, IconGlobe, IconAlert, IconExternal } from "../icons";
 import { useI18n, LOCALES, type TKey } from "../i18n/shared";
 import { apiErrorMessage } from "../api-error";
 import {
   STOPPED_CLOUDFLARE_TUNNEL,
+  buildCloudflareTunnelSetupRequest,
+  canReconfigureTunnel,
   canToggleTunnel,
   endpointFromApiPayload,
   isTunnelEnabled,
   isTunnelTransitioning,
+  shouldOpenTunnelSetup,
   tunnelFromApiPayload,
   tunnelStatusTone,
   type CloudflareTunnelStatus,
+  type CloudflareTunnelSetupMethod,
 } from "../cloudflare-tunnel";
 
 interface ApiKeyEntry {
@@ -40,6 +44,16 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const [tunnel, setTunnel] = useState(STOPPED_CLOUDFLARE_TUNNEL);
   const [tunnelRequestPending, setTunnelRequestPending] = useState(false);
   const [tunnelRequestError, setTunnelRequestError] = useState<string | null>(null);
+  const [tunnelSetupOpen, setTunnelSetupOpen] = useState(false);
+  const [tunnelSetupMethod, setTunnelSetupMethod] = useState<CloudflareTunnelSetupMethod>("api");
+  const [tunnelAccountId, setTunnelAccountId] = useState("");
+  const [tunnelZoneId, setTunnelZoneId] = useState("");
+  const [tunnelHostname, setTunnelHostname] = useState("");
+  const [tunnelApiToken, setTunnelApiToken] = useState("");
+  const [tunnelName, setTunnelName] = useState("");
+  const [tunnelReplaceExisting, setTunnelReplaceExisting] = useState(false);
+  const [tunnelPublicUrl, setTunnelPublicUrl] = useState("");
+  const [tunnelToken, setTunnelToken] = useState("");
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -134,7 +148,20 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     fetchKeys();
   };
 
+  const openTunnelSetup = () => {
+    setTunnelRequestError(null);
+    setTunnelSetupMethod(tunnel.configured || tunnel.configurationSource === "local" ? "token" : "api");
+    setTunnelReplaceExisting(false);
+    setTunnelPublicUrl(tunnel.configuredPublicUrl ?? "");
+    setTunnelSetupOpen(true);
+  };
+
   const handleTunnelToggle = async () => {
+    if (shouldOpenTunnelSetup(tunnel)) {
+      openTunnelSetup();
+      return;
+    }
+
     const enabled = !isTunnelEnabled(tunnel);
     const previousTunnel = tunnel;
     setTunnelRequestError(null);
@@ -166,6 +193,80 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const handleTunnelSetup = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!tunnel.canConfigure) return;
+    setTunnelRequestError(null);
+    setTunnelRequestPending(true);
+
+    const body = tunnelSetupMethod === "api"
+      ? buildCloudflareTunnelSetupRequest("api", {
+          accountId: tunnelAccountId,
+          zoneId: tunnelZoneId,
+          hostname: tunnelHostname,
+          apiToken: tunnelApiToken,
+          tunnelName,
+          replaceExisting: tunnelReplaceExisting,
+        })
+      : buildCloudflareTunnelSetupRequest("token", {
+          publicUrl: tunnelPublicUrl,
+          tunnelToken,
+        });
+
+    try {
+      const res = await fetch(`${apiBase}/api/cloudflare-tunnel/setup`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        // Provisioning can succeed even when the final local cloudflared start fails. In that
+        // case the API returns the saved configuration alongside the start error: adopt it and
+        // clear both secret inputs so the user can install/fix cloudflared, then retry Enable.
+        try {
+          const failurePayload = await res.clone().json();
+          const configuredTunnel = tunnelFromApiPayload(failurePayload, tunnel);
+          if (configuredTunnel.configured) {
+            setTunnel(configuredTunnel);
+            setEndpoint(previous => endpointFromApiPayload(failurePayload, previous));
+            setTunnelApiToken("");
+            setTunnelToken("");
+            setTunnelSetupOpen(false);
+            await fetchTunnel(true);
+          }
+        } catch {
+          // apiErrorMessage below supplies the localized fallback for non-JSON failures.
+        }
+        setTunnelRequestError(await apiErrorMessage(res, t("api.tunnelSetupFailed")));
+        return;
+      }
+
+      const data = await res.json();
+      setTunnel(previous => tunnelFromApiPayload(data, previous));
+      setEndpoint(previous => endpointFromApiPayload(data, previous));
+      setTunnelApiToken("");
+      setTunnelToken("");
+      setTunnelReplaceExisting(false);
+      setTunnelSetupOpen(false);
+      await fetchTunnel(true);
+    } catch {
+      setTunnelRequestError(t("api.tunnelSetupFailed"));
+    } finally {
+      // Secret fields are single-request inputs: clear them after success, validation errors,
+      // Cloudflare failures, and local network errors alike.
+      setTunnelApiToken("");
+      setTunnelToken("");
+      setTunnelRequestPending(false);
+    }
+  };
+
+  const closeTunnelSetup = () => {
+    setTunnelApiToken("");
+    setTunnelToken("");
+    setTunnelReplaceExisting(false);
+    setTunnelSetupOpen(false);
+  };
+
   const copyKey = () => {
     if (newKey) {
       navigator.clipboard.writeText(newKey);
@@ -177,6 +278,8 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   // Subtitle carries the dedicated admission header as an inline <code> chip.
   const subtitleParts = t("api.subtitle").split("{authHeader}");
   const tunnelEnabled = isTunnelEnabled(tunnel);
+  const tunnelNeedsSetup = shouldOpenTunnelSetup(tunnel);
+  const tunnelCanProceed = tunnelNeedsSetup ? tunnel.canConfigure : tunnel.canEnable;
   const tunnelBusy = tunnelRequestPending || isTunnelTransitioning(tunnel.status);
   const tunnelError = tunnelRequestError ?? tunnel.error;
   const tunnelButtonLabel = tunnel.status === "starting"
@@ -185,7 +288,19 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       ? t("api.tunnelStopping")
       : tunnelEnabled
         ? t("api.tunnelDisable")
-        : t("api.tunnelEnable");
+        : tunnelNeedsSetup
+          ? t("api.tunnelConfigure")
+          : t("api.tunnelEnable");
+  const tunnelReplaceConfirmationRequired = tunnel.configurationSource === "local";
+  const tunnelSetupReady = tunnelSetupMethod === "api"
+    ? Boolean(
+        tunnelAccountId.trim()
+        && tunnelZoneId.trim()
+        && tunnelHostname.trim()
+        && tunnelApiToken.trim()
+        && (!tunnelReplaceConfirmationRequired || tunnelReplaceExisting)
+      )
+    : Boolean(tunnelPublicUrl.trim() && tunnelToken.trim());
 
   return (
     <section className="api-page">
@@ -217,24 +332,170 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
             <p className="muted small">
               {t(tunnel.mode === "named" ? "api.tunnelModeNamed" : "api.tunnelModeQuick")}
             </p>
-            {!tunnel.canEnable && !tunnelEnabled && (
-              <p className="api-tunnel-key-hint small">{t("api.tunnelNeedsKey")}</p>
+            {tunnel.configuredPublicUrl && (
+              <p className="api-tunnel-detail small">
+                <span className="muted">{t("api.tunnelPublicUrl")}</span>
+                <code>{tunnel.configuredPublicUrl}</code>
+              </p>
+            )}
+            {tunnel.originUrl && (
+              <p className="api-tunnel-detail small">
+                <span className="muted">{t("api.tunnelOriginUrl")}</span>
+                <code>{tunnel.originUrl}</code>
+              </p>
+            )}
+            {!tunnelCanProceed && !tunnelEnabled && (
+              <p className="api-tunnel-key-hint small">
+                {t(tunnel.configurationSource === "environment" && tunnel.setupRequired
+                  ? "api.tunnelEnvironmentManaged"
+                  : "api.tunnelNeedsKey")}
+              </p>
             )}
           </div>
-          <button
-            type="button"
-            className={`btn ${tunnelEnabled ? "btn-ghost" : "btn-primary"}`}
-            onClick={handleTunnelToggle}
-            disabled={!canToggleTunnel(tunnel, tunnelRequestPending)}
-            aria-busy={tunnelBusy}
-          >
-            {tunnelBusy ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
-            {tunnelButtonLabel}
-          </button>
+          <div className="api-tunnel-buttons">
+            {tunnel.configured && !tunnelEnabled && tunnel.configurationSource !== "environment" && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={openTunnelSetup}
+                disabled={!canReconfigureTunnel(tunnel, tunnelRequestPending)}
+              >
+                {t("api.tunnelReconfigure")}
+              </button>
+            )}
+            <button
+              type="button"
+              className={`btn ${tunnelEnabled ? "btn-ghost" : "btn-primary"}`}
+              onClick={handleTunnelToggle}
+              disabled={!canToggleTunnel(tunnel, tunnelRequestPending)}
+              aria-busy={tunnelBusy}
+            >
+              {tunnelBusy ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
+              {tunnelButtonLabel}
+            </button>
+          </div>
         </div>
         {tunnelError && (
           <div className="notice notice-err api-tunnel-error" role="alert">
             <IconAlert /> <span>{tunnelError}</span>
+          </div>
+        )}
+        {tunnelSetupOpen && !tunnelEnabled && (
+          <div className="api-tunnel-setup">
+            <div className="api-tunnel-setup-head">
+              <div>
+                <h4>{t("api.tunnelSetupTitle")}</h4>
+                <p className="muted small">{t("api.tunnelSetupIntro")}</p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={closeTunnelSetup}
+                disabled={tunnelRequestPending}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+
+            <div className="notice api-tunnel-sse-note">
+              <IconCheck /> <span>{t("api.tunnelSseNote")}</span>
+            </div>
+
+            <div className="api-tunnel-methods" role="radiogroup" aria-label={t("api.tunnelSetupMethod")}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={tunnelSetupMethod === "api"}
+                className={`api-tunnel-method${tunnelSetupMethod === "api" ? " api-tunnel-method-active" : ""}`}
+                onClick={() => setTunnelSetupMethod("api")}
+              >
+                <strong>{t("api.tunnelSetupAutomatic")}</strong>
+                <span>{t("api.tunnelSetupAutomaticDesc")}</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={tunnelSetupMethod === "token"}
+                className={`api-tunnel-method${tunnelSetupMethod === "token" ? " api-tunnel-method-active" : ""}`}
+                onClick={() => setTunnelSetupMethod("token")}
+              >
+                <strong>{t("api.tunnelSetupExisting")}</strong>
+                <span>{t("api.tunnelSetupExistingDesc")}</span>
+              </button>
+            </div>
+
+            <form className="api-tunnel-setup-form" onSubmit={handleTunnelSetup}>
+              {tunnelSetupMethod === "api" ? (
+                <>
+                  <div className="api-tunnel-form-grid">
+                    <label>
+                      <span className="field-label">{t("api.tunnelAccountId")}</span>
+                      <input className="input" required value={tunnelAccountId} onChange={event => setTunnelAccountId(event.target.value)} placeholder={t("api.tunnelAccountIdPlaceholder")} />
+                    </label>
+                    <label>
+                      <span className="field-label">{t("api.tunnelZoneId")}</span>
+                      <input className="input" required value={tunnelZoneId} onChange={event => setTunnelZoneId(event.target.value)} placeholder={t("api.tunnelZoneIdPlaceholder")} />
+                    </label>
+                    <label>
+                      <span className="field-label">{t("api.tunnelHostname")}</span>
+                      <input className="input" required value={tunnelHostname} onChange={event => setTunnelHostname(event.target.value)} placeholder={t("api.tunnelHostnamePlaceholder")} />
+                    </label>
+                    <label>
+                      <span className="field-label">{t("api.tunnelName")}</span>
+                      <input className="input" value={tunnelName} onChange={event => setTunnelName(event.target.value)} placeholder={t("api.tunnelNamePlaceholder")} />
+                    </label>
+                  </div>
+                  <label>
+                    <span className="field-label">{t("api.tunnelApiToken")}</span>
+                    <input className="input" type="password" autoComplete="off" required value={tunnelApiToken} onChange={event => setTunnelApiToken(event.target.value)} placeholder={t("api.tunnelApiTokenPlaceholder")} />
+                  </label>
+                  <p className="muted small">{t("api.tunnelApiPermissions")}</p>
+                  {tunnelReplaceConfirmationRequired && (
+                    <label className="api-tunnel-confirm">
+                      <input
+                        type="checkbox"
+                        checked={tunnelReplaceExisting}
+                        onChange={event => setTunnelReplaceExisting(event.target.checked)}
+                      />
+                      <span>{t("api.tunnelReplaceExistingConfirm")}</span>
+                    </label>
+                  )}
+                </>
+              ) : (
+                <>
+                  <label>
+                    <span className="field-label">{t("api.tunnelExistingPublicUrl")}</span>
+                    <input className="input" type="url" required value={tunnelPublicUrl} onChange={event => setTunnelPublicUrl(event.target.value)} placeholder={t("api.tunnelExistingPublicUrlPlaceholder")} />
+                  </label>
+                  <label>
+                    <span className="field-label">{t("api.tunnelTokenOrCommand")}</span>
+                    <input className="input api-tunnel-token-input" type="password" autoComplete="off" required value={tunnelToken} onChange={event => setTunnelToken(event.target.value)} placeholder={t("api.tunnelTokenOrCommandPlaceholder")} />
+                  </label>
+                </>
+              )}
+
+              <p className="api-tunnel-security-note small">
+                <IconAlert />
+                <span>{t(tunnelSetupMethod === "api" ? "api.tunnelTokenSecurity" : "api.tunnelRunnerTokenSecurity")}</span>
+              </p>
+              <div className="api-tunnel-guide-links">
+                <a href="https://one.dash.cloudflare.com/" target="_blank" rel="noreferrer">
+                  {t("api.tunnelOpenDashboard")} <IconExternal />
+                </a>
+                <a href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">
+                  {t("api.tunnelTokenGuide")} <IconExternal />
+                </a>
+                <a href="https://developers.cloudflare.com/tunnel/setup/" target="_blank" rel="noreferrer">
+                  {t("api.tunnelExistingGuide")} <IconExternal />
+                </a>
+              </div>
+              <div className="api-tunnel-setup-actions">
+                <button type="submit" className="btn btn-primary" disabled={!tunnel.canConfigure || !tunnelSetupReady || tunnelRequestPending} aria-busy={tunnelRequestPending}>
+                  {tunnelRequestPending ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
+                  {tunnelRequestPending ? t("api.tunnelConfiguring") : t("api.tunnelConfigureStart")}
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </div>

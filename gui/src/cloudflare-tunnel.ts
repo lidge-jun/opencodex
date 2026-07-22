@@ -1,5 +1,6 @@
 export type CloudflareTunnelStatus = "stopped" | "starting" | "running" | "stopping" | "error";
 export type CloudflareTunnelMode = "quick" | "named";
+export type CloudflareTunnelSetupMethod = "api" | "token";
 
 export interface CloudflareTunnelState {
   status: CloudflareTunnelStatus;
@@ -8,17 +9,50 @@ export interface CloudflareTunnelState {
   supportsSse: boolean;
   enabled: boolean;
   canEnable: boolean;
+  canConfigure: boolean;
+  configured: boolean;
+  setupRequired: boolean;
+  configurationSource: string | null;
+  configurationEditable: boolean;
+  configuredPublicUrl: string | null;
+  originUrl: string | null;
+  setupError?: string;
   error?: string;
 }
 
 export const STOPPED_CLOUDFLARE_TUNNEL: CloudflareTunnelState = {
   status: "stopped",
-  mode: "quick",
+  mode: "named",
   publicUrl: null,
-  supportsSse: false,
+  supportsSse: true,
   enabled: false,
   canEnable: false,
+  canConfigure: false,
+  configured: false,
+  setupRequired: true,
+  configurationSource: null,
+  configurationEditable: true,
+  configuredPublicUrl: null,
+  originUrl: null,
 };
+
+export interface CloudflareTunnelApiSetupInput {
+  accountId: string;
+  zoneId: string;
+  hostname: string;
+  apiToken: string;
+  tunnelName?: string;
+  replaceExisting?: boolean;
+}
+
+export interface CloudflareTunnelTokenSetupInput {
+  publicUrl: string;
+  tunnelToken: string;
+}
+
+export type CloudflareTunnelSetupRequest =
+  | ({ method: "api"; enable: true } & CloudflareTunnelApiSetupInput)
+  | ({ method: "token"; enable: true } & CloudflareTunnelTokenSetupInput);
 
 const STATUSES = new Set<CloudflareTunnelStatus>(["stopped", "starting", "running", "stopping", "error"]);
 const MODES = new Set<CloudflareTunnelMode>(["quick", "named"]);
@@ -56,8 +90,38 @@ export function tunnelFromApiPayload(
   const canEnable = typeof candidate.canEnable === "boolean"
     ? candidate.canEnable
     : fallback.canEnable;
+  const canConfigure = typeof candidate.canConfigure === "boolean"
+    ? candidate.canConfigure
+    : typeof candidate.canEnable === "boolean"
+      ? candidate.canEnable
+      : fallback.canConfigure;
+  const configuredPublicUrl = typeof candidate.configuredPublicUrl === "string" || candidate.configuredPublicUrl === null
+    ? candidate.configuredPublicUrl
+    : fallback.configuredPublicUrl;
+  const originUrl = typeof candidate.originUrl === "string" || candidate.originUrl === null
+    ? candidate.originUrl
+    : fallback.originUrl;
+  const configurationSource = typeof candidate.configurationSource === "string" && candidate.configurationSource.trim()
+    ? candidate.configurationSource.trim()
+    : candidate.configurationSource === null
+      ? null
+      : fallback.configurationSource;
+  const configurationEditable = typeof candidate.configurationEditable === "boolean"
+    ? candidate.configurationEditable
+    : fallback.configurationEditable;
+  const configured = typeof candidate.configured === "boolean"
+    ? candidate.configured
+    : mode === "quick" || (mode === "named" && (configuredPublicUrl !== null || publicUrl !== null))
+      ? true
+      : fallback.configured;
+  const setupRequired = typeof candidate.setupRequired === "boolean"
+    ? candidate.setupRequired
+    : !configured;
   const error = typeof candidate.error === "string" && candidate.error.trim()
     ? candidate.error.trim()
+    : undefined;
+  const setupError = typeof candidate.setupError === "string" && candidate.setupError.trim()
+    ? candidate.setupError.trim()
     : undefined;
 
   return {
@@ -67,7 +131,51 @@ export function tunnelFromApiPayload(
     supportsSse,
     enabled,
     canEnable,
+    canConfigure,
+    configured,
+    setupRequired,
+    configurationSource,
+    configurationEditable,
+    configuredPublicUrl,
+    originUrl,
     ...(error ? { error } : {}),
+    ...(setupError ? { setupError } : {}),
+  };
+}
+
+export function buildCloudflareTunnelSetupRequest(
+  method: "api",
+  input: CloudflareTunnelApiSetupInput,
+): CloudflareTunnelSetupRequest;
+export function buildCloudflareTunnelSetupRequest(
+  method: "token",
+  input: CloudflareTunnelTokenSetupInput,
+): CloudflareTunnelSetupRequest;
+export function buildCloudflareTunnelSetupRequest(
+  method: CloudflareTunnelSetupMethod,
+  input: CloudflareTunnelApiSetupInput | CloudflareTunnelTokenSetupInput,
+): CloudflareTunnelSetupRequest {
+  if (method === "api") {
+    const api = input as CloudflareTunnelApiSetupInput;
+    const tunnelName = api.tunnelName?.trim();
+    return {
+      method,
+      accountId: api.accountId.trim(),
+      zoneId: api.zoneId.trim(),
+      hostname: api.hostname.trim(),
+      apiToken: api.apiToken.trim(),
+      ...(tunnelName ? { tunnelName } : {}),
+      ...(api.replaceExisting ? { replaceExisting: true } : {}),
+      enable: true,
+    };
+  }
+
+  const token = input as CloudflareTunnelTokenSetupInput;
+  return {
+    method,
+    publicUrl: token.publicUrl.trim(),
+    tunnelToken: token.tunnelToken.trim(),
+    enable: true,
   };
 }
 
@@ -90,7 +198,21 @@ export function canToggleTunnel(
   requestPending: boolean,
 ): boolean {
   if (requestPending || isTunnelTransitioning(tunnel.status)) return false;
-  return isTunnelEnabled(tunnel) || tunnel.canEnable;
+  if (isTunnelEnabled(tunnel)) return true;
+  return shouldOpenTunnelSetup(tunnel) ? tunnel.canConfigure : tunnel.canEnable;
+}
+
+export function shouldOpenTunnelSetup(tunnel: CloudflareTunnelState): boolean {
+  return !isTunnelEnabled(tunnel) && (tunnel.setupRequired || !tunnel.configured);
+}
+
+export function canReconfigureTunnel(tunnel: CloudflareTunnelState, requestPending: boolean): boolean {
+  return tunnel.configured
+    && !isTunnelEnabled(tunnel)
+    && tunnel.configurationSource !== "environment"
+    && tunnel.canConfigure
+    && tunnel.configurationEditable
+    && !requestPending;
 }
 
 export function tunnelStatusTone(

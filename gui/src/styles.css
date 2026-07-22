@@ -411,15 +411,68 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border-top: 1px solid var(--border-soft);
 }
 .api-tunnel-copy { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--space-1-5); min-width: 0; }
+.api-tunnel-buttons { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
 .api-tunnel-title-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .api-tunnel-title { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-control); font-weight: var(--weight-semibold); }
 .api-tunnel-title svg { width: var(--icon-md); height: var(--icon-md); color: var(--muted); }
+.api-tunnel-detail { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; margin: 0; }
+.api-tunnel-detail code { color: var(--text); overflow-wrap: anywhere; }
 .api-tunnel-key-hint { margin: 0; color: var(--amber); }
 .api-tunnel-error { align-items: flex-start; margin: 0; }
+.api-tunnel-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
+}
+.api-tunnel-setup-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+.api-tunnel-setup-head h4 { margin: 0 0 var(--space-1-5); font-size: var(--text-control); }
+.api-tunnel-sse-note { align-items: flex-start; margin: 0; color: var(--green); }
+.api-tunnel-sse-note svg { flex: 0 0 auto; }
+.api-tunnel-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.api-tunnel-method {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+  padding: var(--space-4);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+.api-tunnel-method:hover { background: var(--raised); }
+.api-tunnel-method:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.api-tunnel-method span { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-relaxed); }
+.api-tunnel-method-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.api-tunnel-setup-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.api-tunnel-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.api-tunnel-setup-form label { display: block; min-width: 0; }
+.api-tunnel-setup-form .field-label { color: var(--text); }
+.api-tunnel-setup-form .input { width: 100%; min-width: 0; }
+.api-tunnel-setup-form .api-tunnel-confirm { display: flex; align-items: flex-start; gap: var(--space-2); color: var(--amber); font-size: var(--text-label); line-height: var(--leading-relaxed); }
+.api-tunnel-confirm input { flex: 0 0 auto; margin-top: 3px; }
+.api-tunnel-token-input { font-family: var(--font-code); font-size: var(--text-label); }
+.api-tunnel-security-note { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; color: var(--amber); }
+.api-tunnel-security-note svg { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; margin-top: 2px; }
+.api-tunnel-guide-links { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.api-tunnel-guide-links a { display: inline-flex; align-items: center; gap: var(--space-1-5); color: var(--accent); font-size: var(--text-label); }
+.api-tunnel-guide-links svg { width: var(--icon-sm); height: var(--icon-sm); }
+.api-tunnel-setup-actions { display: flex; align-items: center; justify-content: flex-end; }
 
 @media (max-width: 640px) {
   .api-tunnel-control { align-items: stretch; flex-direction: column; }
-  .api-tunnel-control > .btn { align-self: flex-start; }
+  .api-tunnel-buttons { justify-content: flex-start; }
+  .api-tunnel-setup-head { flex-direction: column; }
+  .api-tunnel-methods, .api-tunnel-form-grid { grid-template-columns: 1fr; }
+  .api-tunnel-setup-actions { justify-content: stretch; }
+  .api-tunnel-setup-actions .btn { width: 100%; }
 }
 .maintenance-head { align-items: flex-start; flex-wrap: wrap; }
 .maintenance-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }

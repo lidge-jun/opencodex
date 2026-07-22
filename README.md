@@ -290,19 +290,47 @@ ocx update [--tag preview]     # update opencodex; preview installs stay on @pre
 ### Public API through Cloudflare Tunnel
 
 The dashboard's **API Access** page can publish the local Responses endpoint without changing the
-loopback bind. Install Cloudflare's official `cloudflared` client, create at least one opencodex API
-key on that page, and click **Enable public access**. While the tunnel is running, the endpoint and
-copyable curl example switch to its HTTPS URL; disabling it restores the local URL.
+loopback bind. A **Named Tunnel is the default**: it provides a stable hostname and supports normal
+Server-Sent Events (SSE) streaming. Install Cloudflare's official
+[`cloudflared` client](https://developers.cloudflare.com/tunnel/downloads/), create at least one
+opencodex API key on the API Access page, and choose one of the two setup methods:
 
-The zero-config path uses a random `trycloudflare.com` Quick Tunnel. Cloudflare documents Quick
-Tunnels as development-only: there is no SLA, they are limited to 200 in-flight requests, and they
-do **not** support Server-Sent Events. Non-streaming API calls still work, as do supported WebSocket
-clients when opencodex WebSockets are enabled; use a named tunnel for normal streaming Responses
-traffic. See Cloudflare's
-[Quick Tunnel limitations](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+1. **Configure automatically.** Enter the Cloudflare account ID, zone ID, public hostname, and an
+   optional tunnel name, then paste a temporary scoped Cloudflare API token. opencodex creates the
+   remotely managed tunnel, published application, DNS record, and local connector. The API token
+   is used only for this setup request: it is cleared from the page and is never written to the
+   opencodex config or credential file. You may revoke it after setup.
+2. **Use an existing tunnel.** Create or select a remotely managed tunnel, map its published
+   application to `http://127.0.0.1:<configured-opencodex-port>`, then enter its HTTPS public URL on
+   the API Access page. Paste either the tunnel runner token or the complete `cloudflared` install
+   command copied from Cloudflare; opencodex extracts the runner token from the command.
 
-For a remotely managed named tunnel, configure its published application in Cloudflare as
-`https://<your-hostname>` → `http://127.0.0.1:<configured-opencodex-port>`, then start opencodex with:
+After a Named Tunnel is configured, **Reconfigure** defaults to the existing-tunnel method so a
+runner token can be rotated without creating another Tunnel. Choosing automatic setup again creates
+a new Tunnel and DNS record; it requires explicit confirmation, does not delete the previous
+Cloudflare resources, and reminds you to remove them manually after verifying the new endpoint.
+
+For automatic setup, scope the temporary API token to the one account and zone you intend to use,
+with only these permissions:
+
+- **Account · Cloudflare Tunnel · Edit**
+- **Zone · DNS · Edit**
+
+See Cloudflare's official [Tunnel setup guide](https://developers.cloudflare.com/tunnel/setup/) and
+[API token guide](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/).
+For either UI method, only the tunnel-specific runner token remains locally. It is stored in the
+fixed `cloudflare-tunnel-token` file in the opencodex config directory (by default
+`~/.opencodex/cloudflare-tunnel-token`) with `0600` permissions; its fingerprint, rather than the
+secret, is stored in `config.json`. The token is not placed in the `cloudflared` command line or
+returned by the management API.
+
+After setup, click **Enable public access**. While the tunnel is running, the endpoint and copyable
+curl example switch to its HTTPS URL; disabling it restores the local URL. Named tunnels use the
+fixed configured opencodex port, so public access is refused if startup had to fall back to a
+different port.
+
+For headless or externally managed installations, the same Named Tunnel can instead be supplied
+through environment variables:
 
 ```bash
 export OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN="..."
@@ -311,9 +339,14 @@ ocx start
 ```
 
 With `cloudflared` 2025.4.0 or newer, you can set `OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE` instead of putting the token in the environment,
-and `OPENCODEX_CLOUDFLARED_PATH` when the executable is not on `PATH`. The runner token is never
-placed in command arguments or returned by the management API. Named tunnels use Cloudflare's
-configured origin, so opencodex refuses to enable one if it had to fall back to a different port.
+and `OPENCODEX_CLOUDFLARED_PATH` when the executable is not on `PATH`.
+
+Quick Tunnel is an explicit **advanced development mode**, never the default. To opt in, set
+`"cloudflareTunnel": { "mode": "quick" }` in `~/.opencodex/config.json` before using the API Access
+toggle. It creates a temporary random `trycloudflare.com` URL, has no SLA, is limited to 200
+in-flight requests, and does **not** support SSE. Use it only for short non-streaming tests (or a
+supported WebSocket client when opencodex WebSockets are enabled). See Cloudflare's
+[Quick Tunnel limitations](https://developers.cloudflare.com/tunnel/setup/#quick-tunnels-development).
 
 The Cloudflare ingress is intentionally data-plane-only: it serves `/v1/*` with a valid
 `X-OpenCodex-API-Key`, while the dashboard and `/api/*` management routes remain local.

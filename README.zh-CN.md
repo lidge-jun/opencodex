@@ -250,18 +250,41 @@ ocx update [--tag preview]     # 更新 opencodex；preview 安装保持 @previe
 
 ### 通过 Cloudflare Tunnel 开启公网 API
 
-仪表盘的 **API 访问** 页面可以在不改变 loopback 监听的情况下发布本地 Responses 端点。先安装
-Cloudflare 官方 `cloudflared`，在该页面至少创建一个 opencodex API 密钥，然后点击**开启公网访问**。
-Tunnel 运行后，页面端点和 curl 示例会自动切换到 HTTPS 公网地址；关闭后恢复本地地址。
+仪表盘的 **API 访问** 页面可以在不改变 loopback 监听的情况下发布本地 Responses 端点。
+**Named Tunnel 是默认模式**，它提供稳定域名，并支持常规 Server-Sent Events（SSE）流式传输。
+先安装 Cloudflare 官方
+[`cloudflared` 客户端](https://developers.cloudflare.com/tunnel/downloads/)，在 API 访问页面至少创建一个
+opencodex API 密钥，再选择下列一种配置方式：
 
-零配置模式会创建随机 `trycloudflare.com` Quick Tunnel。Cloudflare 明确将它定位为开发测试功能：
-无 SLA、最多 200 个同时进行的请求，并且**不支持 Server-Sent Events（SSE）**。它适用于非流式 API
-调用；开启 opencodex WebSocket 后也可供支持的 WebSocket 客户端使用。常规流式 Responses 请求请使用
-Named Tunnel。详见 Cloudflare
-[Quick Tunnel 限制](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)。
+1. **自动配置。** 填入 Cloudflare 账户 ID、区域 ID、公网域名和可选的 Tunnel 名称，然后粘贴一个
+   临时的最小权限 Cloudflare API Token。opencodex 会自动创建远程管理的 Tunnel、Published
+   application、DNS 记录和本地连接器。API Token 只用于这一次配置请求：页面会立即清空，
+   opencodex 不会将它写入配置或凭据文件。配置完成后可以撤销该 Token。
+2. **使用已有 Tunnel。** 创建或选择一个远程管理的 Tunnel，将 Published application 映射到
+   `http://127.0.0.1:<opencodex 固定端口>`，然后在 API 访问页面填入 HTTPS 公网地址。可以粘贴
+   Tunnel runner token，也可以直接粘贴从 Cloudflare 复制的完整 `cloudflared` 安装命令；
+   opencodex 会从命令中提取 runner token。
 
-使用远程管理的 Named Tunnel 时，先在 Cloudflare 中把 Published application 配置为
-`https://<你的域名>` → `http://127.0.0.1:<opencodex 固定端口>`，然后用以下环境启动 opencodex：
+Named Tunnel 配置完成后，点击**重新配置**会默认进入“使用已有 Tunnel”，可以轮换 runner token，
+不会额外创建 Tunnel。若再次选择自动配置，系统会新建 Tunnel 和 DNS 记录，并要求明确确认；旧的
+Cloudflare 资源不会自动删除，请在验证新端点后手动清理。
+
+用于自动配置的临时 API Token 应只限定到本次使用的账户和区域，并且只授予以下权限：
+
+- **Account · Cloudflare Tunnel · Edit**
+- **Zone · DNS · Edit**
+
+参阅 Cloudflare 官方 [Tunnel 配置指南](https://developers.cloudflare.com/tunnel/setup/) 和
+[API Token 指南](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)。两种 UI 配置方式最终都只会在本地
+保留 Tunnel 专用的 runner token。它会写入 opencodex 配置目录下固定的 `cloudflare-tunnel-token`
+文件（默认为 `~/.opencodex/cloudflare-tunnel-token`），权限设为 `0600`；`config.json` 只保存指纹，
+不保存凭据原文。runner token 不会进入 `cloudflared` 命令行，也不会由管理 API 返回。
+
+配置完成后点击**开启公网访问**。Tunnel 运行时，页面端点和可复制的 curl 示例会自动切换到
+HTTPS 公网地址；关闭后恢复本地地址。Named Tunnel 使用固定的 opencodex 配置端口；如果启动时
+因端口占用而切换到备用端口，系统会拒绝开启公网访问。
+
+无界面或外部管理的部署也可以通过环境变量提供同一个 Named Tunnel：
 
 ```bash
 export OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN="..."
@@ -270,9 +293,13 @@ ocx start
 ```
 
 使用 `cloudflared` 2025.4.0 或更高版本时，也可以通过 `OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE` 代替环境中的 token；如果可执行文件不在
-`PATH`，设置 `OPENCODEX_CLOUDFLARED_PATH`。runner token 不会进入命令参数或管理 API 响应。
-Named Tunnel 的 origin 是 Cloudflare 侧的固定配置，因此当 opencodex 因端口占用切换到备用端口时，
-系统会拒绝开启 Tunnel。
+`PATH`，设置 `OPENCODEX_CLOUDFLARED_PATH`。
+
+Quick Tunnel 只作为显式的**高级开发模式**，永远不会默认开启。如需使用，先在
+`~/.opencodex/config.json` 中设置 `"cloudflareTunnel": { "mode": "quick" }`，再使用 API 访问页面的开关。
+它会创建临时的随机 `trycloudflare.com` 地址，无 SLA、最多 200 个同时进行的请求，并且
+**不支持 SSE**。它只适合短期非流式测试（或在开启 opencodex WebSocket 时供支持的 WebSocket 客户端使用）。
+详见 Cloudflare [Quick Tunnel 限制](https://developers.cloudflare.com/tunnel/setup/#quick-tunnels-development)。
 
 Cloudflare 公网入口只开放数据面：有效的 `X-OpenCodex-API-Key` 可以访问 `/v1/*`，仪表盘和
 `/api/*` 管理接口仍然只允许本地访问。

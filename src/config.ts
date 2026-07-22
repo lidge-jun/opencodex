@@ -539,8 +539,7 @@ export function getRuntimePortPath(): string {
   return resolveRuntimePortPath();
 }
 
-export function hardenConfigDir(): void {
-  const dir = getConfigDir();
+export function hardenConfigDir(dir = getConfigDir()): void {
   if (existsSync(dir)) {
     try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
     if (process.platform === "win32") {

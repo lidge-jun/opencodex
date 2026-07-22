@@ -57,9 +57,24 @@ import { applySystemEnvToggle } from "./system-env";
 import { probeHostname } from "./proxy-liveness";
 import {
   cloudflareTunnelController,
+  normalizeNamedPublicUrl,
   type CloudflareTunnelController,
   type CloudflareTunnelStatus,
 } from "./cloudflare-tunnel";
+import {
+  cloudflareTunnelStartOverrides,
+  replaceStoredCloudflareTunnelToken,
+  resolveCloudflareTunnelSetup,
+  type ResolvedCloudflareTunnelSetup,
+  type StoredTunnelTokenChange,
+} from "./cloudflare-setup";
+import {
+  cleanupProvisionedCloudflareTunnel,
+  CloudflareProvisionError,
+  provisionCloudflareNamedTunnel,
+  type CloudflareProvisionInput,
+  type CloudflareProvisionResult,
+} from "./cloudflare-provision";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -71,6 +86,18 @@ export const VERSION = (() => {
   }
 })();
 
+let cloudflareSetupInProgress = false;
+
+function withNoStore(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   refreshCodexCatalog?: () => Promise<void>;
@@ -81,6 +108,9 @@ export interface ManagementApiDeps {
   listenPort?: number;
   cloudflareTunnel?: CloudflareTunnelController;
   persistConfig?: (config: OcxConfig) => void;
+  replaceCloudflareTunnelToken?: (input: unknown) => StoredTunnelTokenChange;
+  provisionCloudflareTunnel?: typeof provisionCloudflareNamedTunnel;
+  cleanupProvisionedCloudflareTunnel?: typeof cleanupProvisionedCloudflareTunnel;
 }
 
 function localResponsesEndpoint(config: Pick<OcxConfig, "hostname" | "port">, listenPort?: number): string {
@@ -92,16 +122,56 @@ function cloudflareTunnelPayload(
   status: CloudflareTunnelStatus,
   localEndpoint: string,
   desiredEnabled = false,
-  canEnable = false,
-): CloudflareTunnelStatus & { enabled: boolean; canEnable: boolean; endpoint: string } {
+  hasAdmissionSecret = false,
+  setup: ResolvedCloudflareTunnelSetup = {
+    mode: "named",
+    configured: false,
+    source: "none",
+    publicUrl: null,
+    supportsSse: true,
+  },
+): CloudflareTunnelStatus & {
+  enabled: boolean;
+  canEnable: boolean;
+  canConfigure: boolean;
+  endpoint: string;
+  configured: boolean;
+  setupRequired: boolean;
+  configurationSource: ResolvedCloudflareTunnelSetup["source"];
+  configurationEditable: boolean;
+  configuredPublicUrl: string | null;
+  originUrl: string;
+  setupError?: ResolvedCloudflareTunnelSetup["error"];
+} {
   const endpoint = status.status === "running" && status.publicUrl
     ? `${status.publicUrl.replace(/\/+$/, "")}/v1/responses`
     : localEndpoint;
-  const enabled = desiredEnabled
+  const enabled = (desiredEnabled && setup.configured)
     || status.status === "starting"
     || status.status === "running"
     || status.status === "stopping";
-  return { ...status, enabled, canEnable, endpoint };
+  const activeStatus = status.status !== "stopped" ? status : {
+    ...status,
+    mode: setup.mode,
+    supportsSse: setup.supportsSse,
+  };
+  return {
+    ...activeStatus,
+    enabled,
+    canEnable: hasAdmissionSecret && setup.configured,
+    canConfigure: hasAdmissionSecret && setup.source !== "environment",
+    endpoint,
+    configured: setup.configured,
+    setupRequired: !setup.configured,
+    configurationSource: setup.source,
+    configurationEditable: setup.source !== "environment"
+      && status.status !== "starting"
+      && status.status !== "running"
+      && status.status !== "stopping",
+    configuredPublicUrl: setup.publicUrl,
+    originUrl: localEndpoint.replace(/\/v1\/responses$/, ""),
+    ...(setup.error ? { setupError: setup.error } : {}),
+  };
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -255,20 +325,197 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   const tunnelController = deps.cloudflareTunnel ?? cloudflareTunnelController;
   const persistConfig = deps.persistConfig ?? saveConfig;
   const localEndpoint = localResponsesEndpoint(config, deps.listenPort);
-  const canEnableTunnel = !!config.apiKeys?.length || !!configuredApiAuthToken(config);
+  const hasAdmissionSecret = !!config.apiKeys?.length || !!configuredApiAuthToken(config);
+  let tunnelSetup = resolveCloudflareTunnelSetup(config);
+  const tunnelPayload = (
+    status = tunnelController.getStatus(),
+    desiredEnabled = config.cloudflareTunnel?.enabled === true,
+  ) => cloudflareTunnelPayload(status, localEndpoint, desiredEnabled, hasAdmissionSecret, tunnelSetup);
 
   if (url.pathname === "/api/cloudflare-tunnel" && req.method === "GET") {
-    return jsonResponse(cloudflareTunnelPayload(
-      tunnelController.getStatus(),
-      localEndpoint,
-      config.cloudflareTunnel?.enabled === true,
-      canEnableTunnel,
-    ));
+    return jsonResponse(tunnelPayload());
+  }
+
+  if (url.pathname === "/api/cloudflare-tunnel/setup" && req.method === "PUT") {
+    const respond = (data: unknown, status = 200) => withNoStore(jsonResponse(data, status, req, config));
+    if (cloudflareSetupInProgress) return respond({ ...tunnelPayload(), error: "Cloudflare setup is already in progress." }, 409);
+    if (tunnelSetup.source === "environment") {
+      return respond({ ...tunnelPayload(), error: "Cloudflare Tunnel configuration is managed by environment variables." }, 409);
+    }
+    const setupInitialStatus = tunnelController.getStatus().status;
+    if (setupInitialStatus !== "stopped" && setupInitialStatus !== "error") {
+      return respond({ ...tunnelPayload(), error: "Stop public access before changing Cloudflare Tunnel configuration." }, 409);
+    }
+
+    cloudflareSetupInProgress = true;
+    try {
+      if (setupInitialStatus === "error") {
+        try { await tunnelController.stop(); } catch { /* sanitized status checked below */ }
+        if (tunnelController.getStatus().status !== "stopped") {
+          return respond({ ...tunnelPayload(), error: "Cloudflare Tunnel could not be stopped safely for reconfiguration." }, 409);
+        }
+      }
+      let raw: unknown;
+      try { raw = await req.json(); } catch { return respond({ error: "invalid JSON body" }, 400); }
+      if (!isPlainRecord(raw)) return respond({ error: "body must be a JSON object" }, 400);
+      const method = raw.method;
+      if (method !== "token" && method !== "api") return respond({ error: "method must be token or api" }, 400);
+      const allowedFields = new Set(method === "token"
+        ? ["method", "publicUrl", "tunnelToken", "enable"]
+        : ["method", "apiToken", "accountId", "zoneId", "hostname", "tunnelName", "replaceExisting", "enable"]);
+      const unknownField = Object.keys(raw).find(field => !allowedFields.has(field));
+      if (unknownField) return respond({ error: `unknown field: ${unknownField}` }, 400);
+      if (raw.enable !== undefined && typeof raw.enable !== "boolean") {
+        return respond({ error: "enable must be a boolean" }, 400);
+      }
+      if (method === "api" && raw.replaceExisting !== undefined && typeof raw.replaceExisting !== "boolean") {
+        return respond({ error: "replaceExisting must be a boolean" }, 400);
+      }
+      if (method === "api" && tunnelSetup.source === "local" && raw.replaceExisting !== true) {
+        return respond({
+          ...tunnelPayload(),
+          error: "Automatic reconfiguration creates new Cloudflare resources. Confirm replaceExisting or use the existing Tunnel token method.",
+        }, 409);
+      }
+      const enable = raw.enable === true;
+      if (enable && !hasAdmissionSecret) {
+        return respond({ ...tunnelPayload(), error: "Create an opencodex API key before enabling public access." }, 409);
+      }
+      const actualPort = deps.listenPort ?? config.port ?? 10100;
+      if (actualPort !== (config.port ?? 10100)) {
+        return respond({
+          ...tunnelPayload(),
+          error: "Named Tunnel setup requires the configured opencodex port to be available. Stop the conflicting service and restart opencodex.",
+        }, 409);
+      }
+
+      const previousTunnelConfig = config.cloudflareTunnel ? { ...config.cloudflareTunnel } : undefined;
+      const restorePreviousConfig = () => {
+        if (previousTunnelConfig) config.cloudflareTunnel = previousTunnelConfig;
+        else delete config.cloudflareTunnel;
+      };
+      let tokenChange: StoredTunnelTokenChange | null = null;
+      let provisioned: CloudflareProvisionResult | null = null;
+      let provisionInput: CloudflareProvisionInput | null = null;
+      let publicUrl: string;
+      let tunnelToken: unknown;
+      if (method === "token") {
+        const normalizedUrl = normalizeNamedPublicUrl(typeof raw.publicUrl === "string" ? raw.publicUrl : undefined);
+        if (!normalizedUrl) return respond({ error: "publicUrl must be a valid HTTPS public origin" }, 400);
+        publicUrl = normalizedUrl;
+        tunnelToken = raw.tunnelToken;
+      } else {
+        if ([raw.apiToken, raw.accountId, raw.zoneId, raw.hostname]
+          .some(value => typeof value !== "string" || !value.trim())) {
+          return respond({ error: "apiToken, accountId, zoneId, and hostname are required" }, 400);
+        }
+        if (raw.tunnelName !== undefined && typeof raw.tunnelName !== "string") {
+          return respond({ error: "tunnelName must be a string" }, 400);
+        }
+        provisionInput = {
+          apiToken: (raw.apiToken as string).trim(),
+          accountId: (raw.accountId as string).trim(),
+          zoneId: (raw.zoneId as string).trim(),
+          hostname: (raw.hostname as string).trim(),
+          ...(typeof raw.tunnelName === "string" && raw.tunnelName.trim()
+            ? { tunnelName: raw.tunnelName.trim() }
+            : {}),
+        };
+        try {
+          provisioned = await (deps.provisionCloudflareTunnel ?? provisionCloudflareNamedTunnel)(
+            provisionInput,
+            `http://${probeHostname(config.hostname)}:${actualPort}`,
+          );
+        } catch (error) {
+          return respond({
+            ...tunnelPayload(),
+            error: error instanceof CloudflareProvisionError ? error.message : "Cloudflare Tunnel setup failed.",
+          }, 502);
+        }
+        publicUrl = provisioned.publicUrl;
+        tunnelToken = provisioned.tunnelToken;
+      }
+
+      try {
+        tokenChange = (deps.replaceCloudflareTunnelToken ?? replaceStoredCloudflareTunnelToken)(tunnelToken);
+      } catch {
+        if (provisioned && provisionInput) {
+          await (deps.cleanupProvisionedCloudflareTunnel ?? cleanupProvisionedCloudflareTunnel)(provisionInput, provisioned);
+        }
+        return respond({ error: "Cloudflare Tunnel token is invalid or could not be stored securely." }, 400);
+      }
+
+      const nextTunnelConfig: NonNullable<OcxConfig["cloudflareTunnel"]> = {
+        ...previousTunnelConfig,
+        version: 2,
+        enabled: false,
+        mode: "named",
+        publicUrl,
+        tokenFingerprint: tokenChange.fingerprint,
+      };
+      if (provisioned) {
+        nextTunnelConfig.managedTunnelId = provisioned.tunnelId;
+        nextTunnelConfig.managedDnsRecordId = provisioned.dnsRecordId;
+      } else {
+        delete nextTunnelConfig.managedTunnelId;
+        delete nextTunnelConfig.managedDnsRecordId;
+      }
+      config.cloudflareTunnel = nextTunnelConfig;
+      try {
+        persistConfig(config);
+      } catch {
+        restorePreviousConfig();
+        let rollbackFailed = false;
+        try { tokenChange.rollback(); } catch { rollbackFailed = true; }
+        if (provisioned && provisionInput) {
+          await (deps.cleanupProvisionedCloudflareTunnel ?? cleanupProvisionedCloudflareTunnel)(provisionInput, provisioned);
+        }
+        return respond({
+          error: rollbackFailed
+            ? "Cloudflare setup could not be saved and local credential rollback failed. Public access remains disabled."
+            : "Cloudflare setup could not be saved. Public access remains disabled.",
+        }, 500);
+      }
+
+      tunnelSetup = resolveCloudflareTunnelSetup(config);
+      if (!tunnelSetup.configured) {
+        return respond({ ...tunnelPayload(), error: "Stored Cloudflare Tunnel credentials did not pass verification." }, 500);
+      }
+      if (!enable) return respond(tunnelPayload());
+
+      try {
+        await tunnelController.start({
+          originUrl: `http://${probeHostname(config.hostname)}:${actualPort}`,
+          actualPort,
+          configuredPort: config.port ?? 10100,
+          ...cloudflareTunnelStartOverrides(tunnelSetup),
+        });
+      } catch {
+        // Sanitized controller state is returned below.
+      }
+      if (tunnelController.getStatus().status === "running") {
+        config.cloudflareTunnel = { ...config.cloudflareTunnel, enabled: true };
+        try {
+          persistConfig(config);
+        } catch {
+          config.cloudflareTunnel = { ...config.cloudflareTunnel, enabled: false };
+          try { await tunnelController.stop(); } catch { /* sanitized below */ }
+          return respond({ ...tunnelPayload(tunnelController.getStatus(), false), error: "Tunnel started but its enabled state could not be saved, so it was stopped." }, 500);
+        }
+      }
+      const payload = tunnelPayload();
+      return respond(payload, payload.status === "error" ? 503 : 200);
+    } finally {
+      cloudflareSetupInProgress = false;
+    }
   }
 
   if (url.pathname === "/api/cloudflare-tunnel" && req.method === "PUT") {
     let raw: unknown;
     try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (cloudflareSetupInProgress) {
+      return jsonResponse({ ...tunnelPayload(), error: "Cloudflare setup is already in progress." }, 409);
+    }
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
     const unknownField = Object.keys(raw).find(field => field !== "enabled");
     if (unknownField) return jsonResponse({ error: `unknown field: ${unknownField}` }, 400);
@@ -276,15 +523,16 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "enabled boolean is required" }, 400);
     }
-    if (body.enabled && !canEnableTunnel) {
+    if (body.enabled && !hasAdmissionSecret) {
       return jsonResponse({
-        ...cloudflareTunnelPayload(
-          tunnelController.getStatus(),
-          localEndpoint,
-          config.cloudflareTunnel?.enabled === true,
-          canEnableTunnel,
-        ),
+        ...tunnelPayload(),
         error: "Create an opencodex API key before enabling public access.",
+      }, 409);
+    }
+    if (body.enabled && !tunnelSetup.configured) {
+      return jsonResponse({
+        ...tunnelPayload(),
+        error: "Configure a Named Cloudflare Tunnel before enabling public access.",
       }, 409);
     }
     const previousTunnelConfig = config.cloudflareTunnel
@@ -302,6 +550,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
           originUrl: `http://${probeHostname(config.hostname)}:${actualPort}`,
           actualPort,
           configuredPort: config.port ?? 10100,
+          ...cloudflareTunnelStartOverrides(tunnelSetup),
         });
       } catch {
         // The controller normally returns sanitized state, but preserve a safe response if an
@@ -316,12 +565,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
           // desired state and operators could reasonably believe the failed action was rolled back.
           restorePreviousTunnelConfig();
           try { await tunnelController.stop(); } catch { /* status remains sanitized below */ }
-          const payload = cloudflareTunnelPayload(
-            tunnelController.getStatus(),
-            localEndpoint,
-            previousTunnelConfig?.enabled === true,
-            canEnableTunnel,
-          );
+          tunnelSetup = resolveCloudflareTunnelSetup(config);
+          const payload = tunnelPayload(tunnelController.getStatus(), previousTunnelConfig?.enabled === true);
           return jsonResponse({
             ...payload,
             error: payload.status === "error"
@@ -346,12 +591,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         // disable remains visibly retryable instead of appearing off and silently re-enabling on
         // the next process start.
         restorePreviousTunnelConfig();
-        const payload = cloudflareTunnelPayload(
-          tunnelController.getStatus(),
-          localEndpoint,
-          previousTunnelConfig?.enabled === true,
-          canEnableTunnel,
-        );
+        tunnelSetup = resolveCloudflareTunnelSetup(config);
+        const payload = tunnelPayload(tunnelController.getStatus(), previousTunnelConfig?.enabled === true);
         return jsonResponse({
           ...payload,
           error: payload.status === "error"
@@ -360,12 +601,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         }, 500);
       }
     }
-    const payload = cloudflareTunnelPayload(
-      tunnelController.getStatus(),
-      localEndpoint,
-      config.cloudflareTunnel?.enabled === true,
-      canEnableTunnel,
-    );
+    tunnelSetup = resolveCloudflareTunnelSetup(config);
+    const payload = tunnelPayload();
     return jsonResponse(payload, payload.status === "error" ? 503 : 200);
   }
 
@@ -1816,8 +2053,8 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     const tunnel = tunnelController.getStatus();
     return jsonResponse({
       keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })),
-      endpoint: cloudflareTunnelPayload(tunnel, localEndpoint, config.cloudflareTunnel?.enabled === true, canEnableTunnel).endpoint,
-      tunnel: cloudflareTunnelPayload(tunnel, localEndpoint, config.cloudflareTunnel?.enabled === true, canEnableTunnel),
+      endpoint: tunnelPayload(tunnel).endpoint,
+      tunnel: tunnelPayload(tunnel),
     }, 200, req, config);
   }
 

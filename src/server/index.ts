@@ -123,6 +123,7 @@ import { handleImages } from "./images";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
 import { cloudflareTunnelController, isCloudflareTunnelRequest } from "./cloudflare-tunnel";
+import { cloudflareTunnelStartOverrides, resolveCloudflareTunnelSetup } from "./cloudflare-setup";
 import { probeHostname } from "./proxy-liveness";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -633,13 +634,17 @@ export function startServer(port?: number) {
 
   if (config.cloudflareTunnel?.enabled) {
     const hasAdmissionSecret = !!config.apiKeys?.length || !!process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
+    const tunnelSetup = resolveCloudflareTunnelSetup(config);
     if (!hasAdmissionSecret) {
       console.warn("[cloudflare] public access was enabled previously, but no opencodex API key is available; tunnel not started");
+    } else if (!tunnelSetup.configured) {
+      console.warn("[cloudflare] Named Tunnel setup is incomplete; public access was not started. Open the API page to configure Cloudflare.");
     } else {
       void cloudflareTunnelController.start({
         originUrl: `http://${probeHostname(config.hostname)}:${actualPort}`,
         actualPort,
         configuredPort: config.port ?? 10100,
+        ...cloudflareTunnelStartOverrides(tunnelSetup),
       }).catch(() => {
         // Sanitized status is available to the local API page; raw child details stay private.
       });

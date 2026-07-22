@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isIP } from "node:net";
 import { join } from "node:path";
@@ -23,6 +23,8 @@ export interface CloudflareTunnelStartOptions {
   originUrl: string;
   actualPort: number;
   configuredPort: number;
+  mode?: CloudflareTunnelMode;
+  namedTunnel?: { publicUrl: string; tokenFile: string };
 }
 
 export interface CloudflareTunnelController {
@@ -38,6 +40,7 @@ export interface CloudflareTunnelDeps {
   platform?: NodeJS.Platform;
   homeDir?: string;
   exists?: (path: string) => boolean;
+  readFile?: (path: string) => string;
   now?: () => Date;
   startupTimeoutMs?: number;
   namedReadyDelayMs?: number;
@@ -157,21 +160,32 @@ export function parseCloudflaredReadyUrl(output: string): string | null {
 
 export function buildCloudflaredLaunch(
   options: CloudflareTunnelStartOptions,
-  deps: Pick<CloudflareTunnelDeps, "env" | "homeDir" | "exists"> = {},
+  deps: Pick<CloudflareTunnelDeps, "env" | "homeDir" | "exists" | "readFile"> = {},
 ): LaunchSpec | CloudflareTunnelStatus {
   const env = deps.env ?? process.env;
-  const mode = selectedMode(env);
+  const mode = options.mode ?? selectedMode(env);
   const binary = env.OPENCODEX_CLOUDFLARED_PATH?.trim() || "cloudflared";
   const childEnv: NodeJS.ProcessEnv = { ...env };
-  const token = env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN?.trim();
-  const tokenFile = env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE?.trim();
-  const publicUrlValue = env.OPENCODEX_CLOUDFLARE_PUBLIC_URL?.trim();
+  let token = options.namedTunnel ? undefined : env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN?.trim();
+  const tokenFile = options.namedTunnel ? undefined : env.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE?.trim();
+  const publicUrlValue = options.namedTunnel?.publicUrl ?? env.OPENCODEX_CLOUDFLARE_PUBLIC_URL?.trim();
   delete childEnv.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN;
   delete childEnv.OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE;
   // Ambient official cloudflared credentials must never select or conflict with the explicit
   // opencodex mode. Re-add only the one credential source chosen below.
   delete childEnv.TUNNEL_TOKEN;
   delete childEnv.TUNNEL_TOKEN_FILE;
+
+  if (options.namedTunnel) {
+    try {
+      token = (deps.readFile ?? (path => readFileSync(path, "utf8")))(options.namedTunnel.tokenFile).trim();
+    } catch {
+      return sanitizedError("Stored Cloudflare Tunnel credentials could not be read.", "named");
+    }
+    if (!/^eyJ[A-Za-z0-9._~+/=-]{30,16381}$/.test(token)) {
+      return sanitizedError("Stored Cloudflare Tunnel credentials are invalid.", "named");
+    }
+  }
 
   if (mode === "named") {
     if ((!token && !tokenFile) || (token && tokenFile) || !publicUrlValue) {
@@ -244,7 +258,7 @@ function hostFromValue(value: string | null): string | null {
 
 export class ManagedCloudflareTunnelController implements CloudflareTunnelController {
   private readonly deps: Required<Pick<CloudflareTunnelDeps,
-    "spawnFn" | "fetchFn" | "env" | "platform" | "homeDir" | "exists" | "now" | "startupTimeoutMs" | "namedReadyDelayMs" | "stopTimeoutMs">>;
+    "spawnFn" | "fetchFn" | "env" | "platform" | "homeDir" | "exists" | "readFile" | "now" | "startupTimeoutMs" | "namedReadyDelayMs" | "stopTimeoutMs">>;
   private state: CloudflareTunnelStatus;
   private child: ChildProcess | null = null;
   private startPromise: Promise<CloudflareTunnelStatus> | null = null;
@@ -263,6 +277,7 @@ export class ManagedCloudflareTunnelController implements CloudflareTunnelContro
       platform: deps.platform ?? process.platform,
       homeDir: deps.homeDir ?? homedir(),
       exists: deps.exists ?? existsSync,
+      readFile: deps.readFile ?? (path => readFileSync(path, "utf8")),
       now: deps.now ?? (() => new Date()),
       startupTimeoutMs: deps.startupTimeoutMs ?? 20_000,
       namedReadyDelayMs: deps.namedReadyDelayMs ?? 750,

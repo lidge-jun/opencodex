@@ -465,8 +465,17 @@ export interface OcxConfig {
   websockets?: boolean;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
   apiKeys?: Array<{ id: string; name: string; key: string; createdAt: string }>;
-  /** Persist the dashboard's Cloudflare public-access toggle across proxy restarts. */
-  cloudflareTunnel?: { enabled?: boolean };
+  /** Persist Cloudflare public access. Named Tunnel is the default; Quick is explicit dev-only. */
+  cloudflareTunnel?: {
+    version?: 2;
+    enabled?: boolean;
+    mode?: "named" | "quick";
+    publicUrl?: string;
+    /** SHA-256 of the fixed local runner-token file; prevents URL/token crash mismatches. */
+    tokenFingerprint?: string;
+    managedTunnelId?: string;
+    managedDnsRecordId?: string;
+  };
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
   /**
