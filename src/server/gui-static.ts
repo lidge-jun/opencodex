@@ -92,6 +92,7 @@ export function rootFallbackPayload() {
       health: "/healthz",
       models: "/v1/models",
       responses: "/v1/responses",
+      chatCompletions: "/v1/chat/completions",
       management: "/api/*",
     },
   };
