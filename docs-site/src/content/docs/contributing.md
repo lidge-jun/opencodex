@@ -77,6 +77,12 @@ bun run release <version> --publish # publish after the CI-gated dry run is unde
 bun run release:watch               # watch the newest Release workflow run
 ```
 
+## Project maintainers
+
+The current maintainers, their responsibilities, and the review and merge policy are documented in
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). GitHub review
+ownership for the repository and security-sensitive paths is declared in `.github/CODEOWNERS`.
+
 ## Conventions
 
 - **ES Modules only** (`import`/`export`), TypeScript, `strict` mode. Keep `bun x tsc --noEmit` clean.

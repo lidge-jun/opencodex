@@ -1,0 +1,18 @@
+# Default reviewers
+* @lidge-jun @Ingwannu
+
+# Repository automation and release security
+/.github/ @lidge-jun @Ingwannu
+/scripts/release.ts @lidge-jun @Ingwannu
+/package.json @lidge-jun @Ingwannu
+/bun.lock @lidge-jun @Ingwannu
+
+# Authentication, credentials, and management API
+/src/oauth/ @lidge-jun @Ingwannu
+/src/codex/auth-context.ts @lidge-jun @Ingwannu
+/src/server/auth-cors.ts @lidge-jun @Ingwannu
+/src/server/management-api.ts @lidge-jun @Ingwannu
+
+# Governance and security policy
+/MAINTAINERS.md @lidge-jun @Ingwannu
+/SECURITY.md @lidge-jun @Ingwannu
