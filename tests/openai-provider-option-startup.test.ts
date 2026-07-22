@@ -262,8 +262,9 @@ describe("OpenAI provider option startup coordinator", () => {
       "/virtual/config.json": "current",
       "/virtual/config.json.pre-openai-tiers-v2.bak": "older",
     });
-    // Stale backup (config was rewritten by ocx init) is replaced, not a crash (issue #257).
-    expect(backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io)).toBe("reused");
+    // Stale backup (config was rewritten by ocx init) is deleted and recreated atomically
+    // with proper permissions, not written in-place (issue #257).
+    expect(backupConfigBeforeOpenAiTierMigration("/virtual/config.json", different.io)).toBe("created");
     expect(new TextDecoder().decode(different.files.get("/virtual/config.json.pre-openai-tiers-v2.bak")!.bytes)).toBe("current");
   });
 

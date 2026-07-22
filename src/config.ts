@@ -182,10 +182,12 @@ export function backupConfigBeforeOpenAiTierMigration(
       // The backup is a snapshot of a config that no longer exists (e.g. ocx init
       // wrote a fresh config). Replace the stale backup instead of crashing.
       console.warn("[openai-provider-migration] Replacing stale pre-migration backup (config was rewritten since last migration).");
-      io.write(backup, original);
-      io.harden(backup);
+      // Delete the stale backup and fall through to the atomic creation path below,
+      // which creates a hardened temp file before writing secrets (issue #257).
+      io.unlink(backup);
+    } else {
+      return "reused";
     }
-    return "reused";
   }
   const temp = `${backup}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let published = false;
