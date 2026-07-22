@@ -25,11 +25,12 @@ test("proxy mode emits the dummy token plus the conditional host-managed flag", 
   expect(env).not.toContain("\nexport CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1");
 });
 
-test("subscription mode keeps the login comment and still carries the conditional flag", () => {
+test("subscription mode keeps native login without claiming host-managed auth", () => {
   const env = buildManualEnv(state());
   expect(env).toContain("# no ANTHROPIC_AUTH_TOKEN: your claude.ai login (and connectors) stay active");
   expect(env).not.toContain("export ANTHROPIC_AUTH_TOKEN=");
-  expect(env).toContain(CONDITIONAL_FLAG_LINE);
+  expect(env).not.toContain(CONDITIONAL_FLAG_LINE);
+  expect(env).not.toContain("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
 });
 
 test("model env slots and auto-compact window are appended before the claude launch line", () => {
