@@ -9,6 +9,21 @@ export interface OAuthAccountIdentity {
   email?: string;
 }
 
+export function partitionAccountProviderRows<T extends { id: string; label: string }>(
+  rows: readonly T[],
+  status: Readonly<Record<string, { loggedIn?: boolean } | undefined>>,
+  needsReauth: Readonly<Record<string, boolean | undefined>>,
+  query = "",
+): { connected: T[]; available: T[] } {
+  const normalizedQuery = query.trim().toLowerCase();
+  const connected = (row: T) => status[row.id]?.loggedIn === true || needsReauth[row.id] === true;
+  return {
+    connected: rows.filter(connected),
+    available: rows.filter(row => !connected(row)
+      && (!normalizedQuery || row.id.toLowerCase().includes(normalizedQuery) || row.label.toLowerCase().includes(normalizedQuery))),
+  };
+}
+
 /**
  * Resolves the one authentication surface a workspace provider actually owns.
  * In particular, a custom forward proxy must never inherit the global Codex

@@ -53,6 +53,7 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
+import { restartCodexApp, type RestartCodexAppResult } from "../codex/restart-app";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -70,6 +71,7 @@ export interface ManagementApiDeps {
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
+  restartCodexApp?: () => RestartCodexAppResult | Promise<RestartCodexAppResult>;
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -260,6 +262,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       ...result,
       staleAppServerHint: "If Codex App still shows an older model list, restart its long-lived app-server process after sync.",
     }, result.ok ? 200 : 500);
+  }
+
+  if (url.pathname === "/api/codex/restart" && req.method === "POST") {
+    const result = await (deps.restartCodexApp ?? restartCodexApp)();
+    return jsonResponse(result, result.ok ? 200 : 500);
   }
 
   if (url.pathname === "/api/update/check" && req.method === "GET") {

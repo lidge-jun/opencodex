@@ -18,6 +18,8 @@ export interface CatalogPreset {
   defaultModel?: string;
   /** "oauth": account login · "forward": ChatGPT passthrough · "key": API key · "local": local scaffold. */
   auth: "oauth" | "forward" | "key" | "local";
+  /** True when this preset supports API-key setup even if OAuth is its primary auth mode. */
+  supportsApiKey?: boolean;
   /** OAuth registry id (for auth === "oauth"). */
   oauthProvider?: string;
   /** Where to create/copy the API key (for auth === "key" catalog providers). */
@@ -66,6 +68,11 @@ export function filterPresets(presets: CatalogPreset[], query: string): CatalogP
   const q = query.trim().toLowerCase();
   if (!q) return presets;
   return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+}
+
+/** API-key capability is distinct from the preset's primary auth mode. */
+export function supportsApiKeySetup(preset: CatalogPreset): boolean {
+  return preset.auth === "key" || preset.supportsApiKey === true;
 }
 
 /** Deterministic catalog order: label A→Z (case-insensitive), id as tiebreak. */

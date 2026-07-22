@@ -12,9 +12,9 @@ export function Switch({ on, onClick, disabled, label }: { on: boolean; onClick:
   );
 }
 
-export function Notice({ tone, children }: { tone: "ok" | "err"; children: ReactNode }) {
+export function Notice({ tone, children }: { tone: "ok" | "warn" | "err"; children: ReactNode }) {
   return (
-    <div className={`notice ${tone === "ok" ? "notice-ok" : "notice-err"}`} role="status">
+    <div className={`notice notice-${tone}`} role="status">
       {tone === "ok" ? <IconCheck /> : <IconAlert />}
       <span>{children}</span>
     </div>

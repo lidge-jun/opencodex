@@ -51,6 +51,8 @@ export interface DerivedProviderPreset {
   baseUrl: string;
   defaultModel?: string;
   auth: "oauth" | "forward" | "key" | "local";
+  /** Provider can be configured with an API key, including OAuth presets with an explicit key override. */
+  supportsApiKey?: boolean;
   codexAccountMode?: CodexAccountMode;
   oauthProvider?: string;
   dashboardUrl?: string;
@@ -186,7 +188,7 @@ export function deriveOAuthIds(): string[] {
 
 export function deriveProviderPresets(): DerivedProviderPreset[] {
   const presets = PROVIDER_REGISTRY
-    .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset)
+    .filter(entry => entry.featured || entry.authKind === "key" || entry.allowKeyAuthOverride || entry.dashboardPreset)
     .map(entryToPreset);
   return [...dedupePresets(presets), customPreset()];
 }
@@ -253,6 +255,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
+    ...(entry.authKind === "key" || entry.allowKeyAuthOverride ? { supportsApiKey: true } : {}),
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.codexAccountMode ? { provider: providerConfigSeed(entry) } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
@@ -277,7 +280,7 @@ function dedupePresets(presets: DerivedProviderPreset[]): DerivedProviderPreset[
 }
 
 function customPreset(): DerivedProviderPreset {
-  return { id: "custom", label: "Custom provider", adapter: "openai-chat", baseUrl: "", auth: "key" };
+  return { id: "custom", label: "Custom provider", adapter: "openai-chat", baseUrl: "", auth: "key", supportsApiKey: true };
 }
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {
