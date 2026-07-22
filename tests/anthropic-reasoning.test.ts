@@ -58,6 +58,22 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.top_p).toBeUndefined();
   });
 
+  test.each([
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+  ])("adaptive-thinking model %s defaults max_tokens well above 8192 when Codex omits it", async (modelId) => {
+    const b = await bodyOf(parsed("xhigh", {}, modelId));
+    expect(b.max_tokens).toBe(128_000);
+  });
+
+  test("adaptive-thinking model preserves explicit maxOutputTokens", async () => {
+    const b = await bodyOf(parsed("high", { maxOutputTokens: 20_000 }, "claude-fable-5"));
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.max_tokens).toBe(20_000);
+  });
+
   test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", async () => {
     const b = await bodyOf(parsed("minimal", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "low" });

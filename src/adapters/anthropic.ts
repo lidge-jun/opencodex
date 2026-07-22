@@ -35,6 +35,13 @@ function toAnthropicContentPart(p: OcxContentPart): unknown {
 
 /** Default `max_tokens` when Codex omits `max_output_tokens`. */
 const DEFAULT_MAX_TOKENS = 8192;
+/**
+ * Default `max_tokens` for adaptive-thinking models (Fable 5, Sonnet 5, Opus 4.7+)
+ * when Codex omits `max_output_tokens`. Adaptive path previously left the 8192 default
+ * in place, so long parent turns hit max_tokens mid-work and finished with no final message.
+ * Matches Anthropic metadata max for these models (128k).
+ */
+const ADAPTIVE_DEFAULT_MAX_TOKENS = 128_000;
 /** Safe ceiling for `max_tokens` (thinking + visible output) across current Claude 4.x models. */
 const REASONING_MAX_TOKENS_CEILING = 32_000;
 /** Anthropic's documented minimum `thinking.budget_tokens`. */
@@ -629,9 +636,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (typeof parsed.options.reasoning === "string" && parsed.options.reasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
-          // `thinking.type: "enabled"` outright — no budget/max_tokens re-sizing needed.
+          // `thinking.type: "enabled"` outright. They still enforce max_tokens as a hard cap
+          // on thinking + visible output, so leave a large default when Codex omits one.
           body.thinking = { type: "adaptive" };
           body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
+          if (parsed.options.maxOutputTokens === undefined) {
+            body.max_tokens = ADAPTIVE_DEFAULT_MAX_TOKENS;
+          }
         } else {
           // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
