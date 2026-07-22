@@ -453,7 +453,7 @@ export function summarizeUsage(
   const { since } = rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
-    if (surface === "claude") return entry.surface === "claude";
+    if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "codex") return entry.surface !== "claude";
     return true;
   });

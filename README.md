@@ -228,7 +228,7 @@ next Codex session. opencodex keeps these behaviors:
 ## Highlights
 
 - **Use any LLM with Codex.** 5 protocol adapters cover Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — that's 40+ providers out of the box.
-- **Use any LLM with Claude Code too.** The same daemon serves the Anthropic Messages API (`/v1/messages` + `count_tokens`): `ocx claude` launches Claude Code fully wired, and routed models appear in its native `/model` picker via gateway model discovery (`claude-ocx-<provider>--<model>` aliases, Claude Code 2.1.129+). Configure slots and model maps on the dashboard's Claude page.
+- **Use any LLM with Claude too.** `ocx claude` launches Claude Code through the proxy. The Claude dashboard also has a separate Desktop profile with Opus, Fable, Sonnet, and Haiku families, accessible drag/keyboard controls, and JSON import/export.
 - **Pool ChatGPT accounts safely.** Keep existing Codex threads on one account while new sessions
   can auto-pick a lower-usage account from the pool, with quota refresh and non-PII request labels.
 - **Log in once, skip the API key.** OAuth support for xAI, Anthropic, and Kimi means you can authenticate with your existing account. Tokens auto-refresh. Or forward your `codex login`, paste an API key, or use `${ENV_VAR}` references — your call.
@@ -291,9 +291,33 @@ ocx logout <provider>          # remove a stored login
 ocx account <list|current|use> # list/switch accounts & API-key pools (masked; also refresh/auto-switch/remove/add-key)
 ocx gui                        # open the web dashboard
 ocx claude [args...]           # launch Claude Code wired to the proxy (model discovery on)
+ocx claude desktop             # save and apply the Claude Desktop four-family profile
 ocx service [install|start|stop|status|uninstall]   # install/update/start background service
 ocx update [--tag preview]     # update opencodex; preview installs stay on @preview
 ```
+
+### Claude Desktop profile
+
+The dashboard's **Claude → Desktop** view sorts routes into four families: Opus, Fable, Sonnet,
+and Haiku. New routes start in Opus, and the first Opus route is the initial application default.
+Every non-empty family has one default. You can drag a route, or use its visible move control with
+a mouse, touch, or keyboard. **Save and apply** writes the profile to Claude Desktop. JSON export
+and import are available for backup or moving the same setup to another machine.
+
+```bash
+ocx claude desktop [apply]                         # save and apply the current profile
+ocx claude desktop show [--json]                   # inspect routes, families, and defaults
+ocx claude desktop move <route> <family> [--default]
+ocx claude desktop default <family> <route|none>
+ocx claude desktop export <path|->                 # use - to write JSON to stdout
+ocx claude desktop import <path> [--apply]         # validate, then save; optionally apply
+```
+
+Families are `opus`, `fable`, `sonnet`, and `haiku`. Non-Anthropic routes receive stable
+Claude-shaped aliases with a synthetic 2026 date slot; that date is an internal slot, not the
+model's release date. Real Anthropic Claude routes keep their real model ids. Use `none` only for
+an empty family; a non-empty family always needs a default. The older apply forms
+`ocx claude desktop --static`, `--hybrid`, and `--discovery-only` remain supported.
 
 ### Autostart: service vs shim
 

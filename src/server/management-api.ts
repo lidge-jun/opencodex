@@ -47,7 +47,8 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
+import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
+import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
@@ -217,6 +218,30 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         // Keep routes available through a provider-discovery blip. A later
         // launch-time sync restores any context markers missing from this pass.
         injectClaudeAgentDefs(config, {});
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /** Best-effort Desktop 3P config auto-reconcile when providers change. */
+  async function autoApplyDesktopBestEffort(): Promise<void> {
+    try {
+      if (config.claudeCode?.desktopAutoApply === false) return;
+      if (!config.claudeCode?.desktopProfile) return;
+      const { writeDesktop3pConfig } = await import("../claude/desktop-3p");
+      const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
+      const allModels = await fetchAllModels(config);
+      const routed = filterCatalogVisibleModels(allModels, config).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow }));
+      const result = writeDesktop3pConfig(
+        config.port ?? 10100,
+        [...visibleNativeSlugs(config)],
+        routed,
+        config.apiKeys?.[0]?.key,
+        "static",
+        config.claudeCode.desktopProfile,
+      );
+      if (result.written && result.fingerprint) {
+        config.claudeCode = { ...config.claudeCode, desktopProfile: { ...config.claudeCode.desktopProfile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
+        saveConfig(config);
       }
     } catch { /* best-effort */ }
   }
@@ -1199,7 +1224,126 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     save(config);
     await refreshCodexCatalogBestEffort();
     await syncClaudeAgentDefsBestEffort();
+    await autoApplyDesktopBestEffort();
     return jsonResponse({ ok: true, applied: chosen });
+  }
+
+  // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
+  if (url.pathname === "/api/claude-desktop" && req.method === "GET") {
+    try {
+      const state = await buildClaudeDesktopState(config);
+      const runtimePort = Number(url.port) || config.port;
+      return jsonResponse({ ...state, port: runtimePort });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/claude-desktop" && req.method === "PUT") {
+    let body: { profile?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try {
+      const { parseDesktopProfile, reconcileDesktopProfile } = await import("../claude/desktop-profile");
+      const parsed = parseDesktopProfile(body.profile);
+      const current = await buildClaudeDesktopState(config);
+      for (const model of current.models.filter(item => !item.available)) {
+        const before = current.profile.assignments[model.route];
+        const after = parsed.assignments[model.route];
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          throw new Error(`현재 사용할 수 없는 모델은 옮길 수 없습니다: ${model.route}`);
+        }
+      }
+      for (const family of ["opus", "fable", "sonnet", "haiku"] as const) {
+        const nextDefault = parsed.defaults[family];
+        const target = nextDefault ? current.models.find(model => model.route === nextDefault) : undefined;
+        if (target && !target.available && current.profile.defaults[family] !== nextDefault) {
+          throw new Error(`현재 사용할 수 없는 모델은 기본값으로 지정할 수 없습니다: ${nextDefault}`);
+        }
+      }
+      const state = await buildClaudeDesktopState(config, parsed);
+      config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
+      saveConfig(config);
+      const saved = await buildClaudeDesktopState(config);
+      const runtimePort = Number(url.port) || config.port;
+      return jsonResponse({ ok: true, ...saved, port: runtimePort });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
+    try {
+      const state = await buildClaudeDesktopState(config);
+      config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
+      saveConfig(config);
+      const { writeDesktop3pConfig } = await import("../claude/desktop-3p");
+      const { visibleNativeSlugs } = await import("../codex/catalog");
+      const routed = state.models
+        .filter(model => model.available && !model.route.startsWith("native/"))
+        .map(model => {
+          const slash = model.route.indexOf("/");
+          return { provider: model.route.slice(0, slash), id: model.route.slice(slash + 1), contextWindow: model.contextWindow };
+        });
+      const result = writeDesktop3pConfig(
+        Number(url.port) || config.port,
+        [...visibleNativeSlugs(config)],
+        routed,
+        config.apiKeys?.[0]?.key,
+        "static",
+        state.profile,
+      );
+      if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
+      // Persist applied fingerprint + timestamp so GUI can show saved-vs-applied state.
+      if (result.fingerprint) {
+        config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: { ...state.profile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
+        saveConfig(config);
+      }
+      return jsonResponse({ ok: true, saved: true, applied: true, path: result.path, fingerprint: result.fingerprint });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+
+  // Desktop applied-state + health status.
+  if (url.pathname === "/api/claude-desktop/status" && req.method === "GET") {
+    try {
+      const { readFileSync, existsSync } = await import("node:fs");
+      const { createHash } = await import("node:crypto");
+      const { join } = await import("node:path");
+      const { homedir } = await import("node:os");
+      const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
+        || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+      const metaPath = join(libraryPath, "_meta.json");
+      let onDiskFingerprint: string | null = null;
+      let configPath: string | null = null;
+      if (existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+          const entry = Array.isArray(meta.entries) ? meta.entries.find((e: { name?: string }) => e?.name === "opencodex") : undefined;
+          if (entry?.id) {
+            configPath = join(libraryPath, `${entry.id}.json`);
+            if (existsSync(configPath)) {
+              const onDisk = readFileSync(configPath, "utf8");
+              onDiskFingerprint = createHash("sha256").update(onDisk).digest("hex").slice(0, 16);
+            }
+          }
+        } catch { /* unreadable metadata */ }
+      }
+      const savedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
+      const appliedAt = config.claudeCode?.desktopProfile?.appliedAt ?? null;
+      const stale = savedFingerprint !== null && onDiskFingerprint !== null && savedFingerprint !== onDiskFingerprint;
+      const { getDesktopHealth } = await import("../claude/desktop-health");
+      const health = getDesktopHealth();
+      return jsonResponse({
+        applied: savedFingerprint !== null,
+        appliedAt,
+        savedFingerprint,
+        onDiskFingerprint,
+        configPath,
+        stale,
+        health,
+      });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
   }
 
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
@@ -1890,4 +2034,45 @@ function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProviderConfi
   if (!matchesRegistryStaticHeaders) return provider;
   const { headers: _headers, ...rest } = provider;
   return rest;
+}
+
+/** Shared Desktop profile DTO builder for the management API and CLI. */
+export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxClaudeDesktopProfile) {
+  const { filterCatalogVisibleModels, visibleNativeSlugs } = await import("../codex/catalog");
+  const { reconcileDesktopProfile, renderDesktopProfile } = await import("../claude/desktop-profile");
+  const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
+  const profileModels: DesktopProfileModel[] = [
+    ...visibleNativeSlugs(config).map(id => ({ route: `native/${id}`, label: `${id} (native)` })),
+    ...routed.map(model => ({
+      route: `${model.provider}/${model.id}`,
+      label: `${model.id} (${model.provider})`,
+      ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
+    })),
+  ];
+  const profile = reconcileDesktopProfile(stored ?? config.claudeCode?.desktopProfile, profileModels);
+  const available = new Set(profileModels.map(model => model.route));
+  const modelByRoute = new Map(profileModels.map(model => [model.route, model]));
+  // Effort support: routed models with a non-empty reasoningEfforts ladder support effort;
+  // native models always support it (Anthropic native effort).
+  const effortByRoute = new Map<string, boolean>();
+  for (const m of routed) {
+    effortByRoute.set(`${m.provider}/${m.id}`, Array.isArray(m.reasoningEfforts) && m.reasoningEfforts.length > 0);
+  }
+  for (const id of visibleNativeSlugs(config)) {
+    effortByRoute.set(`native/${id}`, true);
+  }
+  const models = Object.keys(profile.assignments).sort().map(route => ({
+    route,
+    label: modelByRoute.get(route)?.label ?? route,
+    available: available.has(route),
+    ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
+    effortSupported: effortByRoute.get(route) ?? false,
+    assignment: profile.assignments[route]!,
+  }));
+  return {
+    profile,
+    models,
+    rendered: renderDesktopProfile(profile, profileModels),
+    port: config.port,
+  };
 }

@@ -113,9 +113,20 @@ const helpEntries: Record<string, HelpEntry> = {
     details: [
       "Ensures the proxy is running, then execs `claude` with ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN,",
       "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 and model slots from config.claudeCode.",
-      "Routed models appear in the native /model picker as claude-ocx-<provider>--<model> (Claude Code >= 2.1.129).",
+      "Routed models appear in the native /model picker with stable claude-opus-4-8-2026MMDD slot aliases (Claude Code >= 2.1.129).",
       "Older versions: pick models via ANTHROPIC_MODEL or /model <id> directly (any string passes through).",
       "User-exported ANTHROPIC_* variables always take precedence.",
+      "",
+      "Claude Desktop profile:",
+      "  ocx claude desktop [apply]                         Save and apply the four-family profile",
+      "  ocx claude desktop show [--json]                   Show routes, families, and defaults",
+      "  ocx claude desktop move <route> <family> [--default]",
+      "  ocx claude desktop default <family> <route|none>",
+      "  ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)",
+      "  ocx claude desktop import <path> [--apply]         Validate and import JSON",
+      "Families: opus, fable, sonnet, haiku. New routes start in opus.",
+      "`none` is valid only when that family is empty.",
+      "Legacy apply flags remain supported: --static, --hybrid, --discovery-only.",
     ],
   },
   restart: {
@@ -182,6 +193,7 @@ Usage:
   ocx account <sub>           Accounts/keys (list|current|use|refresh|auto-switch|remove|add-key)
   ocx models <sub>            List models; manage custom models (add|remove|list-custom)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
+  ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ocx help [command]          Show help
   ocx --version | -v          Print version
 

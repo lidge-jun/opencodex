@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
@@ -11,17 +11,20 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 let testDir = "";
 let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
+let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-mgmt-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-mgmt-"));
   process.env.OPENCODEX_HOME = testDir;
   // These API tests intentionally toggle agent injection off. Never let that
   // prune the developer's real ~/.claude/agents directory.
   process.env.CLAUDE_CONFIG_DIR = join(testDir, "claude");
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   saveConfig({
     port: 0,
     defaultProvider: "mock",
@@ -36,6 +39,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+  if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -414,6 +419,93 @@ test("PUT validation rejects bad shapes", async () => {
       expect(((await r.json()) as { error: string }).error).toBe(error);
     }
     expect(loadConfig().claudeCode).toBeUndefined(); // nothing persisted on rejects
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop profile GET, PUT and apply round-trip four-family assignments", async () => {
+  const server = startServer(0);
+  try {
+    const initial = await fetch(new URL("/api/claude-desktop", server.url)).then(r => r.json()) as Record<string, any>;
+    expect(initial.profile.version).toBe(1);
+    expect(initial.models.some((model: { route: string }) => model.route === "mock/test-model")).toBe(true);
+    expect(initial.profile.assignments["mock/test-model"].family).toBe("opus");
+
+    const edited = structuredClone(initial.profile);
+    edited.assignments["mock/test-model"].family = "sonnet";
+    edited.defaults.opus = Object.keys(edited.assignments)
+      .filter(route => edited.assignments[route].family === "opus")
+      .sort()[0] ?? null;
+    edited.defaults.sonnet = "mock/test-model";
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: edited }),
+    });
+    expect(put.status).toBe(200);
+    expect(loadConfig().claudeCode?.desktopProfile?.defaults.sonnet).toBe("mock/test-model");
+
+    const alias = loadConfig().claudeCode?.desktopProfile?.assignments["mock/test-model"]?.alias;
+    const discovery = await fetch(new URL("/v1/models?flavor=anthropic", server.url)).then(r => r.json()) as { data: Array<{ id: string }> };
+    expect(discovery.data.some(model => model.id === alias)).toBe(true);
+
+    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
+    expect(apply.status).toBe(200);
+    const result = await apply.json() as { path: string; applied: boolean };
+    expect(result.applied).toBe(true);
+    expect(result.path.startsWith(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!)).toBe(true);
+    const appliedConfig = JSON.parse(readFileSync(result.path, "utf8")) as { inferenceGatewayBaseUrl: string };
+    expect(appliedConfig.inferenceGatewayBaseUrl).toBe(new URL(server.url).origin);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop PUT rejects invalid JSON profile without mutating saved config", async () => {
+  const server = startServer(0);
+  try {
+    const before = structuredClone(loadConfig());
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: { version: 1, assignments: {}, defaults: { opus: "missing", fable: null, sonnet: null, haiku: null } } }),
+    });
+    expect(put.status).toBe(400);
+    expect(loadConfig()).toEqual(before);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("Claude Desktop PUT retains but cannot move an unavailable route", async () => {
+  const seeded = loadConfig();
+  seeded.claudeCode = {
+    desktopProfile: {
+      version: 1,
+      assignments: {
+        "missing/old-model": { family: "opus", alias: "claude-opus-4-8-20260101" },
+      },
+      defaults: { opus: "missing/old-model", fable: null, sonnet: null, haiku: null },
+    },
+  };
+  saveConfig(seeded);
+  const server = startServer(0);
+  try {
+    const state = await fetch(new URL("/api/claude-desktop", server.url)).then(r => r.json()) as Record<string, any>;
+    expect(state.models.find((model: { route: string }) => model.route === "missing/old-model")?.available).toBe(false);
+    const edited = structuredClone(state.profile);
+    edited.assignments["missing/old-model"].family = "haiku";
+    edited.defaults.opus = Object.keys(edited.assignments).filter(route => edited.assignments[route].family === "opus").sort()[0] ?? null;
+    edited.defaults.haiku = "missing/old-model";
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: edited }),
+    });
+    expect(put.status).toBe(400);
+    expect((await put.json() as { error: string }).error).toContain("사용할 수 없는 모델");
+    expect(loadConfig().claudeCode?.desktopProfile?.assignments["missing/old-model"]?.family).toBe("opus");
   } finally {
     server.stop(true);
   }

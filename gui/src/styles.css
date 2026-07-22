@@ -1043,3 +1043,112 @@ button.prov-account-row.active { cursor: default; }
 .model-tip-key { color: var(--muted); }
 .model-tip-val { color: var(--text); font-family: var(--mono); font-size: var(--text-label); }
 .model-tip-actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
+
+/* ── Claude client tabs + Desktop profile editor ── */
+.claude-tabs {
+  display: inline-flex; gap: 2px; margin-bottom: 22px; padding: 3px;
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface);
+}
+.claude-tabs button {
+  min-width: 88px; min-height: 34px; padding: 6px 14px; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer;
+}
+.claude-tabs button:hover { color: var(--text); background: var(--hover); }
+.claude-tabs button.active { color: var(--text); background: var(--raised); box-shadow: var(--shadow-sm); }
+.claude-desktop-loading { padding: 28px 4px; color: var(--muted); }
+.claude-desktop-error { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.claude-desktop-head { align-items: flex-start; }
+.claude-desktop-head .page-sub { margin-bottom: 0; }
+.claude-profile-tools, .claude-save-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.claude-profile-bar {
+  position: sticky; top: 12px; z-index: 8; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin: 18px 0 16px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--glass-panel); backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-sm);
+}
+.claude-dirty { color: var(--muted); font-size: 12.5px; font-weight: 550; }
+.claude-dirty.active { color: var(--amber); }
+.claude-lanes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 12px; }
+.claude-lane {
+  min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  overflow: hidden;
+}
+.claude-lane-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft); background: var(--raised);
+}
+.claude-lane-head h3 { font-size: 14px; }
+.claude-lane-head > div > span { display: block; margin-top: 1px; color: var(--muted); font-size: 11.5px; }
+.claude-default-radio { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.claude-default-needed { color: var(--amber); font-size: 11.5px; font-weight: 550; }
+.claude-effective-default { display: inline-block; margin-top: 6px; color: var(--amber); font-size: 11px; font-weight: 550; }
+.claude-lane-models { display: flex; flex-direction: column; gap: 9px; min-height: 104px; padding: 10px; }
+.claude-lane-empty {
+  display: grid; place-items: center; min-height: 82px; padding: 12px; border: 1px dashed var(--border);
+  border-radius: var(--radius-sm); color: var(--muted); font-size: 12px; text-align: center;
+}
+.claude-model-card { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); box-shadow: var(--shadow-sm); }
+.claude-model-card[draggable="true"] { cursor: grab; }
+.claude-model-card[draggable="true"]:active { cursor: grabbing; }
+.claude-model-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.claude-model-title > div { min-width: 0; }
+.claude-model-title strong { display: block; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.claude-model-title code { display: block; overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.claude-model-context { display: inline-block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+.claude-field { display: block; margin-top: 10px; }
+.claude-field > span, .claude-move-row > label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11.5px; font-weight: 550; }
+.claude-alias {
+  display: block; width: 100%; min-height: 34px; padding: 7px 10px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--raised);
+  color: var(--text); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap;
+}
+.claude-default-radio { margin-top: 10px; color: var(--text); }
+.claude-move-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end; margin-top: 10px; }
+.claude-move-row > label { grid-column: 1 / -1; margin: 0; }
+.claude-move-row .input { min-width: 0; height: 34px; padding-block: 4px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+@media (max-width: 1200px) {
+  .claude-lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .claude-lanes { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .claude-tabs { display: flex; width: 100%; }
+  .claude-tabs button { flex: 1; min-height: 44px; }
+  .claude-desktop-head { flex-direction: column; }
+  .claude-profile-tools { width: 100%; }
+  .claude-profile-tools .btn { flex: 1; min-height: 44px; }
+  .claude-profile-bar { top: 8px; align-items: stretch; flex-direction: column; }
+  .claude-save-actions .btn { flex: 1; min-height: 44px; }
+  .claude-lane-head { align-items: flex-start; }
+  .claude-move-row .input, .claude-move-row .btn { min-height: 44px; }
+}
+
+/* ── Desktop status bar + effort badges (hardening WP3) ── */
+.claude-status-bar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  font-size: 12.5px; color: var(--muted);
+}
+.claude-status-bar.applied { border-color: var(--green); }
+.claude-status-bar.stale { border-color: var(--amber); }
+.claude-status-bar.not-applied { border-color: var(--border); }
+.claude-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+}
+.claude-status-bar.applied .claude-status-dot { background: var(--green); }
+.claude-status-bar.stale .claude-status-dot { background: var(--amber); }
+.claude-status-health { margin-left: auto; font-size: 11.5px; }
+.claude-effort-badge {
+  display: inline-block; margin-top: 4px; padding: 1px 6px; border-radius: var(--radius-xs);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+}
+.claude-effort-badge.on { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.claude-effort-badge.off { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }

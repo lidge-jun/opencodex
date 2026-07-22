@@ -1,5 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  atomicReplaceDesktopConfig,
   buildDesktop3pRegistry,
   deriveDesktop3pCode,
   desktop3pAlias,
@@ -9,6 +13,7 @@ import {
   parseDesktop3pModeArgs,
   resolveDesktop3pAlias,
 } from "../src/claude/desktop-3p";
+import { moveDesktopRoute, reconcileDesktopProfile, setDesktopFamilyDefault } from "../src/claude/desktop-profile";
 import { resolveInboundModel } from "../src/claude/inbound";
 
 describe("Claude Desktop 3P models", () => {
@@ -180,5 +185,58 @@ describe("Claude Desktop 3P models", () => {
     // Static generation also refreshes the decode registry (new + legacy aliases).
     expect(resolveDesktop3pAlias("claude-opus-4-8-ncb")).toBe("native/gpt-5.6-sol");
     expect(resolveDesktop3pAlias("claude-opus-4-ncb")).toBe("native/gpt-5.6-sol");
+  });
+
+  test("renders persisted family/date assignments and installs their decode registry", () => {
+    const routed = [{ provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 }];
+    let profile = reconcileDesktopProfile(undefined, [
+      { route: "native/gpt-5.6-sol", label: "GPT 5.6 Sol" },
+      { route: "cursor/gpt-5.6-luna", label: "GPT 5.6 Luna", contextWindow: 1_000_000 },
+    ]);
+    profile = moveDesktopRoute(profile, "cursor/gpt-5.6-luna", "haiku", true);
+    const models = generateDesktop3pModels(["gpt-5.6-sol"], routed, profile);
+    const luna = models.find(model => model.labelOverride.includes("Luna"));
+    expect(luna).toMatchObject({ anthropicFamilyTier: "haiku", isFamilyDefault: true, supports1m: true });
+    expect(luna?.name).toMatch(/^claude-opus-4-8-2026\d{4}$/);
+    expect(resolveDesktop3pAlias(luna!.name)).toBe("cursor/gpt-5.6-luna");
+  });
+
+  test("backs up owned config and preserves old bytes when atomic replacement fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-atomic-"));
+    const path = join(dir, "owned.json");
+    try {
+      writeFileSync(path, "old bytes\n");
+      const success = atomicReplaceDesktopConfig(path, "new bytes\n");
+      expect(readFileSync(path, "utf8")).toBe("new bytes\n");
+      expect(readFileSync(success.backupPath!, "utf8")).toBe("old bytes\n");
+
+      writeFileSync(path, "stable bytes\n");
+      expect(() => atomicReplaceDesktopConfig(path, "never written\n", () => { throw new Error("injected"); })).toThrow("injected");
+      expect(readFileSync(path, "utf8")).toBe("stable bytes\n");
+      expect(readFileSync(`${path}.bak`, "utf8")).toBe("stable bytes\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy hash collisions stay bound to the same route when default ordering changes", () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const routed = [
+        { provider: "test", id: "model-123" },
+        { provider: "test", id: "model-155" },
+      ];
+      let profile = reconcileDesktopProfile(undefined, routed.map(model => ({
+        route: `${model.provider}/${model.id}`,
+        label: model.id,
+      })));
+      profile = setDesktopFamilyDefault(profile, "opus", "test/model-155");
+      generateDesktop3pModels([], routed, profile);
+      expect(legacyDesktop3pAlias("test", "model-123")).toBe(legacyDesktop3pAlias("test", "model-155"));
+      expect(resolveDesktop3pAlias(legacyDesktop3pAlias("test", "model-123"))).toBe("test/model-123");
+      expect(warning.mock.calls.flat().join(" ")).toContain("stays bound to test/model-123");
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

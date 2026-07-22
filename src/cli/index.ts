@@ -254,6 +254,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     buildDesktop3pRegistry(
       [...visibleNativeSlugs(config)],
       models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
+      config.claudeCode?.desktopProfile,
     );
   } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
   if (options.block ?? true) {
@@ -678,42 +679,9 @@ switch (command) {
     const { cmdClaude } = await import("./claude");
     // "ocx claude desktop" → write Desktop 3P config
     if (args[1] === "desktop") {
-      const config = loadConfig();
-      const { fetchAllModels } = await import("../server/management-api");
-      const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
-      const { parseDesktop3pModeArgs, writeDesktop3pConfig } = await import("../claude/desktop-3p");
-      // Mutually-exclusive mode flags (devlog 138): default static (deterministic; the
-      // static list overrides discovery anyway — no merge).
-      const parsedMode = parseDesktop3pModeArgs(args.slice(2));
-      if ("error" in parsedMode) {
-        console.error(`❌ ${parsedMode.error}`);
-        process.exit(1);
-      }
-      const mode = parsedMode.mode;
-      const live = await findLiveProxy();
-      const port = live?.port ?? config.port ?? 10100;
-      const allModels = await fetchAllModels(config);
-      const models = filterCatalogVisibleModels(allModels, config);
-      const nativeSlugs = [...visibleNativeSlugs(config)];
-      // contextWindow rides along so supports1m derives from authoritative data (감사 R1#1).
-      const routedModels = models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow }));
-      const result = writeDesktop3pConfig(port, nativeSlugs, routedModels, undefined, mode);
-      if (result.written) {
-        const oneM = routedModels.filter(m => typeof m.contextWindow === "number" && m.contextWindow >= 1_000_000).length;
-        console.log(`✅ Claude Desktop 3P 설정 완료: ${result.path}`);
-        console.log(`   Gateway: http://127.0.0.1:${port}`);
-        if (mode === "discovery") {
-          console.log(`   모델 목록: 자동 발견만 (프록시 /v1/models에서 ${nativeSlugs.length + models.length}개)`);
-        } else {
-          const suffix = mode === "hybrid" ? " + 자동 발견 병행" : "";
-          console.log(`   모델 ${nativeSlugs.length + models.length}개 고정 등록${suffix} (1M 컨텍스트 별도 행 ${oneM}개)`);
-          if (oneM > 0) console.log(`   1M을 쓰려면 Desktop 모델 피커에서 [1M] 붙은 행을 직접 선택하세요.`);
-        }
-        console.log(`   Claude Desktop을 재시작하면 적용됩니다.`);
-      } else {
-        console.error(`❌ 설정 실패: ${result.reason}`);
-        process.exit(1);
-      }
+      const { handleClaudeDesktopCommand } = await import("./claude-desktop");
+      const exitCode = await handleClaudeDesktopCommand(args.slice(2));
+      if (exitCode !== 0) process.exit(exitCode);
       break;
     }
     process.exit(await cmdClaude(args.slice(1)));
