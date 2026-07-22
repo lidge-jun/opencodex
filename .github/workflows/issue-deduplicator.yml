@@ -1,0 +1,150 @@
+﻿name: Issue Deduplicator
+
+on:
+  issues:
+    types:
+      - opened
+      - labeled
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  find-similar:
+    name: Find similar open issues
+    if: |
+      github.event.action == 'opened' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch issues and build prompt
+        id: build-prompt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -eo pipefail
+
+          gh issue list --repo "$REPO" \
+            --json number,title,body \
+            --limit 500 \
+            --state open \
+            --search "sort:created-desc" \
+            | jq --arg cur "$ISSUE_NUMBER" '[
+                .[] | select(.number != ($cur | tonumber)) |
+                { number, title, body: ((.body // "")[0:800]) }
+              ]' \
+            > existing-issues.json
+
+          gh issue view "$ISSUE_NUMBER" --repo "$REPO" \
+            --json number,title,body \
+            | jq '{ number, title, body: ((.body // "")[0:2000]) }' \
+            > current-issue.json
+
+          echo "open_count=$(jq 'length' existing-issues.json)"
+
+          # Write the full prompt to a file so actions/ai-inference can read it
+          cat > dedup-prompt.txt <<'PROMPT'
+New issue (JSON):
+PROMPT
+          cat current-issue.json >> dedup-prompt.txt
+          cat >> dedup-prompt.txt <<'PROMPT'
+
+Existing open issues (JSON array):
+PROMPT
+          cat existing-issues.json >> dedup-prompt.txt
+          cat >> dedup-prompt.txt <<'PROMPT'
+
+Return a JSON object with this exact shape and nothing else:
+{"issues": ["<number>", ...], "reason": "<one sentence>"}
+
+List only issue numbers (as strings) that are clear duplicates of the new
+issue. At most five. Empty array if none are convincing matches.
+PROMPT
+
+      - name: Run semantic duplicate detection
+        id: ai
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o-mini
+          max-completion-tokens: 200
+          system-prompt: >
+            You are a GitHub issue triage assistant. Identify duplicate issues
+            based on semantic similarity — same underlying problem, error, or
+            feature request — not just shared keywords. Respond only with the
+            requested JSON. No markdown, no explanation outside the JSON.
+          prompt-file: dedup-prompt.txt
+
+      - name: Post duplicate comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          AI_RESPONSE: ${{ steps.ai.outputs.response }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const BOT_MARKER = "<!-- opencodex-dedup-bot -->";
+
+            const raw = process.env.AI_RESPONSE ?? '';
+            let parsed;
+            try {
+              // Strip potential markdown code fences
+              const cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+              parsed = JSON.parse(cleaned);
+            } catch (err) {
+              core.warning(`AI response was not valid JSON: ${raw}`);
+              return;
+            }
+
+            const currentNum = String(issue.number);
+            const matches = [...new Set(
+              (Array.isArray(parsed?.issues) ? parsed.issues : [])
+                .map(String)
+                .filter(n => n !== currentNum)
+            )].slice(0, 5);
+
+            if (matches.length === 0) {
+              core.info('No similar issues found.');
+              return;
+            }
+
+            // Upsert: update existing bot comment if present
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: issue.number, per_page: 100,
+            });
+            const existing = comments.find(
+              c => c.user?.type === 'Bot' && c.body?.includes(BOT_MARKER),
+            );
+
+            const list = matches.map(n => `- #${n}`).join('\n');
+            const body = [
+              BOT_MARKER,
+              'Potential duplicates found — please check whether your issue is already covered:',
+              '',
+              list,
+              '',
+              '_Detected automatically via GitHub Models. Matches may not be exact._',
+            ].join('\n');
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+              core.info(`Updated dedup comment on #${issue.number}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number, body,
+              });
+              core.info(`Posted dedup comment on #${issue.number} with ${matches.length} match(es).`);
+            }
+
+      - name: Remove codex-deduplicate label
+        if: github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue edit "${{ github.event.issue.number }}" --remove-label "codex-deduplicate" || true
