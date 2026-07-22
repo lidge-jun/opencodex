@@ -22,6 +22,8 @@ import {
   McpToolResultSchema,
   McpToolsSchema,
   ModelDetailsSchema,
+  RequestedModelSchema,
+  RequestedModel_ModelParameterbytesSchema,
   ResumeActionSchema,
   RequestContextSchema,
   RequestContextEnvSchema,
@@ -42,6 +44,9 @@ import {
 } from "./tool-definitions";
 
 const encoder = new TextEncoder();
+
+/** Parameter id advertised by Cursor's `default` model for its Cost/Balance/Intelligence control. */
+export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 
 /** Runtime timezone for protobuf RequestContextEnv (dynamic, never hardcoded). */
 function runtimeTimeZone(): string {
@@ -364,6 +369,16 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
       displayNameShort: request.modelId,
       aliases: [],
     }),
+    ...(request.routingLevel ? {
+      requestedModel: create(RequestedModelSchema, {
+        modelId: request.modelId,
+        maxMode: false,
+        parameters: [create(RequestedModel_ModelParameterbytesSchema, {
+          id: CURSOR_ROUTING_LEVEL_PARAMETER_ID,
+          value: request.routingLevel,
+        })],
+      }),
+    } : {}),
     // Mirror the client (Responses) tool definitions into the top-level AgentRunRequest.mcp_tools
     // channel. Advertising them ONLY via native-exec `requestContextArgs` (RequestContext.tools) is
     // insufficient: cursor models report those tools as unavailable and fall back to native tools.

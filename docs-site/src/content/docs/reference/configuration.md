@@ -215,6 +215,20 @@ Responses providers so passthrough stays byte-for-byte identical to upstream.
 The Cursor bridge is experimental. After `ocx login cursor`, add or edit the `cursor` entry under
 `providers` in `~/.opencodex/config.json` (Windows: `%USERPROFILE%\.opencodex\config.json`).
 
+Cursor Router's complete optimization ladder is exposed as separate Codex model ids because Codex's
+model picker cannot render Cursor-specific model parameters:
+
+| Codex model | Cursor Router mode |
+| --- | --- |
+| `cursor/auto` | Team/account default (backwards compatible) |
+| `cursor/auto-cost` | Cost |
+| `cursor/auto-balance` | Balance |
+| `cursor/auto-intelligence` | Intelligence |
+
+The explicit variants all send Cursor's `default` model with its `optimization` model parameter, so
+the selection is preserved on every request. They remain available when live model discovery omits
+`default`, just like the original `cursor/auto` entry.
+
 By default, Cursor's server-driven native local tools stay **disabled**. Codex keeps using its own
 tools (`apply_patch`, `exec_command`, and so on) with approval and sandbox policy. Set
 `unsafeAllowNativeLocalExec` only for trusted local experiments where you accept that Cursor may

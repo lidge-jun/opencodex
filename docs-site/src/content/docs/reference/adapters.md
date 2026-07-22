@@ -98,6 +98,9 @@ streams the response back **untranslated**.
 - Replays conversation state through content-addressed blobs, maps server tool calls back to Codex,
   discovers live Cursor models through the protobuf `GetUsableModels` RPC, and retries only before a
   run request is committed to the wire.
+- Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
+  `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
+  `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `unsafeAllowNativeLocalExec` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics.

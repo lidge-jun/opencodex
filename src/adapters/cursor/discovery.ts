@@ -80,13 +80,48 @@ export function isCursorModelAvailableForAccount(modelId: string, liveIds: reado
 /** Codex-facing id for Cursor's auto-router. Always kept in the catalog even when live discovery omits it. */
 export const CURSOR_AUTO_MODEL_ID = "auto";
 
+/** Cursor Router's public optimization modes (cost -> intelligence Pareto frontier). */
+export const CURSOR_ROUTING_LEVELS = ["cost", "balance", "intelligence"] as const;
+export type CursorRoutingLevel = typeof CURSOR_ROUTING_LEVELS[number];
+
+/**
+ * Codex cannot render Cursor's model-specific parameter control, so expose each optimization mode
+ * as a first-class routed model next to the backwards-compatible `cursor/auto` entry.
+ */
+export const CURSOR_ROUTER_MODEL_IDS = [
+  CURSOR_AUTO_MODEL_ID,
+  ...CURSOR_ROUTING_LEVELS.map(level => `${CURSOR_AUTO_MODEL_ID}-${level}`),
+] as const;
+
 /** Wire id Cursor Connect expects for the auto-router (GetUsableModels returns `default`, not `auto`). */
 export const CURSOR_AUTO_WIRE_MODEL_ID = "default";
 
+export interface CursorWireModelSelection {
+  modelId: string;
+  routingLevel?: CursorRoutingLevel;
+}
+
+/** Resolve a Codex-facing model id into Cursor's wire model plus optional router parameter. */
+export function cursorWireModelSelection(modelId: string): CursorWireModelSelection {
+  const normalized = modelId.startsWith("cursor/") ? modelId.slice("cursor/".length) : modelId;
+  if (normalized === CURSOR_AUTO_MODEL_ID) return { modelId: CURSOR_AUTO_WIRE_MODEL_ID };
+  const prefix = `${CURSOR_AUTO_MODEL_ID}-`;
+  if (normalized.startsWith(prefix)) {
+    const level = normalized.slice(prefix.length);
+    if ((CURSOR_ROUTING_LEVELS as readonly string[]).includes(level)) {
+      return { modelId: CURSOR_AUTO_WIRE_MODEL_ID, routingLevel: level as CursorRoutingLevel };
+    }
+  }
+  return { modelId: normalized };
+}
+
 /** Map a Codex-facing Cursor model id to the upstream wire id. */
 export function cursorCodexToWireModelId(modelId: string): string {
-  const normalized = modelId.startsWith("cursor/") ? modelId.slice("cursor/".length) : modelId;
-  return normalized === CURSOR_AUTO_MODEL_ID ? CURSOR_AUTO_WIRE_MODEL_ID : normalized;
+  return cursorWireModelSelection(modelId).modelId;
+}
+
+export function isCursorRouterModelId(modelId: string): boolean {
+  return (CURSOR_ROUTER_MODEL_IDS as readonly string[]).includes(modelId);
 }
 
 /** Filter the static Cursor seed to models this account can use. */
@@ -95,7 +130,7 @@ export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: stri
   liveIds: readonly string[],
 ): T[] {
   return configured.filter(model =>
-    model.id === CURSOR_AUTO_MODEL_ID || isCursorModelAvailableForAccount(model.id, liveIds),
+    isCursorRouterModelId(model.id) || isCursorModelAvailableForAccount(model.id, liveIds),
   );
 }
 
@@ -108,7 +143,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // advertise effort so Codex exposes the tier picker. `supportsReasoningEffort` tracks whether the
   // model has *selectable effort tiers* (CURSOR_MODEL_EFFORT_TIERS), NOT merely whether it reasons:
   // gemini/grok/kimi/gpt-5-mini are reasoning models in the SOT but are sent bare (no tier picker).
-  { id: "auto", contextWindow: CONTEXT_200K, supportsReasoningEffort: false },
+  ...CURSOR_ROUTER_MODEL_IDS.map(id => ({ id, contextWindow: CONTEXT_200K, supportsReasoningEffort: false })),
 
   { id: "claude-sonnet-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-4-sonnet", contextWindow: CONTEXT_200K },

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { create, fromBinary } from "@bufbuild/protobuf";
 import { handleCursorNativeKv, storeCursorBlob } from "../src/adapters/cursor/native-exec";
-import { encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
+import { CURSOR_ROUTING_LEVEL_PARAMETER_ID, encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
@@ -79,6 +79,25 @@ describe("Cursor blob handshake", () => {
     // wire-compatible (the earlier crash was a wrong-shape assignment, since corrected).
     expect(run?.mcpTools?.mcpTools.length).toBe(1);
     expect(run?.mcpTools?.mcpTools[0]?.toolName).toBe("mcp__fs__read_file");
+  });
+
+  test("encodes Cursor Router levels through requested_model parameters", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "default",
+      routingLevel: "cost",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+
+    expect(run?.modelDetails?.modelId).toBe("default");
+    expect(run?.requestedModel).toMatchObject({
+      modelId: "default",
+      maxMode: false,
+      parameters: [{ id: CURSOR_ROUTING_LEVEL_PARAMETER_ID, value: "cost" }],
+    });
   });
 
   test("adds Cursor exact-tool guidance to system prompt blobs when tools are advertised", () => {

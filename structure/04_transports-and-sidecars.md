@@ -117,6 +117,16 @@ and synthesizing explicit "no tool result was recorded" answers only when no rea
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+## Cursor Router optimization levels
+
+Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
+`cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,
+`cursor/auto-balance`, and `cursor/auto-intelligence` make each optimization level explicit.
+All four route to the `default` Cursor wire model. Explicit variants additionally populate
+`AgentRunRequest.requested_model.parameters` with the `optimization` parameter; this is the same
+parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
+must survive a live `GetUsableModels` response that omits `default`.
+
 ## Cursor active-context usage
 
 Cursor's `conversationCheckpointUpdate.tokenDetails.usedTokens` is treated as the authoritative

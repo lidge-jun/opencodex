@@ -1031,6 +1031,12 @@ describe("Codex catalog routed normalization", () => {
       });
 
       expect(fetchCalls).toBe(0);
+      const cursorRouterIds = ["auto", "auto-cost", "auto-balance", "auto-intelligence"];
+      const routedIds = models
+        .filter(model => model.provider === "cursor" && cursorRouterIds.includes(model.id))
+        .map(model => model.id);
+      expect(routedIds).toHaveLength(cursorRouterIds.length);
+      expect(routedIds).toEqual(expect.arrayContaining(cursorRouterIds));
       const auto = models.find(model => model.provider === "cursor" && model.id === "auto");
       expect(auto).toMatchObject({
         provider: "cursor",
@@ -1046,16 +1052,31 @@ describe("Codex catalog routed normalization", () => {
       expect(entry?.input_modalities).toEqual(["text", "image"]);
       expect(entry?.supported_reasoning_levels).toEqual([]);
       expect(entry).not.toHaveProperty("default_reasoning_level");
+      for (const id of cursorRouterIds.slice(1)) {
+        const routedEntry = entries.find(item => item.slug === `cursor/${id}`);
+        expect(routedEntry?.context_window).toBe(200_000);
+        expect(routedEntry?.supported_reasoning_levels).toEqual([]);
+      }
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("cursor");
     }
   });
 
-  test("Cursor live discovery keeps auto even when GetUsableModels omits it", () => {
-    const configured = [{ id: "auto" }, { id: "gpt-5.4" }, { id: "claude-fable-5" }];
+  test("Cursor live discovery keeps all router levels when GetUsableModels omits them", () => {
+    const configured = [
+      { id: "auto" },
+      { id: "auto-cost" },
+      { id: "auto-balance" },
+      { id: "auto-intelligence" },
+      { id: "gpt-5.4" },
+      { id: "claude-fable-5" },
+    ];
     expect(filterCursorConfiguredModelsByLiveDiscovery(configured, ["gpt-5.4-high"]).map(model => model.id)).toEqual([
       "auto",
+      "auto-cost",
+      "auto-balance",
+      "auto-intelligence",
       "gpt-5.4",
     ]);
   });

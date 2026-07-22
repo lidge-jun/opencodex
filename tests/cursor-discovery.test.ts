@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   CURSOR_AUTO_WIRE_MODEL_ID,
   CURSOR_DEFAULT_CONTEXT_WINDOW,
+  CURSOR_ROUTER_MODEL_IDS,
+  CURSOR_ROUTING_LEVELS,
   CURSOR_STATIC_MODELS,
   cursorCodexToWireModelId,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -10,6 +12,7 @@ import {
   cursorModelIds,
   cursorModelInputModalities,
   cursorModelReasoningEfforts,
+  cursorWireModelSelection,
   inferCursorContextWindow,
   normalizeCursorModels,
 } from "../src/adapters/cursor/discovery";
@@ -19,7 +22,7 @@ describe("Cursor discovery metadata", () => {
     const ids = cursorModelIds(CURSOR_STATIC_MODELS);
 
     expect(ids.length).toBeGreaterThanOrEqual(38);
-    expect(ids).toContain("auto");
+    expect(ids).toEqual(expect.arrayContaining([...CURSOR_ROUTER_MODEL_IDS]));
     expect(ids).toContain("claude-sonnet-5");
     expect(ids).toContain("composer-2.5");
     expect(ids).toContain("composer-2.5-fast");
@@ -40,7 +43,9 @@ describe("Cursor discovery metadata", () => {
     expect(ids).toContain("gpt-5.5-extra");
     expect(ids).not.toContain("composer-2");
     // `auto` mirrors the jawcode SOT `default` entry (200k), not the generic fallback window.
-    expect(cursorModelContextWindows(CURSOR_STATIC_MODELS).auto).toBe(200_000);
+    for (const id of CURSOR_ROUTER_MODEL_IDS) {
+      expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)[id]).toBe(200_000);
+    }
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["composer-2.5-fast"]).toBe(200_000);
   });
 
@@ -68,17 +73,24 @@ describe("Cursor discovery metadata", () => {
     expect(filtered.map(model => model.id)).toEqual(["gpt-5.4"]);
   });
 
-  test("live discovery filter always keeps auto even when GetUsableModels omits it", () => {
+  test("live discovery filter always keeps all router levels when GetUsableModels omits them", () => {
     const filtered = filterCursorConfiguredModelsByLiveDiscovery(
-      [{ id: "auto" }, { id: "gpt-5.4" }, { id: "claude-fable-5" }],
+      [...CURSOR_ROUTER_MODEL_IDS.map(id => ({ id })), { id: "gpt-5.4" }, { id: "claude-fable-5" }],
       ["gpt-5.4-high"],
     );
-    expect(filtered.map(model => model.id)).toEqual(["auto", "gpt-5.4"]);
+    expect(filtered.map(model => model.id)).toEqual([...CURSOR_ROUTER_MODEL_IDS, "gpt-5.4"]);
   });
 
-  test("auto maps to default on the Cursor wire", () => {
+  test("auto and every explicit routing level map to default on the Cursor wire", () => {
     expect(cursorCodexToWireModelId("auto")).toBe(CURSOR_AUTO_WIRE_MODEL_ID);
     expect(cursorCodexToWireModelId("cursor/auto")).toBe(CURSOR_AUTO_WIRE_MODEL_ID);
+    for (const level of CURSOR_ROUTING_LEVELS) {
+      expect(cursorWireModelSelection(`auto-${level}`)).toEqual({
+        modelId: CURSOR_AUTO_WIRE_MODEL_ID,
+        routingLevel: level,
+      });
+      expect(cursorCodexToWireModelId(`cursor/auto-${level}`)).toBe(CURSOR_AUTO_WIRE_MODEL_ID);
+    }
     expect(cursorCodexToWireModelId("gpt-5.4")).toBe("gpt-5.4");
   });
 

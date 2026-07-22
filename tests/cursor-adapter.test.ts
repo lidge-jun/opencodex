@@ -74,12 +74,34 @@ describe("Cursor adapter live transport", () => {
     );
 
     expect(requests[0]?.modelId).toBe("default");
+    expect(requests[0]?.routingLevel).toBeUndefined();
     expect(writes).toEqual([]);
     expect(events).toEqual([
       { type: "thinking_delta", thinking: "검토 중" },
       { type: "text_delta", text: "안녕하세요" },
       { type: "done", usage: { inputTokens: 3, outputTokens: 5 } },
     ]);
+  });
+
+  test("runTurn preserves explicit Cursor Router optimization levels", async () => {
+    const requests: CursorRunRequest[] = [];
+    const adapter = createCursorAdapter(provider, {
+      createTransport: () => ({
+        async *run(request) {
+          requests.push(request);
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+
+    await adapter.runTurn?.(
+      { ...parsed, modelId: "cursor/auto-intelligence" },
+      { headers: new Headers() },
+      () => {},
+    );
+
+    expect(requests[0]).toMatchObject({ modelId: "default", routingLevel: "intelligence" });
   });
 
   test("runTurn sanitizes unexpected transport errors", async () => {

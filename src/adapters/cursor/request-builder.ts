@@ -8,7 +8,7 @@ import type {
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
-import { cursorCodexToWireModelId } from "./discovery";
+import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorEffortSuffix } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
@@ -97,10 +97,11 @@ function catalogLimitNote(kept: readonly OcxTool[], omitted: readonly OcxTool[])
 * `undefined` for non-reasoning models like `composer-2.5`. A fully-qualified id (one that isn't a
 * known effort base) passes through unchanged.
  */
-function normalizeCursorModelId(modelId: string, reasoning?: string): string {
-  const id = cursorCodexToWireModelId(modelId);
+function normalizeCursorModelId(modelId: string, reasoning?: string): { modelId: string; routingLevel?: CursorRoutingLevel } {
+  const selection = cursorWireModelSelection(modelId);
+  const id = selection.modelId;
   const suffix = cursorEffortSuffix(id, reasoning);
-  return suffix ? `${id}-${suffix}` : id;
+  return { ...selection, modelId: suffix ? `${id}-${suffix}` : id };
 }
 
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
@@ -166,8 +167,10 @@ export function createCursorRequest(parsed: OcxParsedRequest): CursorRunRequest 
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
+  const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
   return {
-    modelId: normalizeCursorModelId(parsed.modelId, parsed.options.reasoning),
+    modelId: model.modelId,
+    ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
     // The Cursor conversation id comes ONLY from remembered state (_cursorConversationId). Do NOT fall
     // back to the OpenAI Responses previous_response_id (resp_*): that is a Responses-chain id in a
     // different namespace and would start an unrelated Cursor conversation, breaking tool-result
