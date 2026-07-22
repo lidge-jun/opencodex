@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 import { comboConfigIssues } from "./combos/types";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
+import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import type { OcxConfig } from "./types";
 
 let _atomicSeq = 0;
@@ -374,6 +375,20 @@ const configSchema = z.object({
       });
     }
     const provider = config.providers[name];
+    const openRouterRoutingError = openRouterRoutingConfigError(provider);
+    if (openRouterRoutingError) {
+      ctx.addIssue({
+        code: "custom",
+        path: [
+          "providers",
+          name,
+          openRouterRoutingError.startsWith("modelOpenRouterRouting")
+            ? "modelOpenRouterRouting"
+            : "openRouterRouting",
+        ],
+        message: openRouterRoutingError,
+      });
+    }
     if (Object.hasOwn(provider, "virtualModels")) {
       ctx.addIssue({
         code: "custom",

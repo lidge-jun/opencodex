@@ -136,6 +136,8 @@ x-opencodex-api-key: your-secret-token
 | `modelContextWindows?` | `Record<string,number>` | 模型级 context-window cap。匹配模型时优先于 `contextWindow`，且不会抬高更小的实时 metadata。 |
 | `modelInputModalities?` | `Record<string,string[]>` | 模型级目录 input hint，如 `["text"]` 或 `["text", "image"]`。 |
 | `headers?` | `Record<string,string>` | 额外上游 header。Authorization、cookie、API-key header、包含换行的值和无效 header 名称会被拒绝。 |
+| `openRouterRouting?` | `OpenRouterProviderRouting` | 默认 OpenRouter provider 路由设置。支持 `order`、`only` 和 `allowFallbacks`；仅适用于 canonical OpenRouter URL 和 `openai-chat` adapter。 |
+| `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | 按精确模型 id 覆盖 `openRouterRouting`。 |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | 认证方式（默认 `key`）。参见 [Providers](/opencodex/zh-cn/guides/providers/#认证模式)。 |
 | `codexAccountMode?` | `"pool" \| "direct"` | 仅用于 canonical `openai`。省略时默认 Pool；Direct 会绕过池状态。 |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 覆盖该 OAuth provider 的 Token Guardian 策略。 |
@@ -209,6 +211,22 @@ MCP、屏幕录制和 computer-use 使用独立的 `mcpServers` / `desktopExecut
 除非你明确需要绕过 Codex 审批与 sandbox 语义的 Cursor 原生本地执行，否则请省略
 `unsafeAllowNativeLocalExec` 或保持为 `false`。
 :::
+
+## OpenRouter provider 路由
+
+同一模型的不同 OpenRouter endpoint 在 prompt cache 支持、命中率、保留时间和价格方面可能存在显著差异。
+使用 `openRouterRouting` 指定默认 provider，使用 `modelOpenRouterRouting` 为精确模型 id 覆盖设置。
+这些设置会转换为 OpenRouter 请求中的 `order`、`only` 和 `allow_fallbacks` 字段。
+当 `allowFallbacks: false` 时，指定 provider 不可用会使请求失败，而不会切换到其他 endpoint。
+
+```json
+{
+  "openRouterRouting": { "order": ["deepseek"], "allowFallbacks": false },
+  "modelOpenRouterRouting": {
+    "anthropic/claude-sonnet-5": { "only": ["anthropic"], "allowFallbacks": false }
+  }
+}
+```
 
 ## 静态模型 allowlist
 

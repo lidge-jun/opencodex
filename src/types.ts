@@ -585,6 +585,15 @@ export interface OcxWebSearchSidecarConfig {
   routedModelStallTimeoutMs?: number;
 }
 
+export interface OpenRouterProviderRouting {
+  /** OpenRouter provider slugs to try first, in priority order. */
+  order?: string[];
+  /** Restrict routing to these OpenRouter provider slugs. */
+  only?: string[];
+  /** Whether OpenRouter may use providers outside `order`. Defaults to OpenRouter's policy. */
+  allowFallbacks?: boolean;
+}
+
 export interface OcxProviderConfig {
   adapter: string;
   baseUrl: string;
@@ -633,6 +642,10 @@ export interface OcxProviderConfig {
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   headers?: Record<string, string>;
+  /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
+  openRouterRouting?: OpenRouterProviderRouting;
+  /** Exact model-id overrides for `openRouterRouting`. Each matching entry replaces the default. */
+  modelOpenRouterRouting?: Record<string, OpenRouterProviderRouting>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).

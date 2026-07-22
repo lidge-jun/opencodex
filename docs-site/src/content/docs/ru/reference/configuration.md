@@ -163,6 +163,8 @@ x-opencodex-api-key: your-secret-token
 | `modelContextWindows?` | `Record<string,number>` | Лимиты контекстного окна для конкретных моделей. Они перекрывают `contextWindow` для совпадающих id моделей и никогда не повышают меньшие живые метаданные. |
 | `modelInputModalities?` | `Record<string,string[]>` | Подсказки каталога о входных модальностях для конкретных моделей, например `["text"]` или `["text", "image"]`. |
 | `headers?` | `Record<string,string>` | Дополнительные заголовки для вышестоящей стороны. Authorization, cookie, заголовки API-ключей, встроенные переводы строк и недопустимые имена заголовков отклоняются. |
+| `openRouterRouting?` | `OpenRouterProviderRouting` | Настройки маршрутизации провайдеров OpenRouter по умолчанию. Поддерживает `order`, `only` и `allowFallbacks`; действует только с каноническим URL OpenRouter и адаптером `openai-chat`. |
+| `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | Настройки для точных id моделей, заменяющие `openRouterRouting`. |
 | `authMode?` | `"key" \| "forward" \| "oauth"` | Способ аутентификации (по умолчанию `key`). См. [Провайдеры](/opencodex/ru/guides/providers/#режимы-аутентификации). |
 | `codexAccountMode?` | `"pool" \| "direct"` | Только для канонического `openai`; по умолчанию Pool, если опущено. Direct обходит состояние пула. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Переопределение политики Token Guardian для этого OAuth-провайдера. |
@@ -240,6 +242,23 @@ HTTP). Stdio-записи также принимают `args?: string[]`, `env?
 Оставляйте `unsafeAllowNativeLocalExec` незаданным или равным `false`, если только вам явно не
 нужно нативное локальное выполнение Cursor, обходящее семантику одобрений и песочницы Codex.
 :::
+
+## Маршрутизация провайдеров OpenRouter
+
+Для одной модели разные endpoints OpenRouter могут заметно отличаться поддержкой prompt cache,
+долей попаданий, сроком хранения и ценой. `openRouterRouting` задаёт провайдеров по умолчанию, а
+`modelOpenRouterRouting` заменяет настройки для точного id модели. Конфигурация преобразуется в
+поля запроса OpenRouter `order`, `only` и `allow_fallbacks`. При `allowFallbacks: false` запрос
+завершается ошибкой, если указанные провайдеры недоступны, вместо перехода на другой endpoint.
+
+```json
+{
+  "openRouterRouting": { "order": ["deepseek"], "allowFallbacks": false },
+  "modelOpenRouterRouting": {
+    "anthropic/claude-sonnet-5": { "only": ["anthropic"], "allowFallbacks": false }
+  }
+}
+```
 
 ## Статические allowlist моделей
 
