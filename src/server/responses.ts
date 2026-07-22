@@ -55,7 +55,7 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../codex/routing";
-import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
+import { fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
@@ -91,6 +91,153 @@ import {
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "./relay";
+
+/**
+ * Drain a Responses SSE body and return a completed `response` JSON object.
+ * ChatGPT Codex often emits `response.completed` with `output: []` even when
+ * text/tool items streamed earlier — reconstruct output from item/text events
+ * so stream:false clients receive a usable non-stream body.
+ */
+export async function bufferResponsesSseToJson(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<{ response?: Record<string, unknown>; error?: string }> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResponse: Record<string, unknown> | undefined;
+  let createdResponse: Record<string, unknown> | undefined;
+  let error: string | undefined;
+  const itemsByIndex = new Map<number, Record<string, unknown>>();
+  const textByItemId = new Map<string, string>();
+  let looseDeltaText = "";
+  let looseDoneText = "";
+
+  const handle = (payload: string): void => {
+    if (!payload || payload === "[DONE]") return;
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(payload) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const type = typeof data.type === "string" ? data.type : "";
+    if (type === "response.created" || type === "response.in_progress") {
+      const resp = data.response;
+      if (resp && typeof resp === "object" && !Array.isArray(resp)) {
+        createdResponse = resp as Record<string, unknown>;
+      }
+    } else if (type === "response.output_item.added" || type === "response.output_item.done") {
+      const item = data.item;
+      const idx = typeof data.output_index === "number" ? data.output_index : itemsByIndex.size;
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        itemsByIndex.set(idx, item as Record<string, unknown>);
+      }
+    } else if (type === "response.output_text.delta" && typeof data.delta === "string") {
+      const itemId = typeof data.item_id === "string" ? data.item_id : "";
+      if (itemId) textByItemId.set(itemId, (textByItemId.get(itemId) ?? "") + data.delta);
+      else looseDeltaText += data.delta;
+    } else if (type === "response.output_text.done" && typeof data.text === "string") {
+      const itemId = typeof data.item_id === "string" ? data.item_id : "";
+      if (itemId) textByItemId.set(itemId, data.text);
+      else looseDoneText = data.text;
+    } else if (type === "response.completed" || type === "response.done") {
+      const resp = data.response;
+      if (resp && typeof resp === "object" && !Array.isArray(resp)) {
+        finalResponse = resp as Record<string, unknown>;
+      }
+    } else if (type === "response.failed" || type === "error") {
+      const resp = data.response as { error?: { message?: string } } | undefined;
+      error = resp?.error?.message
+        ?? (data.error as { message?: string } | undefined)?.message
+        ?? (typeof data.message === "string" ? data.message : "upstream stream failed");
+    }
+  };
+
+  try {
+    while (true) {
+      if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) handle(line.slice(6).trim());
+        else if (line.startsWith("data:")) handle(line.slice(5).trim());
+      }
+    }
+    if (buffer.trim()) {
+      for (const line of buffer.split("\n")) {
+        if (line.startsWith("data: ")) handle(line.slice(6).trim());
+        else if (line.startsWith("data:")) handle(line.slice(5).trim());
+      }
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+
+  const base = finalResponse ?? createdResponse;
+  if (!base) return { response: undefined, error };
+
+  const completedOutput = Array.isArray(base.output) ? base.output : [];
+  const completedHasContent = completedOutput.some(item => {
+    if (!item || typeof item !== "object") return false;
+    const rec = item as Record<string, unknown>;
+    if (rec.type === "message" && Array.isArray(rec.content) && rec.content.length > 0) return true;
+    if (rec.type === "function_call" || rec.type === "custom_tool_call") return true;
+    if (rec.type === "reasoning") return true;
+    return false;
+  });
+
+  if (!completedHasContent) {
+    const rebuilt: unknown[] = [];
+    if (itemsByIndex.size > 0) {
+      const indices = [...itemsByIndex.keys()].sort((a, b) => a - b);
+      for (const idx of indices) {
+        let item = { ...itemsByIndex.get(idx)! };
+        const id = typeof item.id === "string" ? item.id : "";
+        const streamedText = id ? textByItemId.get(id) : undefined;
+        if (item.type === "message" && streamedText !== undefined) {
+          const content = Array.isArray(item.content) ? [...item.content] : [];
+          if (content.length === 0) {
+            content.push({ type: "output_text", text: streamedText, annotations: [] });
+          } else {
+            content[0] = typeof content[0] === "object" && content[0]
+              ? { ...(content[0] as Record<string, unknown>), type: "output_text", text: streamedText }
+              : { type: "output_text", text: streamedText, annotations: [] };
+          }
+          item = { ...item, status: item.status ?? "completed", content };
+        }
+        rebuilt.push(item);
+      }
+    }
+    if (rebuilt.length === 0) {
+      const text = (looseDoneText || looseDeltaText || [...textByItemId.values()].join("")).trim();
+      if (text) {
+        rebuilt.push({
+          type: "message",
+          id: `msg_${Math.random().toString(36).slice(2, 14)}`,
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text, annotations: [] }],
+        });
+      }
+    }
+    if (rebuilt.length > 0) {
+      return {
+        response: {
+          ...base,
+          status: typeof base.status === "string" ? base.status : "completed",
+          output: rebuilt,
+        },
+        error,
+      };
+    }
+  }
+
+  return { response: base, error };
+}
 
 export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
@@ -1160,10 +1307,11 @@ export async function handleResponses(
       if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;
     }
     // The chatgpt backend may omit Content-Type on SSE responses. Fall back to
-    // treating a successful body as SSE when the caller requested streaming.
+    // treating a successful body as SSE when CT is missing (we force stream:true
+    // on the ChatGPT wire even for non-stream clients).
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
-      || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
+      || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt);
     const terminalRecorder = codexForwardTerminalOutcomeRecorder(
       config,
       authCtx,
@@ -1214,6 +1362,32 @@ export async function handleResponses(
     // native relay, never enters JS Sink.write); branch[1] is consumed in the
     // background for terminal-outcome/quota inspection only.
     if (upstreamResponse.ok && isEventStream && upstreamResponse.body) {
+      // ChatGPT Codex REST requires stream:true; when the client asked for JSON we forced
+      // stream on the wire (openai-responses adapter) and buffer the completed event here.
+      // Rebuild output from streamed item/text events when completed.output is empty.
+      if (!parsed.stream) {
+        try {
+          const buffered = await bufferResponsesSseToJson(upstreamResponse.body, options.abortSignal);
+          if (buffered.error) {
+            return formatErrorResponse(502, "upstream_error", buffered.error);
+          }
+          if (buffered.response) {
+            if (rememberPassthroughResponse) {
+              try { rememberPassthroughResponse(buffered.response as { id?: unknown; output?: unknown; status?: unknown }); } catch { /* best-effort */ }
+            }
+            terminalRecorder?.("completed");
+            options.onNativePassthroughTerminal?.("completed");
+            return new Response(JSON.stringify(buffered.response), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return formatErrorResponse(502, "upstream_error", "upstream stream ended without response.completed");
+        } catch (err) {
+          if (options.abortSignal?.aborted) return clientCancelledResponse();
+          return formatErrorResponse(502, "upstream_error", err instanceof Error ? err.message : String(err));
+        }
+      }
       const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const turnAc = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
@@ -1436,7 +1610,8 @@ export async function handleResponses(
         stream: parsed.stream,
       });
     } else {
-      upstreamResponse = await fetchWithResetRetry(
+      // Retry pre-stream 5xx (OpenCode free tier / gateway blips) the same way passthrough does.
+      upstreamResponse = await fetchWithTransientRetry(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({

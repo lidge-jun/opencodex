@@ -175,7 +175,19 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
       // but override the URL and headers after.
       const baseReq = base.buildRequest(parsed) as AdapterRequest;
       const baseBody = JSON.parse(baseReq.body as string) as unknown;
-      const markedBody = injectMimoSystemMarker(baseBody);
+      // Xiaomi free chat only accepts reasoning_effort in {low, medium, high}.
+      // Codex Desktop often sends max/xhigh/ultra — clamp so free turns don't 400.
+      const clampReasoningEffort = (body: unknown): unknown => {
+        if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+        const rec = body as Record<string, unknown>;
+        const effort = rec.reasoning_effort;
+        if (typeof effort !== "string") return body;
+        const allowed = new Set(["low", "medium", "high"]);
+        if (allowed.has(effort)) return body;
+        const mapped = effort === "minimal" || effort === "none" ? "low" : "high";
+        return { ...rec, reasoning_effort: mapped };
+      };
+      const markedBody = clampReasoningEffort(injectMimoSystemMarker(baseBody));
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -195,31 +207,58 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
     },
 
     async fetchResponse(request: AdapterRequest, ctx): Promise<Response> {
-      const response = await fetch(request.url, {
+      const doFetch = (headers: Record<string, string>) => fetch(request.url, {
         method: request.method,
-        headers: request.headers as Record<string, string>,
+        headers,
         body: request.body,
         signal: ctx?.abortSignal,
       });
+
+      let headers = request.headers as Record<string, string>;
+      let response = await doFetch(headers);
 
       // Retry predicate: 401 (expired/invalid JWT) retries ONCE with a fresh token.
       // 403 is NOT retried — Xiaomi uses it for anti-abuse "Illegal access" and there is
       // no documented token-expiry signature that would mark a 403 as retryable.
       if (response.status === 401) {
-        // Drain the first response body before issuing the retry.
         try { await response.body?.cancel(); } catch { /* already consumed */ }
         resetMimoJwtCache();
         const freshJwt = await getMimoJwt(ctx?.abortSignal);
-        const retryHeaders = {
-          ...(request.headers as Record<string, string>),
+        headers = {
+          ...headers,
           "Authorization": `Bearer ${freshJwt}`,
         };
-        return fetch(request.url, {
-          method: request.method,
-          headers: retryHeaders,
-          body: request.body,
-          signal: ctx?.abortSignal,
-        });
+        response = await doFetch(headers);
+      }
+
+      // Pre-stream 5xx blips from the free tier — retry a couple times (body is replayable).
+      for (let attempt = 0; attempt < 2 && (response.status === 500 || response.status === 502 || response.status === 503); attempt++) {
+        try { await response.body?.cancel(); } catch { /* already consumed */ }
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+        response = await doFetch(headers);
+      }
+
+      // 441 / high-frequency abuse: rotate anonymous client id + JWT once and retry.
+      if (response.status === 400 || response.status === 403 || response.status === 441) {
+        let payloadText = "";
+        try { payloadText = await response.clone().text(); } catch { /* ignore */ }
+        const blocked = response.status === 441
+          || /高频|违规|441|Illegal access|rate/i.test(payloadText);
+        if (blocked) {
+          try { await response.body?.cancel(); } catch { /* already consumed */ }
+          resetMimoJwtCache();
+          resetMimoClientIdCache();
+          try {
+            const { unlinkSync, existsSync } = await import("node:fs");
+            const { join } = await import("node:path");
+            const { getConfigDir } = await import("../config");
+            const idFile = join(getConfigDir(), "mimo-client-id");
+            if (existsSync(idFile)) unlinkSync(idFile);
+          } catch { /* best-effort file rotate */ }
+          const freshJwt = await getMimoJwt(ctx?.abortSignal);
+          headers = { ...headers, "Authorization": `Bearer ${freshJwt}` };
+          response = await doFetch(headers);
+        }
       }
 
       return response;

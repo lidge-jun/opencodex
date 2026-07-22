@@ -454,6 +454,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       );
       if (forward) outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
       else outBody = stripConflictingHostedTools(outBody);
+      // ChatGPT Codex REST rejects non-stream turns with {"detail":"Stream must be set to true"}
+      // and often requires store:false for unstored item ids. Force stream:true on the wire;
+      // the responses handler buffers SSE → JSON when the client asked for stream:false.
+      if (forward && isPlainObject(outBody)) {
+        const next: Record<string, unknown> = { ...outBody };
+        if (next.stream !== true) next.stream = true;
+        if (next.store !== false) next.store = false;
+        outBody = next;
+      }
       return {
         url,
         method: "POST",
