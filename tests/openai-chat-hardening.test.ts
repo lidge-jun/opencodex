@@ -158,3 +158,53 @@ describe("openai-chat credential hardening", () => {
     expect(body).not.toHaveProperty("prompt_cache_key");
   });
 });
+
+describe("openai-chat max output defaults", () => {
+  test("omits max_tokens when neither request nor provider config sets a budget", () => {
+    const body = JSON.parse(createOpenAIChatAdapter(provider()).buildRequest(parsed()).body);
+
+    expect(body).not.toHaveProperty("max_tokens");
+  });
+
+  test("uses provider defaultMaxOutputTokens when Codex omits max_output_tokens", () => {
+    const body = JSON.parse(createOpenAIChatAdapter(provider({ defaultMaxOutputTokens: 32_000 })).buildRequest(parsed()).body);
+
+    expect(body.max_tokens).toBe(32_000);
+  });
+
+  test("modelMaxOutputTokens beats the provider default and supports model matching helpers", () => {
+    const req = parsed();
+    req.modelId = "gpt-oss:120b";
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      defaultMaxOutputTokens: 16_000,
+      modelMaxOutputTokens: { "gpt-oss": 64_000 },
+    })).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(64_000);
+  });
+
+  test("explicit request max_output_tokens beats configured defaults", () => {
+    const req = parsed();
+    req.options.maxOutputTokens = 8_000;
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      defaultMaxOutputTokens: 32_000,
+      modelMaxOutputTokens: { "test-model": 64_000 },
+    })).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(8_000);
+  });
+
+  test("thinking-budget models size thinking_budget from the effective default budget", () => {
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      defaultMaxOutputTokens: 20_000,
+      thinkingBudgetModels: ["test-model"],
+      reasoningEffortMap: { high: "high" },
+    })).buildRequest({
+      ...parsed(),
+      options: { reasoning: "high" },
+    }).body);
+
+    expect(body.max_tokens).toBe(20_000);
+    expect(body.thinking_budget).toBe(15_000);
+  });
+});

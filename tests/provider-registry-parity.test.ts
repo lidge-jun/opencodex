@@ -168,6 +168,46 @@ describe("provider registry parity", () => {
     }
   });
 
+  test("registry output-token defaults hydrate stale provider configs and keep user overrides", () => {
+    const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === "zai")!;
+    const originalDefaultMaxOutputTokens = registryEntry.defaultMaxOutputTokens;
+    const originalModelMaxOutputTokens = registryEntry.modelMaxOutputTokens;
+    try {
+      registryEntry.defaultMaxOutputTokens = 32_000;
+      registryEntry.modelMaxOutputTokens = {
+        "glm-5.2": 128_000,
+        "glm-5.2[1m]": 128_000,
+      };
+      const config: OcxConfig = {
+        port: 10100,
+        defaultProvider: "zai",
+        providers: {
+          zai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.z.ai/api/coding/paas/v4",
+            defaultMaxOutputTokens: 16_000,
+            modelMaxOutputTokens: { "glm-5.2": 64_000 },
+          },
+        },
+      };
+
+      const routed = routeModel(config, "zai/glm-5.2");
+
+      expect(routed.provider.defaultMaxOutputTokens).toBe(16_000);
+      expect(routed.provider.modelMaxOutputTokens).toEqual({
+        "glm-5.2": 64_000,
+        "glm-5.2[1m]": 128_000,
+      });
+      expect(providerConfigSeed(registryEntry).modelMaxOutputTokens?.["glm-5.2"]).toBe(128_000);
+      expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.2"]).toBe(128_000);
+    } finally {
+      if (originalDefaultMaxOutputTokens === undefined) delete registryEntry.defaultMaxOutputTokens;
+      else registryEntry.defaultMaxOutputTokens = originalDefaultMaxOutputTokens;
+      if (originalModelMaxOutputTokens === undefined) delete registryEntry.modelMaxOutputTokens;
+      else registryEntry.modelMaxOutputTokens = originalModelMaxOutputTokens;
+    }
+  });
+
   test("CN provider defaults and context windows match the audited registry refresh", () => {
     const deepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek");
     expect(deepseek).toMatchObject({

@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
   codexAutoStartEnabled,
+  positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
@@ -227,6 +228,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (headersError) return `provider ${name} ${headersError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
+  const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
+  if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
+  const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
+  if (maxOutputError) return `provider ${name} ${maxOutputError}`;
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   if (typed.authMode === "local") {
@@ -293,6 +298,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "models",
       "contextWindow",
       "modelContextWindows",
+      "defaultMaxOutputTokens",
+      "modelMaxOutputTokens",
       "openRouterRouting",
       "modelOpenRouterRouting",
       "reasoningEfforts",

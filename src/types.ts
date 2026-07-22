@@ -667,6 +667,13 @@ export interface OcxProviderConfig {
   modelInputModalities?: Record<string, string[]>;
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
+  /**
+   * Provider-wide fallback for chat-completions `max_tokens` when the caller omits
+   * Responses `max_output_tokens`. Adapters still let an explicit request win.
+   */
+  defaultMaxOutputTokens?: number;
+  /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
+  modelMaxOutputTokens?: Record<string, number>;
   headers?: Record<string, string>;
   /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
   openRouterRouting?: OpenRouterProviderRouting;

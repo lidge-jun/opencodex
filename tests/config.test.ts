@@ -12,6 +12,7 @@ import {
   isOcxStartCommandLine,
   loadConfig,
   parsePidFile,
+  positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   readConfigDiagnostics,
   readRuntimePort,
@@ -355,6 +356,40 @@ describe("opencodex config defaults", () => {
     for (const invalid of [null, [], { model: 0 }, { model: -1 }, { model: 1.5 }, { model: "1" }, { model: Number.POSITIVE_INFINITY }]) {
       expect(positiveIntegerRecordConfigError(invalid, "modelMaxInputTokens")).not.toBeNull();
     }
+  });
+
+  test("output token defaults accept only positive finite integers", () => {
+    expect(positiveIntegerConfigError(128_000, "defaultMaxOutputTokens")).toBeNull();
+    for (const invalid of [null, [], {}, 0, -1, 1.5, "128000", Number.POSITIVE_INFINITY]) {
+      expect(positiveIntegerConfigError(invalid, "defaultMaxOutputTokens")).not.toBeNull();
+    }
+
+    expect(positiveIntegerRecordConfigError({ "glm-5.2": 128_000 }, "modelMaxOutputTokens")).toBeNull();
+    expect(positiveIntegerRecordConfigError({ "glm-5.2": 0 }, "modelMaxOutputTokens")).not.toBeNull();
+  });
+
+  test("disk config rejects malformed output token defaults", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", defaultMaxOutputTokens: 1.5 },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("providers.custom.defaultMaxOutputTokens");
+
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", modelMaxOutputTokens: { model: 0 } },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxOutputTokens");
   });
 
   test("disk config rejects malformed modelMaxInputTokens", () => {

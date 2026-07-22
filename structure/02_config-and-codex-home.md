@@ -45,6 +45,17 @@ opencodex also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile
 uses `service_tier = "fast"` and `[features].fast_mode = true`; catalog/request tier metadata may use
 `priority`. Do not collapse these spellings into one value.
 
+## Provider output defaults
+
+`OcxProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
+not context-window metadata. They are applied only when a Responses request omits
+`max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
+the provider default, then the adapter omits `max_tokens`.
+
+Both fields must stay positive finite integers at disk-config and management validation boundaries.
+Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
+and `routeModel`, but user config overrides registry defaults per field/key.
+
 ## Restore
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip

@@ -71,6 +71,12 @@ the client. Only the first iteration's final response headers/status and any 429
 handled eagerly. A failure before downstream SSE starts returns non-2xx JSON; once headers have
 started the final response, a generation failure is emitted as `response.failed` SSE.
 
+Historical `web_search_call` output items from previous Responses turns are not converted into
+assistant text. They are UI/search-cell evidence, not a replayable search result payload; turning
+them into strings risks routed models echoing an internal marker or implying a current search ran
+when the sidecar is unavailable. The active sidecar path is the only place that emits new
+`web_search_call_begin` / `web_search_call_end` events.
+
 Four independent clocks bound this path. `stallTimeoutSec` is the base bridge event-stall budget.
 `connectTimeoutMs` (default 200 s) covers only DNS/TCP/TLS and the wait for final response headers,
 not response-body generation. Config-file-only

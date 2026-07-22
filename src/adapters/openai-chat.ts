@@ -1,7 +1,7 @@
 import type { ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
-import { mapReasoningEffort } from "../reasoning-effort";
+import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { neutralizeIdentity } from "./identity";
@@ -460,9 +460,15 @@ function usageFromOpenAIChat(usage: Record<string, unknown> | undefined): OcxUsa
   };
 }
 
-function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: string): number | undefined {
+function resolveMaxTokens(provider: OcxProviderConfig, parsed: OcxParsedRequest): number | undefined {
+  return parsed.options.maxOutputTokens
+    ?? modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
+    ?? provider.defaultMaxOutputTokens;
+}
+
+function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: string, maxOutputTokens?: number): number | undefined {
   if (parsed.options.reasoning === "minimal") return 0;
-  const maxBudget = parsed.options.maxOutputTokens ?? 32768;
+  const maxBudget = maxOutputTokens ?? 32768;
   const fractions: Record<string, number> = {
     low: 0.20,
     medium: 0.50,
@@ -495,6 +501,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
+      const maxTokens = resolveMaxTokens(provider, parsed);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
       if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
       if (tools) body.tools = tools;
@@ -503,7 +510,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           ? (toolChoice === "none" ? "none" : "auto")
           : toolChoice;
       }
-      if (parsed.options.maxOutputTokens !== undefined) body.max_tokens = parsed.options.maxOutputTokens;
+      if (maxTokens !== undefined) body.max_tokens = maxTokens;
       if (parsed.options.temperature !== undefined && !modelInList(provider.noTemperatureModels, parsed.modelId)) {
         body.temperature = parsed.options.temperature;
       }
@@ -514,7 +521,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
       if (reasoningEffort !== undefined) {
         if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
-          const budget = thinkingBudgetForEffort(parsed, reasoningEffort);
+          const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
           if (budget !== undefined) body.thinking_budget = budget;
         } else if (modelInList(provider.thinkingToggleModels, parsed.modelId)) {
           // Vendor thinking-toggle wire (MiMo v2.x, GLM 5/5.1): the mapped value is the toggle

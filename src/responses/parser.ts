@@ -443,13 +443,10 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "web_search_call") {
-        // Replayed hosted web-search evidence. Textify it into assistant history so the model
-        // knows the search already ran (prevents re-search loops); there is no output to pair.
-        const call = item as { action?: { type?: string; query?: string } };
-        const query = typeof call.action?.query === "string" ? call.action.query : "";
-        assistantHolderWithReasoning().content.push({
-          type: "text", text: query ? `[web search performed: ${query}]` : "[web search performed]",
-        });
+        // Replayed hosted web-search evidence has no paired result payload that routed providers can
+        // consume. Keep it out of assistant-visible text: the old marker was useful as an internal
+        // loop hint, but when no sidecar is available the model can echo it as a fake answer.
+        pendingReasoning.length = 0;
         continue;
       }
 

@@ -53,6 +53,8 @@ export interface ProviderRegistryEntry {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  defaultMaxOutputTokens?: number;
+  modelMaxOutputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
@@ -87,7 +89,7 @@ export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "adapter" | "baseUrl" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
-  | "modelMaxInputTokens"
+  | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"

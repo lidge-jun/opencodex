@@ -396,6 +396,14 @@ export function positiveIntegerRecordConfigError(value: unknown, field: string):
   return null;
 }
 
+export function positiveIntegerConfigError(value: unknown, field: string): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    return `${field} must be a positive finite integer`;
+  }
+  return null;
+}
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   providers: z.record(z.string(), providerConfigSchema),
@@ -468,6 +476,28 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "modelMaxInputTokens"],
         message: maxInputError,
+      });
+    }
+    const defaultMaxOutputError = positiveIntegerConfigError(
+      (provider as { defaultMaxOutputTokens?: unknown }).defaultMaxOutputTokens,
+      "defaultMaxOutputTokens",
+    );
+    if (defaultMaxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "defaultMaxOutputTokens"],
+        message: defaultMaxOutputError,
+      });
+    }
+    const maxOutputError = positiveIntegerRecordConfigError(
+      (provider as { modelMaxOutputTokens?: unknown }).modelMaxOutputTokens,
+      "modelMaxOutputTokens",
+    );
+    if (maxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelMaxOutputTokens"],
+        message: maxOutputError,
       });
     }
     if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {

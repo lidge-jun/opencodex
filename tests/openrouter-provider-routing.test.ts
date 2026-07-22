@@ -159,7 +159,17 @@ describe("OpenRouter provider-routing validation", () => {
     const openrouter = provider("https://openrouter.ai/api/v1", {
       openRouterRouting: { order: ["deepseek"], allowFallbacks: false },
     });
+    openrouter.defaultMaxOutputTokens = 32_000;
+    openrouter.modelMaxOutputTokens = { "anthropic/claude-sonnet-5": 64_000 };
     expect(providerManagementConfigError("openrouter", openrouter)).toBeNull();
+    expect(providerManagementConfigError("openrouter", {
+      ...openrouter,
+      defaultMaxOutputTokens: 0,
+    })).toContain("defaultMaxOutputTokens");
+    expect(providerManagementConfigError("openrouter", {
+      ...openrouter,
+      modelMaxOutputTokens: { "anthropic/claude-sonnet-5": 0 },
+    })).toContain("modelMaxOutputTokens");
     expect(providerManagementConfigError("custom", {
       ...openrouter,
       baseUrl: "https://example.test/v1",
@@ -168,9 +178,11 @@ describe("OpenRouter provider-routing validation", () => {
       port: 10100,
       defaultProvider: "openrouter",
       providers: { openrouter },
-    }) as { providers: Record<string, { openRouterRouting?: unknown }> };
+    }) as { providers: Record<string, { openRouterRouting?: unknown; defaultMaxOutputTokens?: unknown; modelMaxOutputTokens?: unknown }> };
     expect(dto.providers.openrouter.openRouterRouting).toEqual({
       order: ["deepseek"], allowFallbacks: false,
     });
+    expect(dto.providers.openrouter.defaultMaxOutputTokens).toBe(32_000);
+    expect(dto.providers.openrouter.modelMaxOutputTokens).toEqual({ "anthropic/claude-sonnet-5": 64_000 });
   });
 });

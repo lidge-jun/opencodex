@@ -13,6 +13,8 @@ export interface DerivedKeyLoginProvider {
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
   modelMaxInputTokens?: Record<string, number>;
+  defaultMaxOutputTokens?: number;
+  modelMaxOutputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
   modelReasoningEfforts?: Record<string, string[]>;
   modelDefaultReasoningEfforts?: Record<string, string>;
@@ -96,6 +98,8 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
     ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
+    ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
+    ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
     ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
     ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
@@ -135,6 +139,8 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
       ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
       ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
+      ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
+      ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
@@ -203,6 +209,8 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
   if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
   if (!prov.modelInputModalities && seed.modelInputModalities) prov.modelInputModalities = cloneRecordOfArrays(seed.modelInputModalities);
+  if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
+  if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
   if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
   if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };

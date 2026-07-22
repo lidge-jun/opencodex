@@ -204,14 +204,15 @@ describe("codex-rs compat surface (260707)", () => {
     expect(result?.content).toBe("total 0");
   });
 
-  test("web_search_call replay becomes assistant history text with the query", () => {
+  test("web_search_call replay stays out of assistant-visible history text", () => {
     const parsed = parseRequest({ ...base, input: [
       { type: "web_search_call", status: "completed", action: { type: "search", query: "bun 1.3 release" } },
       { type: "message", role: "user", content: "and now?" },
     ]});
-    const assistant = parsed.context.messages.find(m => m.role === "assistant");
-    const text = (assistant?.content as { type: string; text?: string }[]).find(p => p.type === "text");
-    expect(text?.text).toContain("bun 1.3 release");
+    const serialized = JSON.stringify(parsed.context.messages);
+    expect(serialized).not.toContain("[web search performed");
+    expect(serialized).not.toContain("bun 1.3 release");
+    expect(parsed.context.messages.map(m => m.role)).toEqual(["user"]);
   });
 
   test("tool_search_output failed status is surfaced as an error result", () => {

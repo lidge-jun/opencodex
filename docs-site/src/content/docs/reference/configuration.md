@@ -155,6 +155,9 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `contextWindow?` | `number` | Provider-wide Codex-visible context-window cap for routed catalog entries. Live metadata below this value is kept. |
 | `modelContextWindows?` | `Record<string,number>` | Model-specific context-window caps. These override `contextWindow` for matching model ids and never raise smaller live metadata. |
 | `modelInputModalities?` | `Record<string,string[]>` | Model-specific catalog input hints such as `["text"]` or `["text", "image"]`. |
+| `modelMaxInputTokens?` | `Record<string,number>` | Model-specific max input token limits used for catalog auto-compaction hints. Values must be positive integers. |
+| `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback for `max_tokens` when the client omits `max_output_tokens`. Explicit requests still win. |
+| `modelMaxOutputTokens?` | `Record<string,number>` | Model-specific `openai-chat` fallback output budgets. Exact/model-pattern matches beat `defaultMaxOutputTokens`; all values must be positive integers. |
 | `headers?` | `Record<string,string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid header names are rejected. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter provider preferences. Supports `order`, `only`, and `allowFallbacks`; valid only with the canonical OpenRouter base URL and `openai-chat` adapter. |
 | `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | Exact model-id overrides for `openRouterRouting`. A matching entry replaces the provider-wide default. |

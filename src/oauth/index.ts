@@ -478,6 +478,8 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "models",
   "contextWindow",
   "modelContextWindows",
+  "defaultMaxOutputTokens",
+  "modelMaxOutputTokens",
   "modelInputModalities",
   "noReasoningModels",
   "noVisionModels",
