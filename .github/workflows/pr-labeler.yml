@@ -4,7 +4,7 @@ name: PR Labeler
 # prefix (conventional-commits style). No secrets or external services needed.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize]
 
 concurrency:
