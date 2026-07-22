@@ -1,5 +1,5 @@
 import * as readline from "node:readline";
-import { existsSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
 import { classifyOpenAiTierBackup, getConfigPath, getDefaultConfig, isValidProviderName, saveConfig } from "../config";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
@@ -63,9 +63,21 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
       unlinkSync(backup);
       return;
     }
-    const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}.bak`;
-    renameSync(backup, preserved);
-    console.warn(`⚠️  Kept your pre-migration config rollback snapshot at ${preserved}`);
+    // Publish the preserved snapshot with a no-replace copy (COPYFILE_EXCL) so a
+    // destination collision (frozen/rolled-back clock, pre-created file) can never
+    // silently overwrite another rollback snapshot; retry with a sequence suffix.
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
+      try {
+        copyFileSync(backup, preserved, fsConstants.COPYFILE_EXCL);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw error;
+      }
+      unlinkSync(backup);
+      console.warn(`⚠️  Kept your pre-migration config rollback snapshot at ${preserved}`);
+      return;
+    }
   } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
 }
 

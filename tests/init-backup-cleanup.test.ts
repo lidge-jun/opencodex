@@ -55,6 +55,32 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
     expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(v1);
   });
 
+  test("does not overwrite an occupied rollback destination (no-replace publication)", () => {
+    const dir = makeDir();
+    const configPath = join(dir, "config.json");
+    const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+    const v1 = JSON.stringify({ openaiProviderTierVersion: 1, port: 10100, defaultProvider: "openai", providers: {} });
+    writeFileSync(backup, v1);
+    // Pre-occupy the first-choice destination for the current clock tick(s).
+    const now = Date.now();
+    const existing = `${configPath}.pre-openai-tiers-v1-rollback.${now}.bak`;
+    writeFileSync(existing, "existing rollback");
+    const realNow = Date.now;
+    Date.now = () => now; // freeze the clock so the collision is deterministic
+    try {
+      cleanupOpenAiTierBackupAfterInit(configPath);
+    } finally {
+      Date.now = realNow;
+    }
+    // The pre-existing snapshot must be untouched, and the v1 backup preserved elsewhere.
+    expect(readFileSync(existing, "utf8")).toBe("existing rollback");
+    expect(existsSync(backup)).toBe(false);
+    const preserved = readdirSync(dir)
+      .filter(name => name.includes("pre-openai-tiers-v1-rollback") && join(dir, name) !== existing);
+    expect(preserved).toHaveLength(1);
+    expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(v1);
+  });
+
   test("classifyOpenAiTierBackup shares the migration policy", () => {
     const enc = (value: string) => new TextEncoder().encode(value);
     expect(classifyOpenAiTierBackup(enc(JSON.stringify({ openaiProviderTierVersion: 2 })))).toBe("stale");
