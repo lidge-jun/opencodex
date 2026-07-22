@@ -88,10 +88,19 @@ function pushSystemText(parts: string[], content: unknown): void {
 
 function toolCallsToItems(toolCalls: unknown, input: Rec[]): void {
   if (!Array.isArray(toolCalls)) return;
+  // Recover names from earlier function_call items in the same transcript when a client
+  // re-sends tool_calls with only id/arguments (replace-style merge lost function.name).
+  const knownNameByCallId = new Map<string, string>();
+  for (const item of input) {
+    if (!isRec(item) || item.type !== "function_call") continue;
+    if (typeof item.call_id === "string" && typeof item.name === "string" && item.name.length > 0) {
+      knownNameByCallId.set(item.call_id, item.name);
+    }
+  }
   for (const raw of toolCalls) {
     if (!isRec(raw)) continue;
     const fn = isRec(raw.function) ? raw.function : null;
-    const name = typeof fn?.name === "string" ? fn.name : typeof raw.name === "string" ? raw.name : "";
+    let name = typeof fn?.name === "string" ? fn.name : typeof raw.name === "string" ? raw.name : "";
     const args = typeof fn?.arguments === "string"
       ? fn.arguments
       : typeof raw.arguments === "string"
@@ -102,7 +111,9 @@ function toolCallsToItems(toolCalls: unknown, input: Rec[]): void {
       : typeof raw.call_id === "string" && raw.call_id.length > 0
         ? raw.call_id
         : `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    if (!name) name = knownNameByCallId.get(callId) ?? "";
     if (!name) throw new ChatCompletionsRequestError("tool_calls entries require function.name");
+    knownNameByCallId.set(callId, name);
     input.push({ type: "function_call", call_id: callId, name, arguments: args });
   }
 }

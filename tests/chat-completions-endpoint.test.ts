@@ -609,3 +609,80 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("responsesSseToChatCompletionsSse always re-emits function.name on args/done deltas", async () => {
+  const { responsesSseToChatCompletionsSse, collectChatCompletion } = await import("../src/chat/outbound");
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '"ls"}' })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: '{"cmd":"ls"}' } })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
+  ];
+  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const frame of frames) controller.enqueue(enc.encode(frame));
+      controller.close();
+    },
+  }), "gpt-test");
+  const text = await new Response(stream).text();
+  const chunks = text.split("\n\n")
+    .map(block => block.trim())
+    .filter(block => block.startsWith("data: ") && !block.includes("[DONE]"))
+    .map(block => JSON.parse(block.slice(6)) as {
+      choices?: Array<{ delta?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
+    });
+  const toolDeltas = chunks.flatMap(c => c.choices?.[0]?.delta?.tool_calls ?? [])
+    .filter(tc => tc.function && ("arguments" in (tc.function ?? {}) || "name" in (tc.function ?? {})));
+  // Every tool delta that carries arguments must also carry the name for replace-style clients.
+  for (const tc of toolDeltas) {
+    if (typeof tc.function?.arguments === "string") {
+      expect(tc.function?.name).toBe("exec_command");
+    }
+  }
+  // Last-write-wins collect still yields a complete named tool call.
+  const completion = await collectChatCompletion(responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const frame of frames) controller.enqueue(enc.encode(frame));
+      controller.close();
+    },
+  }), "gpt-test"), "gpt-test");
+  const toolCalls = (completion.choices as Array<{ message?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>)[0]
+    ?.message?.tool_calls ?? [];
+  expect(toolCalls[0]?.function?.name).toBe("exec_command");
+  expect(toolCalls[0]?.function?.arguments).toBe('{"cmd":"ls"}');
+});
+
+test("chatCompletionsToResponsesBody recovers tool_calls function.name from earlier call_id", () => {
+  // Simulate replace-style client history: a later assistant tool_call has id+args but empty name,
+  // while an earlier function_call in the same transcript already named it.
+  // Our translator processes messages in order; recovery looks at previously emitted function_calls.
+  // First push a prior named call via a previous assistant message, then a nameless replay.
+  const body = chatCompletionsToResponsesBody({
+    model: "gpt-test",
+    messages: [
+      { role: "user", content: "run ls" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_a", type: "function", function: { name: "exec_command", arguments: '{"cmd":"ls"}' } }],
+      },
+      { role: "tool", tool_call_id: "call_a", content: "ok" },
+      {
+        role: "assistant",
+        content: null,
+        // Client lost the name on a re-serialized tool_call with same id (should still recover if same turn
+        // already registered the name earlier in the same tool_calls array / prior items).
+        tool_calls: [
+          { id: "call_b", type: "function", function: { name: "exec_command", arguments: '{"cmd":"pwd"}' } },
+          { id: "call_b", type: "function", function: { arguments: '{"cmd":"pwd"}' } },
+        ],
+      },
+    ],
+  });
+  const calls = (body.input as Array<Record<string, unknown>>).filter(i => i.type === "function_call");
+  expect(calls.some(c => c.call_id === "call_b" && c.name === "exec_command")).toBe(true);
+});

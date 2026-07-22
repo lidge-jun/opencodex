@@ -132,6 +132,7 @@ export function responsesSseToChatCompletionsSse(
   // tool call_id -> streaming index (OpenAI requires stable indices per tool call)
   const toolIndexByCallId = new Map<string, number>();
   const toolIndexByItemId = new Map<string, number>();
+  const toolNameByIndex = new Map<number, string>();
   let nextToolIndex = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -231,6 +232,7 @@ export function responsesSseToChatCompletionsSse(
               toolIndexByCallId.set(callId, toolIndex);
             }
             if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
+            if (name) toolNameByIndex.set(toolIndex, name);
             const frame = chunkBase(id, model, created);
             frame.choices = [{
               index: 0,
@@ -239,6 +241,8 @@ export function responsesSseToChatCompletionsSse(
                   index: toolIndex,
                   id: callId,
                   type: "function",
+                  // Always include name so clients that replace (not merge) tool_calls
+                  // deltas never end up with function.name-less history.
                   function: { name, arguments: "" },
                 }],
               },
@@ -253,13 +257,18 @@ export function responsesSseToChatCompletionsSse(
             const toolIndex = (itemId ? toolIndexByItemId.get(itemId) : undefined)
               ?? (nextToolIndex > 0 ? nextToolIndex - 1 : 0);
             ensureRole();
+            const knownName = toolNameByIndex.get(toolIndex) ?? "";
+            const fn: Rec = { arguments: data.delta };
+            // Re-emit name on every args delta: GitHub Copilot App / some ChatGPT clients
+            // replace the whole function object instead of merging, which otherwise drops name.
+            if (knownName) fn.name = knownName;
             const frame = chunkBase(id, model, created);
             frame.choices = [{
               index: 0,
               delta: {
                 tool_calls: [{
                   index: toolIndex,
-                  function: { arguments: data.delta },
+                  function: fn,
                 }],
               },
               finish_reason: null,
@@ -284,27 +293,23 @@ export function responsesSseToChatCompletionsSse(
                 toolIndexByCallId.set(callId, toolIndex);
               }
               if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
+              if (name) toolNameByIndex.set(toolIndex, name);
+              const finalName = name || toolNameByIndex.get(toolIndex) || "";
               // Last-write-wins: the done-frame snapshot is authoritative final arguments.
-              // Emit a final arguments snapshot so clients that only saw partial deltas
-              // (or no deltas) still get the correct tool call payload.
-              if (args.length > 0 || isNew) {
+              // Always re-emit full identity (id/type/name) so replace-style clients keep function.name.
+              if (args.length > 0 || isNew || finalName) {
                 ensureRole();
-                const toolCall: Rec = {
-                  index: toolIndex,
-                  function: { arguments: args },
-                };
-                if (isNew) {
-                  toolCall.id = callId;
-                  toolCall.type = "function";
-                  (toolCall.function as Rec).name = name;
-                } else if (name) {
-                  // Some providers only put the final name on the done frame.
-                  (toolCall.function as Rec).name = name;
-                }
                 const frame = chunkBase(id, model, created);
                 frame.choices = [{
                   index: 0,
-                  delta: { tool_calls: [toolCall] },
+                  delta: {
+                    tool_calls: [{
+                      index: toolIndex,
+                      id: callId,
+                      type: "function",
+                      function: { name: finalName, arguments: args },
+                    }],
+                  },
                   finish_reason: null,
                 }];
                 emit(frame);
