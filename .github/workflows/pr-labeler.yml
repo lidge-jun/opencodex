@@ -75,12 +75,12 @@ jobs:
               }
 
               const creator = context.payload.pull_request.user.login;
-              const existing = await github.rest.issues.listComments({
+              const allComments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 issue_number: pr,
               });
-              const alreadyCommented = existing.data.some(
+              const alreadyCommented = allComments.some(
                 c => c.user.login === 'github-actions[bot]' &&
                      c.body.includes('<!-- opencodex-label-nudge -->')
               );
