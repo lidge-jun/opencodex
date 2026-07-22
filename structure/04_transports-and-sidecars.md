@@ -81,11 +81,14 @@ closes the stream with `response.incomplete` / `upstream_stall_timeout` and canc
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
 
-The web-search loop requests `stream: true` for every routed-model iteration, but fully buffers its
-semantic adapter events internally so synthetic search calls and preliminary answers never leak to
-the client. Only the first iteration's final response headers/status and any 429 key rotations are
-handled eagerly. A failure before downstream SSE starts returns non-2xx JSON; once headers have
-started the final response, a generation failure is emitted as `response.failed` SSE.
+The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
+needed to decide whether to intercept a synthetic search call. Text explicitly phased as
+`commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
+progress visible while its bounded completion retry runs. Synthetic search calls, real tool calls,
+and terminal events remain buffered until the iteration validates. Only the first iteration's final
+response headers/status and any 429 key rotations are handled eagerly. A failure before downstream
+SSE starts returns non-2xx JSON; once headers have started the final response, a generation failure
+is emitted as `response.failed` SSE.
 
 Historical `web_search_call` output items from previous Responses turns are not converted into
 assistant text. They are UI/search-cell evidence, not a replayable search result payload; turning

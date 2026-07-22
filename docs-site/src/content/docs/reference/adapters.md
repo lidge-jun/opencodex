@@ -84,8 +84,38 @@ streams the response back **untranslated**.
   by the Kiro wire.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
-- Owns bounded retries and classified/redacted errors through `fetchResponse`; its non-streaming
-  parser drains the same event stream for the web-search loop.
+- Uses the configured `baseUrl` verbatim when it is custom. A canonical
+  `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
+  shape is eligible for one bounded fallback to `q.{region}.amazonaws.com` after an endpoint,
+  signature, DNS, or connection failure.
+- Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, and one OAuth
+  refresh/replay after HTTP 401. The client owns throttling, timeout, and ordinary service retries;
+  opencodex does not multiply those policies inside the adapter.
+- Its non-streaming parser drains the same event stream for the web-search loop.
+
+### Completion semantics
+
+Kiro text events do not carry a dependable end-turn phase. When an ordinary client tool is present,
+opencodex therefore adds a private `codex_kiro_final_answer` tool to the upstream request. Progress
+text streams as commentary and cannot terminate the turn. The adapter consumes the private call,
+emits its answer as final text, and never exposes the private tool to Codex or Claude Code.
+When the web-search sidecar is active, this commentary still streams immediately; only the events
+needed to decide whether the model requested a synthetic search remain buffered.
+
+If Kiro emits progress without calling the completion tool, the adapter makes one continuation. That
+single retry may finish with a validated private completion or plain final text. It cannot recurse:
+an empty or reasoning-only retry is returned as retryable incomplete, while a real client tool call
+keeps the turn open. If the retry only repeats the preceding commentary after whitespace
+normalization, the duplicate output is suppressed while the turn still completes. Tool-free
+requests retain normal text completion behavior.
+
+### Reasoning effort
+
+`gpt-5.6-sol` has verified native effort support. Its selected `low`, `medium`, `high`, `xhigh`, or
+`max` value is sent as `additionalModelRequestFields.reasoning.effort`. Other Kiro models currently
+use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
+the user content because their native effort field has not been verified. Do not interpret an
+advertised effort control on those models as proof of upstream-native reasoning support.
 
 ## `cursor`
 

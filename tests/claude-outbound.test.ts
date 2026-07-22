@@ -177,6 +177,55 @@ describe("claude outbound SSE", () => {
     expect(events.at(-1)!.name).toBe("message_stop");
   });
 
+  test("retryable or unknown incomplete becomes overloaded_error, never end_turn", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.output_text.delta", { delta: "partial" }),
+      sse("response.incomplete", {
+        response: {
+          status: "incomplete",
+          incomplete_details: {
+            reason: "empty_kiro_fallback",
+            message: "Kiro produced no final answer on its bounded completion retry",
+            retryable: true,
+          },
+        },
+      }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.some(event => event.name === "message_delta" || event.name === "message_stop")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "overloaded_error",
+          message: "Kiro produced no final answer on its bounded completion retry",
+        },
+      },
+    });
+
+    const json = responsesJsonToAnthropicMessage({
+      status: "incomplete",
+      incomplete_details: { reason: "reasoning_only_kiro_fallback", retryable: true },
+      output: [],
+    }, "m");
+    expect(json).toEqual({
+      type: "error",
+      error: {
+        type: "overloaded_error",
+        message: "upstream response was incomplete (reasoning_only_kiro_fallback)",
+      },
+    });
+  });
+
+  test("completed end_turn:false without a client tool becomes overloaded_error", async () => {
+    const upstream = sse("response.created", { response: {} })
+      + sse("response.completed", { response: { status: "completed", end_turn: false } });
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)).toMatchObject({ name: "error", data: { error: { type: "overloaded_error" } } });
+  });
+
   test("idle keepalive pings flow during upstream silence", async () => {
     // Upstream: created frame, 90ms of silence, then a clean completion.
     const encoder = new TextEncoder();

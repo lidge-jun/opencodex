@@ -220,6 +220,54 @@ describe("Responses bridge reasoning and usage parity", () => {
     });
   });
 
+  test("message phase and end_turn propagate through streaming added/done/completed events", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "Working…", phase: "commentary" },
+      { type: "text_delta", text: "Finished.", phase: "final_answer" },
+      { type: "done", endTurn: true },
+    ]), "kiro/gpt-5.6-sol"));
+
+    const added = frames
+      .filter(frame => frame.event === "response.output_item.added")
+      .map(frame => frame.data.item as Record<string, unknown>);
+    const done = frames
+      .filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>);
+    expect(added.map(item => item.phase)).toEqual(["commentary", "final_answer"]);
+    expect(done.map(item => item.phase)).toEqual(["commentary", "final_answer"]);
+
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.end_turn).toBe(true);
+    expect((completed.output as Record<string, unknown>[]).map(item => item.phase)).toEqual(["commentary", "final_answer"]);
+  });
+
+  test("explicit incomplete event stays incomplete with retry metadata", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "reasoning_raw_delta", text: "partial reasoning" },
+      {
+        type: "incomplete",
+        reason: "empty_or_unfinished_kiro_response",
+        message: "Kiro did not complete the turn",
+        retryable: true,
+        endTurn: false,
+        usage: { inputTokens: 10, outputTokens: 2 },
+      },
+    ]), "kiro/gpt-5.6-sol"));
+
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    const response = frames.find(frame => frame.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect(response).toMatchObject({
+      status: "incomplete",
+      end_turn: false,
+      incomplete_details: {
+        reason: "empty_or_unfinished_kiro_response",
+        message: "Kiro did not complete the turn",
+        retryable: true,
+      },
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+    });
+  });
+
   test("non-streaming JSON includes raw reasoning item and usage details", () => {
     const json = buildResponseJSON([
       { type: "reasoning_raw_delta", text: "raw json" },
@@ -238,6 +286,45 @@ describe("Responses bridge reasoning and usage parity", () => {
       input_tokens_details: { cached_tokens: 1, cache_write_tokens: 2 },
       output_tokens_details: { reasoning_tokens: 2 },
       total_tokens: 12,
+    });
+  });
+
+  test("non-streaming JSON preserves phase, end_turn, and incomplete semantics", () => {
+    const completed = buildResponseJSON([
+      { type: "text_delta", text: "progress", phase: "commentary" },
+      { type: "text_delta", text: "answer", phase: "final_answer" },
+      { type: "done", endTurn: true },
+    ], "kiro/gpt-5.6-sol");
+    expect(completed.end_turn).toBe(true);
+    expect((completed.output as Record<string, unknown>[]).map(item => item.phase)).toEqual(["commentary", "final_answer"]);
+
+    const incomplete = buildResponseJSON([
+      { type: "incomplete", reason: "empty_kiro_stream", retryable: true, endTurn: false },
+    ], "kiro/gpt-5.6-sol");
+    expect(incomplete).toMatchObject({
+      status: "incomplete",
+      end_turn: false,
+      incomplete_details: { reason: "empty_kiro_stream", retryable: true },
+    });
+  });
+
+  test("structured adapter errors override message heuristics", () => {
+    const json = buildResponseJSON([
+      {
+        type: "error",
+        message: "provider rejected this payload",
+        status: 400,
+        errorType: "invalid_request_error",
+        code: "context_length_exceeded",
+        retryable: false,
+      },
+    ], "kiro/gpt-5.6-sol");
+
+    expect(json.status).toBe("failed");
+    expect(json.error).toMatchObject({
+      type: "invalid_request_error",
+      code: "context_length_exceeded",
+      message: "provider rejected this payload",
     });
   });
 
@@ -316,11 +403,21 @@ describe("Responses bridge reasoning and usage parity", () => {
 
   test("non-streaming error produces failed status", () => {
     const json = buildResponseJSON([
-      { type: "error", message: "upstream 500" },
+      {
+        type: "error",
+        message: "",
+        status: 502,
+        errorType: "upstream_error",
+        code: "kiro_stream_error",
+        retryable: true,
+        usage: { inputTokens: 7, outputTokens: 3 },
+      },
     ], "model");
 
     expect(json.status).toBe("failed");
-    expect((json.error as Record<string, unknown>).message).toBe("upstream 500");
+    expect(json.retryable).toBe(true);
+    expect(json.usage).toMatchObject({ input_tokens: 7, output_tokens: 3 });
+    expect(json.error).toMatchObject({ type: "upstream_error", code: "kiro_stream_error", message: "" });
     expect((json.output as unknown[]).length).toBe(0);
   });
 

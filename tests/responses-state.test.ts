@@ -12,6 +12,7 @@ import {
   expandPreviousResponseInput,
   flushResponseState,
   previousResponseConversationId,
+  previousResponseProviderState,
   rememberResponseState,
 } from "../src/responses/state";
 
@@ -119,6 +120,26 @@ describe("Responses previous_response_id state", () => {
     ]);
   });
 
+  test("force records Kiro provider continuation despite store:false", () => {
+    const firstBody = { model: "kiro/gpt-5.6-sol", input: "hello", store: false };
+    const first = buildResponseJSON([
+      { type: "text_delta", text: "done", phase: "final_answer" },
+      { type: "done", endTurn: true },
+    ], "kiro/gpt-5.6-sol");
+    rememberResponseState(firstBody, first, { kiro: { conversationId: "kiro-conv-1" } }, { force: true });
+
+    expect(previousResponseProviderState(first.id as string)).toEqual({
+      kiro: { conversationId: "kiro-conv-1" },
+    });
+    const expanded = expandPreviousResponseInput({
+      model: "kiro/gpt-5.6-sol",
+      previous_response_id: first.id,
+      input: "next",
+      store: false,
+    }) as { input: unknown[] };
+    expect(expanded.input).toHaveLength(3);
+  });
+
   test("snapshot survives a simulated restart (memory clear + disk load)", () => {
     const firstBody = { model: "gpt-5.5", input: "hello" };
     const first = buildResponseJSON([
@@ -143,6 +164,48 @@ describe("Responses previous_response_id state", () => {
       { role: "user", content: "next" },
     ]);
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conv_9");
+  });
+
+  test("v1 Cursor snapshot migrates to versioned provider state", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "responses-state.json"), JSON.stringify({
+      version: 1,
+      states: [["resp_v1", {
+        createdAt: Date.now(),
+        items: [{ role: "user", content: "old" }],
+        conversationId: "cursor_v1",
+        cursorCheckpointUsable: false,
+      }]],
+    }));
+
+    expect(previousResponseProviderState("resp_v1")).toEqual({
+      cursor: { conversationId: "cursor_v1", checkpointUsable: false },
+    });
+    expect(previousResponseConversationId("resp_v1")).toBe("cursor_v1");
+  });
+
+  test("persists provider-keyed Cursor and Kiro continuation state across restart", () => {
+    const first = buildResponseJSON([
+      { type: "text_delta", text: "answer", phase: "final_answer" },
+      { type: "done", endTurn: true },
+    ], "kiro/gpt-5.6-sol");
+    rememberResponseState(
+      { model: "kiro/gpt-5.6-sol", input: "hello" },
+      first,
+      {
+        cursor: { conversationId: "cursor_conv_2" },
+        kiro: { conversationId: "kiro_conv_2" },
+      },
+    );
+    flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    expect(previousResponseProviderState(first.id as string)).toEqual({
+      cursor: { conversationId: "cursor_conv_2", checkpointUsable: true },
+      kiro: { conversationId: "kiro_conv_2" },
+    });
+    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { version: number };
+    expect(snapshot.version).toBe(2);
   });
 
   test("stale snapshot entries are pruned on load", () => {

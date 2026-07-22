@@ -9,6 +9,8 @@ export interface OcxParsedRequest {
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
   _cursorConversationId?: string;
+  /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
+  _providerContinuation?: OcxProviderContinuationState;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
@@ -57,6 +59,8 @@ export interface OcxUserMessage {
 export interface OcxAssistantMessage {
   role: "assistant";
   content: OcxAssistantContentPart[];
+  /** Responses message phase, preserved when replaying translated provider output. */
+  phase?: OcxMessagePhase;
   model?: string;
   timestamp: number;
 }
@@ -75,6 +79,8 @@ export interface OcxToolResultMessage {
   toolNamespace?: string;
   /** Text, or content parts when a tool (e.g. Codex view_image) returns an image in its output. */
   content: string | OcxContentPart[];
+  /** True when the Responses result contained opaque encrypted output Kiro cannot translate. */
+  containsEncryptedContent?: boolean;
   isError: boolean;
   timestamp: number;
 }
@@ -197,9 +203,26 @@ export interface OcxRequestOptions {
   promptCacheKey?: string;
 }
 
+export type OcxMessagePhase = "commentary" | "final_answer";
+
+/**
+ * Provider-private state that must follow a locally expanded `previous_response_id` chain.
+ * Kept out of public Responses output and persisted only in the bounded local continuation cache.
+ */
+export interface OcxProviderContinuationState {
+  cursor?: {
+    conversationId?: string;
+    checkpointUsable?: boolean;
+  };
+  kiro?: {
+    conversationId?: string;
+  };
+  [provider: string]: Record<string, unknown> | undefined;
+}
+
 export type AdapterEvent =
   | { type: "heartbeat" }
-  | { type: "text_delta"; text: string }
+  | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
@@ -217,10 +240,35 @@ export type AdapterEvent =
   // the SAME output index, so the activity animates instead of flashing completed instantly.
   | { type: "web_search_call_begin"; id: string }
   | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
-  | { type: "done"; usage?: OcxUsage; stopReason?: string }
+  | {
+      type: "done";
+      usage?: OcxUsage;
+      stopReason?: string;
+      endTurn?: boolean;
+      providerState?: OcxProviderContinuationState;
+    }
+  | {
+      type: "incomplete";
+      reason: string;
+      message?: string;
+      usage?: OcxUsage;
+      retryable?: boolean;
+      endTurn?: boolean;
+      providerState?: OcxProviderContinuationState;
+    }
   // `usage` carries best-effort partial consumption when a turn dies before a clean done
   // (e.g. cursor upstream 502 mid-stream), so failed requests can log real token counts.
-  | { type: "error"; message: string; usage?: OcxUsage };
+  | {
+      type: "error";
+      message: string;
+      usage?: OcxUsage;
+      /** Authoritative upstream/proxy status when known; avoids message-based classification. */
+      status?: number;
+      /** Responses error type and code when the adapter has a structured provider failure. */
+      errorType?: string;
+      code?: string;
+      retryable?: boolean;
+    };
 
 /**
  * A web source backing a search answer. Surfaced on the search-end event and rendered by the bridge

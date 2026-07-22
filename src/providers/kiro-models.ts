@@ -45,8 +45,8 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 const KIRO_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-// Kiro has no upstream reasoning_effort enum; these labels map to fake-thinking budgets in
-// src/adapters/kiro.ts.
+// gpt-5.6-sol sends these values through Kiro's verified native reasoning field. Other models map
+// them to bounded thinking instructions until their native effort support is verified.
 export const KIRO_MODEL_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
   KIRO_MODELS.map(id => [id, KIRO_REASONING_EFFORTS]),
 );

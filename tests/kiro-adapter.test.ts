@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../src/adapters/kiro";
+import { applyProviderConfigHints, buildCatalogEntries } from "../src/codex/catalog";
 import { normalizeKiroModelId } from "../src/providers/kiro-models";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../src/reasoning-effort";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
@@ -70,6 +71,16 @@ describe("kiro adapter — buildRequest", () => {
     const { url } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
 
     expect(url).toBe("https://runtime.ap-northeast-2.kiro.dev/");
+  });
+
+  test("a genuinely custom Kiro base URL is honored", async () => {
+    const custom = { ...provider, baseUrl: "https://kiro.internal.example/custom/generate" };
+    const { url } = await createKiroAdapter(custom).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
+    expect(url).toBe("https://kiro.internal.example/custom/generate");
+
+    const canonicalHostCustomPath = { ...provider, baseUrl: "https://runtime.us-east-1.kiro.dev/custom/generate" };
+    const customPath = await createKiroAdapter(canonicalHostCustomPath).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
+    expect(customPath.url).toBe("https://runtime.us-east-1.kiro.dev/custom/generate");
   });
 
   test("runtime URL rejects host-injection KIRO_API_REGION values", async () => {
@@ -169,9 +180,37 @@ describe("kiro adapter — buildRequest", () => {
     const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
     const ctx = current.userInputMessageContext;
     expect(current.content).toContain("Tool contract: use the current tool catalog as ground truth.");
-    expect(current.content).toContain("Valid tool names for this turn are exactly `grep`.");
+    expect(current.content).toContain("Valid tool names for this turn are exactly `grep`, `codex_kiro_final_answer`.");
     expect(ctx.tools[0].toolSpecification.name).toBe("grep");
     expect(ctx.tools[0].toolSpecification.inputSchema.json).toEqual({ type: "object" });
+  });
+
+  test("explicit completion is injected only when ordinary tools are effective", async () => {
+    const toolEnabled = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+    )).body).conversationState;
+    const firstUser = toolEnabled.history?.find((entry: { userInputMessage?: unknown }) => entry.userInputMessage)?.userInputMessage
+      ?? toolEnabled.currentMessage.userInputMessage;
+    const toolNames = toolEnabled.currentMessage.userInputMessage.userInputMessageContext.tools
+      .map((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name);
+    expect(toolNames).toEqual(["bash", "codex_kiro_final_answer"]);
+    expect(firstUser.content).toContain("Valid tool names for this turn are exactly `bash`, `codex_kiro_final_answer`.");
+    expect(firstUser.content).toContain("ordinary assistant text is mid-task commentary");
+    expect(firstUser.content).toContain("call codex_kiro_final_answer exactly once");
+
+    const toolFree = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }]),
+    )).body).conversationState.currentMessage.userInputMessage;
+    expect(JSON.stringify(toolFree)).not.toContain("codex_kiro_final_answer");
+
+    const none = {
+      ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+      options: { toolChoice: "none" },
+    } as OcxParsedRequest;
+    const disabled = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body)
+      .conversationState.currentMessage.userInputMessage;
+    expect(disabled.userInputMessageContext?.tools).toBeUndefined();
+    expect(JSON.stringify(disabled)).not.toContain("codex_kiro_final_answer");
   });
 
   test("namespaced (MCP) tools advertise + replay the full wire name", async () => {
@@ -464,7 +503,7 @@ describe("kiro adapter — buildRequest", () => {
     expect(withDefs.properties).toEqual({ a: { $ref: "#/$defs/X" } });
   });
 
-  test("long tool descriptions move into the system prompt instead of being truncated away", async () => {
+  test("tool descriptions use deterministic model-specific caps without prompt injection", async () => {
     const longDescription = `Long docs ${"x".repeat(1100)} keep this tail.`;
     const { body } = await createKiroAdapter(provider).buildRequest(
       parsedWith([{ role: "user", content: "hi" }], [{ name: "longtool", description: longDescription, parameters: { type: "object" } }]),
@@ -472,12 +511,24 @@ describe("kiro adapter — buildRequest", () => {
     const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
     const spec = current.userInputMessageContext.tools[0].toolSpecification;
 
-    expect(spec.description).toBe("Tool documentation moved to the system prompt: longtool.");
-    expect(current.content).toContain("### Tool documentation: longtool");
-    expect(current.content).toContain(longDescription);
+    expect(spec.description).toHaveLength(1024);
+    expect(spec.description.endsWith("…")).toBe(true);
+    expect(current.content).not.toContain("### Tool documentation");
+
+    const verifiedDescription = `Verified docs ${"y".repeat(10_000)}`;
+    const verifiedBody = (await createKiroAdapter(provider).buildRequest(
+      parsedWith(
+        [{ role: "user", content: "hi" }],
+        [{ name: "verified", description: verifiedDescription, parameters: { type: "object" } }],
+        "gpt-5.6-sol",
+      ),
+    )).body;
+    const verifiedSpec = JSON.parse(verifiedBody).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification;
+    expect(verifiedSpec.description).toHaveLength(9216);
+    expect(verifiedSpec.description.endsWith("…")).toBe(true);
   });
 
-  test("no-tools fallback converts assistant tool calls and tool results to text", async () => {
+  test("historical tool calls stay structured when the current catalog is omitted", async () => {
     const messages = [
       { role: "user", content: "run it" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "pwd" } }] },
@@ -488,26 +539,98 @@ describe("kiro adapter — buildRequest", () => {
     const assistant = cs.history.find((h: { assistantResponseMessage?: unknown }) => h.assistantResponseMessage).assistantResponseMessage;
     const current = cs.currentMessage.userInputMessage;
 
-    expect(assistant.toolUses).toBeUndefined();
-    expect(assistant.content).toContain("Tool call fallback (bash, id call-1):");
-    expect(current.content).toContain("Tool result fallback (bash, id call-1, success):");
-    expect(current.userInputMessageContext).toBeUndefined();
+    expect(assistant.toolUses).toEqual([{ name: "bash", input: { command: "pwd" }, toolUseId: "call-1" }]);
+    expect(assistant.content).toBe("");
+    expect(current.content).toBe("");
+    expect(current.userInputMessageContext.toolResults).toEqual([
+      { content: [{ text: "/tmp" }], status: "success", toolUseId: "call-1" },
+    ]);
+    expect(current.userInputMessageContext.tools).toBeUndefined();
   });
 
-  test("orphaned tool results fall back to text even when tools are available", async () => {
+  test("orphaned and encrypted tool results are rejected instead of fictionalized", async () => {
     const messages = [
       { role: "toolResult", toolCallId: "missing-call", toolName: "bash", content: "orphaned", isError: true },
     ];
-    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages, [bashTool]));
-    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
+    await expect(createKiroAdapter(provider).buildRequest(parsedWith(messages, [bashTool]))).rejects.toThrow(
+      "orphaned tool result",
+    );
 
-    expect(current.content).toContain("Tool result fallback (bash, id missing-call, error):");
-    expect(current.userInputMessageContext.toolResults).toBeUndefined();
-    expect(current.userInputMessageContext.tools).toHaveLength(1);
+    const encrypted = [
+      { role: "user", content: "run" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: "opaque", containsEncryptedContent: true, isError: false },
+    ];
+    await expect(createKiroAdapter(provider).buildRequest(parsedWith(encrypted, [bashTool]))).rejects.toThrow(
+      "cannot translate encrypted output",
+    );
+  });
+
+  test("adjacent user/developer and assistant items normalize without synthetic prose", async () => {
+    const messages = [
+      { role: "developer", content: "first" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: [{ type: "text", text: "one" }] },
+      { role: "assistant", content: [{ type: "text", text: "two" }] },
+      { role: "user", content: "third" },
+    ];
+    const cs = JSON.parse((await createKiroAdapter(provider).buildRequest(parsedWith(messages))).body).conversationState;
+    expect(cs.history).toEqual([
+      { userInputMessage: { content: "first\n\nsecond", modelId: "claude-sonnet-4.5", origin: "AI_EDITOR" } },
+      { assistantResponseMessage: { content: "one\n\ntwo" } },
+    ]);
+    expect(cs.currentMessage.userInputMessage.content).toBe("third");
+    expect(JSON.stringify(cs)).not.toContain("(acknowledged)");
+    expect(JSON.stringify(cs)).not.toContain("(continue)");
+  });
+
+  test("reserves the private completion name across the full collision domain", async () => {
+    await expect(createKiroAdapter(provider).buildRequest(parsedWith(
+      [{ role: "user", content: "hi" }],
+      [{ name: "codex_kiro_final_answer", description: "collision", parameters: { type: "object" } }],
+    ))).rejects.toThrow("reserves the tool name");
+
+    await expect(createKiroAdapter(provider).buildRequest(parsedWith([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "codex_kiro_final_answer", arguments: {} }] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "codex_kiro_final_answer", content: "x", isError: false },
+    ]))).rejects.toThrow("reserves the tool name");
+  });
+
+  test("conversation IDs are random once, then reused from provider continuation state", async () => {
+    const request = parsedWith([{ role: "user", content: "hi" }]);
+    const adapter = createKiroAdapter(provider);
+    const first = JSON.parse((await adapter.buildRequest(request)).body).conversationState.conversationId;
+    const second = JSON.parse((await adapter.buildRequest(request)).body).conversationState.conversationId;
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+
+    const remembered = parsedWith([{ role: "user", content: "next" }]);
+    remembered._providerContinuation = { kiro: { conversationId: "returned-conversation-7" } };
+    const reused = JSON.parse((await createKiroAdapter(provider).buildRequest(remembered)).body).conversationState.conversationId;
+    expect(reused).toBe("returned-conversation-7");
+  });
+
+  test("validates Kiro request capabilities explicitly", async () => {
+    for (const options of [
+      { toolChoice: "required" },
+      { toolChoice: { name: "bash" } },
+      { parallelToolCalls: true },
+      { serviceTier: "priority" },
+    ]) {
+      await expect(createKiroAdapter(provider).buildRequest({
+        ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+        options,
+      } as OcxParsedRequest)).rejects.toThrow(/Kiro (supports only|does not support)/);
+    }
+
+    const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
+    const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
+    expect(current.userInputMessageContext?.tools).toBeUndefined();
   });
 });
 
-describe("kiro adapter — fake reasoning effort tags", () => {
+describe("kiro adapter — native and emulated reasoning effort", () => {
   const kiro = PROVIDER_REGISTRY.find(p => p.id === "kiro") as unknown as OcxProviderConfig;
 
   test("kiro advertises Codex-compatible reasoning efforts", async () => {
@@ -515,6 +638,18 @@ describe("kiro adapter — fake reasoning effort tags", () => {
     expect(configuredReasoningEfforts(kiro, "claude-opus-4.8")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(configuredReasoningEfforts(kiro, "claude-opus-4.5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(configuredReasoningEfforts(kiro, "kiro-auto")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("kiro catalog disables unsupported Responses verbosity controls", () => {
+    const model = applyProviderConfigHints(
+      "kiro",
+      kiro,
+      { provider: "kiro", id: "gpt-5.6-sol" },
+    );
+    const entry = buildCatalogEntries(null, [], [model]).find(candidate => candidate.slug === "kiro/gpt-5.6-sol");
+
+    expect(model.supportsVerbosity).toBe(false);
+    expect(entry?.support_verbosity).toBe(false);
   });
 
   test("mapReasoningEffort keeps xhigh and max as distinct labels", async () => {
@@ -555,8 +690,24 @@ describe("kiro adapter — fake reasoning effort tags", () => {
     const { body } = await createKiroAdapter(provider).buildRequest({ ...parsedWith(messages, [bashTool]), options: { reasoning: "high" } });
     const content = JSON.parse(body).conversationState.currentMessage.userInputMessage.content;
 
-    expect(content).toBe("(tool results)");
+    expect(content).toBe("");
     expect(content).not.toContain("<thinking_mode>");
+  });
+
+  test("gpt-5.6-sol sends native reasoning while legacy models keep labeled emulation", async () => {
+    const nativeBody = JSON.parse((await createKiroAdapter(provider).buildRequest({
+      ...parsedWith([{ role: "user", content: "solve" }], undefined, "gpt-5.6-sol"),
+      options: { reasoning: "high" },
+    })).body);
+    expect(nativeBody.additionalModelRequestFields).toEqual({ reasoning: { effort: "high" } });
+    expect(nativeBody.conversationState.currentMessage.userInputMessage.content).toBe("solve");
+
+    const emulatedBody = JSON.parse((await createKiroAdapter(provider).buildRequest({
+      ...parsedWith([{ role: "user", content: "solve" }], undefined, "claude-sonnet-4.5"),
+      options: { reasoning: "high", maxOutputTokens: 1000 },
+    })).body);
+    expect(emulatedBody.additionalModelRequestFields).toBeUndefined();
+    expect(emulatedBody.conversationState.currentMessage.userInputMessage.content).toContain("<max_thinking_length>800</max_thinking_length>");
   });
 });
 

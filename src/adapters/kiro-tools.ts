@@ -1,8 +1,10 @@
 import type { OcxParsedRequest } from "../types";
 import { namespacedToolName } from "../types";
-import { kiroToolName } from "./kiro-wire";
+import { normalizeKiroModelId } from "../providers/kiro-models";
+import { createKiroToolNameRegistry, type KiroToolNameRegistry } from "./kiro-wire";
 
-const MAX_KIRO_TOOL_DESCRIPTION = 1024;
+const MAX_KIRO_TOOL_DESCRIPTION_UNVERIFIED = 1024;
+const MAX_KIRO_TOOL_DESCRIPTION_GPT_56_SOL = 9_216;
 
 // JSON Schema validation/annotation keywords that Kiro's runtimeservice tool-spec validator
 // rejects ("ValidationException: Invalid tool use format."). Codex's built-in tools omit these,
@@ -133,39 +135,47 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
   return merged;
 }
 
-export function convertKiroToolContext(parsed: OcxParsedRequest): { tools: unknown[]; systemAdditions: string[]; nameMap: Map<string, string> } {
+function toolDescriptionLimit(modelId: string): number {
+  return normalizeKiroModelId(modelId) === "gpt-5.6-sol"
+    ? MAX_KIRO_TOOL_DESCRIPTION_GPT_56_SOL
+    : MAX_KIRO_TOOL_DESCRIPTION_UNVERIFIED;
+}
+
+function truncateDescription(description: string, limit: number): string {
+  if (description.length <= limit) return description;
+  if (limit <= 1) return description.slice(0, limit);
+  return `${description.slice(0, limit - 1)}…`;
+}
+
+export function convertKiroToolContext(
+  parsed: OcxParsedRequest,
+  registry: KiroToolNameRegistry = createKiroToolNameRegistry(),
+): { tools: unknown[]; systemAdditions: string[]; nameMap: Map<string, string>; registry: KiroToolNameRegistry } {
   const tools = parsed.context.tools ?? [];
-  const systemAdditions: string[] = [];
-  // Maps the Kiro-safe toolSpecification.name back to the original wire name so the response parser
-  // can restore it (the bridge's toolNsMap is keyed by the original wire name). Only non-identity
-  // entries are stored.
-  const nameMap = new Map<string, string>();
+  const descriptionLimit = toolDescriptionLimit(parsed.modelId);
+  // Validate every listed name even when tool_choice:none emulates a tool-free turn.
+  for (const tool of tools) registry.alias(namespacedToolName(tool.namespace, tool.name));
+  const effectiveTools = parsed.options.toolChoice === "none" ? [] : tools;
   return {
-    tools: tools.map(t => {
+    tools: effectiveTools.map(t => {
       const description = t.description || `Tool: ${t.name}`;
       // Send the full namespaced wire name (e.g. mcp__chrome-devtools__navigate_page) so Kiro echoes
       // it back; the bridge's toolNsMap is keyed by this name and restores the MCP namespace Codex
       // routes by. Kiro's runtimeservice rejects names with spaces or >64 chars, so normalize to a
       // safe form and remember the mapping; the response parser restores the original wire name.
       const wireName = namespacedToolName(t.namespace, t.name);
-      const toolName = kiroToolName(wireName);
-      if (toolName !== wireName) nameMap.set(toolName, wireName);
-      const kiroDescription = description.length > MAX_KIRO_TOOL_DESCRIPTION
-        ? `Tool documentation moved to the system prompt: ${toolName}.`
-        : description;
-      if (description.length > MAX_KIRO_TOOL_DESCRIPTION) {
-        systemAdditions.push([`### Tool documentation: ${toolName}`, description].join("\n"));
-      }
+      const toolName = registry.alias(wireName);
       return {
         toolSpecification: {
           name: toolName,
-          description: kiroDescription,
+          description: truncateDescription(description, descriptionLimit),
           inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(t.parameters ?? {})) },
         },
       };
     }),
-    systemAdditions,
-    nameMap,
+    systemAdditions: [],
+    nameMap: registry.nameMap,
+    registry,
   };
 }
 

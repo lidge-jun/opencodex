@@ -381,6 +381,8 @@ export interface CatalogModel {
   inputModalities?: string[];
   /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
+  /** Whether Codex may send Responses text.verbosity for this routed model. */
+  supportsVerbosity?: boolean;
 }
 
 type RawEntry = Record<string, unknown>;
@@ -811,6 +813,9 @@ function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void 
   }
   if (Array.isArray(model.inputModalities) && model.inputModalities.length > 0) {
     entry.input_modalities = model.inputModalities;
+  }
+  if (typeof model.supportsVerbosity === "boolean") {
+    entry.support_verbosity = model.supportsVerbosity;
   }
 }
 
@@ -1276,6 +1281,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       }
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
     ...(prov.parallelToolCalls === true || (prov.adapter === "openai-chat" && prov.parallelToolCalls !== false)

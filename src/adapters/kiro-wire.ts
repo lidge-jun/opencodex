@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { normalizeKiroModelId } from "../providers/kiro-models";
 import type { OcxParsedRequest } from "../types";
+import { KIRO_COMPLETION_TOOL_NAME } from "./kiro-constants";
 
 let cachedFp: string | undefined;
 
@@ -70,6 +71,36 @@ export function kiroToolName(wireName: string, used?: Set<string>): string {
   }
 }
 
+export interface KiroToolNameRegistry {
+  alias(wireName: string): string;
+  restore(kiroName: string): string;
+  readonly nameMap: Map<string, string>;
+}
+
+/** One collision domain for advertised tools, replayed calls, and the private completion tool. */
+export function createKiroToolNameRegistry(): KiroToolNameRegistry {
+  const used = new Set<string>([KIRO_COMPLETION_TOOL_NAME]);
+  const wireToKiro = new Map<string, string>();
+  const nameMap = new Map<string, string>();
+  return {
+    alias(wireName: string): string {
+      if (wireName === KIRO_COMPLETION_TOOL_NAME) {
+        throw new Error(`Kiro reserves the tool name ${JSON.stringify(KIRO_COMPLETION_TOOL_NAME)}`);
+      }
+      const existing = wireToKiro.get(wireName);
+      if (existing) return existing;
+      const alias = kiroToolName(wireName, used);
+      wireToKiro.set(wireName, alias);
+      if (alias !== wireName) nameMap.set(alias, wireName);
+      return alias;
+    },
+    restore(kiroName: string): string {
+      return nameMap.get(kiroName) ?? kiroName;
+    },
+    nameMap,
+  };
+}
+
 export function fallbackToolUseId(): string {
   return `toolu_${randomUUID().slice(0, 8)}`;
 }
@@ -79,10 +110,20 @@ export function invocationId(): string {
 }
 
 export function stableConversationId(parsed: OcxParsedRequest): string {
-  const msgs = parsed.context.messages;
-  if (!msgs || msgs.length === 0) return randomUUID().slice(0, 16);
-  const key = (msgs.length <= 3 ? msgs : [...msgs.slice(0, 3), msgs[msgs.length - 1]])
-    .map(m => `${m.role}:${JSON.stringify((m as { content?: unknown }).content ?? "").slice(0, 100)}`)
-    .join("|");
-  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+  const remembered = parsed._providerContinuation?.kiro?.conversationId;
+  if (isValidKiroConversationId(remembered)) return remembered;
+  const conversationId = randomUUID();
+  parsed._providerContinuation = {
+    ...(parsed._providerContinuation ?? {}),
+    kiro: { ...(parsed._providerContinuation?.kiro ?? {}), conversationId },
+  };
+  return conversationId;
+}
+
+/** Kiro metadata is untrusted; keep only bounded, printable identifiers safe to persist/replay. */
+export function isValidKiroConversationId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 256
+    && /^[A-Za-z0-9._:-]+$/.test(value);
 }

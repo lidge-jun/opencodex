@@ -729,6 +729,12 @@ export async function handleClaudeMessages(
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");
   }
   const message = responsesJsonToAnthropicMessage(json, requestedModel);
+  if ((message as Rec).type === "error") {
+    return new Response(JSON.stringify(message), {
+      status: 529,
+      headers: { "Content-Type": "application/json", "Retry-After": "2" },
+    });
+  }
   if (!stream) {
     return new Response(JSON.stringify(message), { status: 200, headers: { "Content-Type": "application/json" } });
   }

@@ -106,7 +106,7 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
       preferRetryIntervalMs: 50,
       allowEphemeralFallback: !hardPin,
     });
-    if (selected !== preferred) {
+    if (preferred > 0 && selected !== preferred) {
       console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
     }
     if (shouldPersistSelectedPort(config.port, selected, preferred)) {

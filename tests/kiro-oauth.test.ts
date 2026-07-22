@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectKiroCliSqlite, loginKiro, readKiroCliSqlite, refreshKiroToken, resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRegion } from "../src/oauth/kiro";
@@ -17,6 +17,8 @@ const origApiRegion = process.env.KIRO_API_REGION;
 const origCredsFile = process.env.KIRO_CREDS_FILE;
 const origCredentialsFile = process.env.KIRO_CREDENTIALS_FILE;
 const origCliDbFile = process.env.KIRO_CLI_DB_FILE;
+const origCliDbPath = process.env.KIROCLI_DB_PATH;
+const origCliTokenKey = process.env.KIROCLI_TOKEN_KEY;
 const origFetch = globalThis.fetch;
 const warnSpies: Array<ReturnType<typeof spyOn>> = [];
 let tmp: string;
@@ -37,6 +39,8 @@ beforeEach(() => {
   delete process.env.KIRO_CREDS_FILE;
   delete process.env.KIRO_CREDENTIALS_FILE;
   delete process.env.KIRO_CLI_DB_FILE;
+  delete process.env.KIROCLI_DB_PATH;
+  delete process.env.KIROCLI_TOKEN_KEY;
 });
 afterEach(() => {
   for (const warning of warnSpies.splice(0)) warning.mockRestore();
@@ -56,6 +60,10 @@ afterEach(() => {
   else process.env.KIRO_CREDENTIALS_FILE = origCredentialsFile;
   if (origCliDbFile === undefined) delete process.env.KIRO_CLI_DB_FILE;
   else process.env.KIRO_CLI_DB_FILE = origCliDbFile;
+  if (origCliDbPath === undefined) delete process.env.KIROCLI_DB_PATH;
+  else process.env.KIROCLI_DB_PATH = origCliDbPath;
+  if (origCliTokenKey === undefined) delete process.env.KIROCLI_TOKEN_KEY;
+  else process.env.KIROCLI_TOKEN_KEY = origCliTokenKey;
   globalThis.fetch = origFetch;
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -88,6 +96,14 @@ function seedKiroCliRawValue(value: string) {
   db.close();
 }
 
+function seedCustomTokenDb(path: string, rows: Array<[string, Record<string, unknown>]>): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const db = new Database(path);
+  db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
+  for (const [key, value] of rows) db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", [key, JSON.stringify(value)]);
+  db.close();
+}
+
 describe("kiro oauth — import-first", () => {
   test("readKiroCliSqlite imports access+refresh from auth_kv", () => {
     seedKiroCliDb({ access_token: "aoa-abc", refresh_token: "rt-1", expires_at: "2099-01-01T00:00:00Z" });
@@ -95,6 +111,48 @@ describe("kiro oauth — import-first", () => {
     expect(t?.access).toBe("aoa-abc");
     expect(t?.refresh).toBe("rt-1");
     expect(t?.expires).toBe(new Date("2099-01-01T00:00:00Z").getTime());
+  });
+
+  test("KIROCLI_DB_PATH selects a nonstandard read-only database without creating missing paths", () => {
+    const path = join(tmp, "custom", "credentials.sqlite3");
+    seedCustomTokenDb(path, [["kirocli:social:token", { access_token: "aoa-custom", refresh_token: "rt-custom" }]]);
+    process.env.KIROCLI_DB_PATH = path;
+    expect(readKiroCliSqlite()?.access).toBe("aoa-custom");
+
+    const missing = join(tmp, "missing", "credentials.sqlite3");
+    seedKiroCliDb({ access_token: "aoa-default-must-not-win", refresh_token: "rt-default" });
+    process.env.KIROCLI_DB_PATH = missing;
+    expect(readKiroCliSqlite()).toBeNull();
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  test("known token rows are preferred deterministically and KIROCLI_TOKEN_KEY overrides them", () => {
+    const path = join(tmp, "selection", "credentials.sqlite3");
+    seedCustomTokenDb(path, [
+      ["kirocli:social:token", { access_token: "aoa-social", refresh_token: "rt-social" }],
+      ["kirocli:odic:token", { access_token: "aoa-oidc", refresh_token: "rt-oidc" }],
+    ]);
+    process.env.KIROCLI_DB_PATH = path;
+    expect(readKiroCliSqlite()?.access).toBe("aoa-oidc");
+    process.env.KIROCLI_TOKEN_KEY = "kirocli:social:token";
+    expect(readKiroCliSqlite()?.access).toBe("aoa-social");
+  });
+
+  test("otherwise ambiguous token rows require explicit selection without leaking paths or secrets", () => {
+    const path = join(tmp, "ambiguous", "credentials.sqlite3");
+    seedCustomTokenDb(path, [
+      ["custom:a:token", { access_token: "aoa-secret-a", refresh_token: "rt-a" }],
+      ["custom:b:token", { access_token: "aoa-secret-b", refresh_token: "rt-b" }],
+    ]);
+    process.env.KIROCLI_DB_PATH = path;
+    expect(() => readKiroCliSqlite()).toThrow("set KIROCLI_TOKEN_KEY to select one");
+    try {
+      readKiroCliSqlite();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(tmp);
+      expect(message).not.toContain("aoa-secret");
+    }
   });
 
   test("loginKiro returns imported SQLite credentials", async () => {

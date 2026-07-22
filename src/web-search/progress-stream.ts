@@ -241,7 +241,7 @@ export async function* parseStreamWithProgress(
   resetInactivity();
 
   const parserPump = (async (): Promise<void> => {
-    let heldDone: Extract<AdapterEvent, { type: "done" }> | undefined;
+    let heldTerminal: Extract<AdapterEvent, { type: "done" | "incomplete" }> | undefined;
     try {
       iterator = parseStream(tappedResponse);
       if (settled) {
@@ -250,11 +250,11 @@ export async function* parseStreamWithProgress(
       }
       while (true) {
         let result: IteratorResult<AdapterEvent>;
-        if (heldDone) {
+        if (heldTerminal) {
           let drainTimer: ReturnType<typeof setTimeout> | undefined;
           const drainTimeout = new Promise<never>((_, reject) => {
             drainTimer = setTimeout(() => reject(new WebSearchStreamProtocolError(
-              `adapter did not return within ${postTerminalDrainTimeoutMs}ms after done`,
+              `adapter did not return within ${postTerminalDrainTimeoutMs}ms after ${heldTerminal?.type ?? "terminal event"}`,
             )), postTerminalDrainTimeoutMs);
           });
           const stoppedDuringDrain = stopped.then(reason => { throw reason; });
@@ -268,8 +268,8 @@ export async function* parseStreamWithProgress(
         }
 
         if (result.done) {
-          if (!heldDone) throw new WebSearchStreamProtocolError("adapter returned without a done event");
-          await handoff.deliver(heldDone);
+          if (!heldTerminal) throw new WebSearchStreamProtocolError("adapter returned without a terminal event");
+          await handoff.deliver(heldTerminal);
           if (!settled) {
             settled = true;
             clearInactivity();
@@ -281,17 +281,19 @@ export async function* parseStreamWithProgress(
         }
 
         const event = result.value;
-        if (heldDone) {
+        if (heldTerminal) {
           throw new WebSearchStreamProtocolError(
-            event.type === "done" ? "adapter yielded more than one done event" : "adapter yielded an event after done",
+            event.type === "done" || event.type === "incomplete"
+              ? "adapter yielded more than one terminal event"
+              : "adapter yielded an event after its terminal event",
           );
         }
         if (event.type === "error") {
           fail(new Error(event.message));
           return;
         }
-        if (event.type === "done") {
-          heldDone = event;
+        if (event.type === "done" || event.type === "incomplete") {
+          heldTerminal = event;
           continue;
         }
         await handoff.deliver(event);
@@ -300,7 +302,7 @@ export async function* parseStreamWithProgress(
       fail(error instanceof WebSearchStreamProtocolError
         ? error
         : new WebSearchStreamProtocolError(
-          `adapter threw${heldDone ? " after done" : ""}: ${error instanceof Error ? error.message : String(error)}`,
+          `adapter threw${heldTerminal ? " after its terminal event" : ""}: ${error instanceof Error ? error.message : String(error)}`,
         ));
     }
   })();

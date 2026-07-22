@@ -7,7 +7,7 @@ import {
 import { parseRequest } from "../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../adapters/openai-responses";
-import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
+import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
 import {
   advanceComboAfterFailure,
@@ -26,7 +26,7 @@ import {
 import { isInjectionDebugEnabled } from "../lib/debug-settings";
 import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -829,7 +829,8 @@ export async function handleResponses(
   try {
     parsed = parseRequest(body);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
-    parsed._cursorConversationId = previousResponseConversationId(parsed.previousResponseId);
+    parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
+    parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
@@ -1007,7 +1008,7 @@ export async function handleResponses(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
-  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot")
+  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   if (route.provider.authMode === "oauth") {
@@ -1043,6 +1044,14 @@ export async function handleResponses(
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+
+  if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "Kiro continuation state is missing; start a new session instead of reusing this previous_response_id.",
+    );
+  }
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
   const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
@@ -1081,6 +1090,30 @@ export async function handleResponses(
   }
 
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
+
+  const continuationStateForResponse = (
+    emitted?: OcxProviderContinuationState,
+  ): OcxProviderContinuationState | undefined => {
+    const cursorConversationId = parsed._cursorConversationId;
+    const inherited = parsed._providerContinuation;
+    if (!emitted && !inherited && !cursorConversationId) return undefined;
+    return {
+      ...(inherited ?? {}),
+      ...(emitted ?? {}),
+      ...((inherited?.kiro || emitted?.kiro)
+        ? { kiro: { ...(inherited?.kiro ?? {}), ...(emitted?.kiro ?? {}) } }
+        : {}),
+      ...(cursorConversationId
+        ? {
+            cursor: {
+              ...(inherited?.cursor ?? {}),
+              ...(emitted?.cursor ?? {}),
+              conversationId: cursorConversationId,
+            },
+          }
+        : {}),
+    };
+  };
 
   // Remote compaction v2 on a ROUTED model: Codex sent `compaction_trigger` and requires exactly
   // one `{type:"compaction"}` output item (codex-rs compact_remote_v2.rs). Passthrough handles it
@@ -1347,7 +1380,15 @@ export async function handleResponses(
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
-          ...(routedCompaction ? {} : { onCompletedResponse: (response: Record<string, unknown>) => rememberResponseState(parsed._rawBody, response, parsed._cursorConversationId) }),
+          ...(routedCompaction ? {} : {
+            onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) =>
+              rememberResponseState(
+                parsed._rawBody,
+                response,
+                continuationStateForResponse(providerState),
+                adapter.name === "kiro" ? { force: true } : undefined,
+              ),
+          }),
         },
       );
       const bridgeTurnAc = new AbortController();
@@ -1368,14 +1409,23 @@ export async function handleResponses(
         return formatErrorResponse(502, "upstream_error", redactSecretString(message));
       }
     }
+    let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true } : {}),
+      onProviderState: state => { providerState = state; },
     });
-    if (!routedCompaction) rememberResponseState(parsed._rawBody, json, parsed._cursorConversationId);
+    if (!routedCompaction) {
+      rememberResponseState(
+        parsed._rawBody,
+        json,
+        continuationStateForResponse(providerState),
+        adapter.name === "kiro" ? { force: true } : undefined,
+      );
+    }
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 
@@ -1432,17 +1482,18 @@ export async function handleResponses(
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   const connectMs = config.connectTimeoutMs ?? 200_000;
+  let activeAdapter = adapter;
 
-  const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+  const request = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders });
   const inputTokenEstimate = typeof request.usageLog?.inputTokens === "number"
     ? request.usageLog.inputTokens
     : undefined;
   if (inputTokenEstimate !== undefined) logCtx.usageLogInputTokens = inputTokenEstimate;
   let upstreamResponse: Response;
   try {
-    if (adapter.fetchResponse) {
+    if (activeAdapter.fetchResponse) {
       noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
-      upstreamResponse = await adapter.fetchResponse(request, {
+      upstreamResponse = await activeAdapter.fetchResponse(request, {
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         stream: parsed.stream,
@@ -1476,7 +1527,6 @@ export async function handleResponses(
     // both paths so a 429→413 sequence never rebuilds against a stale pre-rotation
     // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
     // 413→429 rotation cannot silently undo the tightening.
-    let activeAdapter = adapter;
     let imageTierBias = 0;
     let imageRetryAttempted = false;
     let oauth401ReplayAttempted = false;
@@ -1603,7 +1653,7 @@ export async function handleResponses(
   }
 
   if (parsed.stream) {
-    const eventStream = adapter.parseStream(upstreamResponse);
+    const eventStream = activeAdapter.parseStream(upstreamResponse);
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
     const sseStream = bridgeToResponsesSSE(
       eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
@@ -1617,7 +1667,15 @@ export async function handleResponses(
         // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
         // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
         // giant stale chain Codex just replaced.
-        ...(routedCompaction ? {} : { onCompletedResponse: (response: Record<string, unknown>) => rememberResponseState(parsed._rawBody, response, parsed._cursorConversationId) }),
+        ...(routedCompaction ? {} : {
+          onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) =>
+            rememberResponseState(
+              parsed._rawBody,
+              response,
+              continuationStateForResponse(providerState),
+              activeAdapter.name === "kiro" ? { force: true } : undefined,
+            ),
+        }),
       },
     );
     const bridgeTurnAc = new AbortController();
@@ -1627,23 +1685,32 @@ export async function handleResponses(
     });
   }
 
-  if (adapter.parseResponse) {
+  if (activeAdapter.parseResponse) {
     let events: AdapterEvent[];
     try {
-      events = await adapter.parseResponse(upstreamResponse);
+      events = await activeAdapter.parseResponse(upstreamResponse);
     } finally {
       cleanupUpstreamAbort();
     }
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
+    let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true } : {}),
+      onProviderState: state => { providerState = state; },
     });
     // See the streaming branch: compaction turns skip the continuation cache.
-    if (!routedCompaction) rememberResponseState(parsed._rawBody, json, parsed._cursorConversationId);
+    if (!routedCompaction) {
+      rememberResponseState(
+        parsed._rawBody,
+        json,
+        continuationStateForResponse(providerState),
+        activeAdapter.name === "kiro" ? { force: true } : undefined,
+      );
+    }
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 

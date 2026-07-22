@@ -314,16 +314,26 @@ export function responsesSseToAnthropicSse(
           }
           case "response.completed": {
             const response = isRec(data.response) ? data.response : {};
+            if (response.end_turn === false && !sawToolUse) {
+              fail(529, "upstream turn ended without a final answer", true);
+              break;
+            }
             finish(sawToolUse ? "tool_use" : "end_turn", response.usage);
             break;
           }
           case "response.incomplete": {
             const response = isRec(data.response) ? data.response : {};
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
-            const reason = details.reason === "max_output_tokens" ? "max_tokens"
-              : details.reason === "content_filter" ? "refusal"
-              : sawToolUse ? "tool_use" : "end_turn";
-            finish(reason, response.usage);
+            if (details.reason === "max_output_tokens") {
+              finish("max_tokens", response.usage);
+            } else if (details.reason === "content_filter") {
+              finish("refusal", response.usage);
+            } else {
+              const message = typeof details.message === "string" && details.message.trim()
+                ? details.message
+                : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
+              fail(529, message, true);
+            }
             break;
           }
           case "response.failed": {
@@ -454,8 +464,21 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string): R
   }
 
   const details = isRec(body.incomplete_details) ? body.incomplete_details : {};
+  if (body.status === "incomplete"
+    && details.reason !== "max_output_tokens"
+    && details.reason !== "content_filter") {
+    const message = typeof details.message === "string" && details.message.trim()
+      ? details.message
+      : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
+    return anthropicErrorBody(529, message, "overloaded_error");
+  }
+  if (body.status === "completed" && body.end_turn === false && !sawToolUse) {
+    return anthropicErrorBody(529, "upstream turn ended without a final answer", "overloaded_error");
+  }
   const stopReason = body.status === "incomplete" && details.reason === "max_output_tokens"
     ? "max_tokens"
+    : body.status === "incomplete" && details.reason === "content_filter"
+      ? "refusal"
     : sawToolUse ? "tool_use" : "end_turn";
 
   return {

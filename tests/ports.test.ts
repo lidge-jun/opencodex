@@ -30,6 +30,14 @@ afterEach(async () => {
 });
 
 describe("port selection", () => {
+  test("resolves port 0 to a concrete ephemeral port", async () => {
+    const selected = await findAvailablePort(0);
+
+    expect(selected).toBeGreaterThan(0);
+    expect(selected).toBeLessThanOrEqual(65535);
+    expect(await isPortAvailable(selected)).toBe(true);
+  });
+
   test("keeps the preferred port when it is free", async () => {
     const { port } = await listen();
     const server = servers.pop();

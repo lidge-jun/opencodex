@@ -199,6 +199,10 @@ function outputToToolResultContent(output: string | unknown[] | undefined): stri
   return parts;
 }
 
+function toolOutputContainsEncryptedContent(output: string | unknown[] | undefined): boolean {
+  return Array.isArray(output) && output.some(raw => isObj(raw) && raw.type === "encrypted_content");
+}
+
 /**
  * codex-rs ImageDetail allows "original", but chat-completions providers only accept
  * auto|low|high on image_url.detail — degrade "original" to "high" (the codex default).
@@ -330,7 +334,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "message") {
-        const msg = item as { role?: string; content?: unknown };
+        const msg = item as { role?: string; content?: unknown; phase?: "commentary" | "final_answer" };
         switch (msg.role) {
           case "system": {
             pendingReasoning.length = 0;
@@ -353,6 +357,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
               content: pendingReasoning.length > 0
                 ? [...pendingReasoning.map(entry => entry.part), ...parts]
                 : parts,
+              ...(msg.phase ? { phase: msg.phase } : {}),
               model: data.model,
               timestamp: now,
             });
@@ -508,6 +513,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           role: "toolResult", toolCallId: output.call_id,
           toolName: toolInfo.name, toolNamespace: toolInfo.namespace,
           content: outputToToolResultContent(output.output), isError: false, timestamp: now,
+          ...(toolOutputContainsEncryptedContent(output.output) ? { containsEncryptedContent: true } : {}),
         });
         continue;
       }
@@ -522,6 +528,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           // Same payload shape as function_call_output (codex-rs FunctionCallOutputPayload):
           // string or content items — normalize arrays instead of leaking raw wire blocks.
           content: outputToToolResultContent(output.output), isError: false, timestamp: now,
+          ...(toolOutputContainsEncryptedContent(output.output) ? { containsEncryptedContent: true } : {}),
         });
       }
     }

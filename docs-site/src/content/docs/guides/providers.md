@@ -95,6 +95,19 @@ active account without logging the others out. Identity-less Kimi and Kiro crede
 active slot, while `chatgpt` is always single-slot because Codex pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+### Kiro credential import
+
+`ocx login kiro` searches the platform Kiro CLI stores and opens SQLite databases read-only. Two
+environment variables make selection explicit without copying credentials into opencodex:
+
+- `KIROCLI_DB_PATH` selects a nonstandard Kiro CLI SQLite database. The path must already exist;
+  opencodex does not create it or modify the database, WAL, or SHM files.
+- `KIROCLI_TOKEN_KEY` selects the exact `auth_kv` token key when a database contains multiple
+  otherwise ambiguous token rows. A missing selection fails login instead of guessing.
+
+Keep these variables and the selected database private. Do not attach database files or raw login
+diagnostics to bug reports.
+
 ## 3. API-key catalog
 
 opencodex ships 53 built-in presets: 42 key-based, seven OAuth, three local, and the default

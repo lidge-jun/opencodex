@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
+import type { OcxProviderContinuationState } from "../types";
 
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
@@ -13,6 +14,9 @@ const SNAPSHOT_TOTAL_MAX_BYTES = 24 * 1024 * 1024;
 interface StoredResponseState {
   createdAt: number;
   items: unknown[];
+  /** v2 provider-keyed continuation metadata. */
+  providers?: OcxProviderContinuationState;
+  /** v1 Cursor-only metadata, accepted only while loading old snapshots. */
   conversationId?: string;
   cursorCheckpointUsable?: boolean;
 }
@@ -48,14 +52,28 @@ function ensureLoaded(): void {
     const path = snapshotPath();
     if (!existsSync(path)) return;
     const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-    if (raw.version !== 1 || !Array.isArray(raw.states)) return;
+    if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.states)) return;
     for (const entry of raw.states) {
       if (!Array.isArray(entry) || entry.length !== 2) continue;
       const [id, state] = entry as [unknown, unknown];
       if (typeof id !== "string" || !state || typeof state !== "object") continue;
       const rec = state as StoredResponseState;
       if (typeof rec.createdAt !== "number" || !Array.isArray(rec.items)) continue;
-      states.set(id, rec);
+      const providers = rec.providers ?? (rec.conversationId
+        ? {
+            cursor: {
+              conversationId: rec.conversationId,
+              ...(rec.cursorCheckpointUsable !== undefined
+                ? { checkpointUsable: rec.cursorCheckpointUsable }
+                : {}),
+            },
+          }
+        : undefined);
+      states.set(id, {
+        createdAt: rec.createdAt,
+        items: rec.items,
+        ...(providers ? { providers } : {}),
+      });
     }
     pruneResponses();
   } catch {
@@ -85,7 +103,7 @@ function persistNow(path: string): void {
     // mkdirSync's mode only applies on creation — re-harden an existing config dir so the
     // conversation-content snapshot never lands in a group/world-readable directory.
     try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-    atomicWriteFile(path, JSON.stringify({ version: 1, states: entries }));
+    atomicWriteFile(path, JSON.stringify({ version: 2, states: entries }));
   } catch {
     /* best-effort: disk trouble must never affect request handling */
   }
@@ -150,16 +168,21 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
 }
 
 export function previousResponseConversationId(responseId: string | undefined): string | undefined {
+  return previousResponseProviderState(responseId)?.cursor?.conversationId;
+}
+
+export function previousResponseProviderState(responseId: string | undefined): OcxProviderContinuationState | undefined {
   if (!responseId) return undefined;
   ensureLoaded();
   pruneResponses();
-  return states.get(responseId)?.conversationId;
+  const providers = states.get(responseId)?.providers;
+  return providers ? structuredClone(providers) : undefined;
 }
 
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown },
-  conversationId?: string,
+  providerState?: OcxProviderContinuationState | string,
   opts?: { force?: boolean },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
@@ -173,6 +196,14 @@ export function rememberResponseState(
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
   if (response.status !== undefined && response.status !== "completed") return;
   ensureLoaded();
+  const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
+    ? { cursor: { conversationId: providerState } }
+    : structuredClone(providerState ?? {});
+  if (normalizedProviderState.cursor?.conversationId) {
+    normalizedProviderState.cursor.checkpointUsable = !response.output.some(item => {
+      return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
+    });
+  }
   states.set(response.id, {
     createdAt: now(),
     items: [...inputItems(request.input), ...response.output],
@@ -181,10 +212,7 @@ export function rememberResponseState(
     // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an
     // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
     // checkpoint must not be reused — but the conversation id string itself is still valid.
-    ...(conversationId ? { conversationId } : {}),
-    cursorCheckpointUsable: !response.output.some(item => {
-      return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
-    }),
+    ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),
   });
   pruneResponses();
   schedulePersist();

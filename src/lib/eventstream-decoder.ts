@@ -24,6 +24,7 @@ const MESSAGE_CRC_LEN = 4;
 const HEADER_BLOCK_OFFSET = PRELUDE_LEN + PRELUDE_CRC_LEN;
 const MIN_MESSAGE_LEN = HEADER_BLOCK_OFFSET + MESSAGE_CRC_LEN;
 const MAX_MESSAGE_LEN = 16 * 1024 * 1024;
+const MAX_HEADERS_LEN = 128 * 1024;
 
 export interface EventStreamMessage {
 	/** Header casing is preserved verbatim (e.g. `:event-type`, `:message-type`). */
@@ -62,6 +63,7 @@ export function decodeMessage(frame: Uint8Array): EventStreamMessage {
 	const preludeCrc = view.getUint32(8, false);
 	const computedPreludeCrc = crc32(frame.subarray(0, PRELUDE_LEN));
 	if (computedPreludeCrc !== preludeCrc) throw new Error("eventstream: prelude CRC mismatch");
+	if (headersLen > MAX_HEADERS_LEN) throw new Error(`eventstream: headers length ${headersLen} exceeds maximum`);
 	if (headersLen > total - MIN_MESSAGE_LEN) throw new Error("eventstream: headers length exceeds frame payload");
 	const msgCrc = view.getUint32(total - MESSAGE_CRC_LEN, false);
 	const computedMsgCrc = crc32(frame.subarray(0, total - MESSAGE_CRC_LEN));
@@ -185,6 +187,13 @@ export async function* decodeEventStream(source: ReadableStream<Uint8Array>): As
 				const total = dv.getUint32(0, false);
 				if (total < MIN_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} below minimum`);
 				if (total > MAX_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} exceeds maximum`);
+				if (buf.length - offset >= HEADER_BLOCK_OFFSET) {
+					const headersLen = dv.getUint32(4, false);
+					const preludeCrc = dv.getUint32(8, false);
+					const computedPreludeCrc = crc32(buf.subarray(offset, offset + PRELUDE_LEN));
+					if (computedPreludeCrc !== preludeCrc) throw new Error("eventstream: prelude CRC mismatch");
+					if (headersLen > MAX_HEADERS_LEN) throw new Error(`eventstream: headers length ${headersLen} exceeds maximum`);
+				}
 				if (buf.length - offset < total) break;
 				const frame = buf.subarray(offset, offset + total);
 				yield decodeMessage(frame);

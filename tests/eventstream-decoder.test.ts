@@ -75,6 +75,15 @@ describe("eventstream-decoder", () => {
 		expect(() => decodeMessage(refreshPreludeAndMessageCrc(frame))).toThrow(/headers length exceeds/);
 	});
 
+	test("advertised oversized header block fails before buffering the full frame", async () => {
+		const prelude = new Uint8Array(12);
+		const view = new DataView(prelude.buffer);
+		view.setUint32(0, 256 * 1024, false);
+		view.setUint32(4, 128 * 1024 + 1, false);
+		view.setUint32(8, crc32(prelude.subarray(0, 8)), false);
+		await expect(drain(streamChunks(prelude))).rejects.toThrow(/headers length .* exceeds maximum/);
+	});
+
 	test("truncated string header throws controlled header error", () => {
 		const frame = encodeMessage({ "x": "abc" }, enc.encode("body"));
 		const dv = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);

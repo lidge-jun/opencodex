@@ -73,14 +73,16 @@ export async function findAvailablePort(
 ): Promise<number> {
   const preferRetryMs = opts.preferRetryMs ?? 0;
   const allowEphemeral = opts.allowEphemeralFallback !== false;
-  if (preferRetryMs > 0) {
+  // Port 0 asks the OS to select an ephemeral port. Resolve it to that concrete
+  // port here so callers never persist or advertise an unusable `:0` endpoint.
+  if (preferredPort > 0 && preferRetryMs > 0) {
     if (await waitForPortAvailable(preferredPort, hostname, {
       timeoutMs: preferRetryMs,
       intervalMs: opts.preferRetryIntervalMs ?? 50,
     })) {
       return preferredPort;
     }
-  } else if (await isPortAvailable(preferredPort, hostname)) {
+  } else if (preferredPort > 0 && (await isPortAvailable(preferredPort, hostname))) {
     return preferredPort;
   }
 

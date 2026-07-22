@@ -272,6 +272,59 @@ function scriptedAdapter(firstPass: AdapterEvent[]): ProviderAdapter {
 }
 
 describe("BUG-R86 routed web-search timeout semantics", () => {
+  test("Kiro-style commentary streams before the iteration finishes", async () => {
+    let releaseIteration: () => void = () => {};
+    const iterationGate = new Promise<void>(resolve => { releaseIteration = resolve; });
+    const adapter: ProviderAdapter = {
+      name: "kiro-commentary",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        yield { type: "text_delta", text: "Hi from Kiro", phase: "commentary" };
+        await iterationGate;
+        yield { type: "done" };
+      },
+      async parseResponse() {
+        throw new Error("parseResponse must be unreachable");
+      },
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    try {
+      for (let reads = 0; reads < 10 && !text.includes("Hi from Kiro"); reads++) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<"timeout">(resolve => setTimeout(() => resolve("timeout"), 250)),
+        ]);
+        expect(result).not.toBe("timeout");
+        if (result === "timeout" || result.done) break;
+        text += decoder.decode(result.value, { stream: true });
+      }
+      expect(text).toContain("Hi from Kiro");
+    } finally {
+      releaseIteration();
+    }
+
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) break;
+      text += decoder.decode(result.value, { stream: true });
+    }
+    expect(text).toContain("event: response.completed");
+  });
+
   test("routed iterations use upstream streaming and never call parseResponse", async () => {
     const seenStream: boolean[] = [];
     let parseStreamCalls = 0;

@@ -15,16 +15,18 @@ const request: AdapterRequest = {
   body: "{}",
 };
 
-function mockFetch(responses: Array<Response | Error>): { calls: RequestInit[] } {
+function mockFetch(responses: Array<Response | Error>): { calls: RequestInit[]; urls: string[] } {
   const calls: RequestInit[] = [];
+  const urls: string[] = [];
   let i = 0;
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push(init ?? {});
+    urls.push(url instanceof Request ? url.url : String(url));
     const next = responses[i++] ?? responses[responses.length - 1];
     if (next instanceof Error) throw next;
     return next;
   }) as typeof fetch;
-  return { calls };
+  return { calls, urls };
 }
 
 describe("kiro retry fetch", () => {
@@ -40,7 +42,7 @@ describe("kiro retry fetch", () => {
     }
   });
 
-  test("retries the per-attempt TimeoutError raised by AbortSignal.timeout", async () => {
+  test("does not replay a per-attempt TimeoutError", async () => {
     let calls = 0;
     const timeoutReasons: unknown[] = [];
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -64,10 +66,8 @@ describe("kiro retry fetch", () => {
       });
     }) as typeof fetch;
 
-    const res = await fetchKiroWithRetry(request, { timeoutMs: 1 });
-
-    expect(res.status).toBe(200);
-    expect(calls).toBe(2);
+    await expect(fetchKiroWithRetry(request, { timeoutMs: 1 })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(calls).toBe(1);
     expect(timeoutReasons).toHaveLength(1);
     expect((timeoutReasons[0] as Error).name).toBe("TimeoutError");
   });
@@ -85,52 +85,67 @@ describe("kiro retry fetch", () => {
     }
   });
 
-  test("retries 429 then returns the successful response", async () => {
+  test("does not replay throttling responses", async () => {
     const mock = mockFetch([
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
       new Response("ok", { status: 200 }),
     ]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("ok");
-    expect(mock.calls).toHaveLength(2);
+    expect(res.status).toBe(429);
+    expect(await res.text()).toContain("Kiro rate limit exceeded");
+    expect(mock.calls).toHaveLength(1);
   });
 
-  test("retries 503 with Retry-After then returns success", async () => {
+  test("does not replay ordinary 5xx responses", async () => {
     const mock = mockFetch([
       new Response("temporarily unavailable", { status: 503, headers: { "Retry-After": "0" } }),
       new Response("ok", { status: 200 }),
     ]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
-    expect(res.status).toBe(200);
-    expect(mock.calls).toHaveLength(2);
+    expect(res.status).toBe(503);
+    expect(mock.calls).toHaveLength(1);
   });
 
-  test("retries without waiting for retryable response body cancellation", async () => {
-    const first = new Response("temporarily unavailable", { status: 503, headers: { "Retry-After": "0" } });
-    const neverSettles = new Promise<void>(() => {});
-    let rejectionObserved = false;
-    const originalCatch = neverSettles.catch.bind(neverSettles);
-    Object.defineProperty(neverSettles, "catch", {
-      value: (onRejected: (reason: unknown) => unknown) => {
-        rejectionObserved = true;
-        return originalCatch(onRejected);
-      },
-    });
-    Object.defineProperty(first.body!, "cancel", {
-      value: () => neverSettles,
-    });
-    const mock = mockFetch([first, new Response("ok", { status: 200 })]);
-
-    const res = await Promise.race([
-      fetchKiroWithRetry(request, { timeoutMs: 5_000 }),
-      Bun.sleep(250).then(() => { throw new Error("retry waited for response body cancellation"); }),
-    ]);
-
+  test("falls back once from canonical runtime to the legacy endpoint for 404", async () => {
+    const mock = mockFetch([new Response("missing", { status: 404 }), new Response("ok", { status: 200 })]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe("ok");
     expect(mock.calls).toHaveLength(2);
-    expect(rejectionObserved).toBe(true);
+    expect(mock.urls).toEqual([
+      "https://runtime.us-east-1.kiro.dev/",
+      "https://q.us-east-1.amazonaws.com/",
+    ]);
+  });
+
+  test("falls back for endpoint-specific 403 and connection-refused errors", async () => {
+    const signature = mockFetch([
+      new Response("InvalidSignatureException", { status: 403 }),
+      new Response("ok", { status: 200 }),
+    ]);
+    expect((await fetchKiroWithRetry(request, { timeoutMs: 5_000 })).status).toBe(200);
+    expect(signature.urls.at(-1)).toBe("https://q.us-east-1.amazonaws.com/");
+
+    const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const connected = mockFetch([refused, new Response("ok", { status: 200 })]);
+    expect((await fetchKiroWithRetry(request, { timeoutMs: 5_000 })).status).toBe(200);
+    expect(connected.urls).toEqual([
+      "https://runtime.us-east-1.kiro.dev/",
+      "https://q.us-east-1.amazonaws.com/",
+    ]);
+  });
+
+  test("a custom base URL disables legacy fallback", async () => {
+    const custom = { ...request, url: "https://kiro.internal.example/generate" };
+    const mock = mockFetch([new Response("missing", { status: 404 }), new Response("unexpected", { status: 200 })]);
+    const res = await fetchKiroWithRetry(custom, { timeoutMs: 5_000 });
+    expect(res.status).toBe(404);
+    expect(mock.urls).toEqual([custom.url]);
+
+    const customPath = { ...request, url: "https://runtime.us-east-1.kiro.dev/custom/generate" };
+    const pathMock = mockFetch([new Response("missing", { status: 404 }), new Response("unexpected", { status: 200 })]);
+    const pathResponse = await fetchKiroWithRetry(customPath, { timeoutMs: 5_000 });
+    expect(pathResponse.status).toBe(404);
+    expect(pathMock.urls).toEqual([customPath.url]);
   });
 
   test("does not retry non-retryable 400", async () => {
@@ -179,7 +194,7 @@ describe("kiro retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("normalizes final retryable 429 after attempts while preserving retry count", async () => {
+  test("normalizes final 429 without adapter replay", async () => {
     const mock = mockFetch([
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
@@ -188,7 +203,7 @@ describe("kiro retry fetch", () => {
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(429);
     expect(await res.text()).toContain("Kiro rate limit exceeded");
-    expect(mock.calls).toHaveLength(3);
+    expect(mock.calls).toHaveLength(1);
   });
 
   test("does not start fetch when caller signal is already aborted", async () => {

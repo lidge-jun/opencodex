@@ -202,6 +202,19 @@ describe("web-search streamed-body progress collector", () => {
     expect(next.value).toEqual({ type: "done", usage: { inputTokens: 1, outputTokens: 2 } });
   });
 
+  test("holds and forwards an explicit incomplete terminal", async () => {
+    let returned = false;
+    const parser: ParseStream = async function* () {
+      yield { type: "incomplete", reason: "empty_kiro_fallback", retryable: true, endTurn: false };
+      returned = true;
+    };
+    const iterator = parseStreamWithProgress(new Response(chunkStream([])), parser, { inactivityTimeoutMs: 100 });
+    const next = await iterator.next();
+    expect(returned).toBe(true);
+    expect(next.value).toEqual({ type: "incomplete", reason: "empty_kiro_fallback", retryable: true, endTurn: false });
+    expect((await iterator.next()).done).toBe(true);
+  });
+
   test.each([
     ["missing terminal", async function* () { yield { type: "text_delta", text: "x" } as AdapterEvent; }],
     ["duplicate terminal", async function* () { yield { type: "done" } as AdapterEvent; yield { type: "done" } as AdapterEvent; }],

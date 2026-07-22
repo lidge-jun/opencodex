@@ -47,6 +47,7 @@ const assistantMessageItemSchema = z.object({
   type: z.literal("message").optional(),
   role: z.literal("assistant"),
   content: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
+  phase: z.enum(["commentary", "final_answer"]).optional(),
 });
 const reasoningItemSchema = z.object({
   type: z.literal("reasoning"),
