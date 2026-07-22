@@ -49,6 +49,12 @@ endpoint restores native Codex config, stops any installed service to prevent re
 The dashboard is a local control surface, not a separate service. It should reflect the same config
 and catalog invariants documented in this folder rather than inventing parallel state.
 
+The `/#codex-auth` add-account modal has a three-step manual-code UX contract on top of the existing
+OAuth polling API: submit request, waiting-for-login completion, and terminal success/failure. Once
+`POST /api/codex-auth/login/code` succeeds, the GUI must keep the input disabled, expose an
+`aria-live` status message that the code was accepted, and surface repeated `login-status` polling
+network failures as a visible warning instead of silently looking idle again.
+
 ## Usage accounting
 
 `src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
