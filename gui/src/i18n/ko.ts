@@ -1039,7 +1039,6 @@ export const ko: Record<TKey, string> = {
   "cws.err.invalidStickyLimit": "sticky 성공 횟수는 1~100의 정수여야 합니다.",
   "cws.err.invalidWeight": "각 라운드로빈 가중치는 1~10000의 정수여야 합니다.",
   "cws.err.noEnabledTarget": "하나 이상의 대상이 활성화된 프로바이더를 사용해야 합니다.",
-||||||| parent of 3ba69135 (feat(gui): add Claude Desktop family editor)
   "claude.tabsLabel": "Claude 클라이언트",
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",

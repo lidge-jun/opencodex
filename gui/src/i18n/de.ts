@@ -1019,7 +1019,6 @@ export const de = {
   "cws.err.invalidStickyLimit": "Sticky-Erfolge müssen eine Ganzzahl von 1 bis 100 sein.",
   "cws.err.invalidWeight": "Jedes Round-Robin-Gewicht muss eine Ganzzahl von 1 bis 10000 sein.",
   "cws.err.noEnabledTarget": "Mindestens ein Ziel muss einen aktivierten Anbieter verwenden.",
-||||||| parent of 3ba69135 (feat(gui): add Claude Desktop family editor)
   "claude.tabsLabel": "Claude-Client",
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",

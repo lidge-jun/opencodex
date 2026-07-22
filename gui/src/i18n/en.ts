@@ -1040,7 +1040,6 @@ export const en = {
   "cws.err.invalidStickyLimit": "Sticky successes must be an integer from 1 to 100.",
   "cws.err.invalidWeight": "Each round-robin weight must be an integer from 1 to 10000.",
   "cws.err.noEnabledTarget": "At least one target must use an enabled provider.",
-||||||| parent of 3ba69135 (feat(gui): add Claude Desktop family editor)
   "claude.tabsLabel": "Claude client",
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",

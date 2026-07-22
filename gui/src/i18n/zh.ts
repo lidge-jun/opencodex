@@ -1039,7 +1039,6 @@ export const zh: Record<TKey, string> = {
   "cws.err.invalidStickyLimit": "粘性成功次数必须是 1 到 100 的整数。",
   "cws.err.invalidWeight": "每个轮询权重必须是 1 到 10000 的整数。",
   "cws.err.noEnabledTarget": "至少一个目标必须使用已启用的提供方。",
-||||||| parent of 3ba69135 (feat(gui): add Claude Desktop family editor)
   "claude.tabsLabel": "Claude 客户端",
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",
