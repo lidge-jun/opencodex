@@ -265,7 +265,6 @@ jobs:
           set -euo pipefail
 
           release_tag="v${RELEASE_VERSION}"
-          notes_file="$(mktemp)"
 
           git fetch --force --tags origin
 
@@ -273,37 +272,6 @@ jobs:
           if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
             echo "::error::${release_tag} already points at ${existing_tag_sha}, not ${GITHUB_SHA}"
             exit 1
-          fi
-
-          previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-              grep -vx "$release_tag" |
-              head -n 1 || true
-          )"
-
-          {
-            echo "Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
-            echo
-            echo "## Commit log"
-            echo
-            if [ -n "$previous_tag" ]; then
-              echo "Changes since \`${previous_tag}\`:"
-              echo
-              git log --reverse --no-merges --pretty=format:'- %s (%h)' "${previous_tag}..HEAD" |
-                grep -vE '^- release: v[0-9]+\.[0-9]+\.[0-9]+' || true
-              echo
-              echo
-              echo "[Full diff](https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${release_tag})"
-            else
-              echo "Initial release commits:"
-              echo
-              git log --reverse --no-merges --pretty=format:'- %s (%h)' HEAD |
-                grep -vE '^- release: v[0-9]+\.[0-9]+\.[0-9]+' || true
-            fi
-          } > "$notes_file"
-
-          if ! grep -q '^- ' "$notes_file"; then
-            printf '\n- Release version bump only.\n' >> "$notes_file"
           fi
 
           if [ -z "$existing_tag_sha" ]; then
@@ -318,8 +286,10 @@ jobs:
             prerelease_flag="--prerelease"
           fi
 
+          # Release notes are generated automatically from merged PR labels using
+          # .github/release.yml categories (populated by pr-labeler.yml).
           if gh release view "$release_tag" >/dev/null 2>&1; then
-            gh release edit "$release_tag" --title "$release_tag" --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+            gh release edit "$release_tag" --title "$release_tag" --generate-notes ${prerelease_flag:+$prerelease_flag}
           else
-            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" --generate-notes ${prerelease_flag:+$prerelease_flag}
           fi

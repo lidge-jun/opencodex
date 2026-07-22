@@ -1,0 +1,91 @@
+name: PR Labeler
+
+# Automatically applies a single type label to every PR based on its title
+# prefix (conventional-commits style). No secrets or external services needed.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+concurrency:
+  group: pr-labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply type label from PR title
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = context.payload.pull_request.title || '';
+            const pr    = context.payload.pull_request.number;
+
+            // Map conventional-commit prefix -> GitHub label name.
+            const PREFIX_TO_LABEL = {
+              'feat':     'enhancement',
+              'feature':  'enhancement',
+              'fix':      'bug',
+              'bugfix':   'bug',
+              'hotfix':   'bug',
+              'docs':     'documentation',
+              'doc':      'documentation',
+              'chore':    'chore',
+              'refactor': 'chore',
+              'style':    'chore',
+              'test':     'chore',
+              'tests':    'chore',
+              'ci':       'chore',
+              'build':    'chore',
+              'perf':     'enhancement',
+              'revert':   'chore',
+            };
+
+            const TYPE_LABELS = new Set(Object.values(PREFIX_TO_LABEL));
+
+            // Match "prefix:" or "prefix(scope):" at the start of the title.
+            const match = title.match(/^([a-zA-Z]+)(?:\([^)]*\))?[!]?\s*:/);
+            const detected = match ? PREFIX_TO_LABEL[match[1].toLowerCase()] : null;
+
+            if (!detected) {
+              core.info(`No conventional-commit prefix detected in: "${title}" — skipping`);
+              return;
+            }
+
+            // Read current labels on the PR.
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: pr,
+            });
+            const current = new Set(currentLabels.map(l => l.name));
+
+            // Remove any stale type label that no longer matches.
+            for (const label of TYPE_LABELS) {
+              if (current.has(label) && label !== detected) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  issue_number: pr,
+                  name: label,
+                });
+              }
+            }
+
+            // Add the detected label if not already present.
+            if (!current.has(detected)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: pr,
+                labels: [detected],
+              });
+              core.info(`Applied label "${detected}" to PR #${pr}`);
+            } else {
+              core.info(`Label "${detected}" already present on PR #${pr}`);
+            }
