@@ -122,6 +122,8 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
+import { cloudflareTunnelController, isCloudflareTunnelRequest } from "./cloudflare-tunnel";
+import { probeHostname } from "./proxy-liveness";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -198,6 +200,17 @@ export function startServer(port?: number) {
       const url = new URL(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
+      // Cloudflare public access is a data-plane boundary, not a remote dashboard. API keys are
+      // intentionally valid for model calls only through this ingress; management routes (key
+      // creation, provider config, stop, and the GUI) remain reachable solely on the local bind.
+      if (isCloudflareTunnelRequest(req) && !url.pathname.startsWith("/v1/")) {
+        return withCors(
+          formatErrorResponse(404, "not_found", "Cloudflare public access exposes /v1/* endpoints only"),
+          req,
+          config,
+        );
+      }
+
       if (req.method === "OPTIONS") {
         if (!isAllowedRequestOrigin(req, config)) {
           return new Response(null, { status: 403, headers: corsHeaders() });
@@ -240,7 +253,10 @@ export function startServer(port?: number) {
       if (url.pathname.startsWith("/api/")) {
         const apiAuthError = requireApiAuth(req, config, "management");
         if (apiAuthError) return withCors(apiAuthError, req, config);
-        const mgmtResponse = await handleManagementAPI(req, url, config);
+        const mgmtResponse = await handleManagementAPI(req, url, config, {
+          listenPort: server.port ?? listenPort,
+          cloudflareTunnel: cloudflareTunnelController,
+        });
         if (mgmtResponse) return withCors(mgmtResponse, req, config);
       }
 
@@ -614,6 +630,21 @@ export function startServer(port?: number) {
   setServerRef(server);
   const actualPort = server.port ?? listenPort;
   setCorsOrigin(actualPort);
+
+  if (config.cloudflareTunnel?.enabled) {
+    const hasAdmissionSecret = !!config.apiKeys?.length || !!process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
+    if (!hasAdmissionSecret) {
+      console.warn("[cloudflare] public access was enabled previously, but no opencodex API key is available; tunnel not started");
+    } else {
+      void cloudflareTunnelController.start({
+        originUrl: `http://${probeHostname(config.hostname)}:${actualPort}`,
+        actualPort,
+        configuredPort: config.port ?? 10100,
+      }).catch(() => {
+        // Sanitized status is available to the local API page; raw child details stay private.
+      });
+    }
+  }
 
   console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
   console.log(`   POST /v1/responses → provider translation`);

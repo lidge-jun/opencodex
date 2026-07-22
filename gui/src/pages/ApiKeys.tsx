@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { IconPlus, IconX, IconCheck } from "../icons";
-import { useI18n, LOCALES } from "../i18n/shared";
+import { IconPlus, IconX, IconCheck, IconGlobe, IconAlert } from "../icons";
+import { useI18n, LOCALES, type TKey } from "../i18n/shared";
+import { apiErrorMessage } from "../api-error";
+import {
+  STOPPED_CLOUDFLARE_TUNNEL,
+  canToggleTunnel,
+  endpointFromApiPayload,
+  isTunnelEnabled,
+  isTunnelTransitioning,
+  tunnelFromApiPayload,
+  tunnelStatusTone,
+  type CloudflareTunnelStatus,
+} from "../cloudflare-tunnel";
 
 interface ApiKeyEntry {
   id: string;
@@ -8,6 +19,14 @@ interface ApiKeyEntry {
   prefix: string;
   createdAt: string;
 }
+
+const TUNNEL_STATUS_KEYS: Record<CloudflareTunnelStatus, TKey> = {
+  stopped: "api.tunnelStatusStopped",
+  starting: "api.tunnelStatusStarting",
+  running: "api.tunnelStatusRunning",
+  stopping: "api.tunnelStatusStopping",
+  error: "api.tunnelStatusError",
+};
 
 function formatCreatedDate(iso: string, localeTag?: string): string {
   return new Date(iso).toLocaleDateString(localeTag);
@@ -18,6 +37,9 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
   const [endpoint, setEndpoint] = useState("");
+  const [tunnel, setTunnel] = useState(STOPPED_CLOUDFLARE_TUNNEL);
+  const [tunnelRequestPending, setTunnelRequestPending] = useState(false);
+  const [tunnelRequestError, setTunnelRequestError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -30,10 +52,31 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       if (res.ok) {
         const data = await res.json();
         setKeys(data.keys ?? []);
-        setEndpoint(data.endpoint ?? "");
+        setEndpoint(previous => endpointFromApiPayload(data, previous));
+        setTunnel(previous => tunnelFromApiPayload(data, previous));
       }
     } catch { /* proxy down */ }
   }, [apiBase]);
+
+  const fetchTunnel = useCallback(async (reportError = false): Promise<boolean> => {
+    try {
+      const res = await fetch(`${apiBase}/api/cloudflare-tunnel`);
+      if (!res.ok) {
+        if (reportError) {
+          setTunnelRequestError(await apiErrorMessage(res, t("api.tunnelRequestFailed")));
+        }
+        return false;
+      }
+      const data = await res.json();
+      setTunnel(previous => tunnelFromApiPayload(data, previous));
+      setEndpoint(previous => endpointFromApiPayload(data, previous));
+      setTunnelRequestError(null);
+      return true;
+    } catch {
+      if (reportError) setTunnelRequestError(t("api.tunnelRequestFailed"));
+      return false;
+    }
+  }, [apiBase, t]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -41,6 +84,24 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [fetchKeys]);
+
+  useEffect(() => {
+    const transitioning = isTunnelTransitioning(tunnel.status);
+    if (!transitioning && !tunnel.enabled) return;
+
+    let cancelled = false;
+    let timeout: number | undefined;
+    const poll = async () => {
+      await fetchTunnel();
+      if (!cancelled) timeout = window.setTimeout(poll, transitioning ? 1000 : 5000);
+    };
+    timeout = window.setTimeout(poll, transitioning ? 1000 : 5000);
+
+    return () => {
+      cancelled = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [fetchTunnel, tunnel.enabled, tunnel.status]);
 
   const responseEndpoint = endpoint || "http://127.0.0.1:10100/v1/responses";
 
@@ -73,6 +134,38 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     fetchKeys();
   };
 
+  const handleTunnelToggle = async () => {
+    const enabled = !isTunnelEnabled(tunnel);
+    const previousTunnel = tunnel;
+    setTunnelRequestError(null);
+    setTunnelRequestPending(true);
+    setTunnel(current => ({
+      ...current,
+      status: enabled ? "starting" : "stopping",
+      enabled,
+      error: undefined,
+    }));
+
+    try {
+      const res = await fetch(`${apiBase}/api/cloudflare-tunnel`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!res.ok) {
+        setTunnel(previousTunnel);
+        setTunnelRequestError(await apiErrorMessage(res, t("api.tunnelRequestFailed")));
+        return;
+      }
+      await fetchTunnel(true);
+    } catch {
+      setTunnel(previousTunnel);
+      setTunnelRequestError(t("api.tunnelRequestFailed"));
+    } finally {
+      setTunnelRequestPending(false);
+    }
+  };
+
   const copyKey = () => {
     if (newKey) {
       navigator.clipboard.writeText(newKey);
@@ -81,8 +174,18 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     }
   };
 
-  // Subtitle carries two inline <code> chips; split the localized string on both tokens.
-  const subtitleParts = t("api.subtitle").split(/\{authHeader\}|\{altHeader\}/);
+  // Subtitle carries the dedicated admission header as an inline <code> chip.
+  const subtitleParts = t("api.subtitle").split("{authHeader}");
+  const tunnelEnabled = isTunnelEnabled(tunnel);
+  const tunnelBusy = tunnelRequestPending || isTunnelTransitioning(tunnel.status);
+  const tunnelError = tunnelRequestError ?? tunnel.error;
+  const tunnelButtonLabel = tunnel.status === "starting"
+    ? t("api.tunnelStarting")
+    : tunnel.status === "stopping"
+      ? t("api.tunnelStopping")
+      : tunnelEnabled
+        ? t("api.tunnelDisable")
+        : t("api.tunnelEnable");
 
   return (
     <section className="api-page">
@@ -91,16 +194,49 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       </div>
       <p className="page-sub">
         {subtitleParts[0]}
-        <code>Authorization: Bearer ocx_...</code>
+        <code>X-OpenCodex-API-Key: ocx_...</code>
         {subtitleParts[1]}
-        <code>x-opencodex-api-key</code>
-        {subtitleParts[2]}
       </p>
 
       <div className="panel api-panel">
         <h3 className="panel-title">{t("api.endpoint")}</h3>
         <code className="api-code api-code-inline">{responseEndpoint}</code>
         <p className="muted small">{t("api.endpointNote")}</p>
+
+        <div className="api-tunnel-control">
+          <div className="api-tunnel-copy">
+            <div className="api-tunnel-title-row">
+              <span className="api-tunnel-title"><IconGlobe /> {t("api.tunnelTitle")}</span>
+              <span
+                className={`badge badge-${tunnelStatusTone(tunnel.status)}`}
+                aria-live="polite"
+              >
+                {t(TUNNEL_STATUS_KEYS[tunnel.status])}
+              </span>
+            </div>
+            <p className="muted small">
+              {t(tunnel.mode === "named" ? "api.tunnelModeNamed" : "api.tunnelModeQuick")}
+            </p>
+            {!tunnel.canEnable && !tunnelEnabled && (
+              <p className="api-tunnel-key-hint small">{t("api.tunnelNeedsKey")}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            className={`btn ${tunnelEnabled ? "btn-ghost" : "btn-primary"}`}
+            onClick={handleTunnelToggle}
+            disabled={!canToggleTunnel(tunnel, tunnelRequestPending)}
+            aria-busy={tunnelBusy}
+          >
+            {tunnelBusy ? <span className="spin" aria-hidden="true" /> : <IconGlobe />}
+            {tunnelButtonLabel}
+          </button>
+        </div>
+        {tunnelError && (
+          <div className="notice notice-err api-tunnel-error" role="alert">
+            <IconAlert /> <span>{tunnelError}</span>
+          </div>
+        )}
       </div>
 
       {newKey && (
@@ -174,7 +310,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       <div className="panel api-panel" style={{ marginTop: "1rem" }}>
         <h3 className="panel-title">{t("api.usageTitle")}</h3>
         <pre className="api-code">{`curl ${responseEndpoint} \\
-  -H "Authorization: Bearer ocx_YOUR_KEY_HERE" \\
+  -H "X-OpenCodex-API-Key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",

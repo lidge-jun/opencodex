@@ -287,6 +287,37 @@ ocx service [install|start|stop|status|uninstall]   # install/update/start backg
 ocx update [--tag preview]     # update opencodex; preview installs stay on @preview
 ```
 
+### Public API through Cloudflare Tunnel
+
+The dashboard's **API Access** page can publish the local Responses endpoint without changing the
+loopback bind. Install Cloudflare's official `cloudflared` client, create at least one opencodex API
+key on that page, and click **Enable public access**. While the tunnel is running, the endpoint and
+copyable curl example switch to its HTTPS URL; disabling it restores the local URL.
+
+The zero-config path uses a random `trycloudflare.com` Quick Tunnel. Cloudflare documents Quick
+Tunnels as development-only: there is no SLA, they are limited to 200 in-flight requests, and they
+do **not** support Server-Sent Events. Non-streaming API calls still work, as do supported WebSocket
+clients when opencodex WebSockets are enabled; use a named tunnel for normal streaming Responses
+traffic. See Cloudflare's
+[Quick Tunnel limitations](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+For a remotely managed named tunnel, configure its published application in Cloudflare as
+`https://<your-hostname>` → `http://127.0.0.1:<configured-opencodex-port>`, then start opencodex with:
+
+```bash
+export OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN="..."
+export OPENCODEX_CLOUDFLARE_PUBLIC_URL="https://ocx.example.com"
+ocx start
+```
+
+With `cloudflared` 2025.4.0 or newer, you can set `OPENCODEX_CLOUDFLARE_TUNNEL_TOKEN_FILE` instead of putting the token in the environment,
+and `OPENCODEX_CLOUDFLARED_PATH` when the executable is not on `PATH`. The runner token is never
+placed in command arguments or returned by the management API. Named tunnels use Cloudflare's
+configured origin, so opencodex refuses to enable one if it had to fall back to a different port.
+
+The Cloudflare ingress is intentionally data-plane-only: it serves `/v1/*` with a valid
+`X-OpenCodex-API-Key`, while the dashboard and `/api/*` management routes remain local.
+
 ### Autostart: service vs shim
 
 opencodex has two ways to auto-start the proxy:

@@ -400,6 +400,27 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .api-code-inline { white-space: nowrap; }
 .api-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.api-tunnel-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-width: 0;
+  margin-top: var(--space-1);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+.api-tunnel-copy { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--space-1-5); min-width: 0; }
+.api-tunnel-title-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.api-tunnel-title { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-control); font-weight: var(--weight-semibold); }
+.api-tunnel-title svg { width: var(--icon-md); height: var(--icon-md); color: var(--muted); }
+.api-tunnel-key-hint { margin: 0; color: var(--amber); }
+.api-tunnel-error { align-items: flex-start; margin: 0; }
+
+@media (max-width: 640px) {
+  .api-tunnel-control { align-items: stretch; flex-direction: column; }
+  .api-tunnel-control > .btn { align-self: flex-start; }
+}
 .maintenance-head { align-items: flex-start; flex-wrap: wrap; }
 .maintenance-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .maintenance-notice { margin: 14px 0 0; align-items: flex-start; }
@@ -464,6 +485,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .badge-accent { background: var(--accent-soft); color: var(--text); }
 .badge-green { background: var(--green-soft); color: var(--green); }
 .badge-amber { background: var(--amber-soft); color: var(--amber); }
+.badge-red { background: var(--red-soft); color: var(--red); }
 .badge-muted { background: var(--raised); color: var(--muted); border: 1px solid var(--border); }
 .badge-clickable { cursor: pointer; transition: filter var(--motion-fast); appearance: none; }
 .badge-clickable:hover { filter: brightness(1.1); }

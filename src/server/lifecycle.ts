@@ -1,4 +1,5 @@
 import { flushResponseState } from "../responses/state";
+import { cloudflareTunnelController } from "./cloudflare-tunnel";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -68,6 +69,13 @@ export async function drainAndShutdown(
   // Debounced replay-state snapshot may still be pending; flush so the last completed turn's
   // previous_response_id chain survives the restart this shutdown is usually part of.
   flushResponseState();
+  // Public ingress must not outlive the local proxy. The controller escalates to a force kill if
+  // cloudflared does not honor its graceful termination window.
+  try {
+    await cloudflareTunnelController.stop();
+  } catch (err) {
+    console.warn(`[cloudflare] tunnel shutdown failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   s?.stop(true);
   draining = false;
 }

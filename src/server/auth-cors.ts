@@ -11,6 +11,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
+import { isCloudflareTunnelRequest, isCloudflareTunnelRequestOrigin } from "./cloudflare-tunnel";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -65,11 +66,15 @@ export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean
     });
   }
   const origin = req.headers.get("Origin");
-  if (!isApiAuthRequired(config)) {
+  if (!isRequestApiAuthRequired(req, config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
     return !origin || isLoopbackOriginValue(origin) || isExtraAllowedOrigin(origin, config);
   }
-  return !origin || isLoopbackOriginValue(origin) || isSameOriginAsRequest(req, origin) || isExtraAllowedOrigin(origin, config);
+  return !origin
+    || isLoopbackOriginValue(origin)
+    || isSameOriginAsRequest(req, origin)
+    || isCloudflareTunnelRequestOrigin(origin)
+    || isExtraAllowedOrigin(origin, config);
 }
 
 export function corsHeaders(req?: Request, config?: OcxConfig): Record<string, string> {
@@ -116,6 +121,14 @@ export function isApiAuthRequired(config: OcxConfig): boolean {
   return !isLoopbackHostname(config.hostname);
 }
 
+/**
+ * Request-scoped admission gate. A Cloudflare connector reaches the loopback listener from the
+ * same machine, so bind-host-only checks would otherwise mistake public traffic for local traffic.
+ */
+export function isRequestApiAuthRequired(req: Request, config: OcxConfig): boolean {
+  return isApiAuthRequired(config) || isCloudflareTunnelRequest(req);
+}
+
 export function assertServerAuthConfig(config: OcxConfig): void {
   if (isApiAuthRequired(config) && !configuredApiAuthToken(config)) {
     throw new Error("OPENCODEX_API_AUTH_TOKEN is required when binding opencodex to a non-loopback hostname");
@@ -155,7 +168,7 @@ export function validateForwardAdmissionCredential(headers: Headers, config: Ocx
 }
 
 export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
-  if (!isApiAuthRequired(config)) return true;
+  if (!isRequestApiAuthRequired(req, config)) return true;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
     // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
@@ -176,7 +189,7 @@ export function requireApiAuth(req: Request, config: OcxConfig, kind: "managemen
  * domains can never be confused.
  */
 export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
-  if (!isApiAuthRequired(config)) return null;
+  if (!isRequestApiAuthRequired(req, config)) return null;
   const actual = req.headers.get("x-opencodex-api-key")?.trim();
   if (actual && isProxyAdmissionSecret(actual, config)) return null;
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");

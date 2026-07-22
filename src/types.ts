@@ -465,6 +465,8 @@ export interface OcxConfig {
   websockets?: boolean;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
   apiKeys?: Array<{ id: string; name: string; key: string; createdAt: string }>;
+  /** Persist the dashboard's Cloudflare public-access toggle across proxy restarts. */
+  cloudflareTunnel?: { enabled?: boolean };
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
   /**

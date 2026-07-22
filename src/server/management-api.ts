@@ -52,8 +52,14 @@ import { drainAndShutdown } from "./lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
+import { configuredApiAuthToken, isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
+import { probeHostname } from "./proxy-liveness";
+import {
+  cloudflareTunnelController,
+  type CloudflareTunnelController,
+  type CloudflareTunnelStatus,
+} from "./cloudflare-tunnel";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -71,6 +77,31 @@ export interface ManagementApiDeps {
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
+  /** Actual live listener port. It can differ from config.port after an occupied-port fallback. */
+  listenPort?: number;
+  cloudflareTunnel?: CloudflareTunnelController;
+  persistConfig?: (config: OcxConfig) => void;
+}
+
+function localResponsesEndpoint(config: Pick<OcxConfig, "hostname" | "port">, listenPort?: number): string {
+  const port = listenPort ?? config.port ?? 10100;
+  return `http://${probeHostname(config.hostname)}:${port}/v1/responses`;
+}
+
+function cloudflareTunnelPayload(
+  status: CloudflareTunnelStatus,
+  localEndpoint: string,
+  desiredEnabled = false,
+  canEnable = false,
+): CloudflareTunnelStatus & { enabled: boolean; canEnable: boolean; endpoint: string } {
+  const endpoint = status.status === "running" && status.publicUrl
+    ? `${status.publicUrl.replace(/\/+$/, "")}/v1/responses`
+    : localEndpoint;
+  const enabled = desiredEnabled
+    || status.status === "starting"
+    || status.status === "running"
+    || status.status === "stopping";
+  return { ...status, enabled, canEnable, endpoint };
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -219,6 +250,123 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         injectClaudeAgentDefs(config, {});
       }
     } catch { /* best-effort */ }
+  }
+
+  const tunnelController = deps.cloudflareTunnel ?? cloudflareTunnelController;
+  const persistConfig = deps.persistConfig ?? saveConfig;
+  const localEndpoint = localResponsesEndpoint(config, deps.listenPort);
+  const canEnableTunnel = !!config.apiKeys?.length || !!configuredApiAuthToken(config);
+
+  if (url.pathname === "/api/cloudflare-tunnel" && req.method === "GET") {
+    return jsonResponse(cloudflareTunnelPayload(
+      tunnelController.getStatus(),
+      localEndpoint,
+      config.cloudflareTunnel?.enabled === true,
+      canEnableTunnel,
+    ));
+  }
+
+  if (url.pathname === "/api/cloudflare-tunnel" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const unknownField = Object.keys(raw).find(field => field !== "enabled");
+    if (unknownField) return jsonResponse({ error: `unknown field: ${unknownField}` }, 400);
+    const body = raw as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "enabled boolean is required" }, 400);
+    }
+    if (body.enabled && !canEnableTunnel) {
+      return jsonResponse({
+        ...cloudflareTunnelPayload(
+          tunnelController.getStatus(),
+          localEndpoint,
+          config.cloudflareTunnel?.enabled === true,
+          canEnableTunnel,
+        ),
+        error: "Create an opencodex API key before enabling public access.",
+      }, 409);
+    }
+    const previousTunnelConfig = config.cloudflareTunnel
+      ? { ...config.cloudflareTunnel }
+      : undefined;
+    const restorePreviousTunnelConfig = () => {
+      if (previousTunnelConfig) config.cloudflareTunnel = previousTunnelConfig;
+      else delete config.cloudflareTunnel;
+    };
+
+    if (body.enabled) {
+      const actualPort = deps.listenPort ?? config.port ?? 10100;
+      try {
+        await tunnelController.start({
+          originUrl: `http://${probeHostname(config.hostname)}:${actualPort}`,
+          actualPort,
+          configuredPort: config.port ?? 10100,
+        });
+      } catch {
+        // The controller normally returns sanitized state, but preserve a safe response if an
+        // injected/custom controller rejects unexpectedly.
+      }
+      if (tunnelController.getStatus().status === "running") {
+        config.cloudflareTunnel = { ...config.cloudflareTunnel, enabled: true };
+        try {
+          persistConfig(config);
+        } catch {
+          // Never leave an unpersisted public listener running: a restart would lose the UI's
+          // desired state and operators could reasonably believe the failed action was rolled back.
+          restorePreviousTunnelConfig();
+          try { await tunnelController.stop(); } catch { /* status remains sanitized below */ }
+          const payload = cloudflareTunnelPayload(
+            tunnelController.getStatus(),
+            localEndpoint,
+            previousTunnelConfig?.enabled === true,
+            canEnableTunnel,
+          );
+          return jsonResponse({
+            ...payload,
+            error: payload.status === "error"
+              ? payload.error
+              : "Public access was rolled back because its setting could not be saved.",
+          }, 500);
+        }
+      }
+    } else {
+      // Process shutdown and persistence are deliberately independent. Even a read-only/corrupt
+      // config directory must not prevent the already-public child process from being terminated.
+      config.cloudflareTunnel = { ...config.cloudflareTunnel, enabled: false };
+      let persistenceFailed = false;
+      try { persistConfig(config); } catch { persistenceFailed = true; }
+      try {
+        await tunnelController.stop();
+      } catch {
+        // The controller owns sanitized diagnostics. Never reflect child argv/env or raw logs here.
+      }
+      if (persistenceFailed) {
+        // The on-disk desired state did not change. Reflect that truth in memory/UI so a failed
+        // disable remains visibly retryable instead of appearing off and silently re-enabling on
+        // the next process start.
+        restorePreviousTunnelConfig();
+        const payload = cloudflareTunnelPayload(
+          tunnelController.getStatus(),
+          localEndpoint,
+          previousTunnelConfig?.enabled === true,
+          canEnableTunnel,
+        );
+        return jsonResponse({
+          ...payload,
+          error: payload.status === "error"
+            ? payload.error
+            : "Public access was stopped, but the disabled setting could not be saved.",
+        }, 500);
+      }
+    }
+    const payload = cloudflareTunnelPayload(
+      tunnelController.getStatus(),
+      localEndpoint,
+      config.cloudflareTunnel?.enabled === true,
+      canEnableTunnel,
+    );
+    return jsonResponse(payload, payload.status === "error" ? 503 : 200);
   }
 
   if (url.pathname === "/api/config" && req.method === "GET") {
@@ -1665,7 +1813,12 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   // ---------------------------------------------------------------------------
   if (url.pathname === "/api/keys" && req.method === "GET") {
     const keys = config.apiKeys ?? [];
-    return jsonResponse({ keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })), endpoint: `http://${config.hostname ?? "127.0.0.1"}:${config.port ?? 10100}/v1/responses` }, 200, req, config);
+    const tunnel = tunnelController.getStatus();
+    return jsonResponse({
+      keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })),
+      endpoint: cloudflareTunnelPayload(tunnel, localEndpoint, config.cloudflareTunnel?.enabled === true, canEnableTunnel).endpoint,
+      tunnel: cloudflareTunnelPayload(tunnel, localEndpoint, config.cloudflareTunnel?.enabled === true, canEnableTunnel),
+    }, 200, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "POST") {
