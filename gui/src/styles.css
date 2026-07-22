@@ -1000,3 +1000,27 @@ button.prov-account-row.active { cursor: default; }
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-label .title { font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .setting-label .desc { font-size: var(--text-label); color: var(--muted); line-height: var(--leading-body); }
+
+/* ---- model row hover tooltip ---- */
+.model-row-wrap { position: relative; }
+.model-tip {
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  min-width: 220px;
+  max-width: 320px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  font-size: var(--text-label);
+  line-height: var(--leading-relaxed);
+  white-space: nowrap;
+}
+.model-tip.has-actions { pointer-events: auto; }
+.model-tip-id { font-family: var(--mono); font-weight: var(--weight-semibold); color: var(--text); margin-bottom: 2px; white-space: normal; word-break: break-all; }
+.model-tip-display { color: var(--muted); margin-bottom: 6px; }
+.model-tip-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-bottom: 6px; }
+.model-tip-key { color: var(--muted); }
+.model-tip-val { color: var(--text); font-family: var(--mono); font-size: var(--text-caption); }
+.model-tip-actions { display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-soft); }
