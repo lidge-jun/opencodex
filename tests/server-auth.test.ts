@@ -398,6 +398,40 @@ describe("server local API auth", () => {
     }
   });
 
+  test("/api/system/memory rides the management auth gate; /healthz shape unchanged (#314 WP3)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    saveConfig({
+      ...config("0.0.0.0"),
+      port: 0,
+    });
+
+    const server = startServer(0);
+    try {
+      const missing = await fetch(`http://127.0.0.1:${server.port}/api/system/memory`);
+      expect(missing.status).toBe(401);
+
+      const ok = await fetch(`http://127.0.0.1:${server.port}/api/system/memory`, {
+        headers: { "x-opencodex-api-key": "local-secret" },
+      });
+      expect(ok.status).toBe(200);
+      const body = await ok.json() as { rss?: number; bunVersion?: string };
+      expect(body.rss).toBeGreaterThan(0);
+      expect(body.bunVersion).toBe(Bun.version);
+
+      // /healthz must NOT gain memory/runtime introspection — it is unauthenticated.
+      const health = await fetch(`http://127.0.0.1:${server.port}/healthz`);
+      expect(health.status).toBe(200);
+      const healthBody = await health.json() as Record<string, unknown>;
+      expect(Object.keys(healthBody).sort()).toEqual(["pid", "port", "service", "status", "uptime", "version"]);
+      expect("rss" in healthBody).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("OPTIONS preflight rejects non-local Origin before CORS headers are trusted", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

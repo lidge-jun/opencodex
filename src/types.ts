@@ -446,6 +446,15 @@ export interface OcxConfig {
    */
   fastMode?: boolean;
   /**
+   * Windows SSE passthrough stream shape (#314 mitigation).
+   * "auto" (default): eager bounded relay only on runtimes proven to carry the
+   * Bun#32111 fix (none today → legacy tee). "eager-relay": force the new relay
+   * (accepts #32111 crash risk on Bun 1.3.14). "legacy-tee": pin the tee path.
+   * Persisted in config.json because Windows services do not inherit shell env.
+   * See src/lib/bun-stream-caps.ts.
+   */
+  streamMode?: "auto" | "legacy-tee" | "eager-relay";
+  /**
    * Custom override for the injected multi-agent guidance body (the text inside the
    * <multi_agent_mode> tags). When set, it replaces the built-in prompt on whichever
    * collab surface would have fired; firing gates are unchanged. Placeholders:

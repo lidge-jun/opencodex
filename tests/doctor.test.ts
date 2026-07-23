@@ -9,9 +9,12 @@ import {
   collectProxyEnv,
   collectRunningProxyEnv,
   collectWslDualInstall,
+  fetchServiceMemory,
+  formatServiceMemoryLines,
   parseProcessEnvBlock,
   probeWham,
   resolveCodexHomeDir,
+  type ServiceMemoryData,
 } from "../src/cli/doctor";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
@@ -277,5 +280,98 @@ describe("doctor", () => {
       throw new TypeError("fetch failed");
     }) as typeof fetch);
     expect(connect.classification).toBe("connect_error");
+  });
+});
+
+describe("service memory section (#314 WP4)", () => {
+  const baseData: ServiceMemoryData = {
+    pid: 4242,
+    bunVersion: "1.3.14",
+    platform: "win32",
+    rss: 5 * 1024 ** 3,
+    heapUsed: 200 * 1024 ** 2,
+    jscHeap: { heapSize: 180 * 1024 ** 2 },
+    streamMode: "auto",
+    eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
+    watchdog: { warnThresholdBytes: 4 * 1024 ** 3, lastWarnAt: null },
+  };
+
+  test("fetchServiceMemory: ok / unauthorized / unreachable / malformed", async () => {
+    const ok = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => Response.json(baseData)) as typeof fetch);
+    expect(ok.status).toBe("ok");
+    if (ok.status === "ok") expect(ok.data.pid).toBe(4242);
+
+    const unauthorized = await fetchServiceMemory("127.0.0.1", 10100, "wrong",
+      (async () => new Response("{}", { status: 401 })) as typeof fetch);
+    expect(unauthorized.status).toBe("unauthorized");
+
+    const unreachable = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+    expect(unreachable.status).toBe("unreachable");
+
+    const malformed = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => Response.json({ hello: "world" })) as typeof fetch);
+    expect(malformed.status).toBe("unreachable");
+    if (malformed.status === "unreachable") expect(malformed.error).toBe("malformed response");
+  });
+
+  test("identity labels: doctor process is never presented as the service", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines[0]).toContain("NOT the service process");
+    expect(lines.some(l => l.includes(`service pid ${baseData.pid}`))).toBe(true);
+  });
+
+  test("interpretation: high RSS + small JS heap → native-side line", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines.some(l => l.includes("native-side growth"))).toBe(true);
+  });
+
+  test("interpretation: high RSS dominated by JS heap → bug-report line", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, heapUsed: 4 * 1024 ** 3, jscHeap: { heapSize: 4 * 1024 ** 3 } },
+    });
+    expect(lines.some(l => l.includes("likely an opencodex bug"))).toBe(true);
+  });
+
+  test("interpretation: rss below threshold → normal line", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, rss: 300 * 1024 ** 2 },
+    });
+    expect(lines.some(l => l.includes("looks normal"))).toBe(true);
+    expect(lines.some(l => l.includes("native-side growth"))).toBe(false);
+  });
+
+  test("guidance gating: win32 + auto-known-bad prints version-claiming guidance", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(true);
+    // Version-claiming, never binary-claiming.
+    expect(lines.join("\n")).not.toContain("bundled binary");
+  });
+
+  test("guidance gating: darwin or fixed runtime prints no override guidance", () => {
+    const darwin = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, platform: "darwin", eagerRelay: null },
+    });
+    expect(darwin.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+
+    const fixedRuntime = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, eagerRelay: { useEagerRelay: true, reason: "auto-fixed-runtime" } },
+    });
+    expect(fixedRuntime.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+  });
+
+  test("unauthorized and unreachable render honest lines without fake data", () => {
+    const unauthorized = formatServiceMemoryLines({ status: "unauthorized" });
+    expect(unauthorized.some(l => l.includes("rejected the request"))).toBe(true);
+    expect(unauthorized.some(l => l.includes("service pid"))).toBe(false);
+
+    const unreachable = formatServiceMemoryLines({ status: "unreachable", error: "ECONNREFUSED" });
+    expect(unreachable.some(l => l.includes("not reachable"))).toBe(true);
+    expect(unreachable.some(l => l.includes("service pid"))).toBe(false);
   });
 });

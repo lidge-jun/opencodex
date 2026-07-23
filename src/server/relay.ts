@@ -404,6 +404,83 @@ export function relaySseWithHeartbeat(
  * Background-consume an SSE stream purely for terminal-outcome inspection (quota tracking).
  * Does not produce output; safe to ignore errors (the client-facing stream is separate).
  */
+export type SseInspector = {
+  /** Feed one upstream chunk through the SSE scanning state machine. */
+  feed(chunk: Uint8Array): void;
+  /** Flush the decoder + trailing unterminated buffer (upstream cleanly done). */
+  finish(): void;
+  /** True once a protocol terminal was detected and reported. */
+  reported(): boolean;
+};
+
+/**
+ * Per-chunk SSE inspection state machine shared by consumeForInspection,
+ * consumeForResponseLogMetadata, and the eager bounded relay (relay-eager.ts).
+ *
+ * Extraction-fidelity invariants (devlog/_plan/260723_win_mem_safestream/020):
+ * - logCtx SSE inspection is gated on !reported; in the metadata configuration
+ *   (no onTerminal) `reported` stays permanently false, which reproduces the
+ *   metadata consumer's unconditional inspection through the same gate.
+ * - finish() skips the trailing-buffer scan once reported, while per-block
+ *   onCompletedResponse continues firing after reported — an intentional
+ *   asymmetry inherited from consumeForInspection.
+ * - logCtx.transportPhase/terminalSource are mutated BEFORE onTerminal fires.
+ * - Synthetic terminals (incomplete / failed-502) are the CALLER's decision:
+ *   the caller owns `cancelled` state and reads `reported()` to decide.
+ */
+export function createSseInspector(handlers: {
+  onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
+  logCtx?: RequestLogContext;
+  onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
+  onFirstOutput?: () => void;
+}): SseInspector {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reported = false;
+  const reportFirstOutput = createFirstOutputReporter(handlers.onFirstOutput);
+
+  const scanPayload = (payload: string | null): void => {
+    if (!reported && handlers.logCtx) inspectResponseLogSsePayload(handlers.logCtx, payload);
+    reportFirstOutput(payload);
+    if (!payload) return;
+    if (!reported && handlers.onTerminal) {
+      const status = terminalStatusFromSsePayload(payload);
+      if (status) {
+        reported = true;
+        if (handlers.logCtx) {
+          handlers.logCtx.transportPhase = "terminal_sse";
+          handlers.logCtx.terminalSource = "upstream";
+        }
+        handlers.onTerminal(status);
+      }
+    }
+    if (handlers.onCompletedResponse) {
+      const response = completedResponseFromSsePayload(payload);
+      if (response) handlers.onCompletedResponse(response);
+    }
+  };
+
+  return {
+    feed(chunk) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let next: { block: string; rest: string } | null;
+      while ((next = nextSseBlock(buffer))) {
+        buffer = next.rest;
+        if (reported && !handlers.onCompletedResponse) continue;
+        scanPayload(sseDataPayload(next.block));
+      }
+    },
+    finish() {
+      buffer += decoder.decode();
+      if (buffer.trim() && !reported) {
+        scanPayload(sseDataPayload(buffer));
+      }
+      buffer = "";
+    },
+    reported: () => reported,
+  };
+}
+
 export function consumeForInspection(
   body: ReadableStream<Uint8Array>,
   onTerminal: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void,
@@ -415,11 +492,8 @@ export function consumeForInspection(
   onFirstOutput?: () => void,
 ): void {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let reported = false;
+  const inspector = createSseInspector({ onTerminal, logCtx, onCompletedResponse, onFirstOutput });
   let cancelled = false;
-  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
   if (signal) {
     if (signal.aborted) {
       // Aborted before we could read anything (Codex disconnects the instant it finishes reading).
@@ -444,64 +518,20 @@ export function consumeForInspection(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) {
-          buffer += decoder.decode();
-          if (buffer.trim() && !reported) {
-            const payload = sseDataPayload(buffer);
-            if (logCtx) inspectResponseLogSsePayload(logCtx, payload);
-            reportFirstOutput(payload);
-            if (payload) {
-              const status = terminalStatusFromSsePayload(payload);
-              if (status) {
-                reported = true;
-                if (logCtx) {
-                  logCtx.transportPhase = "terminal_sse";
-                  logCtx.terminalSource = "upstream";
-                }
-                onTerminal(status);
-              }
-              if (onCompletedResponse) {
-                const response = completedResponseFromSsePayload(payload);
-                if (response) onCompletedResponse(response);
-              }
-            }
-          }
-          if (!reported && !cancelled) {
+          inspector.finish();
+          if (!inspector.reported() && !cancelled) {
             if (logCtx) logCtx.terminalSource = "synthetic";
             onTerminal("incomplete");
           }
           return;
         }
-        buffer += decoder.decode(value, { stream: true });
-        let next: { block: string; rest: string } | null;
-        while ((next = nextSseBlock(buffer))) {
-          buffer = next.rest;
-          if (reported && !onCompletedResponse) continue;
-          const payload = sseDataPayload(next.block);
-          if (!reported && logCtx) inspectResponseLogSsePayload(logCtx, payload);
-          reportFirstOutput(payload);
-          if (!payload) continue;
-          if (!reported) {
-            const status = terminalStatusFromSsePayload(payload);
-            if (status) {
-              reported = true;
-              if (logCtx) {
-                logCtx.transportPhase = "terminal_sse";
-                logCtx.terminalSource = "upstream";
-              }
-              onTerminal(status);
-            }
-          }
-          if (onCompletedResponse) {
-            const response = completedResponseFromSsePayload(payload);
-            if (response) onCompletedResponse(response);
-          }
-        }
+        inspector.feed(value);
       }
     } catch {
       // Upstream read failure after HTTP 200 (mid-stream socket reset) is not a
       // protocol `response.incomplete` terminal. Report a synthetic 502 so account
       // health treats it as transient; abort-driven client cancellation still wins.
-      if (!reported && !cancelled) {
+      if (!inspector.reported() && !cancelled) {
         if (logCtx) {
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
@@ -524,9 +554,9 @@ export function consumeForResponseLogMetadata(
   onFirstOutput?: () => void,
 ): void {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
+  // No onTerminal → the inspector's `reported` gate stays permanently false,
+  // reproducing this consumer's unconditional logCtx inspection.
+  const inspector = createSseInspector({ logCtx, onCompletedResponse, onFirstOutput });
   if (signal) {
     if (signal.aborted) {
       reader.cancel(signal.reason).catch(() => {});
@@ -542,30 +572,10 @@ export function consumeForResponseLogMetadata(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) {
-          buffer += decoder.decode();
-          if (buffer.trim()) {
-            const payload = sseDataPayload(buffer);
-            inspectResponseLogSsePayload(logCtx, payload);
-            reportFirstOutput(payload);
-            if (payload && onCompletedResponse) {
-              const response = completedResponseFromSsePayload(payload);
-              if (response) onCompletedResponse(response);
-            }
-          }
+          inspector.finish();
           return;
         }
-        buffer += decoder.decode(value, { stream: true });
-        let next: { block: string; rest: string } | null;
-        while ((next = nextSseBlock(buffer))) {
-          buffer = next.rest;
-          const payload = sseDataPayload(next.block);
-          inspectResponseLogSsePayload(logCtx, payload);
-          reportFirstOutput(payload);
-          if (payload && onCompletedResponse) {
-            const response = completedResponseFromSsePayload(payload);
-            if (response) onCompletedResponse(response);
-          }
-        }
+        inspector.feed(value);
       }
     } catch {
       /* metadata inspection must not affect the client-facing stream */

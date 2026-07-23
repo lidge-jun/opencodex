@@ -442,6 +442,10 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // Invalid values degrade to undefined ("auto") instead of failing the whole
+  // parse: a hand-edited typo must never trip the backup-and-defaults repair
+  // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
+  streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
 }).passthrough().superRefine((config, ctx) => {
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {
@@ -642,6 +646,19 @@ export function hardenExistingSecret(path: string): void {
     }
   }
 }
+/**
+ * The schema's `.catch(undefined)` silently degrades an invalid persisted
+ * `streamMode` to "auto"; surface that once so a hand-edited typo (e.g.
+ * "legacy_tee") is discoverable instead of silently changing stream shape.
+ */
+function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).streamMode;
+  if (raw !== undefined && validated.streamMode === undefined) {
+    console.warn(`⚠️  config.json streamMode ${JSON.stringify(raw)} is invalid (expected "auto", "legacy-tee", or "eager-relay") — falling back to "auto"`);
+  }
+}
+
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -655,7 +672,10 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
-    if (result.success) return result.data as OcxConfig;
+    if (result.success) {
+      warnDegradedStreamMode(parsed, result.data as OcxConfig);
+      return result.data as OcxConfig;
+    }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.

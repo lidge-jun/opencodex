@@ -53,6 +53,11 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("relaySseWithFailedTail(repairedBody, upstream)");
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
+    // #314 two-shape contract: the eager bounded relay exists ONLY behind the
+    // decideEagerRelay gate on the win32-no-repair branch (default OFF on the
+    // bundled known-bad runtime); the tee shape above remains the default.
+    expect(sseBranch).toContain("decideEagerRelay(config.streamMode ?? \"auto\")");
+    expect(sseBranch).toContain("relaySseEagerBounded(upstreamResponse.body, turnAc,");
     expect(sseBranch).not.toContain("relaySseWithHeartbeat(");
     expect(sseBranch).not.toContain("trackStreamLifetime(");
     expect(logWrapper.indexOf("isNativePassthroughSseResponse(response)")).toBeGreaterThanOrEqual(0);

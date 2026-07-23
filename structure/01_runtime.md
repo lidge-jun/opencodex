@@ -24,7 +24,10 @@ reasoning effort definitions live there. Feature code is grouped under `src/adap
 `src/server/` is split by responsibility: `index.ts` owns the listener and route ordering;
 `responses.ts` owns Responses handling and compaction; `images.ts` owns the standalone Images relay;
 `management-api.ts` owns `/api/*`;
-`lifecycle.ts`, `request-log.ts`, `relay.ts`, and `auth-cors.ts` own server infrastructure; and
+`lifecycle.ts`, `request-log.ts`, `relay.ts` (incl. the shared `createSseInspector` SSE inspection
+factory), `relay-eager.ts` (#314 gated eager bounded passthrough relay), `memory-watchdog.ts`
+(warn-only RSS sampler), `management/system-routes.ts` (`/api/system/*`), and `auth-cors.ts` own
+server infrastructure (`src/lib/bun-stream-caps.ts` owns the Bun stream-capability gate); and
 static GUI, WebSocket bridge, port/liveness, decompression, and adapter-resolution helpers live in
 their own files.
 

@@ -162,7 +162,9 @@ const BENIGN_LOG_INTERVAL_MS = 5 * 60_000;
  * disconnects mid-SSE on the tee()'d passthrough path (responses.ts Bun#32111
  * workaround), Bun's sink-close teardown tries to cancel the tee-locked source body
  * and rejects off-path. Request lifecycle is already settled at that point; same
- * benign handling applies.
+ * benign handling applies. The tee path remains the DEFAULT passthrough shape;
+ * the gated eager relay (relay-eager.ts, #314) does not tee and may not produce
+ * this shape — detection stays unchanged either way.
  */
 export function isBenignAbortTeardown(err: unknown): boolean {
   if (!(err instanceof TypeError)) return false;

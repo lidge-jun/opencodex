@@ -23,6 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { isStreamMode } from "../../lib/bun-stream-caps";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -78,6 +79,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAutoStart: codexAutoStartEnabled(config),
       port: config.port,
       hostname: config.hostname ?? "127.0.0.1",
+      streamMode: config.streamMode ?? "auto",
       startupHealth: await getCachedStartupHealth(config),
     });
   }
@@ -127,17 +129,39 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "PUT") {
-    let body: { codexAutoStart?: unknown };
+    // Each field is optional but at least one must be present; fields are
+    // validated when present. streamMode-only PUTs must work: Windows-memory
+    // troubleshooting docs tell service users to set it here (a service does
+    // not inherit shell env, so config.json is its only input). A stream-shape
+    // change applies to NEW turns only — the config object is shared by
+    // reference with the request handlers, no restart needed.
+    let body: { codexAutoStart?: unknown; streamMode?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (typeof body.codexAutoStart !== "boolean") {
+    if (body.codexAutoStart === undefined && body.streamMode === undefined) {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
-    config.codexAutoStart = body.codexAutoStart;
+    if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
+      return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
+    }
+    if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
+      return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
+    }
+    if (typeof body.codexAutoStart === "boolean") {
+      config.codexAutoStart = body.codexAutoStart;
+    }
+    if (body.streamMode !== undefined) {
+      if (body.streamMode === "auto") {
+        delete config.streamMode;
+      } else {
+        config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+      }
+    }
     saveConfig(config);
     invalidateStartupHealthCache();
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
+      streamMode: config.streamMode ?? "auto",
       startupHealth: await getCachedStartupHealth(config),
     });
   }
