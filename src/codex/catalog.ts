@@ -26,6 +26,7 @@ import {
   targetKey,
 } from "../combos";
 import type { NormalizedComboConfig } from "../combos/types";
+import { providerDestinationResolvedError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
 
@@ -1441,28 +1442,64 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
+  const failedDiscoveryFallback = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+    markModelsFetchFailure(name);
+    const stale = getStaleCached(name);
+    return {
+      models: stale
+        ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+        : configured,
+      fallback: stale ? "stale" : "configured",
+    };
+  };
   try {
+    const destinationError = await providerDestinationResolvedError(name, {
+      baseUrl: url,
+      allowPrivateNetwork: prov.allowPrivateNetwork,
+    });
+    if (destinationError) {
+      const { models, fallback } = failedDiscoveryFallback();
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+      return models;
+    }
+
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
-      markModelsFetchFailure(name);
-      const stale = getStaleCached(name);
-      const fallback = stale ? "stale" : "configured";
+      const { models, fallback } = failedDiscoveryFallback();
       console.warn(
         `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
       );
-      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+      return models;
     }
-    const json = await res.json() as unknown;
+
+    const contentType = (
+      res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
+    ).slice(0, 80);
+    const body = await res.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(body) as unknown;
+    } catch {
+      const { models, fallback } = failedDiscoveryFallback();
+      const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
+        ? "returned invalid JSON in a 2xx response"
+        : "returned a non-JSON 2xx response";
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+      return models;
+    }
     const data = json !== null && typeof json === "object" && !Array.isArray(json)
       ? (json as { data?: unknown }).data
       : undefined;
     if (!isProviderModelsApiItems(data)) {
-      markModelsFetchFailure(name);
+      const { models, fallback } = failedDiscoveryFallback();
       console.warn(
-        `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data; using stale/static catalog degradation.`,
+        `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
       );
-      const stale = getStaleCached(name);
-      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+      return models;
     }
     const items = data;
     const live = items.map(m => applyProviderConfigHints(name, prov, {
@@ -1503,13 +1540,11 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     setCached(name, live);
     return live;
   } catch (error) {
-    markModelsFetchFailure(name);
-    const stale = getStaleCached(name);
-    const fallback = stale ? "stale" : "configured";
+    const { models, fallback } = failedDiscoveryFallback();
     console.warn(
       `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
     );
-    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+    return models;
   }
 }
 

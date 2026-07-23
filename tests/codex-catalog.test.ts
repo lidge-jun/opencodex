@@ -1222,6 +1222,213 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("model discovery blocks a private destination by default before fetch", async () => {
+    const provider = "discovery-private-blocked";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ data: [{ id: "must-not-fetch" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "http://198.18.0.1/v1",
+            apiKey: "sk-test",
+            models: ["static-fallback"],
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(0);
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/static-fallback`,
+      ]);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("blocked by destination policy");
+      expect(warningText).toContain("benchmark address");
+      expect(warningText).toContain("fallback=configured");
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
+  test("model discovery allows a private destination with allowPrivateNetwork opt-in", async () => {
+    const provider = "discovery-private-opt-in";
+    let requestedUrl: string | undefined;
+    globalThis.fetch = (async input => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ data: [{ id: "live-private-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "http://198.18.0.1/v1",
+            allowPrivateNetwork: true,
+            apiKey: "sk-test",
+          },
+        },
+      });
+
+      expect(requestedUrl).toBe("http://198.18.0.1/v1/models");
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/live-private-model`,
+      ]);
+    } finally {
+      clearModelCache(provider);
+    }
+  });
+
+  test("2xx non-JSON discovery emits safe diagnostics instead of SyntaxError", async () => {
+    const provider = "discovery-non-json";
+    const bodyMarker = "PRIVATE-UPSTREAM-BODY-MARKER";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => new Response(`<html>${bodyMarker}</html>`, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            models: ["static-fallback"],
+          },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/static-fallback`,
+      ]);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("returned a non-JSON 2xx response");
+      expect(warningText).toContain("status=200");
+      expect(warningText).toContain("contentType=text/html");
+      expect(warningText).toContain("fallback=configured");
+      expect(warningText).not.toContain("SyntaxError");
+      expect(warningText).not.toContain(bodyMarker);
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
+  test("invalid 2xx JSON preserves and returns the stale discovery cache", async () => {
+    const provider = "discovery-invalid-json-stale";
+    const stale = [{ provider, id: "last-known-good" }];
+    setCached(provider, stale);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => new Response("{not-json", {
+      status: 200,
+      headers: { "content-type": "application/problem+json; charset=utf-8" },
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        modelCacheTtlMs: 0,
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            models: ["static-fallback"],
+          },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/last-known-good`,
+      ]);
+      expect(getStaleCached(provider)).toEqual(stale);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("returned invalid JSON in a 2xx response");
+      expect(warningText).toContain("contentType=application/problem+json");
+      expect(warningText).toContain("fallback=stale");
+      expect(warningText).not.toContain("SyntaxError");
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
+  test("HTTP non-OK discovery returns configured models with status diagnostics", async () => {
+    const provider = "discovery-http-503";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            models: ["static-fallback"],
+          },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/static-fallback`,
+      ]);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("failed with HTTP 503");
+      expect(warningText).toContain("fallback=configured");
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
+  test("thrown fetch discovery returns configured models without SyntaxError conflation", async () => {
+    const provider = "discovery-fetch-throw";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            models: ["static-fallback"],
+          },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+        `${provider}/static-fallback`,
+      ]);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("threw TypeError");
+      expect(warningText).toContain("fallback=configured");
+      expect(warningText).not.toContain("SyntaxError");
+      expect(warningText).not.toContain("fetch failed");
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
   test("malformed 2xx discovery keeps the stale catalog and does not cache the response", async () => {
     const provider = "malformed-stale";
     setCached(provider, [{ provider, id: "last-known-good" }]);
