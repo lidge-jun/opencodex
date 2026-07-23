@@ -107,8 +107,121 @@ afterEach(() => {
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
+  clearAccountNeedsReauth("pool-b");
+  clearAccountQuota();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
+
+const POOL_RETRY_MODEL = "gpt-5.6-sol";
+
+function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
+  return JSON.stringify({
+    detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+  });
+}
+
+type PoolRetryHarness = {
+  config: OcxConfig;
+  dispatches: string[];
+  request: (init?: { stream?: boolean; signal?: AbortSignal }) => Promise<Response>;
+  server: ReturnType<typeof startServer>;
+  upstream: ReturnType<typeof Bun.serve>;
+};
+
+async function startPoolRetryHarness(
+  reply: (accountId: string, request: Request) => Response | Promise<Response>,
+  options: { secondAccount?: boolean; streamMode?: "legacy-tee" | "eager-relay" } = {},
+): Promise<PoolRetryHarness> {
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  mkdirSync(TEST_DIR, { recursive: true });
+  process.env.OPENCODEX_HOME = TEST_DIR;
+  clearCodexUpstreamHealth();
+  clearThreadAccountMap();
+  clearAccountQuota();
+  clearAccountNeedsReauth("pool-a");
+  clearAccountNeedsReauth("pool-b");
+
+  const dispatches: string[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const accountId = request.headers.get("chatgpt-account-id") ?? "missing";
+      dispatches.push(accountId);
+      return reply(accountId, request);
+    },
+  });
+  redirectCanonicalCodexTo(upstream.url.toString());
+
+  const secondAccount = options.secondAccount ?? true;
+  const config = {
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: poolProviders(),
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      ...(secondAccount
+        ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
+        : []),
+    ],
+    activeCodexAccountId: "pool-a",
+    ...(options.streamMode ? { streamMode: options.streamMode } : {}),
+  } as OcxConfig;
+  saveConfig(config);
+  saveCodexAccountCredential("pool-a", {
+    accessToken: "pool-a-token",
+    refreshToken: "pool-a-refresh",
+    expiresAt: Date.now() + 10 * 60_000,
+    chatgptAccountId: "acct-pool-a",
+  });
+  updateAccountQuota("pool-a", 10);
+  if (secondAccount) {
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool-b-token",
+      refreshToken: "pool-b-refresh",
+      expiresAt: Date.now() + 10 * 60_000,
+      chatgptAccountId: "acct-pool-b",
+    });
+    updateAccountQuota("pool-b", 20);
+  }
+
+  const server = startServer(0);
+  return {
+    config,
+    dispatches,
+    server,
+    upstream,
+    request: ({ stream = false, signal } = {}) => originalGlobalFetch(
+      new URL("/v1/responses", server.url),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+        body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream }),
+        signal,
+      },
+    ),
+  };
+}
+
+async function stopPoolRetryHarness(harness: PoolRetryHarness): Promise<void> {
+  await harness.server.stop(true);
+  await harness.upstream.stop(true);
+}
+
+function rejectionResponse(body: BodyInit, headers: Record<string, string> = {}): Response {
+  return new Response(body, {
+    status: 400,
+    statusText: "Account Model Rejected",
+    headers: { "content-type": "application/json", "x-pool-retry-test": "original", ...headers },
+  });
+}
+
+async function expectOriginal400(response: Response, body: string): Promise<void> {
+  expect(response.status).toBe(400);
+  expect(response.headers.get("x-pool-retry-test")).toBe("original");
+  expect(await response.text()).toBe(body);
+}
 
 describe("server local API auth", () => {
   test("responses timeout helper disables Bun request timeout when available", () => {
@@ -1543,6 +1656,325 @@ describe("server local API auth", () => {
     } finally {
       await server.stop(true);
       await upstream.stop(true);
+    }
+  });
+
+  test("Activation A: allow-listed 400 retries once on another eligible pool account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(unsupportedModelBody())
+      : Response.json({ id: "retry-success", status: "completed", output: [] }));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("retry-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("Activation B: allow-listed 400 with one eligible account preserves the original response", async () => {
+    const body = unsupportedModelBody();
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body), { secondAccount: false });
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("Activation C: malformed-input 400 never authorizes a pool retry", async () => {
+    const body = JSON.stringify({ detail: "Invalid request: malformed tool schema" });
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+      expect(isAccountNeedsReauth("pool-b")).toBe(false);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("Activation D: second allow-listed 400 is returned without a third dispatch", async () => {
+    const bodyA = unsupportedModelBody();
+    const bodyB = `${unsupportedModelBody()}\n`;
+    const harness = await startPoolRetryHarness(accountId => rejectionResponse(
+      accountId === "acct-pool-a" ? bodyA : bodyB,
+      { "x-pool-retry-test": accountId },
+    ));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(400);
+      expect(response.headers.get("x-pool-retry-test")).toBe("acct-pool-b");
+      expect(await response.text()).toBe(bodyB);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("Activation E: both stream modes retry only before response relay construction", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+        const positive = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+          ? rejectionResponse(unsupportedModelBody())
+          : new Response(
+              'event: response.completed\ndata: {"type":"response.completed","response":{"id":"from-b","status":"completed","output":[]}}\n\n',
+              { headers: { "content-type": "text/event-stream" } },
+            ), { streamMode });
+        try {
+          const text = await (await positive.request({ stream: true })).text();
+          expect(positive.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+          expect(text).toContain('"id":"from-b"');
+        } finally {
+          await stopPoolRetryHarness(positive);
+        }
+
+        const failedDetail = unsupportedModelBody().slice(10, -1);
+        const negative = await startPoolRetryHarness(() => new Response(
+          `event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"message":${JSON.stringify(failedDetail)}}}}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ), { streamMode });
+        try {
+          const text = await (await negative.request({ stream: true })).text();
+          expect(negative.dispatches).toEqual(["acct-pool-a"]);
+          expect(text).toContain("response.failed");
+          expect(text).toContain("not supported when using Codex");
+        } finally {
+          await stopPoolRetryHarness(negative);
+        }
+      }
+    } finally {
+      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+    }
+  });
+
+  test("oversized 400 body never authorizes a pool retry", async () => {
+    const body = `${unsupportedModelBody()}${"x".repeat(65_536)}`;
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("stalled 400 body timeout never authorizes a pool retry", async () => {
+    const prefix = unsupportedModelBody().slice(0, -1);
+    const suffix = "}";
+    const body = prefix + suffix;
+    const harness = await startPoolRetryHarness(() => rejectionResponse(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix));
+        setTimeout(() => {
+          controller.enqueue(new TextEncoder().encode(suffix));
+          controller.close();
+        }, 5_100);
+      },
+    })));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(400);
+      expect(response.headers.get("x-pool-retry-test")).toBe("original");
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, 7_000);
+
+  test("aborted 400 inspection never authorizes a pool retry", async () => {
+    let releaseDispatch!: () => void;
+    const dispatched = new Promise<void>(resolve => { releaseDispatch = resolve; });
+    const harness = await startPoolRetryHarness(() => {
+      releaseDispatch();
+      return rejectionResponse(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(unsupportedModelBody().slice(0, -1)));
+        },
+      }));
+    });
+    const controller = new AbortController();
+    try {
+      const pending = harness.request({ signal: controller.signal });
+      await dispatched;
+      controller.abort(new DOMException("test abort", "AbortError"));
+      await expect(pending).rejects.toThrow();
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("invalid JSON 400 never authorizes a pool retry", async () => {
+    const body = '{"detail":';
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("missing or non-string detail never authorizes a pool retry", async () => {
+    for (const body of ["{}", '{"detail":null}', '{"detail":400}', '{"detail":{"message":"unsupported"}}']) {
+      const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+      try {
+        await expectOriginal400(await harness.request(), body);
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    }
+  });
+
+  test("wrong model id in exact sentence never authorizes a pool retry", async () => {
+    const body = unsupportedModelBody("other-model");
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("normalization near-misses never authorize a pool retry", async () => {
+    const exact = `The '${POOL_RETRY_MODEL}' model is not supported when using Codex with a ChatGPT account.`;
+    const cases = [
+      exact.slice(0, -1),
+      exact.replaceAll("'", "\u2019"),
+      `prefix ${exact}`,
+      `${exact} suffix`,
+      exact.replace("ChatGPT account.", "ChatGPT account"),
+    ];
+    for (const detail of cases) {
+      const body = JSON.stringify({ detail });
+      const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+      try {
+        await expectOriginal400(await harness.request(), body);
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    }
+    const positive = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(JSON.stringify({ detail: `  THE   '${POOL_RETRY_MODEL}' MODEL IS NOT SUPPORTED\nWHEN USING CODEX WITH A CHATGPT ACCOUNT.  ` }))
+      : Response.json({ id: "normalized", status: "completed", output: [] }));
+    try {
+      expect((await (await positive.request()).json() as { id: string }).id).toBe("normalized");
+      expect(positive.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(positive);
+    }
+  });
+
+  test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
+    for (const body of ['"string"', "42", "true", "null", '["detail"]']) {
+      const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+      try {
+        await expectOriginal400(await harness.request(), body);
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    }
+  });
+
+  test("alternate account resolution failure preserves the original 400", async () => {
+    const body = unsupportedModelBody();
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    markAccountNeedsReauth("pool-b");
+    try {
+      await expectOriginal400(await harness.request(), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("retry-dispatch transport failure records only B and never triple-dispatches", async () => {
+    const harness = await startPoolRetryHarness(() => rejectionResponse(unsupportedModelBody()));
+    const redirectedFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+      if (accountId === "acct-pool-b") {
+        harness.dispatches.push(accountId);
+        throw new Error("synthetic retry connect failure");
+      }
+      return redirectedFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(502);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toMatchObject({
+        consecutiveFailures: 1,
+        lastFailureStatus: 0,
+      });
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("WS-REBIND-01: successful retry migrates the WebSocket registry from A to B", async () => {
+    const registrySnapshots: Array<[number, number]> = [];
+    const harness = await startPoolRetryHarness(accountId => {
+      registrySnapshots.push([
+        getTrackedCodexWebSocketCountForAccount("pool-a"),
+        getTrackedCodexWebSocketCountForAccount("pool-b"),
+      ]);
+      return accountId === "acct-pool-a"
+        ? rejectionResponse(unsupportedModelBody())
+        : new Response(
+            'event: response.completed\ndata: {"type":"response.completed","response":{"id":"ws-b","status":"completed","output":[]}}\n\n',
+            { headers: { "content-type": "text/event-stream" } },
+          );
+    });
+    harness.config.websockets = true;
+    saveConfig(harness.config);
+    await harness.server.stop(true);
+    harness.server = startServer(0);
+    const wsUrl = new URL("/v1/responses", harness.server.url);
+    wsUrl.protocol = "ws:";
+    const ws = new WebSocket(wsUrl);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ws.addEventListener("open", () => {
+          ws.send(JSON.stringify({ type: "response.create", model: POOL_RETRY_MODEL, input: "hello" }));
+        }, { once: true });
+        ws.addEventListener("message", event => {
+          if (String(event.data).includes("response.completed")) resolve();
+        });
+        ws.addEventListener("error", () => reject(new Error("websocket retry failed")), { once: true });
+        setTimeout(() => reject(new Error("websocket retry timed out")), 1_000);
+      });
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(registrySnapshots).toEqual([[1, 0], [0, 1]]);
+      expect(getTrackedCodexWebSocketCountForAccount("pool-a")).toBe(0);
+      expect(getTrackedCodexWebSocketCountForAccount("pool-b")).toBe(1);
+    } finally {
+      ws.close();
+      await stopPoolRetryHarness(harness);
     }
   });
 
