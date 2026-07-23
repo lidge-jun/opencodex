@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capability for the menubar panel",
+  "windows": ["panel"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open"
+  ]
+}

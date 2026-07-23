@@ -1,0 +1,15 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/regex-88e4e20684a57cd9.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/builders.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/error.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/find_byte.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/mod.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/string.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/mod.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/string.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libregex-88e4e20684a57cd9.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/builders.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/error.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/find_byte.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/mod.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/string.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/mod.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/bytes.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/string.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/builders.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/bytes.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/error.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/find_byte.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/mod.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/bytes.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regex/string.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/mod.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/bytes.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-1.13.1/src/regexset/string.rs:

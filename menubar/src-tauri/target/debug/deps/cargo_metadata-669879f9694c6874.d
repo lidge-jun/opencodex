@@ -1,0 +1,11 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/cargo_metadata-669879f9694c6874.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/dependency.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/diagnostic.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/errors.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/messages.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libcargo_metadata-669879f9694c6874.rlib: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/dependency.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/diagnostic.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/errors.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/messages.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libcargo_metadata-669879f9694c6874.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/dependency.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/diagnostic.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/errors.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/messages.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/dependency.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/diagnostic.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/errors.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/cargo_metadata-0.19.2/src/messages.rs:

@@ -1,0 +1,11 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/keyboard_types-85924822c900158f.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/code.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/key.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/location.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/modifiers.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/shortcuts.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/webdriver.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libkeyboard_types-85924822c900158f.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/code.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/key.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/location.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/modifiers.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/shortcuts.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/webdriver.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/code.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/key.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/location.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/modifiers.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/shortcuts.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/keyboard-types-0.7.0/src/webdriver.rs:

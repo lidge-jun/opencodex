@@ -1,0 +1,11 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/string_cache-ad10b5564fe6b8e5.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/atom.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/dynamic_set.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/static_sets.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/trivial_impls.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libstring_cache-ad10b5564fe6b8e5.rlib: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/atom.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/dynamic_set.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/static_sets.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/trivial_impls.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libstring_cache-ad10b5564fe6b8e5.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/atom.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/dynamic_set.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/static_sets.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/trivial_impls.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/atom.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/dynamic_set.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/static_sets.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/string_cache-0.9.0/src/trivial_impls.rs:

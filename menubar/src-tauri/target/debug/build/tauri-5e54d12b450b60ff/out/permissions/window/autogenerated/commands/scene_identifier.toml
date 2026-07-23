@@ -1,0 +1,14 @@
+# Copyright 2019-2024 Tauri Programme within The Commons Conservancy
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scene-identifier"
+description = "Enables the scene_identifier command without any pre-configured scope."
+commands.allow = ["scene_identifier"]
+
+[[permission]]
+identifier = "deny-scene-identifier"
+description = "Denies the scene_identifier command without any pre-configured scope."
+commands.deny = ["scene_identifier"]

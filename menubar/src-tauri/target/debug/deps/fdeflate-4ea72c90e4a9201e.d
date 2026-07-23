@@ -1,0 +1,11 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/fdeflate-4ea72c90e4a9201e.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/compress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/decompress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/huffman.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/tables.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libfdeflate-4ea72c90e4a9201e.rlib: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/compress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/decompress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/huffman.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/tables.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/libfdeflate-4ea72c90e4a9201e.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/compress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/decompress.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/huffman.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/tables.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/compress.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/decompress.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/huffman.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/fdeflate-0.3.7/src/tables.rs:

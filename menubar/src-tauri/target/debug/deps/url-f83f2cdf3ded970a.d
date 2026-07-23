@@ -1,0 +1,13 @@
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/url-f83f2cdf3ded970a.d: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/host.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/origin.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/parser.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/path_segments.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/slicing.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/quirks.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/liburl-f83f2cdf3ded970a.rlib: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/host.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/origin.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/parser.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/path_segments.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/slicing.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/quirks.rs
+
+/Users/glt/code/glt/opencodex/menubar/src-tauri/target/debug/deps/liburl-f83f2cdf3ded970a.rmeta: /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/lib.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/host.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/origin.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/parser.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/path_segments.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/slicing.rs /Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/quirks.rs
+
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/lib.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/host.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/origin.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/parser.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/path_segments.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/slicing.rs:
+/Users/glt/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/url-2.5.8/src/quirks.rs:
