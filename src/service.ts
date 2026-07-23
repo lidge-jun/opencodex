@@ -88,7 +88,7 @@ function normalizePathForCompare(path: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-interface ServiceInstallState {
+export interface ServiceInstallState {
   version: 1 | 2;
   codexHome: string;
   opencodexHome: string;
@@ -99,6 +99,23 @@ interface ServiceInstallState {
   backend?: ServiceBackend;
   winswVersion?: string;
   winswSha256?: string;
+}
+
+export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const state = value as Record<string, unknown>;
+  if (state.version !== 1 && state.version !== 2) return null;
+  if (typeof state.codexHome !== "string" || state.codexHome.length === 0) return null;
+  if (typeof state.opencodexHome !== "string" || state.opencodexHome.length === 0) return null;
+  for (const key of ["bunPath", "cliPath", "winswVersion", "winswSha256"] as const) {
+    if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return null;
+  }
+  if (state.version === 1) {
+    if (state.backend !== undefined) return null;
+  } else if (state.backend !== "scheduler" && state.backend !== "native") {
+    return null;
+  }
+  return state as unknown as ServiceInstallState;
 }
 
 function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {
@@ -124,8 +141,8 @@ function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {
 function readServiceInstallState(): ServiceInstallState | null {
   for (const path of serviceStatePaths()) {
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as ServiceInstallState;
-      if (parsed.version === 1 || parsed.version === 2) return parsed;
+      const parsed = parseServiceInstallState(JSON.parse(readFileSync(path, "utf8")));
+      if (parsed) return parsed;
     } catch {
       /* try the next known state path */
     }

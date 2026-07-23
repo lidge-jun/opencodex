@@ -202,6 +202,19 @@ function providerTableString(content: string, provider: string, key: string): st
 
 type RoutingEndpointKind = "local" | "remote" | "unknown";
 
+function ipv4Octets(hostname: string): number[] | null {
+  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+  if (dotted) {
+    const octets = dotted.slice(1).map(Number);
+    return octets.some(octet => octet > 255) ? null : octets;
+  }
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(hostname);
+  if (!mapped) return null;
+  const high = Number.parseInt(mapped[1], 16);
+  const low = Number.parseInt(mapped[2], 16);
+  return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
+}
+
 function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
   try {
     const url = new URL(value);
@@ -210,12 +223,13 @@ function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
     if (!hostname) return "unknown";
     if (hostname === "localhost" || hostname.endsWith(".localhost")) return "local";
     if (hostname === "::" || hostname === "::1" || hostname === "0.0.0.0") return "local";
-    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
-    if (ipv4) {
-      const octets = ipv4.slice(1).map(Number);
-      if (octets.some(octet => octet > 255)) return "unknown";
+    const octets = ipv4Octets(hostname);
+    if (octets) {
+      if (octets.every(octet => octet === 0)) return "local";
       if (octets[0] === 127) return "local";
+      return "remote";
     }
+    if (/^::ffff:/i.test(hostname)) return "unknown";
     return "remote";
   } catch {
     return "unknown";

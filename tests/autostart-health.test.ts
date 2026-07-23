@@ -82,6 +82,8 @@ describe("Codex startup health", () => {
     expect(classifyCodexRouting('"openai_base_url" = "http://127.0.0.2:10100/v1"')).toBe("custom-local");
     expect(classifyCodexRouting('openai_base_url = "http://0.0.0.0:10100/v1"')).toBe("custom-local");
     expect(classifyCodexRouting('openai_base_url = "http://[::]:10100/v1"')).toBe("custom-local");
+    expect(classifyCodexRouting('openai_base_url = "http://[::ffff:127.0.0.1]:10100/v1"')).toBe("custom-local");
+    expect(classifyCodexRouting('openai_base_url = "http://[::ffff:127.1.2.3]:10100/v1"')).toBe("custom-local");
     expect(classifyCodexRouting('openai_base_url = "not-a-url"')).toBe("unknown");
     expect(classifyCodexRouting('openai_base_url = "https://gateway.example/v1"')).toBe("custom-remote");
     expect(classifyCodexRouting([

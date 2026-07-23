@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -526,6 +526,20 @@ describe("service diagnostics", () => {
       recordedBackend: "native",
     });
     expect(mismatchedScheduler).toMatchObject({ backend: "scheduler", stale: true, viable: false, startable: false });
+  });
+
+  test("rejects malformed service backend state instead of defaulting it to scheduler", () => {
+    const valid = {
+      version: 2,
+      codexHome: "C:\\codex",
+      opencodexHome: "C:\\opencodex",
+      backend: "scheduler",
+    };
+    expect(parseServiceInstallState(valid)?.backend).toBe("scheduler");
+    expect(parseServiceInstallState({ ...valid, backend: "garbage" })).toBeNull();
+    expect(parseServiceInstallState({ ...valid, backend: undefined })).toBeNull();
+    expect(parseServiceInstallState({ ...valid, version: 1, backend: "scheduler" })).toBeNull();
+    expect(parseServiceInstallState({ ...valid, version: 1, backend: undefined })?.version).toBe(1);
   });
 
   test("status summary exposes the service log path", () => {
