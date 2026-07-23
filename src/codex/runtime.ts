@@ -316,10 +316,58 @@ function sameRuntimeCommand(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+/** True when a persisted clamp diagnostic still applies to the currently selected runtime. */
+export function effortClampAppliesToRuntime(
+  diagnostic: EffortClampDiagnostic | null | undefined,
+  runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
+): boolean {
+  if (!diagnostic || diagnostic.removedEfforts.length === 0) return false;
+  if (sameRuntimeCommand(diagnostic.runtimePath, runtime.command)) return true;
+  return Boolean(
+    diagnostic.runtimeVersion
+    && runtime.version
+    && diagnostic.runtimeVersion === runtime.version,
+  );
+}
+
+const RESOLVE_CACHE_MS = 15_000;
+let resolveCache: { key: string; at: number; value: ResolveCodexRuntimeResult } | null = null;
+
+function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
+  // Only memoize uninjected process-env resolves (settings/status hot paths).
+  if (deps.execFileSync || deps.existsSync || deps.readFileSync || deps.configDir || deps.now) {
+    return null;
+  }
+  const env = deps.env ?? process.env;
+  return JSON.stringify({
+    cli: env.CODEX_CLI_PATH ?? "",
+    path: env.PATH ?? "",
+    platform: deps.platform ?? process.platform,
+    discover: deps.discoverAlternatives !== false,
+    home: process.env.OPENCODEX_HOME ?? "",
+  });
+}
+
 /**
  * Resolve the single Codex runtime OpenCodex should use for sync, clamp, and probes.
  */
 export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
+  const cacheKey = resolveCacheKey(deps);
+  if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
+    return resolveCache.value;
+  }
+
+  const result = resolveCodexRuntimeUncached(deps);
+  if (cacheKey) resolveCache = { key: cacheKey, at: Date.now(), value: result };
+  return result;
+}
+
+/** Test-only: drop the short-lived process resolve cache. */
+export function resetCodexRuntimeResolveCacheForTests(): void {
+  resolveCache = null;
+}
+
+function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
   const env = deps.env ?? process.env;
   const failures: RuntimeProbeFailure[] = [];
   const ordered: RankedCandidate[] = [];

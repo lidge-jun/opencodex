@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   compareCodexVersions,
   displayCodexRuntimePath,
+  effortClampAppliesToRuntime,
   loadLastEffortClamp,
   loadPersistedCodexRuntime,
   parseCodexVersionOutput,
@@ -214,6 +215,14 @@ describe("resolveCodexRuntime", () => {
     const loaded = loadLastEffortClamp({ configDir });
     expect(loaded?.removedEfforts).toEqual(["max", "ultra"]);
     expect(loaded?.affectedModels).toEqual(["gpt-5.6-sol"]);
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: "0.133.0",
+    })).toBe(true);
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\newer\\codex.exe",
+      version: "0.145.0-alpha.30",
+    })).toBe(false);
     persistEffortClamp(null, { configDir });
     expect(loadLastEffortClamp({ configDir })).toBeNull();
   });

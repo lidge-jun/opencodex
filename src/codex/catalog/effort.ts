@@ -302,7 +302,7 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
       });
       runtimePath = resolved.runtime.command;
       runtimeVersion = resolved.runtime.version;
-      console.warn(formatRuntimeLogLine(resolved.runtime));
+      process.stderr.write(`${formatRuntimeLogLine(resolved.runtime)}\n`);
       if (
         resolved.replacedConfigured
         && resolved.replacedConfigured.from.command !== resolved.runtime.command

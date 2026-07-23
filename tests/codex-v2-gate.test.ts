@@ -409,18 +409,17 @@ describe("cli surface", () => {
   });
 
   test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (devlog 260715 020)", () => {
-    const configDir = mkdtempSync(join(tmpdir(), "ocx-v2-inv-"));
     const execFileSync = () => "codex-cli 0.145.0";
     expect(codexFeaturesInvocation("enable", "darwin", {
       env: { PATH: "" },
-      configDir,
+      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
       existsSync: () => false,
       execFileSync,
     })).toEqual({ file: "codex", args: ["features", "enable", "multi_agent_v2"], options: {} });
     // Explicit CODEX_CLI_PATH pointing at a .cmd (npm-only Windows Codex install).
     const inv = codexFeaturesInvocation("disable", "win32", {
       env: { CODEX_CLI_PATH: "C:\\npm\\codex.cmd", ComSpec: "C:\\WINDOWS\\system32\\cmd.exe", PATH: "" },
-      configDir,
+      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-cmd-")),
       existsSync: () => true,
       execFileSync,
       exists: () => { throw new Error("explicit path must not probe PATH"); },
@@ -431,7 +430,7 @@ describe("cli surface", () => {
     // Bare `codex` resolving to codex.exe stays a direct spawn.
     const exe = codexFeaturesInvocation("enable", "win32", {
       env: { PATH: "C:\\bin" },
-      configDir,
+      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-exe-")),
       existsSync: (p: string) => p === "C:\\bin\\codex.exe",
       execFileSync,
       exists: (p: string) => p === "C:\\bin\\codex.exe",

@@ -7,7 +7,7 @@ import { diagnoseService } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
-import { displayCodexRuntimePath, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
 
 type HealthCheck = {
   ok: boolean;
@@ -154,12 +154,18 @@ export async function collectStatus(): Promise<CliStatusView> {
     }
   })();
   const lastClamp = loadLastEffortClamp();
-  const clampActive = Boolean(lastClamp && lastClamp.removedEfforts.length > 0);
+  const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
   const warningParts: string[] = [];
   if (resolvedRuntime.replacedConfigured) {
     warningParts.push(
       `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolvedRuntime.runtime.command)} instead. Run ocx doctor for diagnosis and recovery.`,
     );
+  } else if (
+    resolvedRuntime.runtime.source === "fallback"
+    && resolvedRuntime.failures.length > 0
+    && !resolvedRuntime.runtime.version
+  ) {
+    warningParts.push("No validated Codex runtime found; falling back to `codex`. Run ocx doctor for diagnosis and recovery.");
   }
   if (resolvedRuntime.newerAvailable) {
     warningParts.push("OpenCodex is using an older Codex binary. Run ocx doctor for diagnosis and recovery.");
@@ -182,7 +188,7 @@ export async function collectStatus(): Promise<CliStatusView> {
     warning: warningParts.length > 0 ? warningParts.join(" ") : null,
     catalogClamp: {
       active: clampActive,
-      removedEfforts: lastClamp?.removedEfforts ?? [],
+      removedEfforts: clampActive ? (lastClamp?.removedEfforts ?? []) : [],
     },
   };
   const proxyLabel = pid && health.ok

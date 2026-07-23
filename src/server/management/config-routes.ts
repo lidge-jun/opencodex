@@ -59,7 +59,7 @@ import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
-import { displayCodexRuntimePath, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -78,7 +78,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/settings" && req.method === "GET") {
     let resolved: ReturnType<typeof resolveCodexRuntime>;
     try {
-      resolved = resolveCodexRuntime({ discoverAlternatives: false });
+      // Full alternative discovery (memoized) so newerAvailable warnings work.
+      resolved = resolveCodexRuntime();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
@@ -86,16 +87,23 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       };
     }
     const lastClamp = loadLastEffortClamp();
-    const clampActive = Boolean(lastClamp && lastClamp.removedEfforts.length > 0);
+    const clampActive = effortClampAppliesToRuntime(lastClamp, resolved.runtime);
     const warningParts: string[] = [];
     if (resolved.replacedConfigured) {
       warningParts.push(
         `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolved.runtime.command)} instead.`,
       );
+    } else if (
+      resolved.runtime.source === "fallback"
+      && resolved.failures.length > 0
+      && !resolved.runtime.version
+    ) {
+      warningParts.push("No validated Codex runtime found; falling back to `codex`.");
     }
     if (clampActive) {
+      const clampVersion = lastClamp?.runtimeVersion ?? resolved.runtime.version ?? "an older binary";
       warningParts.push(
-        `Some reasoning effort options were hidden because OpenCodex used Codex ${resolved.runtime.version ?? "an older binary"}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
+        `Some reasoning effort options were hidden because OpenCodex used Codex ${clampVersion}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
       );
     } else if (resolved.newerAvailable) {
       warningParts.push(
@@ -120,7 +128,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
           : null,
         catalogClamp: {
           active: clampActive,
-          removedEfforts: lastClamp?.removedEfforts ?? [],
+          removedEfforts: clampActive ? (lastClamp?.removedEfforts ?? []) : [],
+          runtimeVersion: clampActive ? (lastClamp?.runtimeVersion ?? null) : null,
         },
         warning: warningParts.length > 0 ? warningParts.join(" ") : null,
       },

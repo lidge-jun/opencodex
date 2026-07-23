@@ -108,14 +108,16 @@ export default function Startup({ apiBase }: { apiBase: string }) {
             codexRuntime?: {
               version?: string | null;
               newerAvailable?: { path?: string; version?: string | null } | null;
-              catalogClamp?: { active?: boolean; removedEfforts?: string[] };
+              catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
             };
           };
           if (!signal?.aborted) {
             const runtime = settings.codexRuntime;
             const clampActive = Boolean(runtime?.catalogClamp?.active);
             const newer = Boolean(runtime?.newerAvailable);
-            const version = runtime?.version ?? "unknown";
+            const version = (clampActive
+              ? runtime?.catalogClamp?.runtimeVersion
+              : runtime?.version) ?? runtime?.version ?? "unknown";
             const efforts = (runtime?.catalogClamp?.removedEfforts ?? []).join(", ");
             if (clampActive) {
               setCodexRuntimeWarning(
