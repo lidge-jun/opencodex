@@ -33,7 +33,7 @@ The dashboard's **Sub-agent delegation** picker stores an `injectionModel` and, 
 
 `multiAgentGuidanceText` identifies the surface from the request's tools — including the Codex Desktop WebSocket path (`responses_lite`), where tools arrive inside an `additional_tools` input item instead of the request's `tools` array.
 
-On a **v2** turn (Sol/Terra in base mode, every model in v2 mode), the proxy injects a compact guidance block — budgeted to 700 characters — whenever an injection model is set or the configured sub-agent roster resolves in the catalog. The block teaches `spawn_agent`'s hidden `model` / `reasoning_effort` arguments, mandates `fork_turns: "none"` (or a partial fork) for overrides, names the preferred model and effort, and lists the `subagentModels` roster with the effort ladder each advertises in the injected catalog — the same list Codex validates spawn efforts against.
+On a **v2** turn (Sol/Terra in base mode, every model in v2 mode), the proxy injects a compact guidance block — budgeted to 700 characters — whenever an eligible injection model is set or the effective sub-agent roster is non-empty. The block conditionally describes `model` / `reasoning_effort` overrides without assuming whether they appear in the active schema, mandates `fork_turns: "none"` (or a partial fork), names only an eligible canonical preferred model, and lists only configured models in Codex's picker-visible, v2-compatible, priority-sorted first five with their available effort ladders.
 
 On a **v1** turn the proxy only mirrors upstream's Proactive delegation text at the top effort tier (max / ultra). No model designation, roster, or custom prompt is added there — v1 stays lean by design.
 

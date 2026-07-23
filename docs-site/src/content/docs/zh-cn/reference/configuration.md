@@ -29,7 +29,7 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `providers` | `Record<string, OcxProviderConfig>` | — | provider 名称 → 配置的映射。 |
 | `openaiProviderTierVersion?` | `2` | migration 设置 | 单一选项式 OpenAI projection 完成标记。 |
 | `defaultProvider` | `string` | `"openai"` | 路由找不到更优匹配时使用的 provider。 |
-| `subagentModels?` | `string[]` | `gpt-5.5`、三款 GPT-5.6、`gpt-5.4-mini` | 最多 5 个原生 slug 或 `provider/model` id，优先显示在 Codex subagent picker 中。显式空数组会被保留。 也会作为可用模型清单注入 v2 委派指南，并标注各模型在目录中公布的 effort 阶梯。 |
+| `subagentModels?` | `string[]` | `gpt-5.5`、三款 GPT-5.6、`gpt-5.4-mini` | 最多 5 个原生 slug 或 `provider/model` id，优先显示在 Codex subagent picker 中。v2 指引清单是已配置模型与 Codex 中 picker 可见、兼容 v2、按 priority 排序后前五项的交集，并使用规范目录 slug 与可用 effort 档位；被排除的条目仍保留在配置中。显式空数组会被保留。 |
 | `injectionModel?` | `string` | — | 注入 multi-agent 指南（v2 界面）的首选原生或路由模型；委派指南会要求把该模型连同 `fork_turns: "none"` 一起传给 `spawn_agent`。 |
 | `injectionEffort?` | `string` | — | 首选 `spawn_agent` reasoning effort（`low` 到 `ultra`）。只有与 `injectionModel` 一起使用才有意义。 |
 | `effortCap?` | `string` | — | reasoning effort 的逐请求硬上限。这是多代理 V2 专属功能：适用于工具列表带有 V2 协作表面的主轮次，以及标记精确匹配 `x-openai-subagent: collab_spawn` 或 `x-codex-turn-metadata` 中 `"subagent_kind": "thread_spawn"` 的派生子轮次（带标记的子轮次无论自身工具表面如何都会被覆盖）。普通主轮次与 V1 表面主轮次不受影响，压缩（compaction）轮次始终绕过上限，`multiAgentMode: "v1"` 会完全禁用上限功能（仪表盘同时隐藏该面板）。接受 `low` 到 `ultra`；只会降低 effort，绝不会提高。会降至不高于上限的最高受支持档位。若模型不提供 effort 控制，或上限之下没有可用档位，则移除 effort 字段并采用 provider 默认值。`max` 和 `ultra` 均可使用，但不会形成更低的等级上限（客户端会将 `ultra` 转换为 `max`，因此请求以 `low` 到 `max` 的范围到达）；不过，已知的模型 effort 阶梯仍可能触发降档或移除字段。仪表盘选择器提供 `low` 到 `xhigh`。通过 `GET /api/effort-caps` 和 `PUT /api/effort-caps` 管理。 |

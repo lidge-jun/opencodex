@@ -33,7 +33,7 @@ v2 サーフェス(`multi_agent_v2`)のサブエージェントは**デフォル
 
 `multiAgentGuidanceText` はリクエストに入ってきたツール一覧でサーフェスを判定します。Codex Desktop の WebSocket 経路(`responses_lite`)のようにツールがリクエストの `tools` 配列ではなく `additional_tools` input 項目として届く場合も認識します。
 
-**v2** リクエスト(base モードの Sol/Terra、v2 モードでは全モデル)では注入モデルが設定されているかサブエージェントロスターがカタログから解釈されるとき 700 字以内の簡潔なガイドを注入します。ガイドには `spawn_agent` の隠し `model` / `reasoning_effort` 引数の使い方、オーバーライドに必要な `fork_turns: "none"`(または部分 fork)ルール、推奨モデル・推論強度、そして `subagentModels` ロスターと各モデルがカタログに広告する effort ラダーが含まれます。このラダーは Codex がスポーン effort を検証する一覧と同じです。
+**v2** リクエスト(base モードの Sol/Terra、v2 モードでは全モデル)では、有効な注入モデルが設定されているか実効サブエージェントロスターが空でないとき、700 字以内の簡潔なガイドを注入します。ガイドは `model` / `reasoning_effort` が現在のスキーマに表示されるかを断定せず条件付きで override を説明し、`fork_turns: "none"`(または部分 fork)ルール、有効な正規 slug の推奨モデル、Codex の picker-visible・v2 互換・priority 順の先頭 5 件に含まれる設定済みモデルと利用可能な effort ラダーだけを表示します。
 
 **v1** リクエストでは最上位推論段階(max / ultra)で上流と同じ能動委任文言のみミラーリングします。モデル指定、ロスター、カスタムプロンプトは v1 に追加されません。
 
