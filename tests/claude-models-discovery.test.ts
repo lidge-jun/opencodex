@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,10 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+// Full-suite Windows load: startServer + discovery GETs exceed the default 5s budget
+// (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(30_000);
 
 let testDir = "";
 let previousHome: string | undefined;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,10 @@ import { startServer } from "../src/server";
 import * as systemEnv from "../src/server/system-env";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+// Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
+// default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
+setDefaultTimeout(30_000);
 
 let testDir = "";
 let previousHome: string | undefined;
