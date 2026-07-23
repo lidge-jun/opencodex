@@ -129,6 +129,45 @@ describe("Responses bridge reasoning and usage parity", () => {
     });
   });
 
+  test("usage details are always present with zero defaults (grok-build strict Responses client)", async () => {
+    // grok-build's pinned async-openai deserializes input_tokens_details/output_tokens_details
+    // as required fields; omitting them fails the turn after successful text (2026-07-23 live).
+    const withoutDetails = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done", usage: { inputTokens: 10, outputTokens: 5 } },
+    ]), "routed/model"));
+    const completed = withoutDetails.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toMatchObject({
+      input_tokens: 10,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 5,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 15,
+    });
+
+    const noUsage = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done" },
+    ]), "routed/model"));
+    const bare = noUsage.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(bare.usage).toMatchObject({
+      input_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 0,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 0,
+    });
+
+    const json = buildResponseJSON([
+      { type: "done", usage: { inputTokens: 7, outputTokens: 3 } },
+    ], "routed/model");
+    expect(json.usage).toMatchObject({
+      input_tokens: 7,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 3,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 10,
+    });
+  });
+
   test("Anthropic cache read and write tokens pass through Responses usage without re-adding", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       {

@@ -14,7 +14,20 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
 }
 
 function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
-  if (!usage) return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  // input_tokens_details / output_tokens_details are ALWAYS emitted (zero defaults):
+  // strict Responses clients deserialize them as required fields — grok-build's pinned
+  // async-openai fork (rev 95b52ebd, response_usage.rs) has non-Option InputTokenDetails/
+  // OutputTokenDetails, so omitting them turns a successful turn into a hard exit after
+  // response.completed ("missing field `input_tokens_details`", verified live 2026-07-23).
+  if (!usage) {
+    return {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    };
+  }
   // inputTokens is already inclusive of cache read/write (types.ts convention).
   const inputTokens = usage.inputTokens;
   const out: Record<string, unknown> = {
@@ -22,20 +35,13 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
     output_tokens: usage.outputTokens,
     total_tokens: usageDisplayTotalTokens(usage) ?? inputTokens + usage.outputTokens,
   };
-  const inputDetails: Record<string, number> = {};
-  if (usage.cachedInputTokens !== undefined) {
-    // cached_tokens carries cache READS only, matching OpenAI semantics.
-    inputDetails.cached_tokens = usage.cachedInputTokens;
-  }
+  // cached_tokens carries cache READS only, matching OpenAI semantics.
+  const inputDetails: Record<string, number> = { cached_tokens: usage.cachedInputTokens ?? 0 };
   if (usage.cacheCreationInputTokens !== undefined) {
     inputDetails.cache_write_tokens = usage.cacheCreationInputTokens;
   }
-  if (Object.keys(inputDetails).length > 0) {
-    out.input_tokens_details = inputDetails;
-  }
-  if (usage.reasoningOutputTokens !== undefined) {
-    out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens };
-  }
+  out.input_tokens_details = inputDetails;
+  out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
   return out;
 }
 

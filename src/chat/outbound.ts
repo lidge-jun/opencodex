@@ -27,19 +27,19 @@ export function chatCompletionsUsage(usage: unknown): Rec {
   const details = isRec(u.input_tokens_details) ? u.input_tokens_details : {};
   const prompt = typeof u.input_tokens === "number" ? u.input_tokens : 0;
   const completion = typeof u.output_tokens === "number" ? u.output_tokens : 0;
-  const cached = typeof details.cached_tokens === "number" ? details.cached_tokens : undefined;
+  const cached = typeof details.cached_tokens === "number" ? details.cached_tokens : 0;
   const out: Rec = {
     prompt_tokens: prompt,
     completion_tokens: completion,
     total_tokens: prompt + completion,
   };
-  if (cached !== undefined) {
-    out.prompt_tokens_details = { cached_tokens: cached };
-  }
+  // Detail objects are always emitted (zero defaults) so strict OpenAI-compatible
+  // clients that require them (see responsesUsage in src/bridge.ts) never fail on
+  // routed providers that report no cache/reasoning numbers.
+  out.prompt_tokens_details = { cached_tokens: cached };
   const outDetails = isRec(u.output_tokens_details) ? u.output_tokens_details : {};
-  if (typeof outDetails.reasoning_tokens === "number") {
-    out.completion_tokens_details = { reasoning_tokens: outDetails.reasoning_tokens };
-  }
+  const reasoning = typeof outDetails.reasoning_tokens === "number" ? outDetails.reasoning_tokens : 0;
+  out.completion_tokens_details = { reasoning_tokens: reasoning };
   return out;
 }
 
