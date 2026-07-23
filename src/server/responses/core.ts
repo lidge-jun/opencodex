@@ -97,7 +97,7 @@ import {
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceForRequest } from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./fetch-helpers";
 
@@ -664,7 +664,7 @@ export async function handleResponses(
   // mock-max clamp below so the synthetic top tier (ultra arrives as max on the
   // codex wire) is still visible. Both request shapes are rewritten.
   {
-    const guidance = await multiAgentGuidanceText(parsed, {
+    const guidance = await multiAgentGuidanceForRequest(parsed, originalBody, {
       multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,

@@ -200,6 +200,11 @@ export async function multiAgentGuidanceText(
   if (surface === null) return null;
 
   if (surface === "v2") {
+    // A whitespace-only override used to produce `<multi_agent_mode> </multi_agent_mode>`.
+    // Treat an explicitly blank custom prompt as silent instead of emitting a no-op
+    // developer message on every request continuation.
+    if (injectionPrompt !== undefined && injectionPrompt.trim() === "") return null;
+
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.
@@ -252,6 +257,30 @@ export async function multiAgentGuidanceText(
   return `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
 }
 
+/** True when the raw Responses request contains only tool-result delta items. */
+export function isToolOutputContinuation(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const input = (body as { input?: unknown }).input;
+  return Array.isArray(input)
+    && input.length > 0
+    && input.every(item => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const type = (item as { type?: unknown }).type;
+      return typeof type === "string" && type.endsWith("_call_output");
+    });
+}
+
+/** Build guidance for a raw Responses request, excluding tool-result continuations. */
+export async function multiAgentGuidanceForRequest(
+  parsed: OcxParsedRequest,
+  rawBody: unknown,
+  options: MultiAgentGuidanceOptions = {},
+  deps: MultiAgentGuidanceDeps = {},
+): Promise<string | null> {
+  if (isToolOutputContinuation(rawBody)) return null;
+  return multiAgentGuidanceText(parsed, options, deps);
+}
+
 
 
 export const V2_GUIDANCE_CHAR_BUDGET = 700;
@@ -296,5 +325,3 @@ export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): 
     }
   }
 }
-
-

@@ -7,7 +7,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import {
+  injectDeveloperMessage,
+  isToolOutputContinuation,
+  multiAgentGuidanceForRequest,
+  multiAgentGuidanceText,
+  sanitizeEncryptedContentInPlace,
+} from "../src/server/responses";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 import { effectiveSubagentRoster } from "../src/codex/catalog";
@@ -382,6 +388,18 @@ describe("multiAgentGuidanceText", () => {
     expect(text).not.toContain("gpt-5.6-luna");
   });
 
+  test("whitespace-only injectionPrompt never emits an empty developer tag", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-terra", efforts: ["high", "max"], multiAgentVersion: "v2" },
+    ]);
+
+    expect(await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      { subagentModels: ["gpt-5.6-terra"], injectionPrompt: " \n\t " },
+    )).toBeNull();
+  });
+
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {
     codexHomeFixture(V2_ON);
     const custom = "CUSTOM RULES model={{model}} effort={{effort}}{{roster}}";
@@ -558,6 +576,44 @@ describe("multiAgentGuidanceText", () => {
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
       { ...v2Options, multiAgentGuidanceEnabled: true },
     ));
+  });
+});
+
+describe("isToolOutputContinuation", () => {
+  test("recognizes tool-output-only Responses deltas", () => {
+    expect(isToolOutputContinuation({
+      input: [
+        { type: "function_call_output", call_id: "call_1", output: "ok" },
+        { type: "custom_tool_call_output", call_id: "call_2", output: "done" },
+      ],
+    })).toBe(true);
+  });
+
+  test("does not suppress guidance when a user message accompanies tool output", () => {
+    expect(isToolOutputContinuation({
+      input: [
+        { type: "function_call_output", call_id: "call_1", output: "ok" },
+        { type: "message", role: "user", content: "also change the title" },
+      ],
+    })).toBe(false);
+    expect(isToolOutputContinuation({ input: [] })).toBe(false);
+    expect(isToolOutputContinuation({ input: "hello" })).toBe(false);
+  });
+
+  test("request guidance is silent for tool continuations and fires for user input", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-terra", efforts: ["high", "max"], multiAgentVersion: "v2" },
+    ]);
+    const parsed = parsedFixture({ tools: [{ name: "spawn_agent" }] });
+    const options = { subagentModels: ["gpt-5.6-terra"] };
+
+    expect(await multiAgentGuidanceForRequest(parsed, {
+      input: [{ type: "function_call_output", call_id: "call_1", output: "ok" }],
+    }, options)).toBeNull();
+    expect(await multiAgentGuidanceForRequest(parsed, {
+      input: [{ type: "message", role: "user", content: "continue" }],
+    }, options)).toContain("<multi_agent_mode>");
   });
 });
 
