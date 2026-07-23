@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,10 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { formatCodexProviderForLog } from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+
+// Full-suite Windows load: startServer + combo rename/delete management flows exceed the
+// default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(30_000);
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
