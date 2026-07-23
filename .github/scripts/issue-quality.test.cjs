@@ -648,6 +648,49 @@ describe("translated feature headings and soft-pass", () => {
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, true, `Expected valid bug but got: ${result.reasons.join("; ")}`);
   });
+
+  it("accepts US spelling Expected behavior as a behaviour alias", () => {
+    const result = validateIssue({
+      title: "[Feature]: Auto-advertise image inputModalities",
+      body: [
+        "### Goal / Problem",
+        "App blocks images before the vision sidecar can run.",
+        "### Expected behavior",
+        "Catalog should advertise image input when the sidecar covers the model.",
+      ].join("\n"),
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got: ${result.reasons.join("; ")}`);
+  });
+
+  it("does not treat enhancement + non-goal aliases as a feature detect hit", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "Something odd in the proxy",
+        body: [
+          "### Current limitation",
+          "No fallback provider today for upstream 5xx responses.",
+          "### Expected behaviour",
+          "Auto failover to a backup provider.",
+        ].join("\n"),
+        labels: ["enhancement"],
+      }),
+      null,
+    );
+  });
+
+  it("does not let a weak title-prefix detection override stored documentation kind", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "[Feature]: rewrite the docs",
+        body: "Still working on the write-up.",
+        labels: [],
+        storedKind: "documentation",
+      }),
+      "documentation",
+    );
+  });
 });
 
 describe("labelForKind", () => {

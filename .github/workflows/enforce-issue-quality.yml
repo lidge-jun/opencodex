@@ -1,7 +1,9 @@
 name: Enforce issue quality
 
-# Issue events use the workflow file from the repository default branch.
-# Merging this to `dev` alone does not activate it until it reaches that branch.
+# Issue events always load this workflow from the repository DEFAULT branch
+# (currently `main`), not from `dev`. Landing here on `dev` alone does not
+# change live issue-quality behavior until the change is also on that default
+# branch.
 on:
   issues:
     types:

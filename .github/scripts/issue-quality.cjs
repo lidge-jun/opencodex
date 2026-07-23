@@ -127,6 +127,7 @@ const FEATURE_LEGACY_HEADINGS = ["Problem to solve", "Proposed solution"];
 const FEATURE_GOAL_HEADINGS = [
   "What are you trying to accomplish?",
   "Goal / Problem",
+  "Goal/Problem",
   "Problem to solve",
 ];
 const FEATURE_BLOCKER_HEADINGS = [
@@ -137,6 +138,7 @@ const FEATURE_BLOCKER_HEADINGS = [
 const FEATURE_BEHAVIOUR_HEADINGS = [
   "What should OpenCodex do?",
   "Expected behaviour",
+  "Expected behavior",
   "Proposed solution",
 ];
 const FEATURE_EXAMPLE_HEADINGS = [
@@ -146,7 +148,9 @@ const FEATURE_EXAMPLE_HEADINGS = [
 ];
 const FEATURE_ALIAS_DETECT_HEADINGS = [
   "Goal / Problem",
+  "Goal/Problem",
   "Expected behaviour",
+  "Expected behavior",
   "Current limitation",
   "Current workaround",
   "Example usage",
@@ -210,15 +214,14 @@ function detectIssueKindFromContent(issue) {
   if (countHeadings(body, FEATURE_NEW_HEADINGS) >= 2) return "feature";
 
   // Translated / alternate feature headings (e.g. after issue-triage).
-  // Gate on a feature hint so common headings like "Expected behaviour"
-  // cannot reclassify bug/freeform reports as features.
-  if (countHeadings(body, FEATURE_ALIAS_DETECT_HEADINGS) >= 2) {
-    const hasGoalHeading = countHeadings(body, FEATURE_GOAL_HEADINGS) >= 1;
-    const featureHint =
-      titleLower.startsWith("[feature]:") ||
-      labels.includes("enhancement") ||
-      hasGoalHeading;
-    if (featureHint) return "feature";
+  // Require a feature-specific goal heading so common headings like
+  // "Expected behaviour" cannot reclassify bug/freeform reports as features.
+  // ([Feature]: prefix and enhancement labels are handled elsewhere.)
+  if (
+    countHeadings(body, FEATURE_ALIAS_DETECT_HEADINGS) >= 2 &&
+    countHeadings(body, FEATURE_GOAL_HEADINGS) >= 1
+  ) {
+    return "feature";
   }
 
   // New bug form: Client or integration + Summary + Reproduction.
@@ -246,11 +249,41 @@ function detectIssueKindFromContent(issue) {
 }
 
 /**
+ * True when body evidence for `kind` is a full structured form, not merely a
+ * title prefix or leftover label. Used to decide whether detected kind may
+ * override a stored bot kind.
+ */
+function hasStrongKindEvidence(kind, issue) {
+  const { body = "" } = issue;
+  switch (kind) {
+    case "provider-compatibility":
+      return countHeadings(body, PROVIDER_HEADINGS) >= 3;
+    case "documentation":
+      return countHeadings(body, DOCS_HEADINGS) >= 2;
+    case "feature":
+      return (
+        countHeadings(body, FEATURE_NEW_HEADINGS) >= 2 ||
+        countHeadings(body, FEATURE_LEGACY_HEADINGS) >= 2 ||
+        (countHeadings(body, FEATURE_ALIAS_DETECT_HEADINGS) >= 2 &&
+          countHeadings(body, FEATURE_GOAL_HEADINGS) >= 1)
+      );
+    case "bug":
+      return (
+        extractSection(body, "Client or integration") !== null &&
+        extractSection(body, "Summary") !== null &&
+        extractSection(body, "Reproduction") !== null
+      );
+    default:
+      return false;
+  }
+}
+
+/**
  * Detect the issue kind from body headings, title prefix, labels, and
  * optional stored bot kind.
  *
- * Stored kind survives heading removal (bypass protection), but a strong
- * conflicting form in the body wins so stale bot state cannot sticky-wrong-kind.
+ * Stored kind survives heading removal (bypass protection). A different
+ * detected kind overrides it only when the body has strong form evidence.
  *
  * @param {{ title: string, body: string, labels: string[], storedKind?: string|null }} issue
  * @returns {"feature"|"bug"|"provider-compatibility"|"documentation"|null}
@@ -260,7 +293,13 @@ function detectIssueKind(issue) {
   const detected = detectIssueKindFromContent(issue);
 
   if (storedKind) {
-    if (detected && detected !== storedKind) return detected;
+    if (
+      detected &&
+      detected !== storedKind &&
+      hasStrongKindEvidence(detected, issue)
+    ) {
+      return detected;
+    }
     return storedKind;
   }
 
