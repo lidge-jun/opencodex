@@ -2,7 +2,7 @@ import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
-import { estimateComboCost, estimateRequestCost } from "./cost";
+import { estimateComboCost, estimateRequestCost, effectiveServiceTier } from "./cost";
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude";
@@ -268,16 +268,17 @@ function finalizeCoverage(totals: UsageSummaryTotals): void {
 
 function addEstimatedCost(
   totals: UsageSummaryTotals,
-  entry: Pick<PersistedUsageEntry, "provider" | "model" | "usageStatus" | "usage" | "attempts">,
+  entry: Pick<PersistedUsageEntry, "provider" | "model" | "usageStatus" | "usage" | "attempts" | "responseServiceTier" | "requestedServiceTier" | "configuredServiceTier">,
 ): void {
   if (entry.usageStatus === "unreported" || entry.usageStatus === "unsupported"
     || (!entry.usage && !entry.attempts?.length)) {
     totals.unmeteredRequests += 1;
     return;
   }
+  const tier = effectiveServiceTier(entry);
   const estimate = entry.attempts?.length
-    ? estimateComboCost(entry.attempts)
-    : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+    ? estimateComboCost(entry.attempts, undefined, tier)
+    : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
   if (!estimate) {
     totals.unpricedRequests += 1;
     return;
@@ -389,9 +390,10 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   }
   // Accumulate per-model estimated cost
   for (const entry of entries) {
+    const tier = effectiveServiceTier(entry);
     const estimate = entry.attempts?.length
-      ? estimateComboCost(entry.attempts)
-      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+      ? estimateComboCost(entry.attempts, undefined, tier)
+      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
     if (!estimate) continue;
 
     if (entry.attempts?.length && estimate.attempts) {
@@ -457,9 +459,10 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
     }
   }
   for (const entry of entries) {
+    const tier = effectiveServiceTier(entry);
     const estimate = entry.attempts?.length
-      ? estimateComboCost(entry.attempts)
-      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+      ? estimateComboCost(entry.attempts, undefined, tier)
+      : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
     if (!estimate) continue;
 
     if (entry.attempts?.length && estimate.attempts) {

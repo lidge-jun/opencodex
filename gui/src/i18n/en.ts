@@ -107,6 +107,9 @@ export const en = {
   "startup.copied": "Copied",
   "startup.recommended": "Recommended repair: {cmd}",
   "startup.navRisk": "Startup protection requires attention",
+  "startup.codexRuntime.clampHidden": "Some reasoning effort options were hidden because OpenCodex used Codex {version}.",
+  "startup.codexRuntime.clampHiddenWithEfforts": "Some reasoning effort options were hidden because OpenCodex used Codex {version} (removed: {efforts}).",
+  "startup.codexRuntime.olderBinary": "OpenCodex is using an older Codex binary ({version}). A newer installation is available.",
 
   // dashboard
   "dash.subtitle": "Live status of the local opencodex proxy, its providers, and the models routed into Codex.",

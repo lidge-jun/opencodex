@@ -10,6 +10,8 @@ const {
   detectIssueKind,
   validateIssue,
   shouldReopen,
+  shouldEnforceClosure,
+  labelForKind,
 } = require("./issue-quality.cjs");
 
 // ---------------------------------------------------------------------------
@@ -515,5 +517,236 @@ describe("shouldReopen", () => {
       closed_by: "github-actions[bot]",
     };
     assert.equal(shouldReopen(baseBotState, issue, false), true);
+  });
+});
+
+describe("shouldEnforceClosure", () => {
+  it("enforces when there is no bot state yet", () => {
+    assert.equal(shouldEnforceClosure(null), true);
+  });
+
+  it("enforces while the bot still owns an active closure", () => {
+    assert.equal(
+      shouldEnforceClosure({
+        version: 2,
+        active: true,
+        kind: "feature",
+        closedAt: "2026-07-20T10:00:00Z",
+        stateReason: "not_planned",
+      }),
+      true,
+    );
+  });
+
+  it("does not enforce after a maintainer override", () => {
+    assert.equal(
+      shouldEnforceClosure({
+        version: 2,
+        active: false,
+        kind: "feature",
+        closedAt: "2026-07-20T10:00:00Z",
+        stateReason: "not_planned",
+        maintainerOverride: true,
+      }),
+      false,
+    );
+  });
+
+  it("still enforces after a normal active:false without maintainer override", () => {
+    assert.equal(
+      shouldEnforceClosure({
+        version: 2,
+        active: false,
+        kind: "feature",
+        closedAt: "2026-07-20T10:00:00Z",
+        stateReason: "not_planned",
+      }),
+      true,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Translated / soft-pass / labels
+// ---------------------------------------------------------------------------
+
+describe("translated feature headings and soft-pass", () => {
+  it("accepts Goal / Problem + Expected behaviour as a valid feature", () => {
+    const body = [
+      "### Goal / Problem",
+      "Codex App rejects image paste for noVisionModels before the vision sidecar can run.",
+      "### Expected behaviour",
+      "Catalog should advertise image input when the vision sidecar covers the model.",
+      "### Environment",
+      "opencodex 2.7.36 on macOS with Codex App.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "[Feature]: Auto-advertise image inputModalities for noVisionModels",
+      body,
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got: ${result.reasons.join("; ")}`);
+    assert.equal(result.softPass, false);
+  });
+
+  it("soft-passes [Feature]: with rich custom headings outside the alias map", () => {
+    const body = [
+      "### Concrete user workflow that fails",
+      "User pastes an image in Codex App while a text-only routed model is selected and the App blocks upload.",
+      "### Why this matters",
+      "Vision sidecar is advertised but never reached from the App client path.",
+      "### Verification",
+      "Same proxy config works end-to-end in Claude Code with the sidecar describing the image.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "[Feature]: Vision sidecar unusable from Codex App",
+      body,
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.softPass, true);
+    assert.equal(result.valid, false);
+  });
+
+  it("still rejects empty [Feature]: bodies", () => {
+    const result = validateIssue({
+      title: "[Feature]: do something cool",
+      body: "please add this",
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.equal(result.softPass, false);
+  });
+
+  it("does not treat a title containing problem as a bug", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "Problem with documentation wording",
+        body: "The docs are confusing about install.",
+        labels: [],
+      }),
+      null,
+    );
+  });
+
+  it("does not soft-pass long unstructured bodies without headings", () => {
+    const result = validateIssue({
+      title: "[Feature]: please add thing",
+      body: "x".repeat(250),
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.softPass, false);
+    assert.equal(result.valid, false);
+  });
+
+  it("does not classify Expected behaviour + Example as feature without a feature hint", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "Something broke in the proxy",
+        body: [
+          "### Expected behaviour",
+          "Proxy should return 200.",
+          "### Example",
+          "curl localhost:10100/v1/responses",
+        ].join("\n"),
+        labels: [],
+      }),
+      null,
+    );
+  });
+
+  it("classifies alias headings as feature when a goal heading is present", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "Advertise image input for sidecar models",
+        body: [
+          "### Goal / Problem",
+          "App blocks images before the sidecar runs.",
+          "### Expected behaviour",
+          "Catalog should advertise image input.",
+        ].join("\n"),
+        labels: [],
+      }),
+      "feature",
+    );
+  });
+
+  it("lets a strong bug form override a stale stored feature kind", () => {
+    const result = validateIssue({
+      title: "Crash on start",
+      body: [
+        "### Client or integration",
+        "Codex CLI",
+        "### Summary",
+        "Proxy segfaults on ARM64 when streaming is enabled.",
+        "### Reproduction",
+        "ocx start on Raspberry Pi 4, send any streaming request.",
+        "### Version",
+        "2.7.36",
+        "### Operating system",
+        "Linux",
+      ].join("\n"),
+      labels: ["bug"],
+      storedKind: "feature",
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, true, `Expected valid bug but got: ${result.reasons.join("; ")}`);
+  });
+
+  it("accepts US spelling Expected behavior as a behaviour alias", () => {
+    const result = validateIssue({
+      title: "[Feature]: Auto-advertise image inputModalities",
+      body: [
+        "### Goal / Problem",
+        "App blocks images before the vision sidecar can run.",
+        "### Expected behavior",
+        "Catalog should advertise image input when the sidecar covers the model.",
+      ].join("\n"),
+      labels: [],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got: ${result.reasons.join("; ")}`);
+  });
+
+  it("does not treat enhancement + non-goal aliases as a feature detect hit", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "Something odd in the proxy",
+        body: [
+          "### Current limitation",
+          "No fallback provider today for upstream 5xx responses.",
+          "### Expected behaviour",
+          "Auto failover to a backup provider.",
+        ].join("\n"),
+        labels: ["enhancement"],
+      }),
+      null,
+    );
+  });
+
+  it("does not let a weak title-prefix detection override stored documentation kind", () => {
+    assert.equal(
+      detectIssueKind({
+        title: "[Feature]: rewrite the docs",
+        body: "Still working on the write-up.",
+        labels: [],
+        storedKind: "documentation",
+      }),
+      "documentation",
+    );
+  });
+});
+
+describe("labelForKind", () => {
+  it("maps kinds to triage labels", () => {
+    assert.equal(labelForKind("bug"), "bug");
+    assert.equal(labelForKind("feature"), "enhancement");
+    assert.equal(labelForKind("documentation"), "documentation");
+    assert.equal(labelForKind("provider-compatibility"), "provider-compatibility");
+    assert.equal(labelForKind(null), null);
+    assert.equal(labelForKind("unknown"), null);
   });
 });

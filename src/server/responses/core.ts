@@ -89,11 +89,14 @@ import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
+  createSseInspector,
   markNativePassthroughSseResponse,
   relaySseWithFailedTail,
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
+import { relaySseEagerBounded } from "../relay-eager";
+import { decideEagerRelay } from "../../lib/bun-stream-caps";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
@@ -1021,9 +1024,57 @@ export async function handleResponses(
     // async-pull segfault on Windows. Branch[0] goes directly to the Response (Bun
     // native relay, never enters JS Sink.write); branch[1] is consumed in the
     // background for terminal-outcome/quota inspection only.
+    // #314 alternative shape: on win32 (no repair) with a runtime carrying the
+    // Bun#32111 fix — or explicit `streamMode: "eager-relay"` opt-in — the tee
+    // is skipped entirely and relaySseEagerBounded provides a single eager
+    // bounded reader with inline inspection (see src/server/relay-eager.ts and
+    // devlog/_plan/260723_win_mem_safestream/020). Default on the bundled
+    // known-bad runtime remains the tee path below.
     if (upstreamResponse.ok && isEventStream && upstreamResponse.body) {
-      const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const repairConfig = route.provider.responsesItemIdRepair;
+      const winNoRepair = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig);
+      const eagerDecision = winNoRepair ? decideEagerRelay(config.streamMode ?? "auto") : null;
+      if (eagerDecision?.useEagerRelay) {
+        const turnAc = new AbortController();
+        linkAbortSignal(upstream, turnAc.signal);
+        registerTurn(turnAc);
+        const reportNativeTerminal = recordTerminalOutcomes
+          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
+            terminalRecorder?.(status, httpStatusOverride);
+            options.onNativePassthroughTerminal?.(status);
+          }
+          : undefined;
+        const inspector = createSseInspector({
+          onTerminal: reportNativeTerminal,
+          logCtx,
+          onCompletedResponse: rememberPassthroughResponse,
+          onFirstOutput: options.onFirstOutput,
+        });
+        const eagerBody = relaySseEagerBounded(upstreamResponse.body, turnAc, {
+          inspectChunk: chunk => inspector.feed(chunk),
+          finishInspection: () => inspector.finish(),
+          sawTerminal: () => inspector.reported(),
+          onSynthetic: kind => {
+            if (!reportNativeTerminal) return;
+            if (kind === "incomplete") {
+              logCtx.terminalSource = "synthetic";
+              reportNativeTerminal("incomplete");
+            } else {
+              logCtx.transportPhase = "mid_stream";
+              logCtx.terminalSource = "synthetic";
+              reportNativeTerminal("failed", 502);
+            }
+          },
+          onClientCancel: () => options.onNativePassthroughCancel?.(),
+          onDone: () => unregisterTurn(turnAc),
+        });
+        if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
+        return markNativePassthroughSseResponse(new Response(eagerBody, {
+          status: upstreamResponse.status,
+          headers,
+        }));
+      }
+      const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const turnAc = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc);

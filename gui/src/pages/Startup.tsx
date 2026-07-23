@@ -88,6 +88,8 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [trayError, setTrayError] = useState(false);
   const [installBusy, setInstallBusy] = useState<StartupInstallAction | null>(null);
   const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; detail?: string } | null>(null);
+  const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(null);
+  const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -99,6 +101,55 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       if (signal?.aborted) return;
       setData(next);
       setFailed(next.diagnosticStale);
+      try {
+        const settingsRes = await fetch(`${apiBase}/api/settings`, { signal });
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json() as {
+            codexRuntime?: {
+              version?: string | null;
+              newerAvailable?: { path?: string; version?: string | null } | null;
+              catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
+            };
+          };
+          if (!signal?.aborted) {
+            // newerAvailable comes from /api/settings full resolveCodexRuntime()
+            // (memoized alternative discovery), not discoverAlternatives:false.
+            const runtime = settings.codexRuntime;
+            const clampActive = Boolean(runtime?.catalogClamp?.active);
+            const newer = Boolean(runtime?.newerAvailable);
+            const version = (clampActive
+              ? runtime?.catalogClamp?.runtimeVersion
+              : runtime?.version) ?? runtime?.version ?? "unknown";
+            const efforts = (runtime?.catalogClamp?.removedEfforts ?? []).join(", ");
+            if (clampActive) {
+              setCodexRuntimeWarning(
+                efforts
+                  ? t("startup.codexRuntime.clampHiddenWithEfforts", { version, efforts })
+                  : t("startup.codexRuntime.clampHidden", { version }),
+              );
+            } else if (newer) {
+              setCodexRuntimeWarning(t("startup.codexRuntime.olderBinary", { version }));
+            } else {
+              setCodexRuntimeWarning(null);
+            }
+            setCodexRuntimeFix(
+              newer
+                ? "ocx doctor --fix-codex-runtime && ocx sync"
+                : clampActive
+                  ? "ocx sync"
+                  : null,
+            );
+          }
+        } else if (!signal?.aborted) {
+          setCodexRuntimeWarning(null);
+          setCodexRuntimeFix(null);
+        }
+      } catch {
+        if (!signal?.aborted) {
+          setCodexRuntimeWarning(null);
+          setCodexRuntimeFix(null);
+        }
+      }
       if (next.platform === "win32") {
         setTrayError(false);
         try {
@@ -130,7 +181,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, t]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -233,6 +284,23 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       ) : data ? (
         <>
           {failed && <div className="notice notice-warn" role="alert">{t("startup.staleData")}</div>}
+          {codexRuntimeWarning && (
+            <div className="notice notice-warn" role="status">
+              <p>{codexRuntimeWarning}</p>
+              {codexRuntimeFix && (
+                <p>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => void copyCommand(codexRuntimeFix)}
+                  >
+                    {copied === codexRuntimeFix ? t("startup.copied") : t("startup.copy")}
+                  </button>
+                  <code style={{ marginLeft: "0.5rem" }}>{codexRuntimeFix}</code>
+                </p>
+              )}
+            </div>
+          )}
           <section className={`panel startup-hero ${statusClass}`} aria-live="polite">
             <div className="startup-hero-icon"><StatusIcon /></div>
             <div className="startup-hero-copy">

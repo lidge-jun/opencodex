@@ -130,3 +130,22 @@ export function findExpectedPriceOverlay(
   return exact.find(row => row.status === "verified")
     ?? exact.find(row => row.status === "verified-derived");
 }
+
+/**
+ * OpenAI service_tier "priority" (Fast) price multipliers by model slug.
+ * Source: https://platform.openai.com/docs/models (2026-07-24).
+ * Priority pricing applies uniformly to all token types (input, output, cache).
+ * Models not listed here fall back to 1× (no multiplier).
+ */
+export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
+  "gpt-5.6-sol": 2,
+  "gpt-5.6-terra": 2,
+  "gpt-5.6-luna": 2,
+  "gpt-5.5": 2.5,
+  "gpt-5.4": 2,
+};
+
+/** Returns the priority-tier price multiplier for a model (1 if not listed). */
+export function resolvePriorityMultiplier(modelId: string): number {
+  return PRIORITY_MULTIPLIERS[modelId] ?? 1;
+}

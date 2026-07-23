@@ -51,7 +51,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { estimateComboCost, estimateRequestCost, effectiveServiceTier, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
@@ -88,7 +88,7 @@ export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "usageStatus" | "usage"> & {
+export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier"> & {
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -124,9 +124,10 @@ export function unavailableCostReason(entry: MetricSource): MetricUnavailableRea
 }
 
 export function costResult(entry: MetricSource): CostResult {
+  const tier = effectiveServiceTier(entry);
   const estimate = entry.attempts?.length
-    ? estimateComboCost(entry.attempts)
-    : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus });
+    ? estimateComboCost(entry.attempts, undefined, tier)
+    : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
   if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
   const estimateReasons = [
     entry.usageStatus === "estimated" || entry.usage?.estimated ? "usage_estimated" as const : undefined,
@@ -152,7 +153,7 @@ export function requestLogDto(entry: RequestLogEntry): Record<string, unknown> {
           ...attempt,
           displayMetrics: {
             tokPerSecond: tokPerSecondResult(attempt),
-            cost: costResult({ ...attempt, attempts: undefined }),
+            cost: costResult({ ...attempt, attempts: undefined, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
           },
         })),
       }
@@ -182,5 +183,4 @@ export function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProvid
   const { headers: _headers, ...rest } = provider;
   return rest;
 }
-
 

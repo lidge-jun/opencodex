@@ -10,13 +10,22 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "../config";
+import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
+import { gracefulStopHost } from "../lib/process-control";
+import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { readCodexTokens } from "../codex/auth-collision";
 import { resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 import { collectStartupHealth, startupHealthSummary } from "../codex/autostart-health";
+import {
+  displayCodexRuntimePath,
+  loadLastEffortClamp,
+  persistCodexRuntime,
+  resolveAndPersistCodexRuntime,
+  resolveCodexRuntime,
+} from "../codex/runtime";
 export { resolveCodexHomeDir } from "../codex/home";
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -319,8 +328,148 @@ export async function probeWham(fetchImpl: typeof fetch = fetch): Promise<WhamPr
   }
 }
 
-export async function runDoctor(): Promise<void> {
+/**
+ * Service-process memory/runtime introspection (#314 WP4).
+ *
+ * Doctor runs in its OWN Bun process; the only honest source for the SERVICE
+ * process identity (Bun version, RSS, stream-mode gate decision) is the
+ * authed management endpoint added in WP3. Observe-only: failures render as
+ * honest status lines, never as fake data, and never fail the command.
+ */
+export type ServiceMemoryData = {
+  pid: number;
+  bunVersion: string;
+  platform: string;
+  rss: number;
+  heapUsed: number;
+  jscHeap: { heapSize: number } | null;
+  streamMode: string;
+  eagerRelay: { useEagerRelay: boolean; reason: string } | null;
+  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null } | null;
+};
+
+export type ServiceMemoryReport =
+  | { status: "ok"; data: ServiceMemoryData }
+  | { status: "unauthorized" }
+  | { status: "unreachable"; error: string };
+
+const SERVICE_MEMORY_TIMEOUT_MS = 2000;
+const DEFAULT_MEMORY_THRESHOLD_BYTES = 4 * 1024 ** 3;
+
+export async function fetchServiceMemory(
+  host: string,
+  port: number,
+  token: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ServiceMemoryReport> {
+  try {
+    const res = await fetchImpl(`http://${host}:${port}/api/system/memory`, {
+      headers: token ? { "x-opencodex-api-key": token } : {},
+      signal: AbortSignal.timeout(SERVICE_MEMORY_TIMEOUT_MS),
+    });
+    if (res.status === 401 || res.status === 403) return { status: "unauthorized" };
+    if (!res.ok) return { status: "unreachable", error: `http ${res.status}` };
+    const body = await res.json() as Partial<ServiceMemoryData>;
+    if (typeof body.pid !== "number" || typeof body.bunVersion !== "string" || typeof body.rss !== "number") {
+      return { status: "unreachable", error: "malformed response" };
+    }
+    return {
+      status: "ok",
+      data: {
+        pid: body.pid,
+        bunVersion: body.bunVersion,
+        platform: typeof body.platform === "string" ? body.platform : "unknown",
+        rss: body.rss,
+        heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
+        jscHeap: body.jscHeap && typeof body.jscHeap.heapSize === "number" ? { heapSize: body.jscHeap.heapSize } : null,
+        streamMode: typeof body.streamMode === "string" ? body.streamMode : "auto",
+        eagerRelay: body.eagerRelay && typeof body.eagerRelay.reason === "string"
+          ? { useEagerRelay: body.eagerRelay.useEagerRelay === true, reason: body.eagerRelay.reason }
+          : null,
+        watchdog: body.watchdog && typeof body.watchdog.warnThresholdBytes === "number"
+          ? { warnThresholdBytes: body.watchdog.warnThresholdBytes, lastWarnAt: body.watchdog.lastWarnAt ?? null }
+          : null,
+      },
+    };
+  } catch (err) {
+    return { status: "unreachable", error: err instanceof Error ? err.name : "fetch failed" };
+  }
+}
+
+const mb = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))}MB`;
+
+/** Render the doctor "Memory / runtime" section lines (testable without console capture). */
+export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] {
+  const lines: string[] = [];
+  lines.push(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
+  if (report.status === "unauthorized") {
+    lines.push("  --     proxy reachable but rejected the request — set OPENCODEX_API_AUTH_TOKEN to match the service");
+    return lines;
+  }
+  if (report.status === "unreachable") {
+    lines.push(`  --     proxy not reachable (not running?) [${report.error}]`);
+    return lines;
+  }
+  const d = report.data;
+  lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`);
+  lines.push(`         rss=${mb(d.rss)}, heapUsed=${mb(d.heapUsed)}${d.jscHeap ? `, jscHeap=${mb(d.jscHeap.heapSize)}` : ""}`);
+  lines.push(`         streamMode=${d.streamMode}${d.eagerRelay ? ` (eager relay: ${d.eagerRelay.useEagerRelay ? "on" : "off"}, ${d.eagerRelay.reason})` : ""}`);
+  if (d.watchdog) {
+    lines.push(`         watchdog threshold=${mb(d.watchdog.warnThresholdBytes)}${d.watchdog.lastWarnAt ? `, last warn ${new Date(d.watchdog.lastWarnAt).toISOString()}` : ", no warnings"}`);
+  }
+  // Interpretation rule (devlog 040): reuse the watchdog's own threshold so
+  // doctor and watchdog never disagree about "high"; jsShare discriminates
+  // JS-heap growth from native runtime growth (the #314 shape).
+  const threshold = d.watchdog?.warnThresholdBytes ?? DEFAULT_MEMORY_THRESHOLD_BYTES;
+  const jsShare = d.rss > 0 ? Math.max(d.heapUsed, d.jscHeap?.heapSize ?? 0) / d.rss : 0;
+  if (d.rss < threshold) {
+    lines.push("         memory usage looks normal");
+  } else if (jsShare < 0.25) {
+    lines.push("  !!     high RSS with a small JS heap — native-side growth (Bun runtime buffers/handles). See docs: troubleshooting/windows-memory");
+  } else if (jsShare >= 0.5) {
+    lines.push("  !!     high RSS dominated by the JS heap — likely an opencodex bug; please report it");
+  } else {
+    lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
+  }
+  // Version-claiming (never binary-claiming): the endpoint cannot distinguish
+  // the bundled binary from an OPENCODEX_BUN_PATH override of the same version.
+  if (d.platform === "win32" && d.eagerRelay?.reason === "auto-known-bad") {
+    lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
+    lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
+    lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+  }
+  return lines;
+}
+
+export async function runDoctor(args: string[] = []): Promise<void> {
+  if (args.includes("--fix-codex-runtime")) {
+    const resolved = resolveCodexRuntime();
+    if (!resolved.newerAvailable) {
+      console.log("No newer Codex runtime found; keeping current selection.");
+      const current = resolveAndPersistCodexRuntime();
+      console.log(`Selected: ${displayCodexRuntimePath(current.runtime.command)} (${current.runtime.version ?? "unknown"})`);
+      return;
+    }
+    if (resolved.runtime.source === "environment") {
+      console.log("CODEX_CLI_PATH currently overrides configured runtimes.");
+      console.log(`Unset or update CODEX_CLI_PATH to use ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"}).`);
+      console.log("Then run ocx sync.");
+      return;
+    }
+    persistCodexRuntime({
+      command: resolved.newerAvailable.command,
+      version: resolved.newerAvailable.version,
+      source: "configured",
+    });
+    console.log(`Updated Codex runtime to ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"}).`);
+    console.log("Run ocx sync to refresh the catalog against this runtime.");
+    return;
+  }
+
   console.log("opencodex doctor\n");
+
+  // Ordering note: the memory/runtime section renders after "Running proxy
+  // process proxy env" below; helpers live above runDoctor for testability.
 
   const paths = collectPaths();
   const mounts = readMounts();
@@ -336,6 +485,35 @@ export async function runDoctor(): Promise<void> {
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       routing=${startup.routingKind}, service=${startup.serviceViable ? "viable" : startup.serviceInstalled ? "installed-but-unhealthy" : "absent"}, shim=${startup.shimHealthy ? "healthy" : startup.shimInstalled ? "stale" : "absent"}`);
+
+  console.log("\nCodex runtime selection");
+  {
+    const resolved = resolveCodexRuntime();
+    const selected = resolved.runtime;
+    console.log(`  ok  Selected runtime: ${displayCodexRuntimePath(selected.command)} (${selected.version ?? "unknown"}, source=${selected.source})`);
+    const envFailures = resolved.failures.filter(item => item.source === "environment");
+    for (const failure of envFailures) {
+      console.log(`  !!  Invalid CODEX_CLI_PATH: ${failure.reason}`);
+    }
+    const shimFailures = resolved.failures.filter(item => item.source === "shim");
+    if (shimFailures.length > 0) {
+      console.log(`  !!  Stale shim target rejected (${shimFailures.length})`);
+    }
+    if (resolved.replacedConfigured) {
+      console.log(`  !!  Preferred runtime unavailable; fell back to ${displayCodexRuntimePath(selected.command)}`);
+    }
+    if (resolved.newerAvailable) {
+      console.log(`  !!  Multiple Codex installations found.`);
+      console.log(`  ok  Newer usable runtime found: ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"})`);
+      console.log("       Suggested: set CODEX_CLI_PATH to the desired binary and run ocx sync.");
+      console.log("       Optional: ocx doctor --fix-codex-runtime");
+    }
+    const lastClamp = loadLastEffortClamp();
+    if (lastClamp && lastClamp.removedEfforts.length > 0) {
+      console.log(`  !!  ${lastClamp.removedEfforts.join(" and ")} were removed during catalog sync.`);
+      console.log("       Suggested: set CODEX_CLI_PATH to a newer Codex binary and run ocx sync.");
+    }
+  }
 
   const currentProxyEnv = collectProxyEnv();
   const configuredProxy = collectConfiguredProxy();
@@ -358,6 +536,23 @@ export async function runDoctor(): Promise<void> {
     console.log(`  ok     pid ${runningProxyEnv.pid}`);
     for (const row of runningProxyEnv.rows) {
       console.log(`  ${row.present ? "set    " : "unset  "} ${row.key}`);
+    }
+  }
+
+  // #314: service-process memory/runtime identity via the authed management
+  // endpoint. readPid() FIRST (liveness), then the pid-scoped runtime record —
+  // readRuntimePort alone can serve a stale file pointing at a foreign port.
+  console.log("\nMemory / runtime");
+  {
+    const livePid = readPid();
+    const runtime = livePid ? readRuntimePort(livePid) : null;
+    if (!runtime) {
+      console.log(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
+      console.log("  --     no running ocx proxy found (no live pid/runtime record)");
+    } else {
+      const token = process.env.OPENCODEX_API_AUTH_TOKEN ?? loadServiceTokenFromFile(process.env);
+      const report = await fetchServiceMemory(gracefulStopHost(runtime.hostname), runtime.port, token);
+      for (const line of formatServiceMemoryLines(report)) console.log(line);
     }
   }
 

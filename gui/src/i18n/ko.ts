@@ -102,6 +102,9 @@ export const ko: Record<TKey, string> = {
   "startup.copied": "복사됨",
   "startup.recommended": "권장 복구 명령: {cmd}",
   "startup.navRisk": "시작 보호 상태에 조치가 필요합니다",
+  "startup.codexRuntime.clampHidden": "OpenCodex가 Codex {version}을(를) 사용해 일부 reasoning effort 옵션이 숨겨졌습니다.",
+  "startup.codexRuntime.clampHiddenWithEfforts": "OpenCodex가 Codex {version}을(를) 사용해 일부 reasoning effort 옵션이 숨겨졌습니다(제거됨: {efforts}).",
+  "startup.codexRuntime.olderBinary": "OpenCodex가 더 오래된 Codex 바이너리({version})를 사용 중입니다. 더 새 설치를 사용할 수 있습니다.",
 
   // dashboard
   "dash.subtitle": "로컬 opencodex 프록시와 프로바이더, 그리고 Codex로 라우팅되는 모델의 실시간 상태입니다.",

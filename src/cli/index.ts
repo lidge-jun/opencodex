@@ -507,6 +507,16 @@ async function handleStatus() {
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}`);
   console.log(`   Service: ${status.json.service.summary}`);
   console.log(`   ${status.json.codexShim.summary}`);
+  console.log(`   Codex runtime: ${status.json.codexRuntime.path}`);
+  console.log(`   Codex version: ${status.json.codexRuntime.version ?? "unknown"}`);
+  console.log(`   Codex source: ${status.json.codexRuntime.source}`);
+  console.log(`   Catalog clamp: ${status.json.codexRuntime.catalogClamp.active ? "active" : "inactive"}`);
+  if (status.json.codexRuntime.catalogClamp.removedEfforts.length > 0) {
+    console.log(`   Removed efforts: ${status.json.codexRuntime.catalogClamp.removedEfforts.join(", ")}`);
+  }
+  if (status.json.codexRuntime.warning) {
+    console.log(`   ⚠️  ${status.json.codexRuntime.warning}`);
+  }
   if (status.json.codexPlugins.applicable) {
     const icon = status.json.codexPlugins.stale ? "⚠️ " : "✅";
     console.log(`   ${icon} Codex bundled plugins: ${status.json.codexPlugins.summary}`);
@@ -581,7 +591,7 @@ switch (command) {
     break;
   case "doctor": {
     const { runDoctor } = await import("./doctor");
-    await runDoctor();
+    await runDoctor(args.slice(1));
     break;
   }
   case "debug": {

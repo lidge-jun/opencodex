@@ -5,6 +5,8 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Number of leading raw input items restored from local previous_response_id state. */
+  _replayPrefixLen?: number;
   /** True when the proxy expanded a previous_response_id request into a full input replay. */
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
@@ -445,6 +447,15 @@ export interface OcxConfig {
    * Undefined = passthrough (don't modify what the client sends).
    */
   fastMode?: boolean;
+  /**
+   * Windows SSE passthrough stream shape (#314 mitigation).
+   * "auto" (default): eager bounded relay only on runtimes proven to carry the
+   * Bun#32111 fix (none today → legacy tee). "eager-relay": force the new relay
+   * (accepts #32111 crash risk on Bun 1.3.14). "legacy-tee": pin the tee path.
+   * Persisted in config.json because Windows services do not inherit shell env.
+   * See src/lib/bun-stream-caps.ts.
+   */
+  streamMode?: "auto" | "legacy-tee" | "eager-relay";
   /**
    * Custom override for the injected multi-agent guidance body (the text inside the
    * <multi_agent_mode> tags). When set, it replaces the built-in prompt on whichever

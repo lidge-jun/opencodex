@@ -594,6 +594,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     stream: data.stream === true,
     options,
     _rawBody: body,
+    ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
     ...(structuredOutput ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),

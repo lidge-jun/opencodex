@@ -18,6 +18,7 @@ import {
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
 import { invalidateCodexModelsCache } from "../codex/catalog";
+import { startMemoryWatchdog } from "./memory-watchdog";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -134,8 +135,12 @@ const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 
 // Source invariant for tests/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
-// upstreamResponse.body.tee()
 // const repairConfig = route.provider.responsesItemIdRepair;
+// #314 gated shape (win32-no-repair only; default OFF on the bundled known-bad runtime):
+// decideEagerRelay(config.streamMode ?? "auto")
+// relaySseEagerBounded(upstreamResponse.body, turnAc,
+// Default shape (tee + background inspection):
+// upstreamResponse.body.tee()
 // const repairedBody = hasResponsesItemIdRepair(repairConfig)
 // process.platform === "win32"
 // && !hasResponsesItemIdRepair(repairConfig)
@@ -184,6 +189,9 @@ export function startServer(port?: number) {
   // usage.jsonl already persists every request; rehydrate the in-memory Logs ring so
   // /api/logs (and the GUI) survive `ocx stop` / `ocx start` process restarts.
   hydrateRequestLogsFromDisk();
+  // #314: warn-only RSS observability (unref'd, idempotent — safe under repeated
+  // startServer(0) in tests). Snapshot surfaces via GET /api/system/memory.
+  startMemoryWatchdog();
 
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);

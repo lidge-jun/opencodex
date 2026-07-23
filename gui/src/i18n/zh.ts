@@ -102,6 +102,9 @@ export const zh: Record<TKey, string> = {
   "startup.copied": "已复制",
   "startup.recommended": "推荐修复：{cmd}",
   "startup.navRisk": "启动保护需要处理",
+  "startup.codexRuntime.clampHidden": "部分推理强度选项已隐藏，因为 OpenCodex 使用了 Codex {version}。",
+  "startup.codexRuntime.clampHiddenWithEfforts": "部分推理强度选项已隐藏，因为 OpenCodex 使用了 Codex {version}（已移除：{efforts}）。",
+  "startup.codexRuntime.olderBinary": "OpenCodex 正在使用较旧的 Codex 二进制文件（{version}）。检测到可用的较新安装。",
 
   // dashboard
   "dash.subtitle": "本地 opencodex 代理、其提供方以及路由到 Codex 的模型的实时状态。",

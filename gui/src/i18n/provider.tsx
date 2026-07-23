@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DICTS, I18nContext, LOCALES, detectInitial, interpolate, type TFn, type TKey, type Vars } from "./shared";
 import { en } from "./en";
 import { useI18n } from "./shared";
@@ -12,9 +12,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem("ocx-lang", locale); } catch { /* ignore */ }
   }, [locale]);
 
-  const t: TFn = (key, vars) => interpolate(DICTS[locale][key] ?? en[key] ?? key, vars);
+  const t: TFn = useCallback(
+    (key, vars) => interpolate(DICTS[locale][key] ?? en[key] ?? key, vars),
+    [locale],
+  );
+  const value = useMemo(() => ({ locale, setLocale, t }), [locale, t]);
 
-  return <I18nContext.Provider value={{ locale, setLocale, t }}>{children}</I18nContext.Provider>;
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 
 export function Trans({ k, cmd, vars }: { k: TKey; cmd: string; vars?: Vars }) {

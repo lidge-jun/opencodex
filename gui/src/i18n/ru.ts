@@ -107,6 +107,9 @@ export const ru: Record<TKey, string> = {
   "startup.copied": "Скопировано",
   "startup.recommended": "Рекомендуемое исправление: {cmd}",
   "startup.navRisk": "Защита запуска требует внимания",
+  "startup.codexRuntime.clampHidden": "Некоторые уровни reasoning effort скрыты, потому что OpenCodex использовал Codex {version}.",
+  "startup.codexRuntime.clampHiddenWithEfforts": "Некоторые уровни reasoning effort скрыты, потому что OpenCodex использовал Codex {version} (удалены: {efforts}).",
+  "startup.codexRuntime.olderBinary": "OpenCodex использует более старый бинарник Codex ({version}). Доступна более новая установка.",
 
   // dashboard
   "dash.subtitle": "Актуальное состояние локального прокси opencodex, его провайдеров и моделей, маршрутизируемых в Codex.",

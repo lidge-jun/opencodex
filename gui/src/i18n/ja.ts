@@ -107,6 +107,9 @@ export const ja: Record<TKey, string> = {
   "startup.copied": "コピー済み",
   "startup.recommended": "推奨修復: {cmd}",
   "startup.navRisk": "起動保護に対応が必要です",
+  "startup.codexRuntime.clampHidden": "OpenCodex が Codex {version} を使用したため、一部の reasoning effort オプションが非表示になりました。",
+  "startup.codexRuntime.clampHiddenWithEfforts": "OpenCodex が Codex {version} を使用したため、一部の reasoning effort オプションが非表示になりました（削除: {efforts}）。",
+  "startup.codexRuntime.olderBinary": "OpenCodex は古い Codex バイナリ（{version}）を使用しています。より新しいインストールが利用可能です。",
 
   // dashboard
   "dash.subtitle": "ローカル opencodex プロキシ、そのプロバイダー、Codex にルーティングされるモデルのライブ状態です。",
