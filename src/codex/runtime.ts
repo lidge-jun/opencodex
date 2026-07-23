@@ -49,6 +49,7 @@ export type RuntimeExecFile = (
     timeout: number;
     windowsHide: boolean;
     shell?: boolean;
+    windowsVerbatimArguments?: boolean;
   },
 ) => string;
 
@@ -237,13 +238,16 @@ function probeVersion(
   }
   const execFile = deps.execFileSync ?? (execFileSync as unknown as RuntimeExecFile);
   try {
-    const invocation = codexExecInvocation(command, platform);
-    const output = execFile(invocation.file, ["--version"], {
+    const invocation = codexExecInvocation(command, ["--version"], platform, {
+      env: deps.env,
+      exists: deps.existsSync,
+    });
+    const output = execFile(invocation.file, invocation.args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 8_000,
       windowsHide: true,
-      shell: invocation.shell,
+      ...invocation.options,
     });
     const version = parseCodexVersionOutput(output);
     if (!version) {

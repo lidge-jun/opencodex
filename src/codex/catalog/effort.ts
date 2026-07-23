@@ -298,7 +298,12 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
   if (!deps.commandCandidates) {
     try {
       const resolved = resolveAndPersistCodexRuntime({
-        execFileSync: deps.execFileSync as never,
+        execFileSync: deps.execFileSync,
+        configDir: deps.configDir,
+        env: deps.env,
+        platform: deps.platform,
+        existsSync: deps.existsSync,
+        readFileSync: deps.readFileSync,
       });
       runtimePath = resolved.runtime.command;
       runtimeVersion = resolved.runtime.version;

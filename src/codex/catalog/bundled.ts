@@ -57,6 +57,7 @@ export type ExecFile = (
     timeout: number;
     windowsHide: boolean;
     shell?: boolean;
+    windowsVerbatimArguments?: boolean;
   },
 ) => string;
 
@@ -64,6 +65,11 @@ export interface BundledCatalogDeps {
   commandCandidates?: () => string[];
   execFileSync?: ExecFile;
   onEffortClamp?: (diagnostic: EffortClampDiagnostic) => void;
+  configDir?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  existsSync?: (path: string) => boolean;
+  readFileSync?: (path: string, encoding: "utf8") => string;
 }
 
 export function unique(values: string[]): string[] {
@@ -106,20 +112,27 @@ export function codexShimCommandCandidates(): string[] {
   }
 }
 
-export function runCodexDebugModels(command: string, execFile: ExecFile): string {
+export function runCodexDebugModels(
+  command: string,
+  execFile: ExecFile,
+  deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync"> = {},
+): string {
   const args = ["debug", "models", "--bundled"];
-  const invocation = codexExecInvocation(command);
-  return execFile(invocation.file, args, {
+  const invocation = codexExecInvocation(command, args, deps.platform ?? process.platform, {
+    env: deps.env,
+    exists: deps.existsSync,
+  });
+  return execFile(invocation.file, invocation.args, {
     encoding: "utf8" as const,
     stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
     timeout: 10_000,
     windowsHide: true,
-    shell: invocation.shell,
+    ...invocation.options,
   });
 }
 
 export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatalog | null {
-  const useCache = !deps.commandCandidates && !deps.execFileSync;
+  const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.configDir && !deps.env;
   if (useCache && bundledCatalogCache && bundledCatalogCache.expiresAt > Date.now()) {
     return bundledCatalogCache.value;
   }
@@ -128,13 +141,18 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatal
   // than OpenCodex will launch. Tests may inject commandCandidates to stub probing.
   const candidates = deps.commandCandidates?.() ?? (() => {
     const resolved = resolveAndPersistCodexRuntime({
-      execFileSync: execFile as never,
+      execFileSync: execFile,
+      configDir: deps.configDir,
+      env: deps.env,
+      platform: deps.platform,
+      existsSync: deps.existsSync,
+      readFileSync: deps.readFileSync,
     });
     return [resolved.runtime.command];
   })();
   for (const command of unique(candidates)) {
     try {
-      const catalog = parseCatalogJson(runCodexDebugModels(command, execFile));
+      const catalog = parseCatalogJson(runCodexDebugModels(command, execFile, deps));
       if (catalog && findNativeTemplate(catalog)) {
         if (useCache) bundledCatalogCache = { expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS, value: catalog };
         return catalog;

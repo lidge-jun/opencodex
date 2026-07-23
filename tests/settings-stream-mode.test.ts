@@ -80,6 +80,59 @@ describe("GET /api/settings", () => {
     const body = await (await getSettings(config))!.json() as { streamMode?: string };
     expect(body.streamMode).toBe("eager-relay");
   });
+
+  test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
+    const { persistCodexRuntime, persistEffortClamp, resetCodexRuntimeResolveCacheForTests } = await import("../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    persistCodexRuntime({
+      command: join(TEST_DIR, "Users", "Alice", "codex.exe"),
+      version: "0.133.0",
+      source: "configured",
+    }, { configDir: TEST_DIR });
+    persistEffortClamp({
+      runtimePath: join(TEST_DIR, "Users", "Alice", "codex.exe"),
+      runtimeVersion: "0.133.0",
+      removedEfforts: ["max", "ultra"],
+      affectedModels: ["gpt-5.6-sol"],
+    }, { configDir: TEST_DIR });
+
+    const previousCli = process.env.CODEX_CLI_PATH;
+    const previousPath = process.env.PATH;
+    try {
+      process.env.CODEX_CLI_PATH = join(TEST_DIR, "Users", "Alice", "codex.exe");
+      process.env.PATH = "";
+      // Force resolve to use the persisted/env path without spawning a real Codex.
+      // The settings handler catches resolve failures; probe will fail existence and fall back.
+      const body = await (await getSettings(baseConfig()))!.json() as {
+        codexRuntime?: {
+          path?: string;
+          version?: string | null;
+          source?: string;
+          warning?: string | null;
+          newerAvailable?: { path?: string; version?: string | null } | null;
+          catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
+        };
+      };
+      expect(typeof body.codexRuntime?.path).toBe("string");
+      expect(body.codexRuntime?.path?.toLowerCase()).not.toContain("alice");
+      expect(
+        body.codexRuntime?.newerAvailable === null
+        || (typeof body.codexRuntime?.newerAvailable === "object" && body.codexRuntime?.newerAvailable !== null),
+      ).toBe(true);
+      expect(body.codexRuntime?.warning === null || typeof body.codexRuntime?.warning === "string").toBe(true);
+      expect(Array.isArray(body.codexRuntime?.catalogClamp?.removedEfforts)).toBe(true);
+      expect(
+        body.codexRuntime?.catalogClamp?.runtimeVersion === null
+        || typeof body.codexRuntime?.catalogClamp?.runtimeVersion === "string",
+      ).toBe(true);
+    } finally {
+      if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCli;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
 });
 
 describe("PUT /api/settings", () => {
