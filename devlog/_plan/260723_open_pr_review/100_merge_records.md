@@ -24,3 +24,30 @@ Local-only stacking of merge-ready PRs. NO push, NO GitHub mutations. Sol subage
 
 - Outcome: **NOOP** — already contained in origin/dev 02b67b03 absorbed at base refresh.
   Evidence: `git merge-base --is-ancestor pr-317 HEAD` → true.
+
+## WP4 — PR #309 google wire compatibility (doc 020)
+
+- Sol audit round 1 (agent 019f8dbc): **FAIL**, 2 blockers.
+  1. **High — toolNameCodec collision non-determinism across requests**
+     (google-wire-compiler.ts:21-42): salted names depend on encounter order; if a
+     valid tool name equals a generated `prefix_hash8` candidate, reordering the tool
+     set changes the wire name of the colliding tool. Antigravity replay keys
+     signatures by provider-visible name (google-antigravity-replay.ts:39,120), so a
+     reorder/subset across turns can lose the cached signature and re-create the 400.
+  2. **Medium — allowlist over-applied to Vertex/AI Studio**: drops `minimum`,
+     `maximum`, `additionalProperties`, `pattern` which Google documents as supported;
+     the PR's "Google-documented allowlist" claim is inaccurate for non-CCA paths and
+     it reverses existing test assertions (google-tool-schema.test.ts:27,80 in current
+     tree). Suggested fix: provider-profiled compilation (strict sanitizer only for
+     Cloud Code Assist), keep documented fields for Vertex/AI Studio.
+- Synthesis (REVIEW-SYNTHESIS-01):
+  - Blocker 1 accepted with scope note: common case (no collision) IS deterministic
+    since hash is of the original name; failure needs an adversarial/unlucky name
+    collision. Real but low-probability; still a correctness gap upstream should fix.
+  - Blocker 2 accepted: substantive design regression for Vertex/direct-Gemini users;
+    resolving it means restructuring the PR (provider-profiled sanitizer), which is
+    author/maintainer work, not a merge-time patch we should improvise locally.
+- Decision: WP4 closed as **NEEDS_HUMAN** — do not merge #309 into the local stack
+  as composed. Findings should go back to the PR author (GitHub posting is out of
+  scope for this local session; Jun decides whether/how to relay).
+- Stack state: unchanged (last green: 2523a6f5 + devlog commits).
