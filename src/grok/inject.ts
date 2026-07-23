@@ -54,14 +54,28 @@ function findManagedRegion(content: string): ManagedRegion | null {
   return { start, end: endMarkerStart + END_MARKER.length, orphaned: false };
 }
 
-/** `[model.<alias>]` table headers the USER owns (outside our fence) — reserved for collisions. */
+/**
+ * `[model.<alias>]` table headers the USER owns (outside our fence) — reserved for collisions.
+ * TOML admits equivalent header spellings (`[model."ocx-mine"]`, `[ model . ocx-mine ]`, single
+ * quotes); all of them redefine the same table, so each form must be canonicalized. Headers whose
+ * second key segment cannot be recognized are skipped — our generated aliases always start with
+ * "ocx-" and unrecognizable user spellings of that prefix are already covered by the quoted forms.
+ */
 function userModelAliases(content: string, region: ManagedRegion | null): Set<string> {
   const outsideManagedRegion = region
     ? content.slice(0, region.start) + content.slice(region.end)
     : content;
   const aliases = new Set<string>();
-  for (const match of outsideManagedRegion.matchAll(/^\s*\[model\.([A-Za-z0-9_-]+)\]\s*(?:#.*)?$/gm)) {
-    aliases.add(match[1]);
+  const header = /^\s*\[\s*model\s*\.\s*(?:([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*\]\s*(?:#.*)?$/gm;
+  for (const match of outsideManagedRegion.matchAll(header)) {
+    const bare = match[1];
+    const doubleQuoted = match[2];
+    const singleQuoted = match[3];
+    if (bare !== undefined) { aliases.add(bare); continue; }
+    if (singleQuoted !== undefined) { aliases.add(singleQuoted); continue; }
+    if (doubleQuoted !== undefined) {
+      try { aliases.add(JSON.parse(`"${doubleQuoted}"`) as string); } catch { aliases.add(doubleQuoted); }
+    }
   }
   return aliases;
 }

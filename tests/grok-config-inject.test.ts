@@ -90,6 +90,31 @@ describe("Grok config injection", () => {
     expect(content.startsWith(userContent)).toBe(true);
   });
 
+  test("recognizes quoted and whitespace-padded user model headers (TOML-equivalent forms)", () => {
+    const configPath = join(grokHome, "config.toml");
+    const userContent = [
+      '[model."ocx-quoted"]',
+      'model = "user/a"',
+      "[ model . ocx-spaced ]",
+      'model = "user/b"',
+      "[model.'ocx-single']",
+      'model = "user/c"',
+      "",
+    ].join("\n");
+    writeFileSync(configPath, userContent, "utf8");
+
+    injectGrokConfig(10100, [{ id: "quoted" }, { id: "spaced" }, { id: "single" }], { grokHome });
+    const content = readFileSync(configPath, "utf8");
+    // Each equivalent user spelling reserves its canonical alias; ours are suffixed.
+    expect(content).toContain("[model.ocx-quoted-2]");
+    expect(content).toContain("[model.ocx-spaced-2]");
+    expect(content).toContain("[model.ocx-single-2]");
+    // Exactly one bare-form [model.ocx-quoted] must NOT exist (only the user's quoted header).
+    expect(content).not.toContain("[model.ocx-quoted]");
+    // The whole file must stay valid TOML (no duplicate table definitions).
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
   test("sanitizes aliases, suffixes collisions, and escapes TOML strings", () => {
     const block = buildGrokManagedBlock(10100, [
       { id: "anthropic/claude-opus-4.8" },
