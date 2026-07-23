@@ -168,6 +168,71 @@ describe("Responses bridge reasoning and usage parity", () => {
     });
   });
 
+  test("onUsage reports raw adapter usage while the wire carries synthetic zero details", async () => {
+    // Provenance guard: request-log consumers must see the adapter-reported usage (no
+    // cache/reasoning numbers => cache_detail_missing), not the normalized wire zeros.
+    let rawUsage: unknown = "unset";
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done", usage: { inputTokens: 10, outputTokens: 5 } },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onUsage: usage => { rawUsage = usage; },
+    }));
+    expect(rawUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect((completed.usage as Record<string, unknown>).input_tokens_details).toEqual({ cached_tokens: 0 });
+
+    let jsonRawUsage: unknown = "unset";
+    buildResponseJSON([
+      { type: "done", usage: { inputTokens: 4, outputTokens: 2 } },
+    ], "routed/model", { onUsage: usage => { jsonRawUsage = usage; } });
+    expect(jsonRawUsage).toEqual({ inputTokens: 4, outputTokens: 2 });
+
+    // Adapter EOF (no terminal event): onUsage must still fire with undefined so the
+    // request log keeps provenance (usageFromBridge) instead of re-parsing wire zeros.
+    let eofUsage: unknown = "unset";
+    const eofFrames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onUsage: usage => { eofUsage = usage; },
+    }));
+    expect(eofUsage).toBeUndefined();
+    const eofResponse = eofFrames.find(f => f.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect(eofResponse.incomplete_details).toMatchObject({ reason: "adapter_eof" });
+    expect(eofResponse.usage).toMatchObject({
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
+  test("incomplete and failed terminal events also carry zero-default usage details", async () => {
+    const incomplete = await collectSse(bridgeToResponsesSSE(replay([
+      {
+        type: "incomplete",
+        reason: "upstream_truncated",
+        retryable: true,
+        endTurn: false,
+        usage: { inputTokens: 8, outputTokens: 1 },
+      },
+    ]), "routed/model"));
+    const incompleteResponse = incomplete.find(f => f.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect(incompleteResponse.usage).toMatchObject({
+      input_tokens: 8,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+
+    const failed = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+      { type: "error", message: "boom", status: 502, usage: { inputTokens: 3, outputTokens: 1 } },
+    ]), "routed/model"));
+    const failedResponse = failed.find(f => f.event === "response.failed")?.data.response as Record<string, unknown>;
+    expect(failedResponse.usage).toMatchObject({
+      input_tokens: 3,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
   test("Anthropic cache read and write tokens pass through Responses usage without re-adding", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       {
