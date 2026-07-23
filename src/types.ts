@@ -5,6 +5,8 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Number of leading raw input items restored from local previous_response_id state. */
+  _replayPrefixLen?: number;
   /** True when the proxy expanded a previous_response_id request into a full input replay. */
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */

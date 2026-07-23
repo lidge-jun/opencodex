@@ -159,13 +159,20 @@ export function completedResponseFromSsePayload(payload: string): { id?: unknown
   if (payload === "[DONE]") return null;
   try {
     const json = JSON.parse(payload) as { type?: unknown; response?: unknown };
-    if (json.type !== "response.completed") return null;
-    const response = json.response;
-    if (!response || typeof response !== "object" || Array.isArray(response)) return null;
-    return response as { id?: unknown; output?: unknown; status?: unknown };
+    return completedResponseFromParsedEvent(json);
   } catch {
     return null;
   }
+}
+
+/** Extract the response object from an already-parsed `response.completed` event, or null. */
+function completedResponseFromParsedEvent(
+  json: { type?: unknown; response?: unknown } | null,
+): { id?: unknown; output?: unknown; status?: unknown } | null {
+  if (!json || json.type !== "response.completed") return null;
+  const response = json.response;
+  if (!response || typeof response !== "object" || Array.isArray(response)) return null;
+  return response as { id?: unknown; output?: unknown; status?: unknown };
 }
 
 export function trackSseForRequestLog(
@@ -438,6 +445,10 @@ export function createSseInspector(handlers: {
   let buffer = "";
   let reported = false;
   const reportFirstOutput = createFirstOutputReporter(handlers.onFirstOutput);
+  // Allocate reconstruction state only for persistence-capable inspectors.
+  const completedItemsByOutputIndex = handlers.onCompletedResponse
+    ? new Map<number, unknown>()
+    : null;
 
   const scanPayload = (payload: string | null): void => {
     if (!reported && handlers.logCtx) inspectResponseLogSsePayload(handlers.logCtx, payload);
@@ -455,7 +466,36 @@ export function createSseInspector(handlers: {
       }
     }
     if (handlers.onCompletedResponse) {
-      const response = completedResponseFromSsePayload(payload);
+      type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
+      let parsedEvent: ParsedSseEvent | null = null;
+      try {
+        if (payload !== "[DONE]") parsedEvent = JSON.parse(payload) as ParsedSseEvent;
+      } catch {
+        /* malformed SSE payloads remain best-effort/no-throw */
+      }
+      const doneItem = parsedEvent?.type === "response.output_item.done" ? parsedEvent.item : undefined;
+      if (parsedEvent
+        && doneItem !== undefined
+        && Number.isInteger(parsedEvent.output_index)
+        && (parsedEvent.output_index as number) >= 0
+        && typeof doneItem === "object"
+        && doneItem !== null
+        && !Array.isArray(doneItem)
+        && typeof (doneItem as { type?: unknown }).type === "string") {
+        completedItemsByOutputIndex!.set(parsedEvent.output_index as number, doneItem);
+      }
+
+      let response = completedResponseFromParsedEvent(parsedEvent);
+      if (response
+        && (!Array.isArray(response.output) || response.output.length === 0)
+        && completedItemsByOutputIndex!.size > 0) {
+        response = {
+          ...response,
+          output: [...completedItemsByOutputIndex!.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, item]) => item),
+        };
+      }
       if (response) handlers.onCompletedResponse(response);
     }
   };

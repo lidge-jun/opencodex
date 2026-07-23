@@ -6,6 +6,7 @@ import { buildResponseJSON } from "../src/bridge";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { createCursorContextUsageTracker } from "../src/adapters/cursor/protobuf-events";
 import { parseRequest } from "../src/responses/parser";
+import { createSseInspector } from "../src/server/relay";
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
@@ -17,7 +18,30 @@ import {
   setResponseStateByteCapForTests,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
-import { adapterNeedsForcedContinuation } from "../src/server/responses";
+import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
+
+function feedInspector(
+  inspector: ReturnType<typeof createSseInspector>,
+  events: Array<Record<string, unknown> | "[DONE]">,
+): void {
+  const encoder = new TextEncoder();
+  for (const event of events) {
+    const payload = typeof event === "string" ? event : JSON.stringify(event);
+    inspector.feed(encoder.encode(`data: ${payload}\n\n`));
+  }
+  inspector.finish();
+}
+
+function isExactGuidanceItem(item: unknown, text: string): boolean {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  const record = item as Record<string, unknown>;
+  if (record.type !== "message" || record.role !== "developer" || !Array.isArray(record.content)) return false;
+  if (record.content.length !== 1) return false;
+  const part = record.content[0];
+  return !!part && typeof part === "object" && !Array.isArray(part)
+    && (part as Record<string, unknown>).type === "input_text"
+    && (part as Record<string, unknown>).text === text;
+}
 
 describe("Responses previous_response_id state", () => {
   // Sandbox OPENCODEX_HOME: the state store now snapshots to disk, and these tests must never
@@ -121,6 +145,250 @@ describe("Responses previous_response_id state", () => {
       (first.output as unknown[])[0],
       { role: "user", content: "next" },
     ]);
+  });
+
+  test("SSE inspector backfills empty completed output before passthrough persistence (#334)", () => {
+    const requestBody = {
+      model: "gpt-5.5",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "start" }] }],
+    };
+    const reasoning = { type: "reasoning", id: "rs_334", summary: [{ type: "summary_text", text: "think" }] };
+    const message = {
+      type: "message",
+      id: "msg_334",
+      role: "assistant",
+      content: [{ type: "output_text", text: "working" }],
+    };
+    const call = {
+      type: "function_call",
+      id: "fc_334",
+      call_id: "call_334",
+      name: "lookup",
+      arguments: "{}",
+    };
+    let callbacks = 0;
+    const inspector = createSseInspector({
+      onCompletedResponse: response => {
+        callbacks += 1;
+        rememberResponseState(requestBody, response, undefined, { force: true });
+      },
+    });
+
+    feedInspector(inspector, [
+      { type: "response.output_item.done", output_index: 2, item: call },
+      { type: "response.output_item.done", output_index: 0, item: reasoning },
+      { type: "response.output_item.done", output_index: 1, item: message },
+      { type: "response.completed", response: { id: "resp_334_inspection", status: "completed", output: [] } },
+      "[DONE]",
+    ]);
+
+    const expanded = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: "resp_334_inspection",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] }],
+    }) as { input: Array<{ type?: string }> };
+    expect(callbacks).toBe(1);
+    expect(expanded.input.slice(1, -1).map(item => item.type)).toEqual([
+      "reasoning",
+      "message",
+      "function_call",
+    ]);
+  });
+
+  test("non-empty completed output remains authoritative over accumulated done items (#334)", () => {
+    const requestBody = { model: "gpt-5.5", input: "start" };
+    const accumulated = {
+      type: "function_call",
+      call_id: "call_accumulated",
+      name: "must_not_replay",
+      arguments: "{}",
+    };
+    const terminalOutput = [{
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "terminal wins" }],
+    }];
+    let captured: { output?: unknown } | undefined;
+    const inspector = createSseInspector({
+      onCompletedResponse: response => {
+        captured = response;
+        rememberResponseState(requestBody, response, undefined, { force: true });
+      },
+    });
+
+    feedInspector(inspector, [
+      { type: "response.output_item.done", output_index: 0, item: accumulated },
+      { type: "response.completed", response: { id: "resp_334_authoritative", status: "completed", output: terminalOutput } },
+    ]);
+
+    expect(captured?.output).toEqual(terminalOutput);
+    const expanded = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: "resp_334_authoritative",
+      input: "next",
+    }) as { input: Array<Record<string, unknown>> };
+    expect(expanded.input.some(item => item.type === "message" && item.role === "assistant")).toBe(true);
+    expect(expanded.input.some(item => item.type === "function_call" && item.name === "must_not_replay")).toBe(false);
+  });
+
+  test("two previous_response_id continuations keep one replayed guidance item (#326)", () => {
+    const guidance = "Use the delegated agent workflow.";
+    const countRawGuidance = (body: unknown): number => {
+      const input = (body as { input?: unknown }).input;
+      return Array.isArray(input) ? input.filter(item => isExactGuidanceItem(item, guidance)).length : 0;
+    };
+    const countParsedGuidance = (parsed: ReturnType<typeof parseRequest>): number => parsed.context.messages
+      .filter(message => message.role === "developer" && message.content === guidance).length;
+
+    const request1 = { model: "gpt-5.5", input: [{ type: "message", role: "user", content: "start" }] };
+    const parsed1 = parseRequest(request1);
+    injectDeveloperMessage(parsed1, guidance);
+    expect(countRawGuidance(request1)).toBe(1);
+    const response1 = {
+      id: "resp_326_1",
+      status: "completed",
+      output: [{ type: "function_call", call_id: "call_326", name: "lookup", arguments: "{}" }],
+    };
+    rememberResponseState(request1, response1, undefined, { force: true });
+
+    const request2 = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: response1.id,
+      input: [{ type: "function_call_output", call_id: "call_326", output: "ok" }],
+    });
+    const parsed2 = parseRequest(request2);
+    expect(parsed2._replayPrefixLen).toBe(3);
+    const request2Input = (request2 as { input: Array<Record<string, unknown>> }).input;
+    expect(request2Input[1]).toMatchObject({ role: "developer" });
+    expect(request2Input[2]).toMatchObject({ type: "function_call" });
+    injectDeveloperMessage(parsed2, guidance);
+    expect(countRawGuidance(request2)).toBe(1);
+    expect(countParsedGuidance(parsed2)).toBe(1);
+    const response2 = {
+      id: "resp_326_2",
+      status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }],
+    };
+    rememberResponseState(request2, response2, undefined, { force: true });
+
+    const request3 = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: response2.id,
+      input: [{ type: "message", role: "user", content: "again" }],
+    });
+    const parsed3 = parseRequest(request3);
+    injectDeveloperMessage(parsed3, guidance);
+    expect(countRawGuidance(request3)).toBe(1);
+    expect(countParsedGuidance(parsed3)).toBe(1);
+    const response3 = {
+      id: "resp_326_3",
+      status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "finished" }] }],
+    };
+    rememberResponseState(request3, response3, undefined, { force: true });
+
+    const audit = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: response3.id,
+      input: [{ type: "message", role: "user", content: "audit" }],
+    });
+    expect(countRawGuidance(audit)).toBe(1);
+  });
+
+  test("duplicate output_index keeps only the final done item (#334)", () => {
+    const requestBody = { model: "gpt-5.5", input: "start" };
+    const inspector = createSseInspector({
+      onCompletedResponse: response => rememberResponseState(requestBody, response, undefined, { force: true }),
+    });
+    feedInspector(inspector, [
+      {
+        type: "response.output_item.done",
+        output_index: 2,
+        item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "stale sentinel" }] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 2,
+        item: { type: "function_call", call_id: "call_final", name: "final_lookup", arguments: "{}" },
+      },
+      { type: "response.completed", response: { id: "resp_334_duplicate", status: "completed", output: [] } },
+    ]);
+
+    const expanded = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: "resp_334_duplicate",
+      input: "next",
+    }) as { input: Array<Record<string, unknown>> };
+    const calls = expanded.input.filter(item => item.type === "function_call");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ call_id: "call_final", name: "final_lookup" });
+    expect(JSON.stringify(expanded.input)).not.toContain("stale sentinel");
+  });
+
+  test("malformed output_item.done events do not enter reconstructed output (#334)", () => {
+    const requestBody = { model: "gpt-5.5", input: "start" };
+    let callbacks = 0;
+    let captured: unknown;
+    const inspector = createSseInspector({
+      onCompletedResponse: response => {
+        callbacks += 1;
+        captured = response.output;
+        rememberResponseState(requestBody, response, undefined, { force: true });
+      },
+    });
+    const valid = { type: "message", role: "assistant", content: [{ type: "output_text", text: "valid" }] };
+    feedInspector(inspector, [
+      { type: "response.output_item.done", output_index: 0, item: valid },
+      { type: "response.output_item.done", item: valid },
+      { type: "response.output_item.done", output_index: -1, item: valid },
+      { type: "response.output_item.done", output_index: 1.5, item: valid },
+      { type: "response.output_item.done", output_index: "1", item: valid },
+      { type: "response.output_item.done", output_index: 1 },
+      { type: "response.output_item.done", output_index: 1, item: null },
+      { type: "response.output_item.done", output_index: 1, item: "text" },
+      { type: "response.output_item.done", output_index: 1, item: 42 },
+      { type: "response.output_item.done", output_index: 1, item: [] },
+      { type: "response.output_item.done", output_index: 1, item: {} },
+      { type: "response.output_item.done", output_index: 1, item: { type: 42 } },
+      { type: "response.completed", response: { id: "resp_334_malformed_done", status: "completed", output: [] } },
+    ]);
+
+    expect(callbacks).toBe(1);
+    expect(captured).toEqual([valid]);
+    const expanded = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: "resp_334_malformed_done",
+      input: "next",
+    }) as { input: Array<Record<string, unknown>> };
+    expect(expanded.input.filter(item => item.role === "assistant")).toHaveLength(1);
+  });
+
+  test("malformed SSE payload is skipped before a valid completed response (#334)", () => {
+    const requestBody = { model: "gpt-5.5", input: "start" };
+    let callbacks = 0;
+    const inspector = createSseInspector({
+      onCompletedResponse: response => {
+        callbacks += 1;
+        rememberResponseState(requestBody, response, undefined, { force: true });
+      },
+    });
+    inspector.feed(new TextEncoder().encode("data: {not-json}\n\n"));
+    feedInspector(inspector, [
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "survived" }] },
+      },
+      { type: "response.completed", response: { id: "resp_334_malformed_sse", status: "completed", output: [] } },
+    ]);
+
+    expect(callbacks).toBe(1);
+    const expanded = expandPreviousResponseInput({
+      model: "gpt-5.5",
+      previous_response_id: "resp_334_malformed_sse",
+      input: "next",
+    }) as { input: Array<Record<string, unknown>> };
+    expect(expanded.input.some(item => item.role === "assistant")).toBe(true);
   });
 
   test("force records Kiro provider continuation despite store:false", () => {

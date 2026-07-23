@@ -93,6 +93,35 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
   return text;
 }
 
+async function readAllBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    length += value.byteLength;
+  }
+  const joined = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return joined;
+}
+
+function joinBytes(chunks: Uint8Array[]): Uint8Array {
+  const joined = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return joined;
+}
+
 describe("relaySseEagerBounded — side-effect parity", () => {
   test("(a) relays bytes verbatim; terminal recorded once; completed captured; onDone once", async () => {
     const { hooks, rec } = makeHooks();
@@ -122,6 +151,63 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     await settle();
     expect(rec.synthetics).toEqual(["incomplete"]);
     expect(rec.dones).toBe(1);
+  });
+
+  test("eager relay backfills missing completed output before passthrough persistence (#334)", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const frames = [
+      sse(JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] },
+      })),
+      sse(JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 1,
+        item: { type: "function_call", call_id: "call_eager", name: "lookup", arguments: "{}" },
+      })),
+      sse(JSON.stringify({
+        type: "response.completed",
+        response: { id: "resp_334_eager", status: "completed" },
+      })),
+    ];
+    for (const frame of frames) up.push(frame);
+    up.close();
+
+    const clientBytes = await readAllBytes(relayed);
+    await settle();
+    expect(clientBytes).toEqual(joinBytes(frames));
+    const wireText = new TextDecoder().decode(clientBytes);
+    expect(wireText).not.toContain('"output":');
+    expect(rec.completed).toHaveLength(1);
+    expect((rec.completed[0] as { output: Array<{ type: string }> }).output.map(item => item.type))
+      .toEqual(["message", "function_call"]);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("malformed SSE payload is skipped before a valid completed response (#334) — eager relay subcase", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode("data: {not-json}\n\n"));
+    up.push(sse(JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "survived" }] },
+    })));
+    up.push(sse(JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp_334_eager_malformed", status: "completed", output: [] },
+    })));
+    up.close();
+
+    await readAll(relayed);
+    await settle();
+    expect(rec.completed).toHaveLength(1);
+    expect((rec.completed[0] as { output: Array<{ type: string }> }).output.map(item => item.type))
+      .toEqual(["message"]);
   });
 });
 

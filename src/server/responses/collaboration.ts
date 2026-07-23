@@ -281,11 +281,29 @@ export function subagentRosterText(models: Array<{ model: string; efforts: strin
 
 
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
+  if (!isRecord(item) || item.type !== "message" || item.role !== "developer") return false;
+  if (!Array.isArray(item.content) || item.content.length !== 1) return false;
+  const [part] = item.content;
+  return isRecord(part) && part.type === "input_text" && part.text === text;
+}
+
 export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): void {
-  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
   const raw = parsed._rawBody as { input?: unknown } | undefined;
+  const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
   if (raw && Array.isArray(raw.input)) {
-    const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
+    const replayPrefixLen = Math.min(parsed._replayPrefixLen ?? 0, raw.input.length);
+    if (raw.input.slice(0, replayPrefixLen).some(item => isGeneratedDeveloperItem(item, text))) {
+      return;
+    }
+  }
+
+  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
+  if (raw && Array.isArray(raw.input)) {
     // compaction_trigger must remain the final input item (codex-rs + ChatGPT backend both
     // validate this). Insert the developer message BEFORE the trigger when present.
     const last = raw.input[raw.input.length - 1];
@@ -296,5 +314,4 @@ export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): 
     }
   }
 }
-
 
