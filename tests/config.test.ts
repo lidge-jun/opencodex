@@ -475,6 +475,37 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("modelSupportsReasoningSummaries accepts only plain boolean records", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelSupportsReasoningSummaries: { strict: false, normal: true },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    for (const invalid of [[], { strict: "false" }, { "": false }]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            modelSupportsReasoningSummaries: invalid,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelSupportsReasoningSummaries");
+    }
+  });
+
   test("output token defaults accept only positive finite integers", () => {
     expect(positiveIntegerConfigError(128_000, "defaultMaxOutputTokens")).toBeNull();
     for (const invalid of [null, [], {}, 0, -1, 1.5, "128000", Number.POSITIVE_INFINITY]) {

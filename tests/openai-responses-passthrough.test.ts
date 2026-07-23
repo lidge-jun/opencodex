@@ -1,7 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
 
@@ -53,51 +50,60 @@ describe("OpenAI Responses key-auth URL construction", () => {
 });
 
 describe("OpenAI Responses passthrough sanitization", () => {
-  test("BUG-R323 strips unsupported reasoning summary delivery while preserving stream options siblings", () => {
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-reasoning-summary-delivery-"));
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = codexHome;
-    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
-      models: [
-        { slug: "local/no-summaries", supports_reasoning_summaries: false },
-        { slug: "local/with-summaries", supports_reasoning_summaries: true },
-      ],
-    }));
-
-    try {
-      const adapter = createResponsesPassthroughAdapter({
-        adapter: "openai-responses",
-        baseUrl: "https://api.example/v1",
-        authMode: "key",
-        apiKey: "sk-test",
-      });
-      const buildBody = (modelId: string, streamOptions: Record<string, unknown>) => JSON.parse(adapter.buildRequest({
-        modelId,
-        context: { messages: [] },
-        stream: true,
-        options: {},
-        _rawBody: {
-          model: modelId,
-          input: "ping",
-          stream_options: streamOptions,
+  test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      modelSupportsReasoningSummaries: { "strict-summary-model": false },
+    });
+    const request = adapter.buildRequest({
+      modelId: "strict-summary-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "strict-summary-model",
+        input: [],
+        stream_options: {
+          include_usage: true,
+          reasoning_summary_delivery: "sequential_cutoff",
         },
-      }, { headers: new Headers() }).body) as Record<string, unknown>;
+        reasoning: {
+          effort: "high",
+          summary: "auto",
+          generate_summary: true,
+        },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
 
-      expect(buildBody("no-summaries", {
-        reasoning_summary_delivery: "sequential_cutoff",
-        include_usage: true,
-      }).stream_options).toEqual({ include_usage: true });
-      expect(buildBody("with-summaries", {
-        reasoning_summary_delivery: "sequential_cutoff",
-      }).stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
-      expect(buildBody("no-summaries", {
-        reasoning_summary_delivery: "sequential_cutoff",
-      })).not.toHaveProperty("stream_options");
-    } finally {
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(codexHome, { recursive: true, force: true });
-    }
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(body.reasoning).toEqual({ effort: "high" });
+  });
+
+  test("reasoning-summary fields remain untouched without an explicit opt-out", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "normal-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "normal-model",
+        input: [],
+        stream_options: { reasoning_summary_delivery: "sequential_cutoff" },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
+
+    expect(body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
   });
 
   test("agent_message conversion removes its non-OpenAI item id", () => {

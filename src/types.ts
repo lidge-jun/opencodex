@@ -792,6 +792,11 @@ export interface OcxProviderConfig {
   modelReasoningEfforts?: Record<string, string[]>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
+  /**
+   * Model-specific Codex reasoning-summary capability. Set false when an OpenAI-compatible
+   * Responses backend rejects Codex summary-delivery fields for that model.
+   */
+  modelSupportsReasoningSummaries?: Record<string, boolean>;
   /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */
