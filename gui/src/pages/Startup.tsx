@@ -88,6 +88,8 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [trayError, setTrayError] = useState(false);
   const [installBusy, setInstallBusy] = useState<StartupInstallAction | null>(null);
   const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; detail?: string } | null>(null);
+  const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(null);
+  const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -99,6 +101,31 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       if (signal?.aborted) return;
       setData(next);
       setFailed(next.diagnosticStale);
+      try {
+        const settingsRes = await fetch(`${apiBase}/api/settings`, { signal });
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json() as {
+            codexRuntime?: {
+              warning?: string | null;
+              newerAvailable?: { path?: string } | null;
+              catalogClamp?: { active?: boolean; removedEfforts?: string[] };
+            };
+          };
+          if (!signal?.aborted) {
+            setCodexRuntimeWarning(settings.codexRuntime?.warning ?? null);
+            setCodexRuntimeFix(
+              settings.codexRuntime?.newerAvailable || settings.codexRuntime?.catalogClamp?.active
+                ? "ocx doctor --fix-codex-runtime"
+                : null,
+            );
+          }
+        }
+      } catch {
+        if (!signal?.aborted) {
+          setCodexRuntimeWarning(null);
+          setCodexRuntimeFix(null);
+        }
+      }
       if (next.platform === "win32") {
         setTrayError(false);
         try {
@@ -233,6 +260,26 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       ) : data ? (
         <>
           {failed && <div className="notice notice-warn" role="alert">{t("startup.staleData")}</div>}
+          {codexRuntimeWarning && (
+            <div className="notice notice-warn" role="status">
+              <p>{codexRuntimeWarning}</p>
+              {codexRuntimeFix && (
+                <p>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(codexRuntimeFix);
+                      setCopied(codexRuntimeFix);
+                    }}
+                  >
+                    {copied === codexRuntimeFix ? "Copied" : "Copy fix command"}
+                  </button>
+                  <code style={{ marginLeft: "0.5rem" }}>{codexRuntimeFix}</code>
+                </p>
+              )}
+            </div>
+          )}
           <section className={`panel startup-hero ${statusClass}`} aria-live="polite">
             <div className="startup-hero-icon"><StatusIcon /></div>
             <div className="startup-hero-copy">

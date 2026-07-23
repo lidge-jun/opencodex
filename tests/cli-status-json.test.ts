@@ -68,6 +68,13 @@ describe("CLI status JSON", () => {
         config?: { source?: unknown; error?: unknown };
         service?: { summary?: unknown };
         codexShim?: { summary?: unknown };
+        codexRuntime?: {
+          path?: unknown;
+          version?: unknown;
+          source?: unknown;
+          warning?: unknown;
+          catalogClamp?: { active?: unknown; removedEfforts?: unknown };
+        };
       };
 
       expect(parsed.schemaVersion).toBe(1);
@@ -98,6 +105,10 @@ describe("CLI status JSON", () => {
       expect(parsed.config?.error).toBeNull();
       expect(typeof parsed.service?.summary).toBe("string");
       expect(typeof parsed.codexShim?.summary).toBe("string");
+      expect(typeof parsed.codexRuntime?.path).toBe("string");
+      expect(typeof parsed.codexRuntime?.source).toBe("string");
+      expect(parsed.codexRuntime?.catalogClamp?.active).toBe(false);
+      expect(Array.isArray(parsed.codexRuntime?.catalogClamp?.removedEfforts)).toBe(true);
 
       const serialized = JSON.stringify(parsed).toLowerCase();
       for (const forbidden of ["apikey", "sk-test-secret", "token", "refreshtoken", "authorization", "email"]) {

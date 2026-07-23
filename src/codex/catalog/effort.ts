@@ -37,6 +37,14 @@ import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps } from "./bundled";
 import { deriveEntry } from "./sync";
+import {
+  formatClampLogLines,
+  formatRuntimeLogLine,
+  displayCodexRuntimePath,
+  persistEffortClamp,
+  resolveAndPersistCodexRuntime,
+  type EffortClampDiagnostic,
+} from "../runtime";
 
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
   if (!effort || (effort !== "max" && effort !== "ultra")) return null;
@@ -257,7 +265,69 @@ export function clampEntryToCodexSupportedEfforts(entry: RawEntry, supported: Se
 
 export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: BundledCatalogDeps = {}): RawEntry[] {
   const supported = codexSupportedReasoningEfforts(deps);
-  if (!supported) return models;
-  for (const entry of models) clampEntryToCodexSupportedEfforts(entry, supported);
+  if (!supported) {
+    if (!deps.commandCandidates) persistEffortClamp(null);
+    return models;
+  }
+
+  const removed = new Set<string>();
+  const affected: string[] = [];
+  for (const entry of models) {
+    const before = new Set(
+      (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+        .flatMap(level => typeof (level as { effort?: string })?.effort === "string"
+          ? [(level as { effort: string }).effort]
+          : []),
+    );
+    clampEntryToCodexSupportedEfforts(entry, supported);
+    const after = new Set(
+      (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+        .flatMap(level => typeof (level as { effort?: string })?.effort === "string"
+          ? [(level as { effort: string }).effort]
+          : []),
+    );
+    const lost = [...before].filter(effort => !after.has(effort));
+    if (lost.length > 0) {
+      for (const effort of lost) removed.add(effort);
+      if (typeof entry.slug === "string") affected.push(entry.slug);
+    }
+  }
+
+  let runtimePath = "codex";
+  let runtimeVersion: string | null = null;
+  if (!deps.commandCandidates) {
+    try {
+      const resolved = resolveAndPersistCodexRuntime({
+        execFileSync: deps.execFileSync as never,
+      });
+      runtimePath = resolved.runtime.command;
+      runtimeVersion = resolved.runtime.version;
+      console.info(formatRuntimeLogLine(resolved.runtime));
+      if (
+        resolved.replacedConfigured
+        && resolved.replacedConfigured.from.command !== resolved.runtime.command
+      ) {
+        console.warn(`[opencodex] Preferred Codex runtime is unavailable.`);
+        console.warn(
+          `[opencodex] Falling back from ${displayCodexRuntimePath(resolved.replacedConfigured.from.command)} to ${displayCodexRuntimePath(runtimePath)}.`,
+        );
+      }
+    } catch { /* best-effort */ }
+  }
+
+  if (removed.size > 0) {
+    const diagnostic: EffortClampDiagnostic = {
+      runtimePath,
+      runtimeVersion,
+      removedEfforts: [...removed].sort(),
+      affectedModels: affected,
+    };
+    for (const line of formatClampLogLines(diagnostic)) console.warn(line);
+    if (!deps.commandCandidates) persistEffortClamp(diagnostic);
+    deps.onEffortClamp?.(diagnostic);
+  } else if (!deps.commandCandidates) {
+    persistEffortClamp(null);
+  }
+
   return models;
 }

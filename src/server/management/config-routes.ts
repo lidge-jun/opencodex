@@ -59,6 +59,7 @@ import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
+import { displayCodexRuntimePath, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -75,12 +76,36 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
+    const resolved = resolveCodexRuntime();
+    const lastClamp = loadLastEffortClamp();
+    const clampActive = Boolean(lastClamp && lastClamp.removedEfforts.length > 0);
+    const warning = clampActive
+      ? `Some reasoning effort options were hidden because OpenCodex used Codex ${resolved.runtime.version ?? "an older binary"}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`
+      : resolved.newerAvailable
+        ? `OpenCodex is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`
+        : null;
     return jsonResponse({
       codexAutoStart: codexAutoStartEnabled(config),
       port: config.port,
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
       startupHealth: await getCachedStartupHealth(config),
+      codexRuntime: {
+        path: displayCodexRuntimePath(resolved.runtime.command),
+        version: resolved.runtime.version,
+        source: resolved.runtime.source,
+        newerAvailable: resolved.newerAvailable
+          ? {
+            path: displayCodexRuntimePath(resolved.newerAvailable.command),
+            version: resolved.newerAvailable.version,
+          }
+          : null,
+        catalogClamp: {
+          active: clampActive,
+          removedEfforts: lastClamp?.removedEfforts ?? [],
+        },
+        warning,
+      },
     });
   }
 

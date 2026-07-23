@@ -19,6 +19,13 @@ import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 import { collectStartupHealth, startupHealthSummary } from "../codex/autostart-health";
+import {
+  displayCodexRuntimePath,
+  loadLastEffortClamp,
+  persistCodexRuntime,
+  resolveAndPersistCodexRuntime,
+  resolveCodexRuntime,
+} from "../codex/runtime";
 export { resolveCodexHomeDir } from "../codex/home";
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -434,7 +441,25 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   return lines;
 }
 
-export async function runDoctor(): Promise<void> {
+export async function runDoctor(args: string[] = []): Promise<void> {
+  if (args.includes("--fix-codex-runtime")) {
+    const resolved = resolveCodexRuntime();
+    if (!resolved.newerAvailable) {
+      console.log("No newer Codex runtime found; keeping current selection.");
+      const current = resolveAndPersistCodexRuntime();
+      console.log(`Selected: ${displayCodexRuntimePath(current.runtime.command)} (${current.runtime.version ?? "unknown"})`);
+      return;
+    }
+    persistCodexRuntime({
+      command: resolved.newerAvailable.command,
+      version: resolved.newerAvailable.version,
+      source: "configured",
+    });
+    console.log(`Updated Codex runtime to ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"}).`);
+    console.log("Run ocx sync to refresh the catalog against this runtime.");
+    return;
+  }
+
   console.log("opencodex doctor\n");
 
   // Ordering note: the memory/runtime section renders after "Running proxy
@@ -454,6 +479,35 @@ export async function runDoctor(): Promise<void> {
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       routing=${startup.routingKind}, service=${startup.serviceViable ? "viable" : startup.serviceInstalled ? "installed-but-unhealthy" : "absent"}, shim=${startup.shimHealthy ? "healthy" : startup.shimInstalled ? "stale" : "absent"}`);
+
+  console.log("\nCodex runtime selection");
+  {
+    const resolved = resolveCodexRuntime();
+    const selected = resolved.runtime;
+    console.log(`  ok  Selected runtime: ${displayCodexRuntimePath(selected.command)} (${selected.version ?? "unknown"}, source=${selected.source})`);
+    const envFailures = resolved.failures.filter(item => item.source === "environment");
+    for (const failure of envFailures) {
+      console.log(`  !!  Invalid CODEX_CLI_PATH: ${failure.reason}`);
+    }
+    const shimFailures = resolved.failures.filter(item => item.source === "shim");
+    if (shimFailures.length > 0) {
+      console.log(`  !!  Stale shim target rejected (${shimFailures.length})`);
+    }
+    if (resolved.replacedConfigured) {
+      console.log(`  !!  Preferred runtime unavailable; fell back to ${displayCodexRuntimePath(selected.command)}`);
+    }
+    if (resolved.newerAvailable) {
+      console.log(`  !!  Multiple Codex installations found.`);
+      console.log(`  ok  Newer usable runtime found: ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"})`);
+      console.log("       Suggested: set CODEX_CLI_PATH to the desired binary and run ocx sync.");
+      console.log("       Optional: ocx doctor --fix-codex-runtime");
+    }
+    const lastClamp = loadLastEffortClamp();
+    if (lastClamp && lastClamp.removedEfforts.length > 0) {
+      console.log(`  !!  ${lastClamp.removedEfforts.join(" and ")} were removed during catalog sync.`);
+      console.log("       Suggested: set CODEX_CLI_PATH to a newer Codex binary and run ocx sync.");
+    }
+  }
 
   const currentProxyEnv = collectProxyEnv();
   const configuredProxy = collectConfiguredProxy();

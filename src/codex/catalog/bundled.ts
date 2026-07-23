@@ -33,6 +33,11 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
+import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
+import { resolveAndPersistCodexRuntime } from "../runtime";
+import type { EffortClampDiagnostic } from "../runtime";
+
+export { isSpawnableCodexCandidate, codexExecInvocation } from "../exec-invocation";
 
 export const BUNDLED_CATALOG_CACHE_MS = 60_000;
 
@@ -58,6 +63,7 @@ export type ExecFile = (
 export interface BundledCatalogDeps {
   commandCandidates?: () => string[];
   execFileSync?: ExecFile;
+  onEffortClamp?: (diagnostic: EffortClampDiagnostic) => void;
 }
 
 export function unique(values: string[]): string[] {
@@ -75,11 +81,6 @@ export function codexCommandCandidates(): string[] {
   }
   candidates.push("codex");
   return unique(candidates);
-}
-
-export function isSpawnableCodexCandidate(path: string, platform: NodeJS.Platform = process.platform): boolean {
-  if (platform !== "win32") return true;
-  return /\.(cmd|bat|exe|com)$/i.test(path);
 }
 
 export function codexShimCommandCandidates(): string[] {
@@ -105,16 +106,6 @@ export function codexShimCommandCandidates(): string[] {
   }
 }
 
-export function codexExecInvocation(
-  command: string,
-  platform: NodeJS.Platform = process.platform,
-): { file: string; shell: boolean } {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
-    return { file: `"${command.replace(/"/g, "")}"`, shell: true };
-  }
-  return { file: command, shell: false };
-}
-
 export function runCodexDebugModels(command: string, execFile: ExecFile): string {
   const args = ["debug", "models", "--bundled"];
   const invocation = codexExecInvocation(command);
@@ -132,9 +123,16 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatal
   if (useCache && bundledCatalogCache && bundledCatalogCache.expiresAt > Date.now()) {
     return bundledCatalogCache.value;
   }
-  const candidates = deps.commandCandidates?.() ?? codexCommandCandidates();
   const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
-  for (const command of candidates) {
+  // Prefer the single resolved runtime so sync/clamp never probe a different binary
+  // than OpenCodex will launch. Tests may inject commandCandidates to stub probing.
+  const candidates = deps.commandCandidates?.() ?? (() => {
+    const resolved = resolveAndPersistCodexRuntime({
+      execFileSync: execFile as never,
+    });
+    return [resolved.runtime.command];
+  })();
+  for (const command of unique(candidates)) {
     try {
       const catalog = parseCatalogJson(runCodexDebugModels(command, execFile));
       if (catalog && findNativeTemplate(catalog)) {

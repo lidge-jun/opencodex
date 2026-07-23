@@ -15,6 +15,7 @@ import { getLogicalMaxThreads, hasAgentsMaxThreads, isMultiAgentV2Enabled, trans
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
+import { resolveAndPersistCodexRuntime } from "../codex/runtime";
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
@@ -35,7 +36,13 @@ export function codexFeaturesInvocation(
   platform: NodeJS.Platform = process.platform,
   deps: Parameters<typeof commandInvocation>[3] = {},
 ): SpawnInvocation {
-  const command = (deps.env ?? process.env).CODEX_CLI_PATH?.trim() || "codex";
+  const envPath = (deps.env ?? process.env).CODEX_CLI_PATH?.trim();
+  const command = envPath
+    || resolveAndPersistCodexRuntime({
+      env: deps.env ?? process.env,
+      platform,
+    }).runtime.command
+    || "codex";
   return commandInvocation(command, ["features", action, "multi_agent_v2"], platform, deps);
 }
 
