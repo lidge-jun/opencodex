@@ -18,7 +18,7 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncationReason, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
-import { sanitizeGeminiToolParameters } from "./google-tool-schema";
+import { compileGoogleWireBody } from "./google-wire-compiler";
 import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
@@ -179,7 +179,7 @@ function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
     functionDeclarations: tools.map(t => ({
       name: namespacedToolName(t.namespace, t.name),
       description: t.description,
-      parameters: sanitizeGeminiToolParameters(t.parameters),
+      parameters: t.parameters,
     })),
   }];
 }
@@ -199,6 +199,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
   let antigravitySession: string | undefined;
+  let restoreGoogleToolName = (name: string): string => name;
   return {
     name: "google",
 
@@ -262,23 +263,27 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         // Reasoning continuity: Gemini models re-inject cached thoughtSignatures; Claude-on-Antigravity
         // sanitizes signatures inline (no cache). Both guard against the upstream 400 on bad signatures.
-        if (Array.isArray((body as { contents?: unknown[] }).contents)) {
-          const contents = (body as { contents: unknown[] }).contents;
+        // The real Antigravity client puts the session id ONLY at `request.sessionId` (camelCase,
+        // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
+        // spelling is a non-first-party key, so we send the single canonical location.
+        const draftRequest: Record<string, unknown> = { ...body, sessionId };
+        // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
+        if (/claude/i.test(wireModelId)) {
+          const existing = (draftRequest.toolConfig ?? {}) as Record<string, unknown>;
+          const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
+          draftRequest.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
+        }
+        const compiled = compileGoogleWireBody(draftRequest);
+        const request = compiled.body;
+        restoreGoogleToolName = compiled.restoreToolName;
+        // Compile names before replay: signatures are keyed by the exact provider-visible name.
+        if (Array.isArray((request as { contents?: unknown[] }).contents)) {
+          const contents = (request as { contents: unknown[] }).contents;
           if (antigravityUsesReplayCache(wireModelId)) {
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
             sanitizeAntigravityClaudeSignatures(contents);
           }
-        }
-        // The real Antigravity client puts the session id ONLY at `request.sessionId` (camelCase,
-        // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
-        // spelling is a non-first-party key, so we send the single canonical location.
-        const request: Record<string, unknown> = { ...body, sessionId };
-        // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
-        if (/claude/i.test(wireModelId)) {
-          const existing = (request.toolConfig ?? {}) as Record<string, unknown>;
-          const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
-          request.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
         }
         const envelope = {
           model: wireModelId,
@@ -297,12 +302,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
+        const compiled = compileGoogleWireBody(body);
+        restoreGoogleToolName = compiled.restoreToolName;
         // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
         const apiKey = resolveVertexApiKey(provider.apiKey);
         if (apiKey) {
           const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
           headers["x-goog-api-key"] = apiKey;
-          return { url, method: "POST", headers, body: JSON.stringify(body) };
+          return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
         }
         const project = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
         if (!project) throw new Error("Vertex AI requires a project id (provider.project or GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT).");
@@ -312,7 +319,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
         const token = await getVertexAccessToken();
         headers["Authorization"] = `Bearer ${token}`;
-        return { url, method: "POST", headers, body: JSON.stringify(body) };
+        return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
       // ai-studio (default): Generative Language API + x-goog-api-key.
@@ -321,7 +328,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
 
-      return { url, method: "POST", headers, body: JSON.stringify(body) };
+      const compiled = compileGoogleWireBody(body);
+      restoreGoogleToolName = compiled.restoreToolName;
+      return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 
     async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
@@ -403,7 +412,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
                 if (part.functionCall) {
                   const id = `call_${crypto.randomUUID().slice(0, 8)}`;
                   toolCallsStarted++;
-                  yield { type: "tool_call_start", id, name: part.functionCall.name };
+                  yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
                   yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
                   yield { type: "tool_call_end" };
                 }
@@ -456,7 +465,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
-            events.push({ type: "tool_call_start", id, name: part.functionCall.name });
+            events.push({ type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });
           }

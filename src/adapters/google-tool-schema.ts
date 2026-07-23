@@ -1,98 +1,173 @@
 type Schema = Record<string, unknown>;
 
-// Gemini / Antigravity (CCA) accept only an OpenAPI-3.0 subset for function `parameters`. Codex
-// emits full JSON-Schema (draft 2020-12) tool definitions, so passing them through verbatim makes
-// CCA reject the whole request with "Request contains an invalid argument" / "Unknown name ...".
-// Every keyword below was confirmed live against the Antigravity backend to trigger a 400.
-// `encrypted` is Codex's Responses-only marker (openai/codex 5f4d06ef, PR #26210) stamped on v2
-// collaboration tool schemas (spawn_agent/send_message/followup_task `message`); CCA rejects it
-// with 400 "Unknown name \"encrypted\"" (issue #85). It is an annotation for the ChatGPT backend
-// only, so dropping it never changes tool behavior.
-const DROPPED_SCHEMA_KEYS = new Set([
-  "$schema", "$id", "$comment", "$ref", "$defs", "definitions",
-  "examples", "patternProperties", "if", "then", "else",
-  "uniqueItems", "additionalItems", "unevaluatedProperties", "unevaluatedItems",
-  "dependentRequired", "dependentSchemas", "propertyNames", "contains",
-  "encrypted",
-]);
+// Google documents this function-schema subset: type, nullable, required, format, description,
+// properties, items, enum, anyOf, $ref, and $defs. We inline local refs and normalize anyOf, so
+// only the eight scalar/container keywords below are ever emitted. Building from an allowlist
+// prevents new MCP/JSON-Schema annotations from turning into provider-wide 400 responses.
+const ALLOWED_TYPES = new Set(["string", "integer", "number", "boolean", "array", "object"]);
+const MAX_SCHEMA_DEPTH = 24; // Google's documented nesting limit is 32; leave headroom for CCA.
+const MAX_DEREF_DEPTH = 16;
 
-const MAX_DEREF_DEPTH = 64;
+function isRecord(value: unknown): value is Schema {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 
 function resolveRef(ref: string, defs: Map<string, unknown>): unknown {
-  // Only local pointers into the schema's own $defs/definitions are supported (e.g.
-  // "#/$defs/Foo"). Anything else cannot be inlined, so it collapses to an unconstrained object.
+  // Only local pointers into the schema's own $defs/definitions are safe to inline.
   const match = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(ref);
   if (!match) return undefined;
-  return defs.get(decodeURIComponent(match[1].replace(/~1/g, "/").replace(/~0/g, "~")));
+  try {
+    return defs.get(decodeURIComponent(match[1].replace(/~1/g, "/").replace(/~0/g, "~")));
+  } catch {
+    return undefined;
+  }
 }
 
 function collectDefs(root: unknown, defs: Map<string, unknown>): void {
-  if (!root || typeof root !== "object") return;
+  if (!isRecord(root)) return;
   for (const bag of ["$defs", "definitions"] as const) {
-    const group = (root as Schema)[bag];
-    if (group && typeof group === "object" && !Array.isArray(group)) {
-      for (const [name, value] of Object.entries(group as Schema)) {
-        if (!defs.has(name)) defs.set(name, value);
-      }
+    const group = root[bag];
+    if (!isRecord(group)) continue;
+    for (const [name, value] of Object.entries(group)) {
+      if (!defs.has(name)) defs.set(name, value);
     }
   }
 }
 
-function normalizeType(value: unknown, out: Schema): void {
-  // JSON-Schema allows `type` to be an array (e.g. ["string","null"]); OpenAPI 3.0 does not.
-  // Collapse to the first non-null type and mark the field nullable when "null" was present.
-  if (!Array.isArray(value)) {
-    out.type = value;
-    return;
+function normalizeType(value: unknown, out: Schema, preserveNullType: boolean): void {
+  const candidates = Array.isArray(value) ? value : [value];
+  let sawNull = false;
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const type = candidate.toLowerCase();
+    if (type === "null") {
+      sawNull = true;
+    } else if (out.type === undefined && ALLOWED_TYPES.has(type)) {
+      out.type = type;
+    }
   }
-  const nonNull = value.filter(t => t !== "null");
-  if (value.includes("null")) out.nullable = true;
-  if (nonNull.length > 0) out.type = nonNull[0];
+
+  if (!sawNull) return;
+  if (out.type !== undefined) out.nullable = true;
+  else if (preserveNullType) out.type = "null";
+  else out.nullable = true;
 }
 
-function sanitize(node: unknown, defs: Map<string, unknown>, depth: number): unknown {
-  if (Array.isArray(node)) return node.map(item => sanitize(item, defs, depth));
-  if (!node || typeof node !== "object") return node;
-  const input = node as Schema;
+function sanitizeEnum(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+  return values.length > 0 ? values : undefined;
+}
 
-  if (typeof input.$ref === "string" && depth < MAX_DEREF_DEPTH) {
-    const target = resolveRef(input.$ref, defs);
-    if (target && typeof target === "object") {
-      const merged: Schema = { ...(target as Schema) };
-      for (const [key, value] of Object.entries(input)) {
+function normalizeAnyOf(
+  value: unknown,
+  defs: Map<string, unknown>,
+  depth: number,
+  refDepth: number,
+): Schema {
+  if (!Array.isArray(value) || value.length === 0) return {};
+  const schemas = value.map(item => sanitizeSchema(item, defs, depth + 1, refDepth, true));
+
+  const nonNullSchemas = schemas.filter(schema => schema.type !== "null");
+  const nullSchemas = schemas.filter(schema => schema.type === "null");
+  if (
+    nonNullSchemas.length === 1
+    && nullSchemas.length > 0
+    && nullSchemas.every(schema => Object.keys(schema).every(key => key === "type"))
+  ) {
+    return { ...nonNullSchemas[0], nullable: true };
+  }
+
+  const type = schemas[0]?.type;
+  const sameType = schemas.length > 0 && schemas.every(schema => schema.type === type);
+  const enumOnly = schemas.every(schema => {
+    const allowedKeys = type === undefined ? new Set(["enum"]) : new Set(["type", "enum"]);
+    return Array.isArray(schema.enum) && Object.keys(schema).every(key => allowedKeys.has(key));
+  });
+  if (sameType && enumOnly && type !== "null") {
+    const values = sanitizeEnum(schemas.flatMap(schema => schema.enum as unknown[]));
+    if (values) return { ...(typeof type === "string" ? { type } : {}), enum: values };
+  }
+
+  // CCA's Claude bridge turns typed anyOf branches into an invalid input_schema. Widen only this
+  // node when a union cannot be collapsed losslessly; parent annotations and structure survive.
+  return {};
+}
+
+function sanitizeProperties(
+  value: unknown,
+  defs: Map<string, unknown>,
+  depth: number,
+  refDepth: number,
+): Record<string, Schema> | undefined {
+  if (!isRecord(value)) return undefined;
+  const properties: Record<string, Schema> = Object.create(null) as Record<string, Schema>;
+  for (const [name, schema] of Object.entries(value)) {
+    // Property names form a name bag and must never be interpreted as schema keywords.
+    properties[name] = sanitizeSchema(schema, defs, depth + 1, refDepth, false);
+  }
+  return properties;
+}
+
+function sanitizeSchema(
+  node: unknown,
+  defs: Map<string, unknown>,
+  depth: number,
+  refDepth: number,
+  preserveNullType: boolean,
+): Schema {
+  if (depth >= MAX_SCHEMA_DEPTH || !isRecord(node)) return {};
+
+  if (typeof node.$ref === "string" && refDepth < MAX_DEREF_DEPTH) {
+    const target = resolveRef(node.$ref, defs);
+    if (isRecord(target)) {
+      const merged: Schema = { ...target };
+      for (const [key, value] of Object.entries(node)) {
         if (key !== "$ref") merged[key] = value;
       }
-      return sanitize(merged, defs, depth + 1);
+      return sanitizeSchema(merged, defs, depth, refDepth + 1, preserveNullType);
     }
   }
 
   const out: Schema = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (DROPPED_SCHEMA_KEYS.has(key)) continue;
-    if (key === "type") { normalizeType(value, out); continue; }
-    if (key === "const") { out.enum = [value]; continue; }
-    if (key === "exclusiveMinimum" && typeof value === "number") { out.minimum = value; continue; }
-    if (key === "exclusiveMaximum" && typeof value === "number") { out.maximum = value; continue; }
-    if (key === "required" && Array.isArray(value)) {
-      out.required = [...new Set(value.filter((item): item is string => typeof item === "string"))];
-      continue;
-    }
-    if (key === "additionalProperties") {
-      // A boolean additionalProperties is accepted, but a nested schema is only meaningful with
-      // its own sanitize pass.
-      out.additionalProperties = typeof value === "boolean" ? value : sanitize(value, defs, depth);
-      continue;
-    }
-    out[key] = sanitize(value, defs, depth);
+  normalizeType(node.type, out, preserveNullType);
+
+  if (typeof node.nullable === "boolean") out.nullable = node.nullable;
+  if (typeof node.description === "string") out.description = node.description;
+  if (typeof node.format === "string") out.format = node.format;
+
+  const enumValues = sanitizeEnum(node.enum ?? (typeof node.const === "string" ? [node.const] : undefined));
+  if (enumValues) out.enum = enumValues;
+
+  const properties = sanitizeProperties(node.properties, defs, depth, refDepth);
+  if (properties) out.properties = properties;
+
+  if (isRecord(node.items)) {
+    out.items = sanitizeSchema(node.items, defs, depth + 1, refDepth, false);
   }
+
+  if (Array.isArray(node.required)) {
+    out.required = [...new Set(node.required.filter((item): item is string => typeof item === "string"))];
+  }
+
+  if (node.anyOf !== undefined) Object.assign(out, normalizeAnyOf(node.anyOf, defs, depth, refDepth));
   return out;
 }
 
 export function sanitizeGeminiToolParameters(parameters: unknown): Record<string, unknown> {
-  const defs = new Map<string, unknown>();
-  collectDefs(parameters, defs);
-  const result = sanitize(parameters, defs, 0);
-  return result && typeof result === "object" && !Array.isArray(result)
-    ? result as Record<string, unknown>
-    : { type: "object" };
+  try {
+    const defs = new Map<string, unknown>();
+    collectDefs(parameters, defs);
+    const root = sanitizeSchema(parameters, defs, 0, 0, false);
+
+    // Function arguments are always an object. Claude additionally rejects root composition and a
+    // missing root type even when those forms are valid general-purpose JSON Schema.
+    root.type = "object";
+    if (!isRecord(root.properties)) root.properties = {};
+    return root;
+  } catch {
+    // Last-resort containment: no third-party schema may break every tool in the request.
+    return { type: "object", properties: {} };
+  }
 }

@@ -133,6 +133,35 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
+  test("replays one structurally repaired request after a provider schema 400", async () => {
+    const repairableRequest: AdapterRequest = {
+      ...request,
+      body: JSON.stringify({
+        request: {
+          contents: [{ role: "user", parts: [{ text: "hi" }] }],
+          tools: [{ functionDeclarations: [{
+            name: "replace_in_files",
+            parameters: { type: "object", properties: { occurrence_ids: { type: "array", items: { type: "string" } } } },
+          }] }],
+        },
+      }),
+    };
+    const mock = mockFetch([
+      new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), { status: 400 }),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(repairableRequest, { timeoutMs: 5_000 });
+
+    expect(res.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+    const replay = JSON.parse(mock.calls[1].body as string);
+    expect(replay.request.tools[0].functionDeclarations[0].parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   test("raw mode preserves final error body and headers without normalization", async () => {
     const raw = vertexError(400, "INVALID_ARGUMENT", "provider-private-detail");
     const mock = mockFetch([new Response(raw, { status: 400, headers: { "x-provider-error": "raw" } })]);

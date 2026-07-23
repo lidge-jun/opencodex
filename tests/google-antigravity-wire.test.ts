@@ -246,18 +246,18 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
-  test("claude-opus-4-6-thinking with effort=max sends thinkingConfig max", async () => {
+  test("claude-opus-4-6-thinking with effort=max clamps CCA thinkingLevel to high", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "max"));
     const env = JSON.parse(req.body);
     expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
-  test("claude-opus-4-6-thinking with effort=ultra clamps to max", async () => {
+  test("claude-opus-4-6-thinking with effort=ultra clamps CCA thinkingLevel to high", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "ultra"));
     const env = JSON.parse(req.body);
     expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
   test("claude-opus-4-6-thinking with no effort sends no thinkingConfig", async () => {
@@ -276,11 +276,11 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
-  test("claude-sonnet-4-6 with effort=max sends thinkingConfig max", async () => {
+  test("claude-sonnet-4-6 with effort=max clamps CCA thinkingLevel to high", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "max"));
     const env = JSON.parse(req.body);
     expect(env.model).toBe("claude-sonnet-4-6");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("max");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
   test("claude-sonnet-4-6 with no effort sends no thinkingConfig", async () => {

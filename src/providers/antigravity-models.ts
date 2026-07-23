@@ -47,6 +47,13 @@ const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
   "gemini-3.1-pro": "high",
 };
 
+const ANTIGRAVITY_THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+
+function resolveAntigravityThinkingLevel(effort: string): string | undefined {
+  if (effort === "xhigh" || effort === "max" || effort === "ultra") return "high";
+  return ANTIGRAVITY_THINKING_LEVELS.has(effort) ? effort : undefined;
+}
+
 // ── Visible client aliases (kept for saved-config compat, not picker-visible) ──
 const ANTIGRAVITY_VISIBLE_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.1-pro-high": "gemini-pro-agent",
@@ -152,10 +159,9 @@ export function resolveAntigravityEffortWireModel(
   }
 
   // Rule 4: Claude models — effort via thinkingConfig only (no suffix variants).
-  // Anthropic adaptive thinking supports low/medium/high/max for both Sonnet 4.6 and Opus 4.6.
-  // CLIProxyAPI proves CCA accepts thinkingConfig on base IDs (validation confirmed).
+  // CCA validates this field as Google's ThinkingLevel enum, whose highest value is `high`.
   if (/^claude-/.test(modelId) && effort) {
-    return { wireModelId: modelId, thinkingLevel: effort };
+    return { wireModelId: modelId, thinkingLevel: resolveAntigravityThinkingLevel(effort) };
   }
 
   // Rule 5: everything else.

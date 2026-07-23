@@ -1,5 +1,6 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import {
   abortError,
@@ -29,14 +30,32 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
 export async function fetchGoogleWithRetry(label: string, request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
   const timeoutMs = ctx.timeoutMs ?? 200_000;
   let lastError: unknown;
+  let activeRequest = request;
+  let compatibilityReplayUsed = false;
   for (let attempt = 0; attempt < GOOGLE_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     try {
-      const res = await fetchWithAttemptDeadline(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
+      const res = await fetchWithAttemptDeadline(activeRequest.url, {
+        method: activeRequest.method,
+        headers: activeRequest.headers,
+        body: activeRequest.body,
       }, timeoutMs, ctx.abortSignal, ctx.stream);
+      if (res.status === 400 && !compatibilityReplayUsed) {
+        let payloadText = "";
+        try {
+          payloadText = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);
+        } catch (error) {
+          if (ctx.abortSignal?.aborted) throw error;
+        }
+        const repairedBody = repairGoogleInvalidRequestBody(activeRequest.body, payloadText);
+        if (repairedBody !== undefined) {
+          compatibilityReplayUsed = true;
+          activeRequest = { ...activeRequest, body: repairedBody };
+          cancelResponseBodyBestEffort(res);
+          attempt--; // The changed-request replay is separate from transient retry accounting.
+          continue;
+        }
+      }
       if (!retryableGoogleStatus(res.status) || attempt === GOOGLE_RETRY_ATTEMPTS - 1) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
       }
