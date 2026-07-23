@@ -118,6 +118,9 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const sessionsDir = join(codexHome, "sessions");
     mkdirSync(sessionsDir);
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    const profile = "sentinel profile\n";
+    writeFileSync(profilePath, profile, "utf8");
     const rolloutPath = join(sessionsDir, "rollout-custom.jsonl");
     const rollout = JSON.stringify({
       type: "session_meta",
@@ -148,9 +151,11 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.success).toBe(true);
     expect(result.message).toContain("routing NOT injected");
     expect(result.message).toContain('external model_provider "custom"');
+    expect(result.message).toContain("http://127.0.0.1:10100/v1");
+    expect(result.message).toContain("Responses passthrough");
 
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
-    expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
+    expect(readFileSync(profilePath, "utf8")).toBe(profile);
     expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
     expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
     expect(existsSync(journalPath)).toBe(false);
@@ -170,6 +175,18 @@ describe("injectCodexConfig integration (Design B)", () => {
     const r = runInject(codexHome, ocxHome);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).message).toContain('external model_provider "custom"');
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+  });
+
+  test("external provider guidance includes the admission header for non-loopback binds", () => {
+    const original = 'model_provider = "custom"\n';
+    writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.20" }));
+    expect(r.status).toBe(0);
+    const message = JSON.parse(r.stdout).message;
+    expect(message).toContain("http://192.168.1.20:10100/v1");
+    expect(message).toContain("x-opencodex-api-key from OPENCODEX_API_AUTH_TOKEN");
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
