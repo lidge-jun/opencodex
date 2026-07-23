@@ -32,10 +32,12 @@ and harden two transport gaps. Work happens in worktree
 - Cursor's completed response carries its `conversationId` through
   `continuationStateForResponse()` (`src/server/responses.ts:1245-1263`).
 - `rememberResponseState()` skips persistence when the request has `store:false`
-  unless `force:true` (`src/responses/state.ts:196`). Codex sends `store:false` on
+  unless `force:true` (`src/responses/state.ts:195`). Codex sends `store:false` on
   every non-Azure HTTP request.
-- All four call sites pass `force` only for kiro:
-  `src/server/responses.ts:1537`, `:1574`, `:1824`, `:1859`.
+- The two REACHABLE call sites for cursor (runTurn branch) pass `force` only for
+  kiro: `src/server/responses.ts:1537`, `:1574`. (Generic sites `:1824`/`:1859`
+  exist but cursor never reaches them — it always takes the runTurn branch at
+  `:1483`; audit r1 blocker 1.)
 - Next request → `previousResponseProviderState()` finds nothing →
   `_cursorConversationId` undefined → fresh UUID per request
   (`src/adapters/cursor/request-builder.ts:195`) → carry-forward cache miss →
@@ -62,21 +64,24 @@ and harden two transport gaps. Work happens in worktree
 - First-frame timeout cleanup uses only `close()`
   (`src/adapters/cursor/live-transport.ts:642-643`); no `destroy()` fallback.
 - Discovery `fetchCursorUsableModels()` has no bounded retry for transient
-  pre-response failures (`src/adapters/cursor/live-models.ts:33-62`).
+  pre-response failures (`src/adapters/cursor/live-models.ts:33-62`); its real
+  caller is `src/codex/catalog.ts:1538`, reached synchronously from
+  `/v1/models` and `/api/models` (audit r1 blocker 8).
 
 ## Dependency-ordered phase map (PHASE-SPLIT-01)
 
 | Phase | Doc | Scope | Depends on |
 |-------|-----|-------|------------|
-| 1 | `010_phase1_conversation_continuity.md` | RC1: force-remember Cursor continuation state | — (foundation: identity/state contract) |
+| 1 | `010_phase1_conversation_continuity.md` | RC1: force-remember Cursor continuation state + byte-bounded response store | — (foundation: identity/state contract) |
 | 2 | `020_phase2_resource_exhausted_classification.md` | RC2: split 400 vs 429 | — (independent, but lands after 1 to keep test churn ordered) |
-| 3 | `030_phase3_transport_hardening.md` | RC3: session error handler, idempotent cleanup, discovery retry | 1–2 landed (touches same files' test suites) |
+| 3 | `030_phase3_transport_hardening.md` | RC3: settled guard, session error handler, idempotent cleanup, discovery retry | 1–2 landed (touches same files' test suites) |
 
 ## Scope boundary
 
-- IN: `src/server/responses.ts` (4 call sites), `src/adapters/cursor/cursor-errors.ts`,
+- IN: `src/server/responses.ts` (2 runTurn call sites + predicate),
+  `src/responses/state.ts` (byte cap), `src/adapters/cursor/cursor-errors.ts`,
   `src/lib/errors.ts`, `src/adapters/cursor/live-transport.ts`,
-  `src/adapters/cursor/live-models.ts`, matching tests.
+  `src/adapters/cursor/live-models.ts` (+ `transport.ts` factory input), matching tests.
 - OUT: GUI, docs-site, kiro adapter behavior, catalog degradation policy,
   transport-retry commit semantics (post-connect no-replay stays), release work,
   any push (DEV-GIT-PUSH-01 — no push without explicit approval).

@@ -39,20 +39,35 @@ After:
       : "Cursor rate limit exceeded";
   }
 ```
-New helper (exported for reuse by `src/lib/errors.ts` if needed; keep in this file):
+New helper (audit r1 blocker 4 + r2 blocker 3: free cue pairing reclassified
+"too many requests" as 400 — rejected. Quota/rate rejection runs FIRST, then
+only phrase-specific size patterns match):
 ```ts
+const QUOTA_RATE_CUES = ["too many requests", "quota", "rate limit", "rate-limit", "throttl"];
+const REQUEST_TOO_LARGE_PATTERNS: (string | RegExp)[] = [
+  "tool catalog too large",
+  "tool registration too large",
+  "too many tools",
+  "message too large",
+  "payload too large",
+  "request too large",
+  /request (?:body |size )?exceeds .*(?:size|limit)/,
+  "maximum allowed size",
+];
+
 /** True when a resource_exhausted detail names a request-size overflow rather than quota. */
 export function isCursorRequestTooLargeDetail(lowerMessage: string): boolean {
-  return (
-    lowerMessage.includes("tool catalog") ||
-    lowerMessage.includes("tool registration") ||
-    lowerMessage.includes("too many tools") ||
-    lowerMessage.includes("request too large") ||
-    lowerMessage.includes("message too large") ||
-    lowerMessage.includes("payload too large")
+  if (QUOTA_RATE_CUES.some(cue => lowerMessage.includes(cue))) return false;
+  return REQUEST_TOO_LARGE_PATTERNS.some(pattern =>
+    typeof pattern === "string" ? lowerMessage.includes(pattern) : pattern.test(lowerMessage),
   );
 }
 ```
+Table cases: "resource_exhausted: too many requests" → 429 (quota cue rejects
+first); "resource_exhausted while loading tool catalog: quota exhausted" → 429
+(quota cue); "resource_exhausted: tool registration too large" → 400;
+"resource_exhausted: request exceeds maximum allowed size" → 400; bare
+"resource_exhausted: Error" → 429 (no size pattern).
 `safeCursorErrorMessage` keeps the existing `resource[_ ]exhausted` →
 "resource limit exceeded" rewrite (`:125`) — harmless for both prefixes.
 
@@ -78,6 +93,11 @@ Same comment shape above `:205`.
 1. `classifyCursorError("resource_exhausted: Error")` → `"Cursor rate limit exceeded"`.
 2. `classifyCursorError("resource_exhausted: tool registration too large")` →
    `"Cursor resource limit exceeded"` (unchanged).
+2a. Adversarial negatives (asserted END-TO-END through `safeCursorErrorMessage(raw)`,
+   not just the predicate — audit r2 blocker 3): `"resource_exhausted: too many requests"`
+   → rate-limit prefix (429); `"resource_exhausted while loading tool catalog: quota exhausted"`
+   → rate-limit prefix; `"resource_exhausted: request exceeds maximum allowed size"`
+   → too-large prefix (400).
 3. `adapterFailureFromMessage("Cursor rate limit exceeded: ...")` → 429 /
    `rate_limit_error` / `rate_limit_exceeded`.
 4. `adapterFailureFromMessage("Cursor resource limit exceeded: tool catalog too large")`
