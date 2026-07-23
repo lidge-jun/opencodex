@@ -715,6 +715,9 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
 
 /** Resolve reasoning-summary support from the active Codex catalog for wire sanitization. */
 export function catalogModelSupportsReasoningSummaries(modelId: string): boolean | undefined {
+  // Fail open for absent/non-string ids: callers pass parsed.modelId, which test doubles (and
+  // defensive callers) may omit — encodeRoutedModelId would otherwise throw on undefined.
+  if (typeof modelId !== "string" || modelId.length === 0) return undefined;
   const catalog = readCatalog(readCodexCatalogPath()) ?? readCatalog(activeCodexModelsCachePath());
   const models = catalog?.models ?? [];
   const exact = models.find(entry => entry.slug === modelId || entry.id === modelId);
