@@ -21,11 +21,11 @@ files are picked up automatically.
     `:151-154`;
   - `describe("combo namespace primitives", …)` `:156-674` (pure-combo tests,
     inside the describe);
-  - **18 top-level management `test()`** `:676-1262` (OUTSIDE any describe —
-    the describe closes at `:674`);
-  - tail `:1263-1286` — confirm at B whether it is the close of test #18 or a
-    further test; cut the management block at the exact `});` that ends test
-    #18 ("PATCH skips one disabled member…").
+  - **management slice `:676-1286` (to EOF)**: tests #1-17 are top-level
+    `test()` calls (`:676-1197`); test #18 ("PATCH skips one disabled member…")
+    is wrapped in `describe("supported disabled-provider activation")`
+    `:1200-1286`. The `describe("combo namespace primitives")` block closes at
+    `:674`, so the cut is clean: keep `:1-674`, move `:676-1286`.
 
 ## Existing helpers (do not collide)
 
