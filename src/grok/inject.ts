@@ -1,6 +1,7 @@
-import { constants, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { atomicWriteFile } from "../config";
 import { applyEol, dominantEol, providerBaseHost } from "../codex/inject";
 
 export interface GrokInjectModel {
@@ -13,17 +14,15 @@ export interface GrokInjectResult {
   ok: boolean;
   changed: boolean;
   message: string;
-  skippedReason?: "no-grok-home" | "user-owned-provider";
+  skippedReason?: "no-grok-home" | "orphaned-marker";
 }
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
 const END_MARKER = "# <<< opencodex managed block <<<";
-const PROVIDER_HEADER = "[model_providers.opencodex]";
 // grok 0.2.101 verified live (2026-07-23): [model_providers.<id>] inheritance parses but the
 // inherited base_url is NOT applied to inference routing — the turn falls through to the default
 // cli-chat-proxy and 401s. Per-model direct fields DO route. So every [model.*] block carries its
-// own base_url/api_backend/api_key; the provider table remains only as a user-visible grouping
-// header (harmless) and the user-owned conflict guard keeps checking for it.
+// own base_url/api_backend/api_key and no [model_providers] table is emitted at all.
 
 interface ManagedRegion {
   start: number;
@@ -55,11 +54,27 @@ function findManagedRegion(content: string): ManagedRegion | null {
   return { start, end: endMarkerStart + END_MARKER.length, orphaned: false };
 }
 
-function hasUserOwnedProvider(content: string, region: ManagedRegion | null): boolean {
+/** `[model.<alias>]` table headers the USER owns (outside our fence) — reserved for collisions. */
+function userModelAliases(content: string, region: ManagedRegion | null): Set<string> {
   const outsideManagedRegion = region
     ? content.slice(0, region.start) + content.slice(region.end)
     : content;
-  return /^\s*\[model_providers\.opencodex\]\s*(?:#.*)?$/m.test(outsideManagedRegion);
+  const aliases = new Set<string>();
+  for (const match of outsideManagedRegion.matchAll(/^\s*\[model\.([A-Za-z0-9_-]+)\]\s*(?:#.*)?$/gm)) {
+    aliases.add(match[1]);
+  }
+  return aliases;
+}
+
+function orphanedMarkerResult(action: string): GrokInjectResult {
+  return {
+    ok: false,
+    changed: false,
+    message: `Grok config ${action} refused: found the opencodex begin marker without its end marker. `
+      + "The managed region boundary is ambiguous, so nothing was modified. "
+      + "Repair ~/.grok/config.toml manually (see config.toml.bak-opencodex) and re-run.",
+    skippedReason: "orphaned-marker",
+  };
 }
 
 function copyBackupOnce(configPath: string, backupPath: string): void {
@@ -76,19 +91,27 @@ function errorResult(action: string, error: unknown): GrokInjectResult {
   return { ok: false, changed: false, message: `Could not ${action} Grok config: ${detail}` };
 }
 
-export function buildGrokManagedBlock(port: number, models: GrokInjectModel[], hostname?: string): string {
+export function buildGrokManagedBlock(port: number, models: GrokInjectModel[], hostname?: string, reservedAliases?: ReadonlySet<string>): string {
   const host = providerBaseHost(hostname);
   const baseUrl = `http://${host}:${port}/v1`;
   const lines = [
     BEGIN_MARKER,
   ];
   const aliasCounts = new Map<string, number>();
+  const taken = new Set(reservedAliases ?? []);
 
   for (const model of models) {
     const baseAlias = `ocx-${model.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-    const count = (aliasCounts.get(baseAlias) ?? 0) + 1;
+    let count = (aliasCounts.get(baseAlias) ?? 0) + 1;
+    let alias = count === 1 ? baseAlias : `${baseAlias}-${count}`;
+    // User-owned [model.<alias>] tables outside the fence are reserved: emitting a
+    // duplicate table header would make the whole TOML invalid for grok.
+    while (taken.has(alias)) {
+      count += 1;
+      alias = `${baseAlias}-${count}`;
+    }
     aliasCounts.set(baseAlias, count);
-    const alias = count === 1 ? baseAlias : `${baseAlias}-${count}`;
+    taken.add(alias);
     const isFirst = lines.length === 1;
     lines.push(
       ...(isFirst ? [] : [""]),
@@ -131,17 +154,9 @@ export function injectGrokConfig(
     const eol = dominantEol(rawContent);
     const content = applyEol(rawContent, "\n");
     const region = findManagedRegion(content);
+    if (region?.orphaned) return orphanedMarkerResult("injection");
 
-    if (hasUserOwnedProvider(content, region)) {
-      return {
-        ok: true,
-        changed: false,
-        message: "Warning: Grok config injection skipped because a user-owned [model_providers.opencodex] table exists outside the managed block.",
-        skippedReason: "user-owned-provider",
-      };
-    }
-
-    const block = buildGrokManagedBlock(port, models, opts.hostname);
+    const block = buildGrokManagedBlock(port, models, opts.hostname, userModelAliases(content, region));
     let nextContent: string;
     if (region) {
       nextContent = content.slice(0, region.start) + block + content.slice(region.end);
@@ -157,7 +172,7 @@ export function injectGrokConfig(
       return { ok: true, changed: false, message: "Grok config already contains the current opencodex managed block." };
     }
     if (configExisted && !region) copyBackupOnce(configPath, backupPath);
-    writeFileSync(configPath, output, "utf8");
+    atomicWriteFile(configPath, output);
     return {
       ok: true,
       changed: true,
@@ -194,20 +209,19 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
     if (!region) {
       return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
     }
+    if (region.orphaned) return orphanedMarkerResult("cleanup");
 
     let removalEnd = region.end;
-    if (!region.orphaned && content.startsWith("\n", removalEnd)) removalEnd += 1;
+    if (content.startsWith("\n", removalEnd)) removalEnd += 1;
     let prefix = content.slice(0, region.start);
     if (prefix.endsWith("\n\n")) prefix = prefix.slice(0, -1);
     const stripped = prefix + content.slice(removalEnd);
-    writeFileSync(configPath, applyEol(stripped, eol), "utf8");
+    atomicWriteFile(configPath, applyEol(stripped, eol));
 
     return {
       ok: true,
       changed: true,
-      message: region.orphaned
-        ? "Removed an orphaned opencodex begin marker and all following Grok config content."
-        : "Removed the opencodex managed block from Grok config.",
+      message: "Removed the opencodex managed block from Grok config.",
     };
   } catch (error) {
     return errorResult("strip", error);

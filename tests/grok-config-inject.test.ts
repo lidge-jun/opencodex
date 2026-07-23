@@ -63,16 +63,31 @@ describe("Grok config injection", () => {
     expect(content).toContain("[model.ocx-newer-model]");
   });
 
-  test("skips a user-owned opencodex provider table", () => {
+  test("emits per-model direct fields (grok 0.2.101 ignores model_providers inheritance)", () => {
+    const block = buildGrokManagedBlock(10190, [{ id: "cursor/grok-4.5", contextWindow: 500_000 }]);
+    expect(block).not.toContain("[model_providers");
+    expect(block).not.toContain("model_provider =");
+    const table = block.slice(block.indexOf("[model.ocx-cursor-grok-4-5]"));
+    expect(table).toContain('model = "cursor/grok-4.5"');
+    expect(table).toContain('base_url = "http://127.0.0.1:10190/v1"');
+    expect(table).toContain('api_backend = "chat_completions"');
+    expect(table).toContain('api_key = "opencodex-loopback"');
+    expect(table).toContain("context_window = 500000");
+  });
+
+  test("reserves user-owned [model.*] aliases outside the fence", () => {
     const configPath = join(grokHome, "config.toml");
-    const userContent = "[model_providers.opencodex]\nbase_url = \"https://example.test/v1\"\n";
+    const userContent = '[model.ocx-mine]\nmodel = "user/model"\nbase_url = "https://example.test/v1"\n';
     writeFileSync(configPath, userContent, "utf8");
 
-    const result = injectGrokConfig(10100, [{ id: "ignored" }], { grokHome });
-    expect(result).toMatchObject({ ok: true, changed: false, skippedReason: "user-owned-provider" });
-    expect(result.message.toLowerCase()).toContain("user-owned");
-    expect(readFileSync(configPath, "utf8")).toBe(userContent);
-    expect(existsSync(join(grokHome, "config.toml.bak-opencodex"))).toBe(false);
+    const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    // The user's table survives untouched and our entry takes a suffixed alias —
+    // a duplicate [model.ocx-mine] header would invalidate the whole TOML.
+    expect(content.match(/\[model\.ocx-mine\]/g) ?? []).toHaveLength(1);
+    expect(content).toContain("[model.ocx-mine-2]");
+    expect(content.startsWith(userContent)).toBe(true);
   });
 
   test("sanitizes aliases, suffixes collisions, and escapes TOML strings", () => {
@@ -107,13 +122,17 @@ describe("Grok config injection", () => {
     expect(result).toMatchObject({ ok: true, changed: false, skippedReason: "no-grok-home" });
   });
 
-  test("strips an orphaned begin marker through EOF", () => {
+  test("refuses to mutate when the begin marker is orphaned (data-safety)", () => {
     const configPath = join(grokHome, "config.toml");
-    writeFileSync(configPath, `theme = "dark"\n\n${BEGIN_MARKER}\npartial = true\n`, "utf8");
+    const damaged = `theme = "dark"\n\n${BEGIN_MARKER}\npartial = true\n[model.user-added-later]\nmodel = "keep/me"\n`;
+    writeFileSync(configPath, damaged, "utf8");
 
-    const result = stripGrokConfig({ grokHome });
-    expect(result).toMatchObject({ ok: true, changed: true });
-    expect(result.message.toLowerCase()).toContain("orphaned");
-    expect(readFileSync(configPath, "utf8")).toBe('theme = "dark"\n');
+    const stripResult = stripGrokConfig({ grokHome });
+    expect(stripResult).toMatchObject({ ok: false, changed: false, skippedReason: "orphaned-marker" });
+    expect(readFileSync(configPath, "utf8")).toBe(damaged);
+
+    const injectResult = injectGrokConfig(10100, [{ id: "x" }], { grokHome });
+    expect(injectResult).toMatchObject({ ok: false, changed: false, skippedReason: "orphaned-marker" });
+    expect(readFileSync(configPath, "utf8")).toBe(damaged);
   });
 });
