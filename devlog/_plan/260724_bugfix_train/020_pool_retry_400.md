@@ -4,6 +4,17 @@
 > fixes one account/model capability mismatch without changing the general 4xx
 > health taxonomy introduced by `35d28a02`.
 
+> **Stale-check 2026-07-24:** re-verified against `origin/dev` design base
+> `097cadc1` plus PR #350 / cycle-1 head `4b60f5ee`. Since the original
+> `d9e06c8d` draft, `3781448a`/`e0c7caba` inserted the runtime stream-capability
+> gate and eager bounded SSE relay at `src/server/responses/core.ts:1023-1123`,
+> after this cycle's retry insertion point. Cycle 1 changed replay metadata and
+> SSE completion reconstruction but did not change `core.ts`: `_replayPrefixLen`
+> is parser/collaboration metadata, while the new inspector accumulator exists
+> only after a successful SSE response enters a relay. The dispatch, outcome,
+> error-classifier, and bounded-body anchors and both stream-mode commitment
+> boundaries were re-validated below.
+
 ## Loop-spec
 
 - **Work class:** C4 for the affected slice. The implementation changes pooled
@@ -12,8 +23,8 @@
 - **Loop archetype:** verifier-defined **spec-satisfaction repair**.
 - **Specification:** in canonical OpenAI Pool mode, recognize only the captured
   ChatGPT account/model rejection, then make at most one additional upstream
-  dispatch with a different eligible pooled account before any response bytes are
-  exposed to the client.
+  dispatch with a different eligible pooled account before any client-facing
+  `Response` or relay is constructed.
 - **Primary verifier:** activation tests in `tests/server-auth.test.ts` plus the
   focused auth-selection tests in `tests/codex-auth-context.test.ts`.
 - **Policy-preservation verifier:** the existing test named `caller and model 4xx
@@ -25,9 +36,10 @@
 - **Escalate up:** stop and return to Plan/Audit if implementation needs to (a)
   classify generic `unsupported model`, `model not found`, or `invalid request`
   substrings, (b) change `classifyCodexUpstreamOutcome`, health penalties,
-  cooldowns, or global active-account state, (c) retry after a client-visible
-  byte or after an SSE `200` terminal event, (d) make more than one
-  account-switch retry, or (e) expose account IDs/tokens/error bodies in logs.
+  cooldowns, or global active-account state, (c) retry after a client-facing relay
+  is constructed, after a visible byte, or after an SSE `200` terminal event, (d)
+  make more than one account-switch retry, or (e) expose account IDs/tokens/error
+  bodies in logs.
 - **Escalate down:** once the exact-body matcher, one-account exclusion, four
   required activation scenarios, streaming safety scenario, and C4 gates are
   green, do not add diagnostics, catalog changes, affinity redesign, or broader
@@ -58,15 +70,22 @@ or source capture supports broader alternatives such as bare `unsupported model`
 - `src/codex/routing.ts:450-480` returns without mutating health for `caller`.
 - `tests/codex-routing.test.ts:217-226` pins 400/404/422 as zero-penalty and keeps
   account `a` selectable.
-- `src/server/responses/core.ts:920-948` builds a replayable passthrough request
+- `src/server/responses/core.ts:923-951` builds a replayable passthrough request
   and performs the existing bounded transient/5xx dispatch before returning a
   client `Response`.
-- `src/server/responses/core.ts:1011-1017` records the selected pool account's
+- `src/server/responses/core.ts:1015-1020` records the selected pool account's
   HTTP outcome. The new retry must converge back into this path with the final
   account/response; it must not invent a model-health penalty.
+- `src/server/responses/core.ts:1023-1123` now chooses between the eager bounded
+  single-reader relay and the legacy tee relay for successful SSE responses. Both
+  branches remain downstream of the retry decision and must observe only the
+  final account/response.
 - `src/lib/errors.ts:79-190` is response/error-envelope classification. Its broad
   `model unavailable` / `model not found` / `unsupported model` bucket at
   `src/lib/errors.ts:172-183` is intentionally unsuitable as a retry signal.
+- `src/lib/bounded-body.ts:1-5,75-201` still owns the 64 KiB cap, 5 s total and
+  inactivity defaults, abort propagation, unsafe timeout/oversize results, and
+  cancellation without waiting. No matcher-specific unbounded read is allowed.
 
 ### Policy statement for the PR description
 
@@ -146,11 +165,12 @@ evidence.
 
 The retry decision occurs after `fetchWithTransientRetry(...)` has returned an
 HTTP response but **before** `sanitizePassthroughHeaders`, terminal recorder
-installation, body tee/relay, or construction/return of the client-facing
-`Response` (`src/server/responses/core.ts:938-963`). At that point:
+installation, either body relay, or construction/return of the client-facing
+`Response` (`src/server/responses/core.ts:941-966`). At that point:
 
 - the request body is already a replayable string from `adapter.buildRequest`;
-- no upstream body byte has been relayed to the client;
+- no upstream body byte has been relayed to the client (although clone inspection
+  deliberately reads the HTTP 400 body from upstream);
 - no client response headers have been committed;
 - an HTTP 400 is a pre-stream rejection even when `parsed.stream === true`.
 
@@ -160,10 +180,29 @@ invalid JSON, missing/non-string `detail`, or normalization mismatch means **no
 retry** and returns the untouched original response. The clone prevents matcher
 inspection from consuming or rewriting a non-matching response.
 
-Once a client-facing `Response` has been returned, or once an HTTP 200 SSE body is
-being relayed/inspected, the retry window is closed. A later
-`response.failed`/EOF/error event never enters this path. This defines
-“non-streaming or pre-first-byte” precisely and avoids duplicate visible output.
+The stream-capability gate does not move or narrow this decision point. In
+`legacy-tee` mode, tee/inspection setup begins only in the successful-SSE branch
+at `src/server/responses/core.ts:1077-1123`. In `eager-relay` mode,
+`relaySseEagerBounded` is constructed at `src/server/responses/core.ts:1037-1075`;
+its `ReadableStream.start()` immediately starts the producer and may read/queue
+upstream bytes before the downstream client pulls. That eager read still happens
+only after the HTTP status classifier has declined retry and the code has entered
+the successful-SSE branch. Therefore eager relay does **not** cause client bytes
+to flow before the 400 decision, but it makes the post-construction boundary
+especially strict: never attempt account switching after either relay is created.
+
+Accordingly, “pre-first-byte” means **before any client-facing `Response` or relay
+is constructed/returned**, not before any upstream body byte has been read. Once
+an HTTP 200 SSE response enters either relay mode, the retry window is closed. A
+later `response.failed`/EOF/error event never enters this path, even if no client
+pull has happened yet. This avoids duplicate visible output and mode-dependent
+retry behavior.
+
+Cycle 1 does not alter clone inspection. `_replayPrefixLen` stays on the parsed
+request and is reused unchanged when the alternate adapter rebuilds the same
+request; it is not consulted by the 400 matcher. The SSE completion accumulator
+is allocated by `createSseInspector` only for a final successful SSE relay, after
+the retry decision, and never sees the cloned 400 body.
 
 The unsupported-model budget is one account switch and one alternate HTTP
 dispatch. The initial account is excluded from alternate selection, the alternate
@@ -179,7 +218,7 @@ pre-existing policy. No recursive call to `handleResponses` is permitted.
 | MODIFY | `src/codex/auth-context.ts` | Add an optional request-local excluded account to `resolveCodexAuthContext`; use existing eligible-pool ranking for the alternate and reuse the exact credential resolution path. |
 | MODIFY | `src/server/responses/core.ts` | Add the exact `detail` matcher and bounded clone inspection; perform one alternate-account request rebuild/dispatch before response commitment; preserve final response fidelity and health policy. |
 | MODIFY | `tests/codex-auth-context.test.ts` | Prove exclusion selects a different eligible account and fails closed when none exists. |
-| MODIFY | `tests/server-auth.test.ts` | Add endpoint activation scenarios for success, one-account, malformed 400, bounded double rejection, and pre-first-byte streaming safety. |
+| MODIFY | `tests/server-auth.test.ts` | Add endpoint activation scenarios for success, one-account, malformed 400, bounded double rejection, and both-mode pre-response streaming safety. |
 | NEW | none | No new abstraction/module is justified for one private matcher and one optional auth-resolution input. |
 | DELETE | none | No production/test file is removed. |
 
@@ -323,7 +362,7 @@ field and cannot safely authorize cross-account dispatch.
 
 ### 3. `src/server/responses/core.ts` — rebuild and dispatch once
 
-Before (`src/server/responses/core.ts:920-963`):
+Before (`src/server/responses/core.ts:923-966`):
 
 ```ts
 const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
@@ -348,7 +387,8 @@ const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
 ```
 
 After, retain the existing transport error catch but place one non-recursive
-account-switch block before header sanitization:
+account-switch block before header sanitization. This insertion remains before
+the stream-mode decision at `src/server/responses/core.ts:1023-1123`:
 
 ```ts
 let request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
@@ -400,6 +440,7 @@ if (
 
     await upstreamResponse.body?.cancel().catch(() => undefined);
     authCtx = retryAuthCtx;
+    options.onCodexAuthContextResolved?.(retryAuthCtx);
     selectedForwardHeaders = retryHeaders;
     route.provider = retryProvider;
     logCtx.provider = formatCodexProviderForLog(
@@ -436,7 +477,7 @@ Implementation audit notes for this sketch:
 - Extracting the duplicated fetch body into a private local dispatch function is
   acceptable and preferred if it keeps `handleResponses` readable. The helper
   must take the concrete request/provider and must not recurse or own selection.
-- The existing catch behavior at lines 949-962 must be extracted/reused around
+- The existing catch behavior at lines 952-965 must be extracted/reused around
   the second dispatch. A second-attempt connect failure returns the existing 502
   and records against the second account; it must not retry that same account or
   select a third account.
@@ -489,6 +530,25 @@ export function recordCodexUpstreamOutcome(
 `pickLowestUsageCodexAccount(config, firstAccountId)` already supplies the exact
 eligibility and exclusion semantics needed by auth resolution: reauth-needed,
 hard-cooldown, soft-avoided, unusable, and the excluded account are omitted.
+
+Eligibility definition (ELIGIBLE-01, binding): "eligible" for the retry target B
+means credential/health eligible ONLY — not reauth-needed, not hard-cooled,
+usable credential, and not account A. There is NO per-model capability
+predicate in the pool (routing.ts:246/285 have no model dimension), so whether
+B supports the routed model is UNKNOWN until the single bounded probe runs; a
+second allow-listed 400 from B is the expected negative outcome and is returned
+directly (no third dispatch). Pool mutation between A's selection and the
+retry selection is handled best-effort at selection time: the retry re-reads
+the pool snapshot at the retry point; if no eligible B exists at that moment,
+the original A response is returned unchanged.
+
+Account-context republication (WS-REBIND-01, binding): the initial auth context
+is published via `options.onCodexAuthContextResolved` (core.ts:744-746) and the
+WebSocket layer registers the socket under that account (index.ts:594,
+websocket-registry.ts:37). A successful retry MUST republish the final context
+(`options.onCodexAuthContextResolved?.(retryAuthCtx)` — included in the retry
+sketch above) so the registry migrates A -> B; otherwise invalidating B leaves
+a stale A-bound socket and invalidating A closes a B-backed socket.
 
 ## Test plan and activation scenarios
 
@@ -557,22 +617,37 @@ burn.
 - Assert there is no third dispatch, no return to A, and both health states are
   `null`.
 
-#### Activation E — streaming request is retried only before first byte
+#### Activation E — both stream modes share the pre-response commitment boundary
 
-- Send `stream: true`; A returns the exact HTTP 400 before any SSE response.
-- B returns a valid completed SSE stream.
-- Assert the client receives only B's SSE frames and dispatch count is 2.
-- Add the negative half: A returns HTTP 200 then an SSE `response.failed` payload
-  containing the same sentence; assert dispatch count is 1. This proves the
-  matcher cannot activate after response commitment/stream relay.
+Run both halves below as a table over `streamMode: "legacy-tee"` and
+`streamMode: "eager-relay"`. Because the production gate consults `streamMode`
+only for win32 without item-ID repair, the endpoint test must temporarily set
+`process.platform` to `"win32"`, keep `responsesItemIdRepair` disabled, and restore
+the original descriptor in `finally` (the repository already uses this pattern in
+`tests/config.test.ts:758-830`). Do not treat setting `streamMode` on a non-Windows
+test as coverage of the eager branch.
+
+- Positive half: send `stream: true`; A returns the exact HTTP 400 before any SSE
+  response and B returns a valid completed SSE stream. Assert the client receives
+  only B's frames and dispatch count/order is exactly `[A, B]` under each mode.
+- Negative half: A returns HTTP 200 then an SSE `response.failed` payload containing
+  the same sentence. Assert dispatch count/order is `[A]` under each mode and the
+  failure frames come from A. This proves neither the tee inspector nor the eager
+  producer can reactivate account retry after the response/relay boundary.
+- Keep the platform override serial and tightly scoped so unrelated endpoint cases
+  cannot observe the synthetic platform.
 
 ### Mandatory negative activation matrix — hostile/non-authorizing bodies
 
-Every case below uses two eligible accounts, records dispatch order, and compares the client-visible
-status, sanitized headers, and body bytes with account A's original HTTP 400. The invariant is one
-dispatch (`[A]`), no request to B, unchanged original 400, and null health for both accounts. Use
-`readBoundedResponseBody`'s real timeout/truncation/oversize/display-safety behavior; do not replace
-the production reader with a permissive test stub.
+Every case below uses two eligible accounts and records dispatch order. Rows 1-8
+(the hostile/no-authorization bodies) share this invariant: one dispatch (`[A]`),
+no request to B, client receives A's original 400 status/sanitized headers/body
+bytes unchanged, and null health for both accounts. Rows 9-10 (the retry-failure
+negatives) use their row-specific assertions instead: row 9 preserves A after a
+failed alternate resolution (`[A]` only), row 10 dispatches `[A,B]` with the
+transport failure attributed to B and no third attempt. Use
+`readBoundedResponseBody`'s real timeout/truncation/oversize/display-safety
+behavior; do not replace the production reader with a permissive test stub.
 
 | Name (mandatory test) | Fixture/activation | Observable assertion |
 |---|---|---|
@@ -583,10 +658,23 @@ the production reader with a permissive test stub.
 | `missing or non-string detail never authorizes a pool retry` | Table-driven A bodies: `{}`, `{"detail":null}`, `{"detail":400}`, `{"detail":{"message":"..."}}` | Every subcase dispatches once, never contacts B, and returns that exact original body/status |
 | `wrong model id in exact sentence never authorizes a pool retry` | Requested route model is `gpt-5.6-sol`, but A's otherwise exact sentence names `other-model` | Model interpolation mismatch keeps dispatches at `[A]`; original 400 is unchanged |
 | `normalization near-misses never authorize a pool retry` | Table-driven near misses outside the allow-list: removed terminal period, changed quote characters, extra prefix/suffix text, or punctuation removal; include one whitespace/case-only variant as the positive control | Every near miss returns A unchanged with no B dispatch; only the whitespace/case-only positive control may dispatch `[A,B]`, proving normalization is narrow |
+| `valid JSON wrong top-level shape never authorizes a pool retry` | Table-driven A bodies that parse as valid JSON but are not objects: `"string"`, `42`, `true`, `null`, `["detail"]` | Non-object top-level rejection branch fires; dispatches are `[A]`; exact original bytes/status reach the client |
+| `alternate account resolution failure preserves the original 400` | Allow-listed 400 from A; the retry-target credential refresh throws (auth-context.ts:126 path) or the only alternate is hard-cooled at the retry snapshot | Resolution failure is swallowed; dispatches are `[A]`; A's original 400 status/headers/body are returned unchanged; no health mutation for either account |
+| `retry-dispatch transport failure records only B and never triple-dispatches` | Allow-listed 400 from A; B's dispatch throws a connect/timeout transport error through the existing boundary (core.ts:941 region) | Dispatch order is `[A,B]` with no third attempt; the transport failure surfaces through the existing transport-error path attributed to B; A's health remains untouched |
 
-These seven named tests are additional to Activations A–E. A shared parameterized harness is allowed,
-but each hostile-body class must appear by name in test output and assert response fidelity, not only
-dispatch count.
+These ten named tests (eight hostile-body plus two retry-failure negatives) are
+additional to Activations A–E. A shared parameterized harness is allowed, but
+each class must appear by name in test output and assert response fidelity (or
+its row-specific retry-failure assertion), not only dispatch count.
+
+The three rows added after audit round 1 (wrong top-level shape, alternate
+resolution failure, retry transport failure) are equally mandatory, bringing the
+negative matrix to ten named tests.
+
+Additionally mandatory (WS-REBIND-01 activation): a WebSocket-mode test in which
+account A returns the allow-listed 400 and the retry succeeds on B — assert
+`onCodexAuthContextResolved` fires twice (A then B) and the WebSocket account
+registry ends bound to B (registry migration A -> B).
 
 ### `tests/codex-routing.test.ts` policy-preservation gate
 
@@ -624,7 +712,7 @@ changes authentication/account-selection behavior.
 - **Controls:** exact status, exact top-level field, model-bound full-sentence
   equality, bounded clone read, one excluded-account selection, one non-recursive
   retry, existing eligibility checks, zero health penalty, no body/token logging,
-  and no post-first-byte activation.
+  and no activation after either client relay is constructed.
 - **Residual risk:** upstream wording changes cause a false negative (no retry),
   which preserves current behavior and is safer than a false-positive quota burn.
 
@@ -639,7 +727,8 @@ changes authentication/account-selection behavior.
       eligibility checks; no caller bearer fallback occurs.
 - [ ] Dispatch count is bounded and cannot recurse; double rejection is exactly
       two account dispatches.
-- [ ] No response byte/header is client-visible before the retry decision.
+- [ ] No client-facing response/relay exists before the retry decision; both
+      `legacy-tee` and `eager-relay` commitment scenarios are covered.
 - [ ] `classifyCodexUpstreamOutcome` and caller-health behavior are unchanged.
 - [ ] No credential, account identifier, request body, or raw upstream body is
       added to logs or error diagnostics.
@@ -681,19 +770,26 @@ bun run privacy:scan
 ```
 
 Expected result for every command: exit code 0. The focused endpoint test output
-must name all activation scenarios A-E and all seven mandatory hostile-body negatives. Completion evidence records command,
+must name all activation scenarios A-E and all ten mandatory negatives (eight
+hostile-body + two retry-failure). Completion evidence records command,
 commit SHA, exit code, pass/fail counts, and the explicit security-review result.
 
 ## Acceptance criteria
 
 - [ ] Exact captured `detail` from A with at least two eligible accounts dispatches
       once to B and can recover.
-- [ ] The retry account is eligible and not A.
+- [ ] The retry account is credential/health eligible (ELIGIBLE-01) and not A;
+      model support on B is probed, not assumed.
 - [ ] One eligible account returns the original 400 without another dispatch.
 - [ ] Malformed-input/non-allow-listed 400 never contacts B.
+- [ ] A successful retry republishes the auth context (WS-REBIND-01): the
+      WebSocket registry migrates A -> B.
+- [ ] Alternate-resolution failure and B transport failure behave per the two
+      dedicated negative tests (original 400 preserved / no third dispatch).
 - [ ] A then B allow-listed rejection stops at two dispatches and returns B's 400.
-- [ ] Streaming requests retry only on an HTTP 400 before response handoff; HTTP
-      200/SSE terminal failures never retry.
+- [ ] Streaming requests retry only on an HTTP 400 before response/relay
+      construction; HTTP 200/SSE terminal failures never retry under either
+      `legacy-tee` or `eager-relay`.
 - [ ] A's allow-listed 400 creates no health penalty, cooldown, soft avoid, reauth
       state, active-account mutation, or global affinity rewrite.
 - [ ] `classifyCodexUpstreamOutcome` and its pinned 4xx test are unchanged and green.
