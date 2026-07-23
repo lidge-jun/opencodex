@@ -7,11 +7,97 @@ import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "./QuotaBars";
 import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
+import {
+  DEFAULT_AUTO_SWITCH_THRESHOLD,
+  normalizeAutoSwitchThreshold,
+  parseEnabledAutoSwitchThreshold,
+  planAutoSwitchToggleWrites,
+  putAutoSwitchThreshold,
+} from "../codex-auto-switch";
 
 export interface CodexAccountEntry {
   id: string; alias?: string; email: string; plan?: string; isMain: boolean;
   hasCredential: boolean; quota: AccountQuota | null;
   needsReauth?: boolean;
+}
+
+export function AutoSwitchSetting({
+  threshold,
+  draft,
+  saving,
+  onDraftChange,
+  onEditingChange,
+  onCommit,
+  onToggle,
+}: {
+  threshold: number;
+  draft: string;
+  saving: boolean;
+  onDraftChange: (value: string) => void;
+  onEditingChange: (editing: boolean) => void;
+  onCommit: () => Promise<boolean>;
+  onToggle: () => Promise<boolean>;
+}) {
+  const t = useT();
+  const enabled = threshold > 0;
+  return (
+    <div className="card card-row codex-auto-switch-card" style={{ marginTop: 16 }}>
+      <div className="codex-auto-switch-copy">
+        <strong>{t("codexAuth.autoSwitch")}</strong>
+        <div id="codex-auto-switch-desc" className="card-sub">
+          {enabled
+            ? t("codexAuth.autoSwitchDesc", { threshold })
+            : t("codexAuth.autoSwitchOffDesc")}
+        </div>
+      </div>
+      <div className="codex-auto-switch-controls" aria-busy={saving}>
+        {enabled && (
+          <label className="codex-auto-switch-threshold">
+            <span className="field-label">{t("codexAuth.autoSwitchThreshold")}</span>
+            <span className="codex-auto-switch-input-wrap">
+              <input
+                className="input mono codex-auto-switch-input"
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                inputMode="numeric"
+                value={draft}
+                disabled={saving}
+                aria-label={t("codexAuth.autoSwitchThreshold")}
+                aria-describedby="codex-auto-switch-desc"
+                onChange={(event) => onDraftChange(event.target.value)}
+                onFocus={() => onEditingChange(true)}
+                onBlur={() => {
+                  onEditingChange(false);
+                  void onCommit();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+              <span className="codex-auto-switch-unit" aria-hidden="true">%</span>
+            </span>
+          </label>
+        )}
+        <button
+          type="button"
+          className={`toggle ${enabled ? "on" : ""}`}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => { void onToggle(); }}
+          disabled={saving}
+          aria-pressed={enabled}
+          aria-label={t("codexAuth.autoSwitch")}
+          title={t("codexAuth.autoSwitch")}
+        >
+          <span className="toggle-knob" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -31,7 +117,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const t = useT();
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [autoThreshold, setAutoThreshold] = useState(80);
+  const [autoThreshold, setAutoThreshold] = useState(DEFAULT_AUTO_SWITCH_THRESHOLD);
+  const [autoThresholdDraft, setAutoThresholdDraft] = useState(String(DEFAULT_AUTO_SWITCH_THRESHOLD));
+  const [savingAutoThreshold, setSavingAutoThreshold] = useState(false);
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -46,9 +134,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const loadGenerationRef = useRef(0);
+  const lastEnabledAutoThresholdRef = useRef(DEFAULT_AUTO_SWITCH_THRESHOLD);
+  const autoThresholdEditingRef = useRef(false);
+  const autoThresholdSavingRef = useRef(false);
+  const autoThresholdRevisionRef = useRef(0);
 
   const load = useCallback(async (refreshQuota = false) => {
     const generation = ++loadGenerationRef.current;
+    const autoThresholdRevision = autoThresholdRevisionRef.current;
     if (!refreshQuota) setLoadState("loading");
     try {
       const [accountsResponse, activeResponse] = await Promise.all([
@@ -60,7 +153,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       if (loadGenerationRef.current !== generation) return false;
       setAccounts(accts.accounts ?? []);
       setActiveId(active.activeCodexAccountId ?? null);
-      setAutoThreshold(active.autoSwitchThreshold ?? 80);
+      if (!autoThresholdSavingRef.current && autoThresholdRevisionRef.current === autoThresholdRevision) {
+        const threshold = normalizeAutoSwitchThreshold(active.autoSwitchThreshold);
+        setAutoThreshold(threshold);
+        if (threshold > 0) lastEnabledAutoThresholdRef.current = threshold;
+        if (!autoThresholdEditingRef.current) {
+          setAutoThresholdDraft(String(threshold > 0 ? threshold : lastEnabledAutoThresholdRef.current));
+        }
+      }
       setLoadState("ready");
       return true;
     } catch {
@@ -179,13 +279,81 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }
   };
 
-  const toggleAuto = async () => {
-    const next = autoThreshold > 0 ? 0 : 80;
-    await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ threshold: next }),
-    });
-    setAutoThreshold(next);
+  const showAutoThresholdToast = (message: string, error: boolean) => {
+    setToast(message);
+    setToastError(error);
+    setTimeout(() => setToast(""), 5000);
+  };
+
+  const saveAutoThreshold = async (
+    next: number,
+    previous = autoThreshold,
+    showSuccess = true,
+  ): Promise<boolean> => {
+    if (autoThresholdSavingRef.current) return false;
+    autoThresholdSavingRef.current = true;
+    autoThresholdEditingRef.current = false;
+    setSavingAutoThreshold(true);
+    // Ignore threshold reads that began before or during this write while still
+    // allowing the same refresh pass to update account and quota data.
+    autoThresholdRevisionRef.current += 1;
+    const ok = await putAutoSwitchThreshold(apiBase, next);
+    autoThresholdRevisionRef.current += 1;
+    if (ok) {
+      setAutoThreshold(next);
+      if (next > 0) lastEnabledAutoThresholdRef.current = next;
+      setAutoThresholdDraft(String(next > 0 ? next : lastEnabledAutoThresholdRef.current));
+      if (showSuccess) showAutoThresholdToast(t("codexAuth.autoSwitchUpdated"), false);
+    } else {
+      setAutoThreshold(previous);
+      setAutoThresholdDraft(String(previous > 0 ? previous : lastEnabledAutoThresholdRef.current));
+      showAutoThresholdToast(t("codexAuth.autoSwitchUpdateFailed"), true);
+    }
+    autoThresholdSavingRef.current = false;
+    setSavingAutoThreshold(false);
+    return ok;
+  };
+
+  const rejectAutoThresholdDraft = () => {
+    autoThresholdEditingRef.current = false;
+    setAutoThresholdDraft(String(autoThreshold > 0 ? autoThreshold : lastEnabledAutoThresholdRef.current));
+    showAutoThresholdToast(t("codexAuth.autoSwitchThresholdInvalid"), true);
+  };
+
+  const commitAutoThreshold = async (): Promise<boolean> => {
+    autoThresholdEditingRef.current = false;
+    const next = parseEnabledAutoSwitchThreshold(autoThresholdDraft);
+    if (next === null) {
+      rejectAutoThresholdDraft();
+      return false;
+    }
+    if (next === autoThreshold) {
+      setAutoThresholdDraft(String(next));
+      return true;
+    }
+    return saveAutoThreshold(next);
+  };
+
+  const toggleAuto = async (): Promise<boolean> => {
+    autoThresholdEditingRef.current = false;
+    const writes = planAutoSwitchToggleWrites(
+      autoThreshold,
+      autoThresholdDraft,
+      lastEnabledAutoThresholdRef.current,
+    );
+    if (writes === null) {
+      rejectAutoThresholdDraft();
+      return false;
+    }
+
+    let previous = autoThreshold;
+    for (let index = 0; index < writes.length; index += 1) {
+      const next = writes[index]!;
+      const ok = await saveAutoThreshold(next, previous, index === writes.length - 1);
+      if (!ok) return false;
+      previous = next;
+    }
+    return true;
   };
 
   const refreshQuotas = async () => {
@@ -378,16 +546,18 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         </div>
       ))}
 
-      <div className="card card-row" style={{ marginTop: 16 }}>
-        <div>
-          <strong>{t("codexAuth.autoSwitch")}</strong>
-          <div className="card-sub">{t("codexAuth.autoSwitchDesc")}</div>
-        </div>
-        <button className={`toggle ${autoThreshold > 0 ? "on" : ""}`} onClick={toggleAuto}
-          aria-pressed={autoThreshold > 0} aria-label={t("codexAuth.autoSwitch")} title={t("codexAuth.autoSwitch")}>
-          <span className="toggle-knob" />
-        </button>
-      </div>
+      <AutoSwitchSetting
+        threshold={autoThreshold}
+        draft={autoThresholdDraft}
+        saving={savingAutoThreshold}
+        onDraftChange={(value) => {
+          autoThresholdEditingRef.current = true;
+          setAutoThresholdDraft(value);
+        }}
+        onEditingChange={(editing) => { autoThresholdEditingRef.current = editing; }}
+        onCommit={commitAutoThreshold}
+        onToggle={toggleAuto}
+      />
 
       {confirm && (
         <div className="modal-overlay" onClick={() => setConfirm(null)}>
