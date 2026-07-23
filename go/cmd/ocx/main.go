@@ -1,10 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"os"
 
-// Version is replaced by the release build in a later work package.
-const Version = "0.1.0-dev"
+	"github.com/lidge-jun/opencodex-go/internal/cli"
+)
 
 func main() {
-	fmt.Printf("ocx %s\n", Version)
+	os.Exit(cli.Dispatch())
 }
