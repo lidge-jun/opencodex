@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
+  booleanRecordConfigError,
   codexAutoStartEnabled,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -228,6 +229,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (headersError) return `provider ${name} ${headersError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
+  const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
+  if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");

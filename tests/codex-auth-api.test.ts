@@ -22,6 +22,7 @@ import {
 } from "../src/codex/websocket-registry";
 import type { OcxConfig } from "../src/types";
 import type { WsData } from "../src/server/ws-bridge";
+import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -110,11 +111,13 @@ beforeEach(() => {
   process.env.CODEX_HOME = TEST_CODEX_HOME;
   delete process.env[MANUAL_IMPORT_ENV];
   clearAccountQuota();
+  clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearCodexWebSocketRegistry();
 });
 
 afterEach(() => {
   clearAccountQuota();
+  clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearCodexWebSocketRegistry();
   globalThis.fetch = previousFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -134,8 +137,71 @@ describe("codex-auth API", () => {
     expect(resp).not.toBeNull();
     const data = await resp!.json() as { accounts: unknown[] };
     expect(Array.isArray(data.accounts)).toBe(true);
-    const main = (data.accounts as { isMain: boolean }[]).find(a => a.isMain);
+    const main = (data.accounts as { isMain: boolean; hasCredential: boolean; needsReauth?: boolean }[]).find(a => a.isMain);
     expect(main).toBeTruthy();
+    expect(main?.hasCredential).toBe(false);
+    expect(main?.needsReauth).toBe(true);
+  });
+
+  test("main account 401 marks needsReauth and exposes it in the DTO (#327)", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "expired-main", account_id: "acct-main" },
+    }));
+    globalThis.fetch = (async () => new Response("", { status: 401 })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    const data = await resp!.json() as { accounts: Array<{ id: string; hasCredential: boolean; needsReauth?: boolean }> };
+    const main = data.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID);
+
+    expect(main).toMatchObject({ hasCredential: true, needsReauth: true });
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+  });
+
+  test("main account invalid-workspace 403 is terminal but a generic 403 is not (#327)", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "workspace-main", account_id: "acct-main" },
+    }));
+    globalThis.fetch = (async () => Response.json(
+      { detail: { code: "invalid_workspace_selected" } },
+      { status: 403 },
+    )) as typeof fetch;
+
+    const terminalReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    const terminalResp = await handleCodexAuthAPI(terminalReq, new URL(terminalReq.url), makeConfig());
+    const terminalData = await terminalResp!.json() as { accounts: Array<{ id: string; needsReauth?: boolean }> };
+    expect(terminalData.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)?.needsReauth).toBe(true);
+
+    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    globalThis.fetch = (async () => Response.json(
+      { error: { code: "permission_denied" } },
+      { status: 403 },
+    )) as typeof fetch;
+    const genericReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    const genericResp = await handleCodexAuthAPI(genericReq, new URL(genericReq.url), makeConfig());
+    const genericData = await genericResp!.json() as { accounts: Array<{ id: string; needsReauth?: boolean }> };
+
+    expect(genericData.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)?.needsReauth).toBe(false);
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+  });
+
+  test("successful main account refresh clears a prior needsReauth mark (#327)", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "fresh-main", account_id: "acct-main" },
+    }));
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    globalThis.fetch = (async () => Response.json({
+      email: "main@example.test",
+      plan_type: "pro",
+      rate_limit: { primary_window: { used_percent: 10, reset_at: 1783000000 } },
+    })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    const data = await resp!.json() as { accounts: Array<{ id: string; needsReauth?: boolean }> };
+
+    expect(data.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)?.needsReauth).toBe(false);
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
   });
 
   test("maskEmail hides local account names", () => {

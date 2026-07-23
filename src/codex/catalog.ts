@@ -486,6 +486,8 @@ export interface CatalogModel {
   parallelToolCalls?: boolean;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
+  /** Whether Codex may request reasoning summaries for this routed model. */
+  supportsReasoningSummaries?: boolean;
 }
 
 type RawEntry = Record<string, unknown>;
@@ -927,6 +929,9 @@ function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void 
   }
   if (typeof model.supportsVerbosity === "boolean") {
     entry.support_verbosity = model.supportsVerbosity;
+  }
+  if (typeof model.supportsReasoningSummaries === "boolean") {
+    entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
 }
 
@@ -1373,6 +1378,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
+  const supportsReasoningSummaries = modelRecordValue(prov.modelSupportsReasoningSummaries, model.id);
   const hinted = {
     ...model,
     ...(configuredCap !== undefined
@@ -1392,6 +1398,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       }
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
@@ -1810,6 +1817,9 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     ...(cm.displayName ? { displayName: cm.displayName } : {}),
     ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
     ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+    ...(typeof modelRecordValue(config.providers[cm.provider]?.modelSupportsReasoningSummaries, cm.modelId) === "boolean"
+      ? { supportsReasoningSummaries: modelRecordValue(config.providers[cm.provider]?.modelSupportsReasoningSummaries, cm.modelId) }
+      : {}),
   }));
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
@@ -1885,6 +1895,9 @@ export function deriveComboCatalogModel(
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
       : {}),
+    ...(members.some(member => member.supportsReasoningSummaries === false)
+      ? { supportsReasoningSummaries: false }
+      : {}),
   };
 }
 
@@ -1912,6 +1925,7 @@ function comboCatalogWarningSignature(
       inputModalities: [...new Set(member?.inputModalities ?? [])].sort(),
       reasoningEfforts: [...new Set(member?.reasoningEfforts ?? [])].sort(),
       parallelToolCalls: member?.parallelToolCalls === true,
+      supportsReasoningSummaries: member?.supportsReasoningSummaries !== false,
     };
   }).sort((a, b) => a.key.localeCompare(b.key)));
 }

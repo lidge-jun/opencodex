@@ -168,6 +168,7 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Model-specific reasoning labels. An empty list hides the effort control for that model. |
+| `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | Model-specific reasoning-summary capability. Set a model to `false` to stop advertising summaries and strip summary-delivery fields before an `openai-responses` request. |
 | `reasoningEffortMap?` | `Record<string,string>` | Provider-wide wire aliases for reasoning labels. Use only when the upstream expects a different value. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | Model-specific wire aliases for reasoning labels. |
 | `noReasoningModels?` | `string[]` | Models that reject a reasoning/thinking param — the adapter drops `reasoning_effort` for them. |

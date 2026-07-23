@@ -219,28 +219,53 @@ describe("Codex autostart shim", () => {
     expect(doctor.status).toBe(0);
     expect(readFileSync(logPath, "utf8")).toBe("codex:doctor\n");
 
+    const flaggedAppServer = spawnSync(
+      shimPath,
+      ["-s", "read-only", "-a", "untrusted", "app-server"],
+      { encoding: "utf8", env },
+    );
+    expect(flaggedAppServer.status).toBe(0);
+    expect(readFileSync(logPath, "utf8")).toBe(
+      "codex:doctor\ncodex:-s read-only -a untrusted app-server\n",
+    );
+
     const exec = spawnSync(shimPath, ["exec", "hello"], { encoding: "utf8", env });
     expect(exec.status).toBe(0);
     expect(readFileSync(logPath, "utf8")).toBe(
-      "codex:doctor\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\n",
+      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\n",
     );
 
     const prompt = spawnSync(shimPath, ["hello"], { encoding: "utf8", env });
     expect(prompt.status).toBe(0);
     expect(readFileSync(logPath, "utf8")).toBe(
-      "codex:doctor\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:hello\n",
+      "codex:doctor\ncodex:-s read-only -a untrusted app-server\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:exec hello\nbun:/opt/opencodex/src/cli.ts ensure\ncodex:hello\n",
     );
   });
 
   test("Windows shim skips ocx startup only for Codex management commands", () => {
     const script = buildWindowsCodexShim("C:\\Tools\\codex-real.exe", "C:\\Bun\\bun.exe", "C:\\ocx\\cli.ts");
 
+    expect(script).toContain(':scan_codex_args');
+    expect(script).toContain('if /I "%~1"=="-s" goto skip_option_value');
+    expect(script).toContain('if /I "%~1"=="-a" goto skip_option_value');
     expect(script).toContain('if /I "%~1"=="app-server" goto run_codex');
     expect(script).toContain('if /I "%~1"=="doctor" goto run_codex');
     expect(script).not.toContain('if /I "%~1"=="exec" goto run_codex');
     expect(script).not.toContain('if /I "%~1"=="resume" goto run_codex');
     expect(script).not.toContain('if /I "%~1"=="review" goto run_codex');
     expect(script).toContain('if /I "%~1"=="--help" goto run_codex');
+    expect(script).toContain('"%OCX_REAL_CODEX%" %*');
+  });
+
+  test("PowerShell shim scans past value-taking global options", () => {
+    const script = buildWindowsPowerShellCodexShim("C:\\codex-real.ps1", "C:\\bun.exe", "C:\\cli.ts");
+
+    expect(script).toContain("$valueOptions = @(");
+    expect(script).toContain("'-s'");
+    expect(script).toContain("'-a'");
+    expect(script).toContain("if ($skipNext)");
+    expect(script).toContain("$internalCommands -contains $subcommand");
+    expect(script).not.toContain("$firstArg");
   });
 
   test("Windows install backs up cmd, ps1, and the bare Git-Bash launcher", () => {

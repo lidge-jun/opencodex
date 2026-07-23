@@ -172,6 +172,7 @@ x-opencodex-api-key: your-secret-token
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Переопределение политики Token Guardian для этого OAuth-провайдера. |
 | `reasoningEfforts?` | `string[]` | Метки рассуждений Codex на уровне провайдера, которые объявляются и отправляются (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Метки рассуждений для конкретных моделей. Пустой список скрывает управление уровнем рассуждений для этой модели. |
+| `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | Поддержка reasoning summary для отдельных моделей. Значение `false` отключает объявление summary и удаляет поля summary-delivery перед запросом `openai-responses`. |
 | `reasoningEffortMap?` | `Record<string,string>` | Wire-алиасы меток рассуждений на уровне провайдера. Используйте только когда вышестоящая сторона ожидает другое значение. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | Wire-алиасы меток рассуждений для конкретных моделей. |
 | `noReasoningModels?` | `string[]` | Модели, отклоняющие параметр reasoning/thinking — адаптер удаляет для них `reasoning_effort`. |

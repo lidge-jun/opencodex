@@ -13,7 +13,7 @@
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
-| `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. Detects stale/overwritten wrappers and repairs by re-backing-up the updated Codex binary. |
+| `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and detects stale/overwritten wrappers for repair. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. |
 
 The `src/` root stays thin: process entry, shared config/types, router, bridge, service manager, and

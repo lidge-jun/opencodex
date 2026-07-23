@@ -357,7 +357,9 @@ Here's a typical multi-provider setup:
 Provider entries can also annotate routed catalog metadata and output defaults. Use `contextWindow`
 for a provider-wide Codex-visible context cap, `modelContextWindows` for model-specific caps, and
 `modelInputModalities` for model-specific catalog input hints such as `["text"]` or
-`["text", "image"]`. For OpenAI-compatible chat providers whose upstream default response budget is
+`["text", "image"]`. For Responses models that reject Codex reasoning-summary delivery fields, set
+`modelSupportsReasoningSummaries.<model-id>` to `false`; this updates the catalog and strips stale
+summary-delivery fields at the adapter boundary. For OpenAI-compatible chat providers whose upstream default response budget is
 too small, set `defaultMaxOutputTokens` or per-model `modelMaxOutputTokens`; explicit
 `max_output_tokens` from the client still wins, and unset configs still omit `max_tokens`. Context
 values cap live `/models` metadata; they never raise a smaller live context window. The bundled

@@ -71,3 +71,7 @@ unchanged API-key card. `PATCH /api/providers?name=openai` persists exactly one
 the model catalog or restart the proxy. Codex Auth shows an option-aware Pool/Direct banner, while
 Models always shows one bare OpenAI group. Disabled or absent `openai` state remains neutral and is
 never recreated by the UI.
+
+`GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401, and allowlisted
+terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
+successful main usage refresh clears the runtime mark.

@@ -472,6 +472,36 @@ describe("server local API auth", () => {
         expect(rejected.status).toBe(400);
       }
       expect(loadConfig().providers["custom-max-input"].modelMaxInputTokens).toEqual({ model: 1000 });
+
+      const acceptedSummaryCapability = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-summary-capability",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            modelSupportsReasoningSummaries: { strict: false },
+          },
+        }),
+      });
+      expect(acceptedSummaryCapability.status).toBe(200);
+      for (const invalid of [[], { strict: "false" }, { "": false }]) {
+        const rejected = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "custom-summary-capability",
+            provider: {
+              adapter: "openai-responses",
+              baseUrl: "https://api.example.test/v1",
+              modelSupportsReasoningSummaries: invalid,
+            },
+          }),
+        });
+        expect(rejected.status).toBe(400);
+      }
+      expect(loadConfig().providers["custom-summary-capability"].modelSupportsReasoningSummaries).toEqual({ strict: false });
       const legacy = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },

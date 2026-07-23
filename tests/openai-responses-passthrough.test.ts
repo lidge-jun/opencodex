@@ -50,6 +50,62 @@ describe("OpenAI Responses key-auth URL construction", () => {
 });
 
 describe("OpenAI Responses passthrough sanitization", () => {
+  test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      modelSupportsReasoningSummaries: { "strict-summary-model": false },
+    });
+    const request = adapter.buildRequest({
+      modelId: "strict-summary-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "strict-summary-model",
+        input: [],
+        stream_options: {
+          include_usage: true,
+          reasoning_summary_delivery: "sequential_cutoff",
+        },
+        reasoning: {
+          effort: "high",
+          summary: "auto",
+          generate_summary: true,
+        },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
+
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(body.reasoning).toEqual({ effort: "high" });
+  });
+
+  test("reasoning-summary fields remain untouched without an explicit opt-out", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "normal-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "normal-model",
+        input: [],
+        stream_options: { reasoning_summary_delivery: "sequential_cutoff" },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
+
+    expect(body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
+  });
+
   test("agent_message conversion removes its non-OpenAI item id", () => {
     const input = [{
       type: "agent_message",

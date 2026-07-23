@@ -13,7 +13,7 @@ import { deleteCodexAccount } from "./account-lifecycle";
 import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "./account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   clearAccountQuota,
   getAccountQuota,
@@ -32,6 +32,7 @@ export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, OcxConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -217,18 +218,55 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+const MAIN_TERMINAL_AUTH_CODES = new Set([
+  "invalid_workspace_selected",
+  "invalid_refresh_token",
+]);
+
+async function isTerminalMainAuthResponse(resp: Response): Promise<boolean> {
+  if (resp.status === 401) return true;
+  if (resp.status !== 403) return false;
+  try {
+    const body = await readBoundedResponseBody(resp, { totalTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 });
+    if (!body.displaySafe) return false;
+    const parsed = JSON.parse(body.text) as {
+      detail?: { code?: unknown } | string;
+      error?: { code?: unknown } | string;
+      code?: unknown;
+    };
+    const code = typeof parsed.detail === "object" && parsed.detail !== null
+      ? parsed.detail.code
+      : typeof parsed.error === "object" && parsed.error !== null
+        ? parsed.error.code
+        : parsed.code;
+    return typeof code === "string" && MAIN_TERMINAL_AUTH_CODES.has(code);
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null }> {
+  const tokens = readCodexTokens();
+  if (!tokens) {
+    mainAccountCache = null;
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    return { email: null, plan: null, quota: null };
+  }
   if (!forceRefresh && mainAccountCache && Date.now() - mainAccountCache.ts < MAIN_CACHE_TTL) {
     return mainAccountCache;
   }
-  const tokens = readCodexTokens();
-  if (!tokens) return { email: null, plan: null, quota: null };
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
       signal: AbortSignal.timeout(8000),
     });
-    if (!resp.ok) return { email: null, plan: null, quota: null };
+    if (!resp.ok) {
+      if (await isTerminalMainAuthResponse(resp)) {
+        mainAccountCache = null;
+        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+      }
+      return { email: null, plan: null, quota: null };
+    }
     const data = (await resp.json()) as WhamUsageResponse;
     const result = {
       email: data.email ?? null,
@@ -237,6 +275,7 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
       ts: Date.now(),
     };
     mainAccountCache = result;
+    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     // Mirror main quota + plan into the shared stores so the rotation engine can
     // score and auto-switch the main account exactly like a pool account (Option A).
     setMainAccountPlan(result.plan);
@@ -373,12 +412,14 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
       : { quota: null, needsReauth: true };
     return poolAccountDto(a, quotaResult, !!cred);
   });
+  const hasMainCredential = readCodexTokens() !== null;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: maskEmail(mainInfo.email) ?? "Codex App login",
     plan: mainInfo.plan,
     isMain: true,
-    hasCredential: true,
+    hasCredential: hasMainCredential,
+    needsReauth: !hasMainCredential || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID),
     quota: mainInfo.quota ? { ...quotaForPlan({ ...mainInfo.quota, updatedAt: Date.now() }, mainInfo.plan) } : null,
   };
   return [main, ...withQuota];
