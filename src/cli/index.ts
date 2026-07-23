@@ -271,16 +271,9 @@ async function handleStart(options: { block?: boolean } = {}) {
     // installed grok CLI can pick opencodex-routed models without manual config. No-op
     // when ~/.grok is absent; removed again by stop/eject/uninstall/shutdown.
     try {
-      const { injectGrokConfig } = await import("../grok/inject");
-      const grokModels = [
-        ...visibleNativeSlugs(config).map(id => ({ id })),
-        ...models.map(m => ({
-          id: m.alias ?? `${m.provider}/${m.id}`,
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-        })),
-      ];
-      const r = injectGrokConfig(port, grokModels, config.hostname ? { hostname: config.hostname } : {});
-      if (r.changed) console.log(`   + Grok Build config updated (${grokModels.length} models via ~/.grok/config.toml)`);
+      const { syncGrokConfig } = await import("../grok/sync");
+      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
       else if (!r.ok) console.error(`⚠️  ${r.message}`);
     } catch { /* best-effort — grok integration must never block startup */ }
   } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
@@ -304,6 +297,14 @@ async function handleEnsure() {
       });
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
       await injectSystemEnv(live.port, config).catch(() => {});
+      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
+      // hostname the running proxy actually bound — config.hostname may have drifted.
+      try {
+        const { syncGrokConfig } = await import("../grok/sync");
+        const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
+        if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+        else if (!g.ok) console.error(`⚠️  ${g.message}`);
+      } catch { /* best-effort */ }
       console.log(`✅ Proxy running on port ${live.port}`);
       return;
     }
@@ -322,6 +323,15 @@ async function handleEnsure() {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exit(1);
   }
+  // Deterministic fence guarantee: the spawned child injects late in its own startup, but
+  // this parent returns as soon as /healthz responds — inject here too (idempotent block
+  // replace) so `ocx ensure` never returns without the Grok fence in place.
+  try {
+    const { syncGrokConfig } = await import("../grok/sync");
+    const g = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+    else if (!g.ok) console.error(`⚠️  ${g.message}`);
+  } catch { /* best-effort */ }
   // Always sync the LIVE port: after a fallback-port start, config.port still names the
   // busy preferred port — syncing that would point Codex at a dead listener.
   await syncModelsToCodex(port).catch(e => {

@@ -178,6 +178,31 @@ test("chatCompletionsUsage always emits detail objects with zero defaults", () =
   });
 });
 
+test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwarding a raw frame", async () => {
+  // grok-build's strict Responses decoder dies on unknown variants (response.heartbeat),
+  // which is why the injected Grok config pins api_backend = "chat_completions". This
+  // regression pins the safety property: heartbeats never surface as raw frames here —
+  // at most a valid role chunk is emitted.
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const upstream = new Response([
+    `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "hi" })}\n\n`,
+    `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
+  ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+  const stream = responsesSseToChatCompletionsSse(upstream.body!, "routed/model");
+  const text = await new Response(stream).text();
+  expect(text).not.toContain("response.heartbeat");
+  expect(text).toContain('"content":"hi"');
+  expect(text).toContain("data: [DONE]");
+  // Every data frame must be a chat.completion.chunk — no Responses-vocab leaks.
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+    const parsed = JSON.parse(line.slice(6)) as { object?: string };
+    expect(parsed.object).toBe("chat.completion.chunk");
+  }
+});
+
 test("POST /v1/chat/completions streams OpenAI-shaped chunks end to end", async () => {
   const upstream = mockChatUpstream();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
