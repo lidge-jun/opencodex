@@ -265,7 +265,6 @@ jobs:
           set -euo pipefail
 
           release_tag="v${RELEASE_VERSION}"
-          notes_file="$(mktemp)"
 
           git fetch --force --tags origin
 
@@ -280,31 +279,7 @@ jobs:
               grep -vx "$release_tag" |
               head -n 1 || true
           )"
-
-          {
-            echo "Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
-            echo
-            echo "## Commit log"
-            echo
-            if [ -n "$previous_tag" ]; then
-              echo "Changes since \`${previous_tag}\`:"
-              echo
-              git log --reverse --no-merges --pretty=format:'- %s (%h)' "${previous_tag}..HEAD" |
-                grep -vE '^- release: v[0-9]+\.[0-9]+\.[0-9]+' || true
-              echo
-              echo
-              echo "[Full diff](https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${release_tag})"
-            else
-              echo "Initial release commits:"
-              echo
-              git log --reverse --no-merges --pretty=format:'- %s (%h)' HEAD |
-                grep -vE '^- release: v[0-9]+\.[0-9]+\.[0-9]+' || true
-            fi
-          } > "$notes_file"
-
-          if ! grep -q '^- ' "$notes_file"; then
-            printf '\n- Release version bump only.\n' >> "$notes_file"
-          fi
+          npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
 
           if [ -z "$existing_tag_sha" ]; then
             git tag "$release_tag" "$GITHUB_SHA"
@@ -319,7 +294,25 @@ jobs:
           fi
 
           if gh release view "$release_tag" >/dev/null 2>&1; then
+            notes_file="$(mktemp)"
+            generate_notes_api=(
+              "repos/${GITHUB_REPOSITORY}/releases/generate-notes"
+              -f "tag_name=${release_tag}"
+              -f "target_commitish=${GITHUB_SHA}"
+            )
+            if [ -n "$previous_tag" ]; then
+              generate_notes_api+=(-f "previous_tag_name=${previous_tag}")
+            fi
+            {
+              printf '%s\n\n' "$npm_metadata"
+              gh api "${generate_notes_api[@]}" --jq '.body'
+            } > "$notes_file"
             gh release edit "$release_tag" --title "$release_tag" --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
           else
-            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+            generate_notes_args=(--generate-notes)
+            if [ -n "$previous_tag" ]; then
+              generate_notes_args+=(--notes-start-tag "$previous_tag")
+            fi
+            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+              --notes "$npm_metadata" "${generate_notes_args[@]}" ${prerelease_flag:+$prerelease_flag}
           fi

@@ -1,0 +1,183 @@
+name: PR Labeler
+
+# Applies one conventional-commit type label without checking out untrusted PR code.
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize]
+
+concurrency:
+  group: pr-labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply type label from live PR title
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const prefixToLabel = {
+              feat: 'enhancement',
+              feature: 'enhancement',
+              fix: 'bug',
+              bugfix: 'bug',
+              hotfix: 'bug',
+              docs: 'documentation',
+              doc: 'documentation',
+              chore: 'chore',
+              refactor: 'chore',
+              style: 'chore',
+              test: 'chore',
+              tests: 'chore',
+              ci: 'chore',
+              build: 'chore',
+              perf: 'enhancement',
+              revert: 'chore',
+            };
+            const labelDefinitions = {
+              enhancement: {
+                color: 'a2eeef',
+                description: 'New feature or improvement',
+              },
+              bug: {
+                color: 'd73a4a',
+                description: 'Something is not working',
+              },
+              documentation: {
+                color: '0075ca',
+                description: 'Documentation changes',
+              },
+              chore: {
+                color: 'ededed',
+                description: 'Maintenance, build, test, or CI changes',
+              },
+            };
+            const typeLabels = new Set(Object.values(prefixToLabel));
+
+            const { data: livePR } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+            const title = livePR.title ?? '';
+            const match = title.match(/^([a-zA-Z]+)(?:\([^)]*\))?[!]?\s*:/);
+            const key = match ? match[1].toLowerCase() : null;
+            const detected = key && Object.prototype.hasOwnProperty.call(prefixToLabel, key)
+              ? prefixToLabel[key]
+              : null;
+
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner,
+              repo,
+              issue_number: pull_number,
+            });
+            const current = new Set(currentLabels.map(label => label.name));
+
+            // Re-fetch immediately before mutation so a queued run cannot apply
+            // labels based on a title that was edited while the job was running.
+            const { data: confirmedPR } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+            if (confirmedPR.title !== title) {
+              core.info('PR title changed during the run; a newer event will label it.');
+              return;
+            }
+
+            if (!detected) {
+              for (const label of currentLabels) {
+                if (typeLabels.has(label.name)) {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: pull_number,
+                    name: label.name,
+                  });
+                }
+              }
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100,
+              });
+              const alreadyCommented = comments.some(comment =>
+                comment.user?.login === 'github-actions[bot]' &&
+                comment.body?.includes('<!-- opencodex-label-nudge -->')
+              );
+              if (!alreadyCommented) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  body: [
+                    '<!-- opencodex-label-nudge -->',
+                    `Hey @${confirmedPR.user.login} — could you add a [conventional-commit](https://www.conventionalcommits.org) prefix to the PR title? This lets the release notes generator categorize it automatically.`,
+                    '',
+                    'Examples:',
+                    '- `feat: Add Cursor Router optimization levels`',
+                    '- `fix: Resolve auth token refresh loop`',
+                    '- `docs: Update provider setup guide`',
+                    '- `chore: Bump Bun`',
+                    '',
+                    'Once updated, this workflow will re-run and apply the label automatically.',
+                  ].join('\n'),
+                });
+              }
+              return;
+            }
+
+            if (!current.has(detected)) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: detected });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                const definition = labelDefinitions[detected];
+                try {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: detected,
+                    color: definition.color,
+                    description: definition.description,
+                  });
+                  core.info(`Created missing label "${detected}".`);
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                  // Another PR-labeler run may have created the repository-wide
+                  // label concurrently. Confirm it exists before continuing.
+                  await github.rest.issues.getLabel({ owner, repo, name: detected });
+                }
+              }
+            }
+
+            for (const label of currentLabels) {
+              if (typeLabels.has(label.name) && label.name !== detected) {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  name: label.name,
+                });
+              }
+            }
+
+            if (!current.has(detected)) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_number,
+                labels: [detected],
+              });
+              core.info(`Applied label "${detected}" to PR #${pull_number}.`);
+            } else {
+              core.info(`Label "${detected}" is already present on PR #${pull_number}.`);
+            }
