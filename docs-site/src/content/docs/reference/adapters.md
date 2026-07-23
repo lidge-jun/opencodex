@@ -62,7 +62,8 @@ streams the response back **untranslated**.
   output headroom, and **drops `temperature`/`top_p`** when thinking is enabled (Anthropic forbids
   them there).
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
-  `thinking_delta`, `input_json_delta`).
+  `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
+  event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
 
 ## `google`
 
