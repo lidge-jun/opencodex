@@ -7,13 +7,15 @@
  * settable alone via PUT (legacy codexAutoStart-only PUTs keep working).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
+import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-settings-stream-mode-test");
+let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
 
 function baseConfig(): OcxConfig {
@@ -46,15 +48,22 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
 }
 
 beforeEach(() => {
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-  mkdirSync(TEST_DIR, { recursive: true });
+  invalidateStartupHealthCache();
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-settings-stream-"));
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
 
 afterEach(() => {
+  invalidateStartupHealthCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (TEST_DIR && existsSync(TEST_DIR)) {
+    try {
+      rmSync(TEST_DIR, { recursive: true, force: true });
+    } catch {
+      /* Windows may briefly lock while a background startup-health probe exits */
+    }
+  }
 });
 
 describe("GET /api/settings", () => {

@@ -15,7 +15,7 @@ import { getLogicalMaxThreads, hasAgentsMaxThreads, isMultiAgentV2Enabled, trans
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
-import { resolveAndPersistCodexRuntime } from "../codex/runtime";
+import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 
 export interface V2CliDeps {
   execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
@@ -24,6 +24,10 @@ export interface V2CliDeps {
   sync?: (port?: number) => Promise<unknown>;
   log?: Pick<Console, "log" | "error">;
 }
+
+export type CodexFeaturesInvocationDeps =
+  & Parameters<typeof commandInvocation>[3]
+  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">;
 
 /**
  * Shared invocation for `codex features enable|disable multi_agent_v2` — the single
@@ -34,15 +38,16 @@ export interface V2CliDeps {
 export function codexFeaturesInvocation(
   action: "enable" | "disable",
   platform: NodeJS.Platform = process.platform,
-  deps: Parameters<typeof commandInvocation>[3] = {},
+  deps: CodexFeaturesInvocationDeps = {},
 ): SpawnInvocation {
-  const envPath = (deps.env ?? process.env).CODEX_CLI_PATH?.trim();
-  const command = envPath
-    || resolveAndPersistCodexRuntime({
-      env: deps.env ?? process.env,
-      platform,
-    }).runtime.command
-    || "codex";
+  const command = resolveAndPersistCodexRuntime({
+    env: deps.env ?? process.env,
+    platform,
+    existsSync: deps.existsSync,
+    execFileSync: deps.execFileSync,
+    configDir: deps.configDir,
+    readFileSync: deps.readFileSync,
+  }).runtime.command || "codex";
   return commandInvocation(command, ["features", action, "multi_agent_v2"], platform, deps);
 }
 

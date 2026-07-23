@@ -58,6 +58,11 @@ export interface ResolveCodexRuntimeDeps {
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: "utf8") => string;
   now?: () => number;
+  /**
+   * When false, stop after the first valid priority candidate (skip PATH-wide
+   * newerAvailable discovery). Use for hot UI/status paths.
+   */
+  discoverAlternatives?: boolean;
 }
 
 interface PersistedRuntimeState {
@@ -196,7 +201,7 @@ export function persistCodexRuntime(
 function probeVersion(
   command: string,
   deps: ResolveCodexRuntimeDeps,
-): { ok: true; version: string | null } | { ok: false; reason: string } {
+): { ok: true; version: string } | { ok: false; reason: string } {
   const platform = deps.platform ?? process.platform;
   if (command.includes("/") || command.includes("\\") || /^[A-Za-z]:/.test(command)) {
     const exists = deps.existsSync ?? existsSync;
@@ -215,7 +220,11 @@ function probeVersion(
       windowsHide: true,
       shell: invocation.shell,
     });
-    return { ok: true, version: parseCodexVersionOutput(output) };
+    const version = parseCodexVersionOutput(output);
+    if (!version) {
+      return { ok: false, reason: "unrecognized --version output" };
+    }
+    return { ok: true, version };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, reason: `failed --version (${message.slice(0, 160)})` };
@@ -284,6 +293,10 @@ function tryCandidate(
   };
 }
 
+function sameRuntimeCommand(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 /**
  * Resolve the single Codex runtime OpenCodex should use for sync, clamp, and probes.
  */
@@ -315,7 +328,9 @@ export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): Resolve
     if (seen.has(key)) continue;
     seen.add(key);
     const resolved = tryCandidate(candidate, failures, deps);
-    if (resolved) valid.push(resolved);
+    if (!resolved) continue;
+    valid.push(resolved);
+    if (deps.discoverAlternatives === false) break;
   }
 
   if (valid.length === 0) {
@@ -329,39 +344,35 @@ export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): Resolve
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
 
-  // If environment is invalid but configured is valid, configured wins among remaining.
-  // (Already handled by order.) If configured was preferred but failed, record replacement.
+  const envValid = envPath
+    ? valid.find(item => sameRuntimeCommand(item.command, envPath) && item.source === "environment")
+    : undefined;
+  if (envValid) selected = envValid;
+
   if (persisted?.command) {
-    const configuredStillValid = valid.some(
-      item => item.command === persisted.command && item.source === "configured",
-    );
-    if (!configuredStillValid) {
-      const replacement = valid.find(item => item.command !== persisted.command) ?? selected;
+    const configuredStillValid = valid.some(item => sameRuntimeCommand(item.command, persisted.command));
+    // Only emit replacement diagnostics when we actually searched alternatives or
+    // the preferred configured runtime was probed and rejected.
+    const configuredRejected = failures.some(item => sameRuntimeCommand(item.command, persisted.command));
+    if (!configuredStillValid && (configuredRejected || deps.discoverAlternatives !== false) && !envValid) {
       replacedConfigured = {
         from: {
           command: persisted.command,
           version: persisted.selectedVersion,
           source: "configured",
         },
-        reason: failures.find(item => item.command === persisted.command)?.reason
+        reason: failures.find(item => sameRuntimeCommand(item.command, persisted.command))?.reason
           ?? "configured runtime is no longer valid",
       };
-      selected = replacement;
-    } else {
-      // Stick to configured even if a later PATH entry appears first after env miss —
-      // configured is intentionally second priority and must survive new terminals.
-      selected = valid.find(item => item.command === persisted.command) ?? selected;
+      // Keep priority-selected replacement (already in `selected`).
+    } else if (!envValid && configuredStillValid) {
+      // Stick to configured even when a later PATH entry is also valid.
+      selected = valid.find(item => sameRuntimeCommand(item.command, persisted.command)) ?? selected;
     }
   }
 
-  // Environment always wins when valid.
-  const envValid = envPath
-    ? valid.find(item => item.command === envPath && item.source === "environment")
-    : undefined;
-  if (envValid) selected = envValid;
-
   const newerAvailable = valid
-    .filter(item => item.command !== selected.command)
+    .filter(item => !sameRuntimeCommand(item.command, selected.command))
     .sort((a, b) => compareCodexVersions(b.version, a.version))[0];
   const newer =
     newerAvailable && compareCodexVersions(newerAvailable.version, selected.version) > 0

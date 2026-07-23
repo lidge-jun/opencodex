@@ -76,14 +76,32 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
-    const resolved = resolveCodexRuntime();
+    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    try {
+      resolved = resolveCodexRuntime({ discoverAlternatives: false });
+    } catch {
+      resolved = {
+        runtime: { command: "codex", version: null, source: "fallback" },
+        failures: [],
+      };
+    }
     const lastClamp = loadLastEffortClamp();
     const clampActive = Boolean(lastClamp && lastClamp.removedEfforts.length > 0);
-    const warning = clampActive
-      ? `Some reasoning effort options were hidden because OpenCodex used Codex ${resolved.runtime.version ?? "an older binary"}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`
-      : resolved.newerAvailable
-        ? `OpenCodex is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`
-        : null;
+    const warningParts: string[] = [];
+    if (resolved.replacedConfigured) {
+      warningParts.push(
+        `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolved.runtime.command)} instead.`,
+      );
+    }
+    if (clampActive) {
+      warningParts.push(
+        `Some reasoning effort options were hidden because OpenCodex used Codex ${resolved.runtime.version ?? "an older binary"}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
+      );
+    } else if (resolved.newerAvailable) {
+      warningParts.push(
+        `OpenCodex is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`,
+      );
+    }
     return jsonResponse({
       codexAutoStart: codexAutoStartEnabled(config),
       port: config.port,
@@ -104,7 +122,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
           active: clampActive,
           removedEfforts: lastClamp?.removedEfforts ?? [],
         },
-        warning,
+        warning: warningParts.length > 0 ? warningParts.join(" ") : null,
       },
     });
   }

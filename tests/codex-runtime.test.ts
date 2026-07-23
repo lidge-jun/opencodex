@@ -172,6 +172,36 @@ describe("resolveCodexRuntime", () => {
     expect(shown.toLowerCase()).not.toContain("alice");
   });
 
+  test("unrecognized --version output is rejected", () => {
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { CODEX_CLI_PATH: "C:\\weird\\codex.exe", PATH: "" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => "not a codex binary",
+    });
+    expect(result.failures.some(item => item.source === "environment" && item.reason.includes("unrecognized"))).toBe(true);
+    expect(result.runtime.source).not.toBe("environment");
+  });
+
+  test("CODEX_CLI_PATH equal to persisted path does not fabricate replacedConfigured", () => {
+    const configDir = tempConfigDir();
+    persistCodexRuntime({
+      command: "C:\\same\\codex.exe",
+      version: "0.145.0-alpha.30",
+      source: "configured",
+    }, { configDir });
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { CODEX_CLI_PATH: "C:\\same\\codex.exe", PATH: "" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => "codex-cli 0.145.0-alpha.30",
+    });
+    expect(result.runtime.source).toBe("environment");
+    expect(result.replacedConfigured).toBeUndefined();
+  });
+
   test("persists and clears effort clamp diagnostics", () => {
     const configDir = tempConfigDir();
     persistEffortClamp({

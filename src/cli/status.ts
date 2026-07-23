@@ -141,10 +141,26 @@ export async function collectStatus(): Promise<CliStatusView> {
     routingKind: getCodexRoutingKind(),
   });
   const codexPlugins = diagnoseCodexBundledPlugins();
-  const resolvedRuntime = resolveCodexRuntime();
+  const resolvedRuntime = (() => {
+    try {
+      return resolveCodexRuntime();
+    } catch {
+      return {
+        runtime: { command: "codex", version: null, source: "fallback" as const },
+        failures: [] as [],
+        replacedConfigured: undefined,
+        newerAvailable: undefined,
+      };
+    }
+  })();
   const lastClamp = loadLastEffortClamp();
   const clampActive = Boolean(lastClamp && lastClamp.removedEfforts.length > 0);
   const warningParts: string[] = [];
+  if (resolvedRuntime.replacedConfigured) {
+    warningParts.push(
+      `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolvedRuntime.runtime.command)} instead. Run ocx doctor for diagnosis and recovery.`,
+    );
+  }
   if (resolvedRuntime.newerAvailable) {
     warningParts.push("OpenCodex is using an older Codex binary. Run ocx doctor for diagnosis and recovery.");
   }
