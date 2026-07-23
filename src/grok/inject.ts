@@ -73,9 +73,7 @@ function userModelAliases(content: string, region: ManagedRegion | null): Set<st
     const singleQuoted = match[3];
     if (bare !== undefined) { aliases.add(bare); continue; }
     if (singleQuoted !== undefined) { aliases.add(singleQuoted); continue; }
-    if (doubleQuoted !== undefined) {
-      try { aliases.add(JSON.parse(`"${doubleQuoted}"`) as string); } catch { aliases.add(doubleQuoted); }
-    }
+    if (doubleQuoted !== undefined) aliases.add(decodeTomlBasicString(doubleQuoted));
   }
   return aliases;
 }
@@ -240,4 +238,27 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
   } catch (error) {
     return errorResult("strip", error);
   }
+}
+/** Decode a TOML basic-string body: JSON-compatible escapes plus TOML's \uXXXX / \UXXXXXXXX. */
+function decodeTomlBasicString(body: string): string {
+  return body.replace(
+    /\\(u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)/g,
+    (whole, esc: string) => {
+      if (esc[0] === "u") return String.fromCharCode(parseInt(esc.slice(1), 16));
+      if (esc[0] === "U") {
+        const code = parseInt(esc.slice(1), 16);
+        return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+      }
+      switch (esc) {
+        case "b": return "\b";
+        case "t": return "\t";
+        case "n": return "\n";
+        case "f": return "\f";
+        case "r": return "\r";
+        case '"': return '"';
+        case "\\": return "\\";
+        default: return whole; // invalid escape — keep raw, reservation stays conservative
+      }
+    },
+  );
 }

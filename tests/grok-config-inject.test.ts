@@ -115,6 +115,21 @@ describe("Grok config injection", () => {
     expect(() => Bun.TOML.parse(content)).not.toThrow();
   });
 
+  test("decodes TOML unicode escapes in user model headers", () => {
+    const configPath = join(grokHome, "config.toml");
+    // \U0000006F and \u006F are both "o" — these headers canonically define model.ocx-esc*.
+    const userContent = '[model."\\U0000006Fcx-esc"]\nmodel = "user/esc"\n[model."\\u006Fcx-esc4"]\nmodel = "user/esc4"\n';
+    writeFileSync(configPath, userContent, "utf8");
+
+    injectGrokConfig(10100, [{ id: "esc" }, { id: "esc4" }], { grokHome });
+    const content = readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[model.ocx-esc]");
+    expect(content).not.toContain("[model.ocx-esc4]");
+    expect(content).toContain("[model.ocx-esc-2]");
+    expect(content).toContain("[model.ocx-esc4-2]");
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
   test("sanitizes aliases, suffixes collisions, and escapes TOML strings", () => {
     const block = buildGrokManagedBlock(10100, [
       { id: "anthropic/claude-opus-4.8" },
