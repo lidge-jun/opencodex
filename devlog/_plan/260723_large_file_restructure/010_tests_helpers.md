@@ -4,6 +4,29 @@ Surface: tests only. Zero src changes. The runner discovers `./tests/`
 recursively (`package.json:39` → `bun test --isolate ./tests/`), so new test
 files are picked up automatically.
 
+## Verified structure (wp1 P stale-check, tree unchanged since wp0)
+
+- `tsconfig.json` has `"include": ["src"]` and NO `noUnusedLocals` —
+  **tests are NOT covered by `bun run typecheck`**. Unused imports in a test
+  file are therefore harmless. Consequence: each NEW test file copies the FULL
+  import header of its source file verbatim; we do NOT hand-partition imports.
+  The correctness gate for this phase is `bun test` (every case still runs;
+  total pass count unchanged), not tsc.
+- `tests/combos.test.ts` (1286 lines, 49 `test()` total) layout:
+  - imports `:1-42`; `VALID_COMBO` `:44`;
+  - helpers `:46-149`: `baseConfig`:46, `rrConfig`:68, `successfulPicks`:86,
+    `withTempHome`:95, `writeRawConfig`:114, `comboApi`:118, `comboApiRaw`:133,
+    `responseJson`:145;
+  - file-wide `afterEach` (clearComboSelectionState/clearComboTargetCooldowns)
+    `:151-154`;
+  - `describe("combo namespace primitives", …)` `:156-674` (pure-combo tests,
+    inside the describe);
+  - **18 top-level management `test()`** `:676-1262` (OUTSIDE any describe —
+    the describe closes at `:674`);
+  - tail `:1263-1286` — confirm at B whether it is the close of test #18 or a
+    further test; cut the management block at the exact `});` that ends test
+    #18 ("PATCH skips one disabled member…").
+
 ## Existing helpers (do not collide)
 
 - `tests/helpers/fake-chatgpt-jwt.ts:1` → `fakeChatGptJwt`.
@@ -35,23 +58,25 @@ The management API block is **18 tests** (corrected from the census "17"),
 18. PATCH skips disabled member, persists all-disabled, 503 envelope `:1201-1262`
 
 NEW `tests/combo-management-api.test.ts` receives those 18 tests plus the
-management-only setup they share:
+management-only setup they share (copy verbatim from combos.test.ts):
 
-- `baseConfig` `:40-63`, `withTempHome` `:91-108`, `writeRawConfig` `:110-112`,
-  `comboApi` `:114-131`, `comboApiRaw` `:133-143`, `responseJson` `:145-149`.
-- The file-wide `afterEach` combo-state cleanup `:151-154` — duplicate it into
-  the new file (both files need it once the block moves).
+- the FULL import header `:1-42` (unused imports are harmless — see above);
+- `baseConfig` `:46`, `withTempHome` `:95`, `writeRawConfig` `:114`,
+  `comboApi` `:118`, `comboApiRaw` `:133`, `responseJson` `:145`
+  (`rrConfig`/`successfulPicks`/`VALID_COMBO` stay in the original — only the
+  describe-block pure-combo tests use them);
+- the file-wide `afterEach` combo-state cleanup `:151-154` — duplicate into the
+  new file (both files need it once the block moves).
 
-MODIFY `tests/combos.test.ts`: remove `:676-1262`; keep the pure-combo tests
-(primitives, request cloning, cooldown/failure policy, deterministic
-selection) and whichever of the setup helpers those still use. Re-check
-imports after removal (drop now-unused management/filesystem imports).
+MODIFY `tests/combos.test.ts`: remove the 18 top-level management tests
+`:676-<end of test #18>`; keep imports, all helpers, afterEach, and the
+`describe("combo namespace primitives")` block `:156-674`. Imports need NO
+pruning (unused imports harmless).
 
-Decision: the six setup helpers are small and used by BOTH files after the
-split. Rather than a third shared module now, COPY them into the new file
-(they are test-local fixtures; duplication of a 6-helper fixture block is
-acceptable and keeps each test file self-contained). If a later phase wants
-them shared, move to `tests/helpers/combo-api.ts` then — out of scope here.
+Decision: COPY the six helpers + import header into the new file (test-local
+fixtures; duplication keeps each file self-contained and, since tests are not
+typechecked, carries no unused-import cost). A shared `tests/helpers/combo-api.ts`
+is a later-phase option, out of scope here.
 
 ## Split B — `tests/server-auth.test.ts` (2926) → move provider-management validation
 
