@@ -4,7 +4,17 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
-import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
+import {
+  clearModelCache,
+  DEFAULT_MODEL_CACHE_TTL_MS,
+  getFreshCached,
+  getStaleCached,
+  isModelsFetchCoolingDown,
+  markModelsFetchFailure,
+  setCached,
+  setModelsDiscoveryStatus,
+  type ProviderDiscoveryFallback,
+} from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
@@ -235,7 +245,12 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       : models
   );
   if (prov.adapter === "cursor") {
-    if (prov.liveModels === false || !apiKey) return configured;
+    if (prov.liveModels === false || !apiKey) {
+      if (prov.liveModels === false) {
+        setModelsDiscoveryStatus(name, { ok: true, kind: "skipped", fallback: "none" });
+      }
+      return configured;
+    }
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
     // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
     // suffix) but filter the static seed to the bases the account actually has — so models not on the
@@ -251,13 +266,25 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;
       setCached(name, result);
+      setModelsDiscoveryStatus(name, {
+        ok: true,
+        kind: result.length === 0 ? "empty" : "ok",
+        fallback: "none",
+      });
       return result;
     }
     markModelsFetchFailure(name);
+    const staleCursor = getStaleCached(name);
+    const fallback: ProviderDiscoveryFallback = staleCursor ? "stale" : "configured";
+    setModelsDiscoveryStatus(name, {
+      ok: false,
+      kind: "network",
+      fallback,
+      detail: liveResult.error,
+    });
     console.warn(
       `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
     );
-    const staleCursor = getStaleCached(name);
     return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
   }
   if (prov.authMode === "oauth" && !apiKey) {
@@ -267,6 +294,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     return configured;
   }
   if (prov.liveModels === false) {
+    setModelsDiscoveryStatus(name, { ok: true, kind: "skipped", fallback: "none" });
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
@@ -281,7 +309,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
-  const failedDiscoveryFallback = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+  const failedDiscoveryFallback = (): { models: CatalogModel[]; fallback: ProviderDiscoveryFallback } => {
     markModelsFetchFailure(name);
     const stale = getStaleCached(name);
     return {
@@ -298,6 +326,12 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     });
     if (destinationError) {
       const { models, fallback } = failedDiscoveryFallback();
+      setModelsDiscoveryStatus(name, {
+        ok: false,
+        kind: "policy",
+        fallback,
+        detail: destinationError,
+      });
       console.warn(
         `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
       );
@@ -307,6 +341,12 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const { models, fallback } = failedDiscoveryFallback();
+      setModelsDiscoveryStatus(name, {
+        ok: false,
+        kind: "http",
+        httpStatus: res.status,
+        fallback,
+      });
       console.warn(
         `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
       );
@@ -325,6 +365,13 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
         ? "returned invalid JSON in a 2xx response"
         : "returned a non-JSON 2xx response";
+      setModelsDiscoveryStatus(name, {
+        ok: false,
+        kind: "malformed",
+        httpStatus: res.status,
+        fallback,
+        detail: diagnostic,
+      });
       console.warn(
         `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
       );
@@ -335,6 +382,13 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       : undefined;
     if (!isProviderModelsApiItems(data)) {
       const { models, fallback } = failedDiscoveryFallback();
+      setModelsDiscoveryStatus(name, {
+        ok: false,
+        kind: "malformed",
+        httpStatus: res.status,
+        fallback,
+        detail: "malformed 2xx data",
+      });
       console.warn(
         `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
       );
@@ -377,9 +431,20 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       warnDroppedConfiguredIdsOnce(name, droppedConfiguredIds);
     }
     setCached(name, live);
+    setModelsDiscoveryStatus(name, {
+      ok: true,
+      kind: live.length === 0 ? "empty" : "ok",
+      fallback: "none",
+    });
     return live;
   } catch (error) {
     const { models, fallback } = failedDiscoveryFallback();
+    setModelsDiscoveryStatus(name, {
+      ok: false,
+      kind: "network",
+      fallback,
+      detail: error instanceof Error ? error.name : "unknown",
+    });
     console.warn(
       `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
     );

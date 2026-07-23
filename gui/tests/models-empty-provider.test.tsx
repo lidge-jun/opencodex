@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LanguageProvider } from "../src/i18n/provider";
 import { EmptyProviderHint } from "../src/pages/Models";
+import type { ProviderDiscoverySummary } from "../src/models-groups";
 
 let previousLanguage: unknown;
 
@@ -20,10 +21,10 @@ afterEach(() => {
   });
 });
 
-function renderHint(liveModels: boolean): string {
+function renderHint(liveModels: boolean, discovery?: ProviderDiscoverySummary | null): string {
   return renderToStaticMarkup(
     <LanguageProvider>
-      <EmptyProviderHint liveModels={liveModels} />
+      <EmptyProviderHint liveModels={liveModels} discovery={discovery} />
     </LanguageProvider>,
   );
 }
@@ -39,4 +40,16 @@ test("empty static provider explains that live discovery is disabled", () => {
   const html = renderHint(false);
   expect(html).toContain("Live model discovery is off");
   expect(html).toContain('role="status"');
+});
+
+test("empty provider with HTTP 401 discovery status surfaces the concrete reason (#329)", () => {
+  const html = renderHint(true, {
+    ok: false,
+    kind: "http",
+    httpStatus: 401,
+    fallback: "configured",
+  });
+  expect(html).toContain("Discovery failed (HTTP 401)");
+  expect(html).toContain("provider stays visible");
+  expect(html).toContain('href="#providers"');
 });

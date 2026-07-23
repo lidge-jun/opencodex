@@ -69,6 +69,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
+    const { publicModelsDiscoveryStatus } = await import("../../codex/model-cache");
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
@@ -78,6 +79,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
+      // Last live /models outcome (null until the first attempt). Keeps HTTP 401 / network
+      // failures visible on the Models page without re-fetching during cooldown (#329).
+      discovery: publicModelsDiscoveryStatus(name),
     })));
   }
 

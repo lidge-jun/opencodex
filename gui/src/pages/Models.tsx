@@ -5,7 +5,7 @@ import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
-import { buildProviderModelGroups, type ConfiguredProviderSummary } from "../models-groups";
+import { buildProviderModelGroups, discoveryFailureBadgeLabel, type ConfiguredProviderSummary } from "../models-groups";
 
 interface ModelRow {
   provider: string;
@@ -726,7 +726,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
      {
        // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
-       groups.map(({ provider, rows, native: isNative, liveModels }) => {
+       groups.map(({ provider, rows, native: isNative, liveModels, discovery }) => {
        const isCollapsed = collapsed.has(provider);
        const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
        const capOn = contextCaps[provider] === contextCapValue;
@@ -742,6 +742,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
        const remaining = filtered.length - visible.length;
         const allOn = rows.length > 0 && rows.every(m => !disabled.has(m.namespaced));
         const allOff = rows.length > 0 && rows.every(m => disabled.has(m.namespaced));
+        const discoveryBadge = discoveryFailureBadgeLabel(discovery, t);
         const bulkToggle = (enable: boolean) => {
           const next = new Set(disabled);
           for (const m of rows) { if (enable) next.delete(m.namespaced); else next.add(m.namespaced); }
@@ -754,6 +755,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
              <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
              <span className="text-body font-semibold">{provider}</span>
              {isNative && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.nativeGroupLabel")}</span>}
+             {discoveryBadge && (
+               <span
+                 className="badge badge-amber"
+                 title={discovery?.detail ? `${discoveryBadge}: ${discovery.detail}` : discoveryBadge}
+               >
+                 {discoveryBadge}
+               </span>
+             )}
              <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
              <div style={{ flex: 1 }} />
               <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
@@ -792,7 +801,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
            {!isCollapsed && (
              <div style={{ padding: "6px 12px" }}>
                {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
-               {rows.length === 0 && <EmptyProviderHint liveModels={liveModels} />}
+               {rows.length === 0 && <EmptyProviderHint liveModels={liveModels} discovery={discovery} />}
                {rows.length > PAGE / 2 && (
                  <input
                    className="input"
@@ -1108,13 +1117,22 @@ export default function Models({ apiBase }: { apiBase: string }) {
   );
 }
 
-export function EmptyProviderHint({ liveModels }: { liveModels: boolean }) {
+export function EmptyProviderHint({
+  liveModels,
+  discovery,
+}: {
+  liveModels: boolean;
+  discovery?: ConfiguredProviderSummary["discovery"];
+}) {
   const t = useT();
+  const discoveryBadge = discoveryFailureBadgeLabel(discovery, t);
   return (
     <div className="row muted text-label leading-body" role="status" style={{ alignItems: "flex-start", gap: 8, padding: "6px 0" }}>
       <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
       <span>
-        {t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")}{" "}
+        {discoveryBadge
+          ? <>{t("models.emptyDiscoveryFailed", { reason: discoveryBadge })}{" "}</>
+          : <>{t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")}{" "}</>}
         <a href="#providers">{t("models.openProviderSettings")}</a>
       </span>
     </div>
