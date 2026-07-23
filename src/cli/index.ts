@@ -131,7 +131,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const serviceToken = loadServiceTokenFromFile(process.env);
   if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   const requestedPort = parsePortOption();
-  reconcileJournal();
+  if (!currentExternalCodexModelProvider()) reconcileJournal();
   const existingPid = readPid();
   if (existingPid) {
     const live = await findLiveProxy();
@@ -266,7 +266,7 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 async function handleEnsure() {
-  reconcileJournal();
+  if (!currentExternalCodexModelProvider()) reconcileJournal();
   const config = loadConfig();
   if (!codexAutoStartEnabled(config)) {
     console.log("Codex autostart is disabled.");
