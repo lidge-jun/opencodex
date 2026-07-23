@@ -1,5 +1,6 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { PROVIDER_REGISTRY, type ProviderRegistryEntry } from "./registry";
+import type { ProviderAccessGroup } from "./free-directory";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -67,6 +68,15 @@ export interface DerivedProviderPreset {
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
   provider?: OcxProviderConfig;
+  accessGroups?: readonly ProviderAccessGroup[];
+  supportLevel?: "supported" | "experimental" | "reference";
+  verification?: "official" | "primary" | "unverified";
+  documentationUrl?: string;
+  modelsUrl?: string;
+  discovery?: "live" | "static" | "hybrid" | "unsupported";
+  lastVerified?: string;
+  models?: string[];
+  liveModels?: boolean;
 }
 
 export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
@@ -125,7 +135,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
 export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
   const out: Record<string, DerivedKeyLoginProvider> = {};
   for (const entry of PROVIDER_REGISTRY) {
-    if (entry.authKind !== "key") continue;
+    if (entry.authKind !== "key" || entry.supportLevel === "reference" || entry.directoryOnly) continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
     out[entry.id] = {
       label: entry.label,
@@ -165,7 +175,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
 }
 
 export function deriveInitProviders(): DerivedInitProvider[] {
-  return PROVIDER_REGISTRY.map(entry => ({
+  return PROVIDER_REGISTRY.filter(entry => entry.supportLevel !== "reference" && !entry.directoryOnly).map(entry => ({
     id: entry.id,
     label: formatInitLabel(entry),
     adapter: entry.adapter,
@@ -192,7 +202,7 @@ export function deriveOAuthIds(): string[] {
 
 export function deriveProviderPresets(): DerivedProviderPreset[] {
   const presets = PROVIDER_REGISTRY
-    .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset)
+    .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset || entry.accessGroups?.length)
     .map(entryToPreset);
   return [...dedupePresets(presets), customPreset()];
 }
@@ -231,6 +241,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
+  if (prov.googleMode === undefined && seed.googleMode !== undefined) prov.googleMode = seed.googleMode;
+  if (prov.project === undefined && seed.project !== undefined) prov.project = seed.project;
+  if (prov.location === undefined && seed.location !== undefined) prov.location = seed.location;
 }
 
 export function deriveFeaturedProviderIds(): string[] {
@@ -270,6 +283,15 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
+    ...(entry.accessGroups ? { accessGroups: [...entry.accessGroups] } : {}),
+    ...(entry.supportLevel ? { supportLevel: entry.supportLevel } : {}),
+    ...(entry.verification ? { verification: entry.verification } : {}),
+    ...(entry.documentationUrl ? { documentationUrl: entry.documentationUrl } : {}),
+    ...(entry.modelsUrl ? { modelsUrl: entry.modelsUrl } : {}),
+    ...(entry.discovery ? { discovery: entry.discovery } : {}),
+    ...(entry.lastVerified ? { lastVerified: entry.lastVerified } : {}),
+    ...(entry.models ? { models: [...entry.models] } : {}),
+    ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
   };
 }
 

@@ -416,13 +416,13 @@ describe("provider registry parity", () => {
     expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
   });
 
-  test("LiteLLM is the only registry seed with optional key authentication", () => {
+  test("optional-key registry seeds are explicit", () => {
     const litellm = PROVIDER_REGISTRY.find(entry => entry.id === "litellm");
     const optionalKeyProviders = PROVIDER_REGISTRY.filter(entry => entry.keyOptional).map(entry => entry.id);
 
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free"]);
+    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free", "ovhcloud", "pollinations"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
