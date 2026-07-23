@@ -3,6 +3,29 @@
 Target: `src/server/management-api.ts` → thin dispatch core + 7 domain route
 modules + 1 shared module. Facade preserves the exact public surface.
 
+## wp3 P stale-check (verified)
+
+`src/server/management-api.ts` is unchanged at **1940 lines** (matches this
+doc). Public surface confirmed: `VERSION` `:61`, `ManagementApiDeps` `:69`,
+`handleManagementAPI` `:181-1922`, `fetchAllModels` `:1925`.
+
+**Ordering invariant VERIFIED:** extracted every `(method, pathname)` matcher
+in `handleManagementAPI` (`:181-1922`) — 72 matchers, all `(method,path)` pairs
+UNIQUE. The only repeated pathname regex `/^\/api\/custom-models\/([^/]+)$/`
+appears at `:958` (PUT) and `:995` (DELETE) — distinct methods, so still a
+unique pair. Pathname literals repeat only across distinct methods (e.g.
+`/api/providers` has GET/POST/PATCH/DELETE). Therefore reordering the route
+blocks into domain groups is behavior-safe (first-match order is irrelevant
+when every `(method,path)` matcher is unique). The two regex matchers do not
+overlap any literal matcher (`/api/custom-models/:id` vs `/api/custom-models`).
+
+Implementation note (vs catalog): `handleManagementAPI` is ONE imperative
+function of sequential `if (url.pathname === X && req.method === Y)` blocks,
+not top-level declarations — so B extracts each domain's if-blocks into a
+`DomainHandler(ctx)` function and the core chains them in the original
+domain-first-appearance order. Shared helpers/DTOs move to `shared.ts`;
+`config`/`deps`/`req`/`url` travel via a `ManagementContext`.
+
 ## Public surface to preserve (the facade contract)
 
 External importers (verified by rg):
