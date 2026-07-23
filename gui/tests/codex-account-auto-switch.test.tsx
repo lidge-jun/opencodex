@@ -10,7 +10,7 @@ import {
   putAutoSwitchThreshold,
   type AutoSwitchFetch,
 } from "../src/codex-auto-switch";
-import { AutoSwitchSetting } from "../src/components/CodexAccountPool";
+import { CodexAutoSwitchSetting as AutoSwitchSetting } from "../src/components/CodexAutoSwitchSetting";
 import { LanguageProvider } from "../src/i18n/provider";
 
 let previousLanguage: unknown;

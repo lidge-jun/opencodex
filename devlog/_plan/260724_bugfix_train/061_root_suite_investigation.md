@@ -110,3 +110,27 @@ Cycle 6 may update the contributor branch only when:
 - two consecutive post-change `bun run test` executions pass;
 - the focused release-helper run is supporting evidence, not sole closure; and
 - required Cross-platform CI is green on the exact pushed head.
+
+## 2026-07-24 — Cycle 6 investigation result
+
+- Live contributor head at takeover: `5f84301252865dc6f792d3272c2fe0db6d09eb0e`.
+- `CYCLE6_BASE_SHA`: `c63589ccfe9e053d92acc029f55be0a809fb6fca` (`origin/dev` after the cycle-start fetch).
+- Rebased pre-repair head: `8feb0980`; `git range-diff` mapped both contributor commits exactly (`=`) to `458b3a39` and `8feb0980`.
+- Environment: macOS arm64 (`Darwin 25.6.0`), Bun `1.3.14`.
+- Evidence directory: `devlog/_plan/260724_bugfix_train/evidence/cycle6-pr337-root/`.
+- The contributor's retained public report contains only the aggregate `3780 passed, 4 skipped, 4 failed` and says the four failures were in this five-test file. It does not retain the four failing names, assertion text, stderr, or first-failure line. The four rows below map the report's four failure slots to the four success-path cases (the only four cases that require a zero release-helper exit); this mapping is an evidence limitation, not a recovered original log.
+
+| Reported test name | First failing log/line | Reproduction matrix | Classification | Causal evidence | Owner path | Disposition |
+|---|---|---|---|---|---|---|
+| `preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs` | Original log unavailable; current source line 216 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | No PR diff hunk reaches release tooling; every required PR/base order passed | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
+| `preview branch still defaults to preview tag and dry-run dispatch` | Original log unavailable; current source line 250 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; no repeatable order/resource trigger | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
+| `dispatch pins the audited release SHA via expected-sha` | Original log unavailable; current source line 263 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; `scripts/release.ts` is unchanged by the PR | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
+| `aborts before dispatch when the remote branch moved during the CI wait` | Original log unavailable; current source line 275 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; no observed child-process/temp-path leak | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
+
+Supporting logs:
+
+- PR initial/repeats: `pr337-root-initial.log`, `pr337-root-repeat-1.log`, `pr337-root-repeat-2.log` — each `3861 pass / 0 fail`.
+- PR standalone: `release-helper-1.log`, `release-helper-2.log`, `release-helper-3.log` — each `5 pass / 0 fail`.
+- Exact-base comparison: `baseline-release-helper.log` (`5 pass / 0 fail`), `baseline-root-1.log`, `baseline-root-2.log` (each `3861 pass / 0 fail`).
+
+Hypothesis disposition: H1 (PR-caused) is rejected because the PR and exact base are identically green and the PR diff has no causal release-helper path. H2 (baseline deterministic) is rejected by both base full-suite passes. H3 (order/concurrency defect) remains unconfirmed because every real-order full suite passed and no shared path, process overlap, environment leak, or collision reproduced. Therefore no root-suite source fix is justified, and the mandatory out-of-map amendment gate is not activated.
