@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { currentExternalCodexModelProvider, restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
+import { stripGrokConfig } from "../grok/inject";
 import { restoreLegacyOpenaiHistory } from "../codex/history-provider";
 import { writeJournal, reconcileJournal } from "../codex/journal";
 import {
@@ -208,6 +209,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
       try { restoreNativeCodex(); } catch { /* best-effort restore */ }
     }
+    if (!process.env.OCX_SERVICE) { try { stripGrokConfig(); } catch { /* best-effort restore */ } }
   };
 
   let shuttingDown = false;
@@ -265,6 +267,22 @@ async function handleStart(options: { block?: boolean } = {}) {
       [...visibleNativeSlugs(config)],
       models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
     );
+    // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an
+    // installed grok CLI can pick opencodex-routed models without manual config. No-op
+    // when ~/.grok is absent; removed again by stop/eject/uninstall/shutdown.
+    try {
+      const { injectGrokConfig } = await import("../grok/inject");
+      const grokModels = [
+        ...visibleNativeSlugs(config).map(id => ({ id })),
+        ...models.map(m => ({
+          id: m.alias ?? `${m.provider}/${m.id}`,
+          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+        })),
+      ];
+      const r = injectGrokConfig(port, grokModels, config.hostname ? { hostname: config.hostname } : {});
+      if (r.changed) console.log(`   + Grok Build config updated (${grokModels.length} models via ~/.grok/config.toml)`);
+      else if (r.skippedReason === "user-owned-provider") console.error(`⚠️  ${r.message}`);
+    } catch { /* best-effort — grok integration must never block startup */ }
   } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
@@ -403,6 +421,11 @@ async function handleStop() {
   // Safety net: revert system env vars even if the daemon's syncCleanup didn't run
   // (e.g. SIGKILL). revertSystemEnv is ownership-checked and idempotent.
   try { revertSystemEnv(); } catch { /* best-effort */ }
+  // Same safety net for the Grok Build managed block (marker-owned, idempotent).
+  try {
+    const g = stripGrokConfig();
+    if (g.changed) console.log(`↩️  ${g.message}`);
+  } catch { /* best-effort */ }
   if (stopFailed) process.exit(1);
 }
 
@@ -445,6 +468,12 @@ async function handleUninstall() {
   await runStep("native Codex restored", () => {
     const r = restoreNativeCodex();
     if (!r.success) throw new Error(r.message);
+  });
+
+  await runStep("Grok Build config restored", () => {
+    const r = stripGrokConfig();
+    if (!r.ok) throw new Error(r.message);
+    return r.changed;
   });
 
   await runStep("system env vars reverted", () => {
@@ -580,6 +609,10 @@ switch (command) {
     }
     const r = restoreNativeCodex();
     console.log(r.success ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+    try {
+      const g = stripGrokConfig();
+      if (g.changed) console.log(`✅ ${g.message}`);
+    } catch { /* best-effort */ }
     console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
     break;
   }

@@ -1,7 +1,7 @@
 import { constants, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { applyEol, dominantEol } from "../codex/inject";
+import { applyEol, dominantEol, providerBaseHost } from "../codex/inject";
 
 export interface GrokInjectModel {
   id: string;
@@ -19,6 +19,11 @@ export interface GrokInjectResult {
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
 const END_MARKER = "# <<< opencodex managed block <<<";
 const PROVIDER_HEADER = "[model_providers.opencodex]";
+// grok 0.2.101 verified live (2026-07-23): [model_providers.<id>] inheritance parses but the
+// inherited base_url is NOT applied to inference routing — the turn falls through to the default
+// cli-chat-proxy and 401s. Per-model direct fields DO route. So every [model.*] block carries its
+// own base_url/api_backend/api_key; the provider table remains only as a user-visible grouping
+// header (harmless) and the user-owned conflict guard keeps checking for it.
 
 interface ManagedRegion {
   start: number;
@@ -71,13 +76,11 @@ function errorResult(action: string, error: unknown): GrokInjectResult {
   return { ok: false, changed: false, message: `Could not ${action} Grok config: ${detail}` };
 }
 
-export function buildGrokManagedBlock(port: number, models: GrokInjectModel[], hostname = "127.0.0.1"): string {
+export function buildGrokManagedBlock(port: number, models: GrokInjectModel[], hostname?: string): string {
+  const host = providerBaseHost(hostname);
+  const baseUrl = `http://${host}:${port}/v1`;
   const lines = [
     BEGIN_MARKER,
-    PROVIDER_HEADER,
-    `base_url = ${tomlString(`http://${hostname}:${port}/v1`)}`,
-    'api_backend = "chat_completions"',
-    'api_key = "opencodex-loopback"',
   ];
   const aliasCounts = new Map<string, number>();
 
@@ -86,11 +89,14 @@ export function buildGrokManagedBlock(port: number, models: GrokInjectModel[], h
     const count = (aliasCounts.get(baseAlias) ?? 0) + 1;
     aliasCounts.set(baseAlias, count);
     const alias = count === 1 ? baseAlias : `${baseAlias}-${count}`;
+    const isFirst = lines.length === 1;
     lines.push(
-      "",
+      ...(isFirst ? [] : [""]),
       `[model.${alias}]`,
       `model = ${tomlString(model.id)}`,
-      'model_provider = "opencodex"',
+      `base_url = ${tomlString(baseUrl)}`,
+      'api_backend = "chat_completions"',
+      'api_key = "opencodex-loopback"',
       `name = ${tomlString(model.name ?? `OCX ${model.id}`)}`,
     );
     if (Number.isFinite(model.contextWindow) && (model.contextWindow ?? 0) > 0) {
