@@ -19,6 +19,13 @@ open "dist/macos/OpenCodex.app"
 只有 Command Line Tools 时只能构建当前架构。产物会进行本地使用的 ad-hoc 签名；正式分发仍需要
 Developer ID 签名和 notarization。
 
+## 发布打包
+
+Release 工作流会同时构建 arm64 和 x86_64，将 `OpenCodex.app` 打包为
+`OpenCodex-<version>-macOS-universal.zip`，并生成对应的 `.sha256` 文件。Dry run 也会把两个文件
+作为工作流 artifact 传递并验证；正式发布时，则会在 npm 发布成功后将其附加到 GitHub Release。
+自动生成的压缩包使用 ad-hoc 签名且未 notarization，因此首次启动时 macOS 可能要求手动批准。
+
 应用读取 `ocx status --json`，并把启动、重启和停止操作交给现有 CLI。重启和停止可能中断进行中的
 请求，因此会先显示确认对话框。退出菜单栏应用本身不会停止代理。
 

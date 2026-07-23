@@ -19,6 +19,14 @@ open "dist/macos/OpenCodex.app"
 作成できます。Command Line Tools だけの場合は現在のアーキテクチャのみです。出力はローカル実行用に
 ad-hoc 署名され、配布には Developer ID 署名と notarization が別途必要です。
 
+## リリースパッケージ
+
+Release ワークフローは arm64 と x86_64 をまとめてビルドし、`OpenCodex.app` を
+`OpenCodex-<version>-macOS-universal.zip` に圧縮して対応する `.sha256` を生成します。
+ドライランでも両ファイルをワークフロー artifact として転送・検証し、実際のリリースでは npm 公開の
+成功後に GitHub Release へ添付します。自動生成アーカイブは ad-hoc 署名で notarization されていないため、
+初回起動時に macOS で手動承認が必要になる場合があります。
+
 アプリは `ocx status --json` を読み、既存 CLI に起動・再起動・終了を委譲します。終了と再起動は
 進行中のリクエストを中断する可能性があるため確認ダイアログを表示します。メニューバーアプリだけを
 終了してもプロキシは停止しません。

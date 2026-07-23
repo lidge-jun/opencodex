@@ -77,6 +77,10 @@ bun run build:macos
 open "dist/macos/OpenCodex.app"
 ```
 
+Non-dry-run GitHub releases include a Universal macOS archive named
+`OpenCodex-<version>-macOS-universal.zip` plus its SHA-256 checksum. The archive is ad-hoc signed
+and not notarized, so macOS may require manual approval on first launch.
+
 The companion uses the installed `ocx` CLI as its control boundary and never edits PID files or
 Codex configuration directly. See the [macOS menu bar guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
 for CLI discovery, universal builds, and launch-at-login setup.
