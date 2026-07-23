@@ -64,8 +64,9 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # 仅当 config.websockets 为 true
 ```
 
-两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。loopback 模式下，其中包含
-自动注入被移除时可手动合并的根级键；non-loopback 模式下，其中包含专用提供商配置。
+当 OpenCodex 管理路由时，两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。
+loopback 模式下，其中包含自动注入被移除时可手动合并的根级键；non-loopback 模式下，其中包含
+专用提供商配置。外部提供商模式不会修改此配置文件。
 
 :::caution
 `openai_base_url`、`model_provider`、`model_catalog_json` 等根级键**必须**位于第一个 `[table]`

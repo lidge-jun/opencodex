@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
-import { restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
+import { currentExternalCodexModelProvider, restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
 import { restoreLegacyOpenaiHistory } from "../codex/history-provider";
 import { writeJournal, reconcileJournal } from "../codex/journal";
 import {
@@ -131,7 +131,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const serviceToken = loadServiceTokenFromFile(process.env);
   if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   const requestedPort = parsePortOption();
-  reconcileJournal();
+  if (!currentExternalCodexModelProvider()) reconcileJournal();
   const existingPid = readPid();
   if (existingPid) {
     const live = await findLiveProxy();
@@ -179,7 +179,7 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   const config = loadConfig();
   writeRuntimePort({ pid: process.pid, port, hostname: config.hostname });
-  writeJournal();
+  if (!currentExternalCodexModelProvider()) writeJournal();
 
   // Background proactive token refresh. No-op unless config.tokenGuardian.enabled; timer is unref'd
   // so it never keeps the process alive on its own. Stopped in syncCleanup so no refresh fires mid-drain.
@@ -187,9 +187,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Design B upgrade path: keep retrying the one-time opencodex→openai history migration in the
   // background — the first `ocx start` after an update usually races the Codex app's DB lock.
   // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
-  const historyGuardian = !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false
-    ? startHistoryMigrationGuardian()
-    : undefined;
+  let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
 
   let cleaned = false;
   const syncCleanup = () => {
@@ -200,7 +198,9 @@ async function handleStart(options: { block?: boolean } = {}) {
     try { revertSystemEnv(); } catch { /* best-effort */ }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (!process.env.OCX_SERVICE) { try { restoreNativeCodex(); } catch { /* best-effort restore */ } }
+    if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
+      try { restoreNativeCodex(); } catch { /* best-effort restore */ }
+    }
   };
 
   let shuttingDown = false;
@@ -246,6 +246,9 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
+  if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
+    historyGuardian = startHistoryMigrationGuardian();
+  }
   // Build Desktop 3P alias registry so inbound claude-opus-4-8-{code} aliases (and legacy claude-opus-4-{code}) decode correctly.
   try {
     const { fetchAllModels } = await import("../server/management-api");
@@ -263,7 +266,7 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 async function handleEnsure() {
-  reconcileJournal();
+  if (!currentExternalCodexModelProvider()) reconcileJournal();
   const config = loadConfig();
   if (!codexAutoStartEnabled(config)) {
     console.log("Codex autostart is disabled.");

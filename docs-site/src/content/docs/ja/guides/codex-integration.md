@@ -65,8 +65,10 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # config.websockets が true のときのみ
 ```
 
-両モードとも `$CODEX_HOME/opencodex.config.toml` を参考用フォールバック設定として書き出します。ループバックモードでは
-自動注入が漏れたときに直接統合できるルートキーが、非ループバックモードでは専用プロバイダー設定が含まれます。
+OpenCodex がルーティングを管理する場合、両モードとも `$CODEX_HOME/opencodex.config.toml` を
+参考用フォールバック設定として書き出します。ループバックモードでは自動注入が漏れたときに直接統合できる
+ルートキーが、非ループバックモードでは専用プロバイダー設定が含まれます。外部プロバイダーモードでは
+このプロファイルを変更しません。
 
 :::caution
 `openai_base_url`、`model_provider`、`model_catalog_json` のようなルートキーは最初の `[table]` ヘッダーより

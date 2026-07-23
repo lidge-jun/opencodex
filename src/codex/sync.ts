@@ -1,4 +1,4 @@
-import { injectCodexConfig } from "./inject";
+import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
@@ -19,6 +19,7 @@ export interface CodexSyncResult {
 interface CodexSyncDeps {
   refreshCodexModelCatalog: typeof refreshCodexModelCatalog;
   injectCodexConfig: typeof injectCodexConfig;
+  currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
 }
 
 const defaultDeps: CodexSyncDeps = {
@@ -32,8 +33,22 @@ export async function syncModelsToCodex(
   log: Pick<Console, "log" | "error"> | null = console,
   deps: CodexSyncDeps = defaultDeps,
 ): Promise<CodexSyncResult> {
-  applyProxyEnv(config); // `ocx ensure`/`ocx sync` fetch provider models outside the server process
   const p = port ?? config.port ?? 10100;
+  const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
+  if (externalProvider) {
+    const result = await deps.injectCodexConfig(p, config, {});
+    log?.log(result.message);
+    return {
+      ok: result.success,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      cacheSynced: false,
+      message: result.message,
+    };
+  }
+
+  applyProxyEnv(config); // `ocx ensure`/`ocx sync` fetch provider models outside the server process
   let added = 0;
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;

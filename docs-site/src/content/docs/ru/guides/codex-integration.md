@@ -71,9 +71,11 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # only when config.websockets is true
 ```
 
-В обоих режимах opencodex записывает `$CODEX_HOME/opencodex.config.toml` как справочную и
-резервную конфигурацию. На loopback в ней лежат корневые ключи, которые можно объединить
-вручную, если автоматическое внедрение было удалено; вне loopback — форма с выделенным провайдером.
+Когда маршрутизацией управляет OpenCodex, в обоих режимах он записывает
+`$CODEX_HOME/opencodex.config.toml` как справочную и резервную конфигурацию. На loopback в ней
+лежат корневые ключи, которые можно объединить вручную, если автоматическое внедрение было удалено;
+вне loopback — форма с выделенным провайдером. В режиме внешнего провайдера этот профиль остается
+без изменений.
 
 :::caution
 Корневые ключи, такие как `openai_base_url`, `model_provider` и `model_catalog_json`, **обязаны**

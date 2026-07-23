@@ -65,8 +65,9 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 # supports_websockets = true   # config.websockets가 true일 때만
 ```
 
-두 모드 모두 `$CODEX_HOME/opencodex.config.toml`을 참고용 폴백 설정으로 작성합니다. loopback 모드에서는
-자동 주입이 빠졌을 때 직접 합칠 수 있는 루트 키가, non-loopback 모드에서는 전용 프로바이더 설정이 담깁니다.
+OpenCodex가 라우팅을 소유할 때 두 모드 모두 `$CODEX_HOME/opencodex.config.toml`을 참고용 폴백 설정으로
+작성합니다. loopback 모드에서는 자동 주입이 빠졌을 때 직접 합칠 수 있는 루트 키가, non-loopback 모드에서는
+전용 프로바이더 설정이 담깁니다. 외부 프로바이더 모드에서는 이 프로필을 변경하지 않습니다.
 
 :::caution
 `openai_base_url`, `model_provider`, `model_catalog_json` 같은 루트 키는 첫 번째 `[table]` 헤더보다

@@ -44,6 +44,7 @@ describe("GUI/CLI Codex sync backend", () => {
         injectedCatalogPath = options.catalogPath;
         return { success: true, message: "injected" };
       },
+      currentExternalCodexModelProvider: () => null,
     });
 
     expect(injectedPort).toBe(12345);
@@ -69,11 +70,39 @@ describe("GUI/CLI Codex sync backend", () => {
         injectedCatalogPath = options.catalogPath;
         return { success: true, message: "injected fallback" };
       },
+      currentExternalCodexModelProvider: () => null,
     });
 
     expect(injectedCatalogPath).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.catalogPath).toBeNull();
     expect(result.warning).toContain("catalog boom");
+  });
+
+  test("skips catalog refresh before preserving an external provider", async () => {
+    let refreshed = false;
+    let injectedCatalogPath: string | null | undefined = "unset";
+    const result = await syncModelsToCodex(10100, config, null, {
+      refreshCodexModelCatalog: async () => {
+        refreshed = true;
+        throw new Error("must not refresh");
+      },
+      injectCodexConfig: async (_port, _config, options) => {
+        injectedCatalogPath = options.catalogPath;
+        return { success: true, message: "external provider preserved" };
+      },
+      currentExternalCodexModelProvider: () => "custom",
+    });
+
+    expect(refreshed).toBe(false);
+    expect(injectedCatalogPath).toBeUndefined();
+    expect(result).toEqual({
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      cacheSynced: false,
+      message: "external provider preserved",
+    });
   });
 });

@@ -1,12 +1,23 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { atomicWriteFile, loadConfig, websocketsEnabled } from "../config";
-import { markJournalInjectedState, restoreJournalState, writeJournal } from "./journal";
+import { markJournalInjectedState, removeJournal, restoreJournalState, writeJournal } from "./journal";
 import { restoreCodexCatalog } from "./catalog";
 import { migrateHistoryToOpenai, syncCodexHistoryProvider } from "./history-provider";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH, parseTomlString, readRootTomlString, resolveCodexConfigPath, tomlString } from "./paths";
+import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
 import type { OcxConfig } from "../types";
 
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
+
+export function externalCodexModelProvider(content: string): string | null {
+  const provider = resolveEffectiveProjectModelProvider(content).provider;
+  return provider && provider !== "openai" && provider !== "opencodex" ? provider : null;
+}
+
+export function currentExternalCodexModelProvider(): string | null {
+  if (!existsSync(CODEX_CONFIG_PATH)) return null;
+  return externalCodexModelProvider(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+}
 
 /**
  * Detect the file's dominant line ending. Every transform in this module is LF-pure
@@ -365,8 +376,23 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     return { success: false, message: `Codex config not found at ${CODEX_CONFIG_PATH}. Is Codex installed?` };
   }
 
-  writeJournal();
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const activeProvider = externalCodexModelProvider(rawContent);
+  if (activeProvider) {
+    // A launcher may have journaled before the provider manager took ownership. Never let shutdown
+    // replay that stale snapshot over externally managed config.
+    removeJournal();
+    return {
+      success: true,
+      message: `⚠️ Codex routing NOT injected: config.toml selects the external model_provider ${tomlString(activeProvider)}.\n` +
+        `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n` +
+        `  Configure that provider for Responses passthrough at http://${providerBaseHost(config?.hostname)}:${port}/v1` +
+        `${shouldInjectApiAuthHeader(config) ? ` with x-opencodex-api-key from OPENCODEX_API_AUTH_TOKEN` : ""}.\n` +
+        `  For direct injection, switch to the built-in openai provider, remove any user-owned root openai_base_url, and rerun 'ocx start'.`,
+    };
+  }
+
+  writeJournal();
   // EOL boundary: transforms below are LF-pure; preserve the file's dominant ending on write.
   const eol = dominantEol(rawContent);
   let content = applyEol(rawContent, "\n");
@@ -543,6 +569,11 @@ export function removeCodexConfig(options: { preserveProfile?: boolean } = {}): 
  * handler, and `ocx restore`. Idempotent + atomic.
  */
 export function restoreNativeCodex(): { success: boolean; message: string } {
+  const activeProvider = currentExternalCodexModelProvider();
+  if (activeProvider) {
+    removeJournal();
+    return { success: true, message: `External Codex provider ${tomlString(activeProvider)} preserved; no native restore was needed.` };
+  }
   const journal = restoreJournalState();
   const cfg = journal.configRestored
     ? { success: true, message: "Codex config restored from opencodex journal." }
