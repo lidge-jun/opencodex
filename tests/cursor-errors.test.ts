@@ -12,6 +12,26 @@ describe("classifyCursorError", () => {
     expect(classifyCursorError("rate limit exceeded for model")).toBe("Cursor rate limit exceeded");
   });
 
+  test("generic resource_exhausted is quota-style rate limiting, not a too-large request", () => {
+    // The live retry-storm shape: no detail beyond "Error" — must map to 429 so Codex backs off.
+    expect(classifyCursorError("Cursor Connect error resource_exhausted: Error")).toBe("Cursor rate limit exceeded");
+    expect(classifyCursorError("resource_exhausted: too many requests")).toBe("Cursor rate limit exceeded");
+    expect(classifyCursorError("resource_exhausted while loading tool catalog: quota exhausted")).toBe("Cursor rate limit exceeded");
+    // Concurrency limits are quota shapes, not request-size overflow (a bare "limit"
+    // tail must not satisfy the size patterns).
+    expect(classifyCursorError("resource_exhausted: request exceeds concurrent request limit")).toBe("Cursor rate limit exceeded");
+    expect(classifyCursorError("resource_exhausted: request exceeds per-user concurrent requests limit")).toBe("Cursor rate limit exceeded");
+  });
+
+  test("explicit request-size overflow keeps the too-large classification", () => {
+    expect(classifyCursorError("resource_exhausted: tool catalog too large")).toBe("Cursor resource limit exceeded");
+    expect(classifyCursorError("resource_exhausted: request exceeds maximum allowed size")).toBe("Cursor resource limit exceeded");
+    expect(classifyCursorError("resource_exhausted: too many tools")).toBe("Cursor resource limit exceeded");
+    // Explicit body/size subject keeps overflow semantics even with a "limit" tail.
+    expect(classifyCursorError("resource_exhausted: request body exceeds maximum allowed limit")).toBe("Cursor resource limit exceeded");
+    expect(classifyCursorError("resource_exhausted: request size exceeds maximum allowed limit")).toBe("Cursor resource limit exceeded");
+  });
+
   test("authentication / permission denied", () => {
     expect(classifyCursorError("unauthenticated: invalid bearer token")).toBe("Cursor authentication failed");
     expect(classifyCursorError("permission_denied: account suspended")).toBe("Cursor authentication failed");
@@ -80,6 +100,18 @@ describe("safeCursorErrorMessage", () => {
     expect(msg).toContain("Cursor resource limit exceeded");
     expect(msg).not.toContain("resource_exhausted");
     expect(msg).not.toContain("rate limit");
+  });
+
+  test("end-to-end: quota-style resource exhaustion carries the rate-limit prefix", () => {
+    expect(safeCursorErrorMessage("Cursor Connect error resource_exhausted: Error"))
+      .toContain("Cursor rate limit exceeded");
+    expect(safeCursorErrorMessage("resource_exhausted: too many requests"))
+      .toContain("Cursor rate limit exceeded");
+    expect(safeCursorErrorMessage("resource_exhausted while loading tool catalog: quota exhausted"))
+      .toContain("Cursor rate limit exceeded");
+    // Explicit overflow still reads as the 400-style prefix end-to-end.
+    expect(safeCursorErrorMessage("resource_exhausted: request exceeds maximum allowed size"))
+      .toContain("Cursor resource limit exceeded");
   });
 });
 

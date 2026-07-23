@@ -6,6 +6,10 @@ import type { OcxProviderContinuationState } from "../types";
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
+/** In-memory high-water byte cap across all entries. Forced store:false retention (kiro/cursor
+ * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
+ * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
+const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
 /** Entries whose serialized size exceeds this are kept in memory but skipped on disk: inputs can
  * carry base64 `input_image` data URLs, and one screenshot-heavy thread must not balloon the file. */
 const SNAPSHOT_ENTRY_MAX_BYTES = 2 * 1024 * 1024;
@@ -19,9 +23,55 @@ interface StoredResponseState {
   /** v1 Cursor-only metadata, accepted only while loading old snapshots. */
   conversationId?: string;
   cursorCheckpointUsable?: boolean;
+  /** Approximate in-memory size, computed locally at insert time (never trusted from disk). */
+  sizeBytes?: number;
 }
 
 const states = new Map<string, StoredResponseState>();
+let storedResponseBytes = 0;
+let byteCapOverride: number | null = null;
+
+function byteCap(): number {
+  return byteCapOverride ?? MAX_STORED_RESPONSE_BYTES;
+}
+
+/** Test-only: lower/restore the in-memory byte cap (null restores the default). */
+export function setResponseStateByteCapForTests(bytes: number | null): void {
+  byteCapOverride = bytes;
+}
+
+/** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
+export function getStoredResponseBytesForTests(): number {
+  return storedResponseBytes;
+}
+
+/** The ONLY size computation: approximate entry weight from its items payload. */
+function measuredEntry(entry: Omit<StoredResponseState, "sizeBytes">): StoredResponseState {
+  let sizeBytes = 0;
+  try {
+    sizeBytes = JSON.stringify(entry.items).length;
+  } catch {
+    /* unserializable items: weightless rather than fatal */
+  }
+  return { ...entry, sizeBytes };
+}
+
+/** The ONLY insertion point: keeps the byte counter consistent on replacement. */
+function setEntry(id: string, entry: Omit<StoredResponseState, "sizeBytes">): void {
+  deleteEntry(id);
+  const measured = measuredEntry(entry);
+  storedResponseBytes += measured.sizeBytes ?? 0;
+  states.set(id, measured);
+}
+
+/** The ONLY deletion point: TTL, count, byte, and explicit deletes all route here. */
+function deleteEntry(id: string): void {
+  const existing = states.get(id);
+  if (!existing) return;
+  storedResponseBytes -= existing.sizeBytes ?? 0;
+  if (storedResponseBytes < 0) storedResponseBytes = 0;
+  states.delete(id);
+}
 // Expansion provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
 // newly appended input suffix without adding an unknown field that native passthrough could send
 // upstream. The parser uses this boundary to acknowledge historical compaction markers exactly once.
@@ -69,7 +119,9 @@ function ensureLoaded(): void {
             },
           }
         : undefined);
-      states.set(id, {
+      // Recompute sizes locally while loading — persisted sizeBytes (absent in v1/v2
+      // snapshots anyway) is never trusted.
+      setEntry(id, {
         createdAt: rec.createdAt,
         items: rec.items,
         ...(providers ? { providers } : {}),
@@ -92,11 +144,15 @@ function persistNow(path: string): void {
     let total = 0;
     // Newest-first so the most recent chains survive both caps.
     for (const entry of [...states].reverse()) {
-      const size = JSON.stringify(entry).length;
+      // sizeBytes is in-memory accounting only; keep it out of the disk snapshot.
+      const [id, state] = entry;
+      const { sizeBytes: _sizeBytes, ...persistable } = state;
+      const persistEntry: [string, StoredResponseState] = [id, persistable];
+      const size = JSON.stringify(persistEntry).length;
       if (size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
       if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
       total += size;
-      entries.push(entry);
+      entries.push(persistEntry);
     }
     entries.reverse();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -135,12 +191,18 @@ function inputItems(input: unknown): unknown[] {
 
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
-    if (at - state.createdAt > RESPONSE_TTL_MS) states.delete(id);
+    if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
   }
   while (states.size > MAX_STORED_RESPONSES) {
     const oldest = states.keys().next().value;
     if (!oldest) break;
-    states.delete(oldest);
+    deleteEntry(oldest);
+  }
+  // Byte high-water eviction, oldest-first (Map preserves insertion order).
+  while (storedResponseBytes > byteCap() && states.size > 1) {
+    const oldest = states.keys().next().value;
+    if (!oldest) break;
+    deleteEntry(oldest);
   }
 }
 
@@ -204,7 +266,7 @@ export function rememberResponseState(
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     });
   }
-  states.set(response.id, {
+  setEntry(response.id, {
     createdAt: now(),
     items: [...inputItems(request.input), ...response.output],
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
@@ -225,6 +287,7 @@ export function clearResponseStateMemoryForTests(): void {
     persistTimer = null;
   }
   states.clear();
+  storedResponseBytes = 0;
   loaded = false;
 }
 

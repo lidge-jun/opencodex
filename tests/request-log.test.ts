@@ -639,6 +639,14 @@ describe("request log metadata", () => {
     })).toBe(400);
   });
 
+  test("httpStatusFromTerminalError maps Cursor quota-style resource exhaustion to 429", () => {
+    expect(httpStatusFromTerminalError({
+      type: "rate_limit_error",
+      code: "rate_limit_exceeded",
+      message: "Cursor rate limit exceeded: Cursor Connect error resource limit exceeded: Error",
+    })).toBe(429);
+  });
+
   test("httpStatusFromTerminalError maps client-closed web-search aborts to 499", () => {
     expect(httpStatusFromTerminalError({
       type: "invalid_request_error",

@@ -1567,6 +1567,12 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     // plan (e.g. claude-fable-5) drop out instead of failing ERROR_BAD_MODEL_NAME. Fall back to the seed.
     const cachedCursor = getFreshCached(name, ttlMs);
     if (cachedCursor) return applyConfigHintsToCachedModels(name, prov, cachedCursor);
+    if (isModelsFetchCoolingDown(name)) {
+      // A recently-failed Cursor discovery must not re-pay the RPC timeout (plus its bounded
+      // retry) on every /v1/models poll during an outage — same cooldown the generic path uses.
+      const cooling = getStaleCached(name);
+      return cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured;
+    }
     const liveResult = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
@@ -1574,6 +1580,7 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
       setCached(name, result);
       return result;
     }
+    markModelsFetchFailure(name);
     console.warn(
       `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
     );

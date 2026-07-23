@@ -96,6 +96,17 @@ import {
 } from "./relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "./responses-item-id-repair";
 
+/**
+ * Adapters whose continuation state must survive Codex's store:false requests: their provider
+ * conversation ids (kiro, cursor) live only in the proxy-internal continuation cache, and losing
+ * them breaks tool continuation (kiro) and absolute-context carry-forward (cursor — the next turn
+ * would mint a fresh conversation id, miss the context-usage cache, and report output-delta-sized
+ * totals instead of the real active context).
+ */
+export function adapterNeedsForcedContinuation(name: string): boolean {
+  return name === "kiro" || name === "cursor";
+}
+
 export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
   freeformToolNames: Set<string>;
@@ -1534,7 +1545,7 @@ export async function handleResponses(
                 parsed._rawBody,
                 response,
                 continuationStateForResponse(providerState),
-                adapter.name === "kiro" ? { force: true } : undefined,
+                adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
               ),
           }),
         },
@@ -1571,7 +1582,7 @@ export async function handleResponses(
         parsed._rawBody,
         json,
         continuationStateForResponse(providerState),
-        adapter.name === "kiro" ? { force: true } : undefined,
+        adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
       );
     }
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });

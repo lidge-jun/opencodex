@@ -47,6 +47,34 @@ export function isCursorInvalidArgumentError(value: unknown): boolean {
   return message.includes("invalid_argument");
 }
 
+const QUOTA_RATE_CUES = ["too many requests", "quota", "rate limit", "rate-limit", "throttl"];
+const REQUEST_TOO_LARGE_PATTERNS: (string | RegExp)[] = [
+  "tool catalog too large",
+  "tool registration too large",
+  "too many tools",
+  "message too large",
+  "payload too large",
+  "request too large",
+  // Size cue required somewhere: a bare "request exceeds ... limit" (concurrency/quota
+  // shape) must NOT match, but "request body/size exceeds ... limit" and
+  // "request exceeds maximum allowed size" are deterministic overflow (WP3 r1/r2).
+  /request exceeds .*size/,
+  /request (?:body|size) exceeds .*(?:size|limit)/,
+  "maximum allowed size",
+];
+
+/**
+ * True when a resource_exhausted detail names a request-size overflow rather than quota.
+ * Quota/rate cues are rejected FIRST: "resource_exhausted while loading tool catalog: quota
+ * exhausted" is rate limiting, not a too-large request, even though it mentions the catalog.
+ */
+export function isCursorRequestTooLargeDetail(lowerMessage: string): boolean {
+  if (QUOTA_RATE_CUES.some(cue => lowerMessage.includes(cue))) return false;
+  return REQUEST_TOO_LARGE_PATTERNS.some(pattern =>
+    typeof pattern === "string" ? lowerMessage.includes(pattern) : pattern.test(lowerMessage),
+  );
+}
+
 /**
  * Classify a Cursor transport/Connect/gRPC error message into an actionable category.
  * The returned prefix string is recognized by `src/lib/errors.ts` `classifyError` keywords,
@@ -60,7 +88,16 @@ export function classifyCursorError(message: string): string {
   if (
     lower.includes("resource_exhausted") ||
     lower.includes("resource exhausted")
-  ) return "Cursor resource limit exceeded";
+  ) {
+    // gRPC RESOURCE_EXHAUSTED is quota/rate exhaustion unless the detail names a
+    // request-size overflow (tool catalog/registration). Only the latter is a
+    // client-fixable 400; everything else surfaces as a 429 so Codex backs off
+    // instead of hammering retries (live evidence: 6x 400 retry storm, devlog
+    // 260723_cursor_context_continuity/000_plan.md).
+    return isCursorRequestTooLargeDetail(lower)
+      ? "Cursor resource limit exceeded"
+      : "Cursor rate limit exceeded";
+  }
 
   if (
     lower.includes("rate limit") ||

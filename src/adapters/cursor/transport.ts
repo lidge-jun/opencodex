@@ -18,6 +18,8 @@ export interface CursorTransportFactoryInput {
   headers?: Headers;
   /** Pre-first-frame deadline (dial + first server frame). Defaults to 30s when omitted. */
   firstFrameTimeoutMs?: number;
+  /** Grace (ms) between close() and the force-destroy fallback after a first-frame timeout. Defaults to 1s. */
+  timeoutDestroyGraceMs?: number;
   /**
    * Grace window (ms) before a drained client-tool turn is finalized, so a sibling tool call
    * announced in a later receive chunk can revoke a premature finalize. Defaults to 50ms.

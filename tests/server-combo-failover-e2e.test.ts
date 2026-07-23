@@ -27,14 +27,22 @@ const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
 const actualRetry = await import("../src/lib/upstream-retry");
 const actualFetchWithTransientRetry = actualRetry.fetchWithTransientRetry;
+const { createCursorAdapter } = await import("../src/adapters/cursor");
+import type { CursorTransportFactory } from "../src/adapters/cursor/transport";
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
 let customTransientResponse: (() => Promise<Response>) | undefined;
 let customUsageEstimate: ((model: string) => number | undefined) | undefined;
+let customCursorTransportFactory: CursorTransportFactory | undefined;
 
 mock.module("../src/server/adapter-resolve", () => ({
   ...actualResolver,
   resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
+    if (provider.adapter === "cursor" && customCursorTransportFactory) {
+      // Real cursor adapter (adapter.name === "cursor") over a fake transport, so server-level
+      // tests can drive the genuine continuation/persistence policy without a live socket.
+      return createCursorAdapter(provider, { createTransport: customCursorTransportFactory });
+    }
     if (provider.adapter === "test-run-turn") {
       const adapter: ProviderAdapter = {
         name: "test-run-turn",
@@ -110,6 +118,7 @@ beforeEach(() => {
   customFetchResponse = undefined;
   customTransientResponse = undefined;
   customUsageEstimate = undefined;
+  customCursorTransportFactory = undefined;
   clearRequestLogsForTests();
 });
 
@@ -1458,4 +1467,88 @@ describe("server combo failover 030 activation matrix", () => {
     expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });
     expect(attempt).not.toHaveProperty("usage");
   }, 10_000);
+});
+
+describe("cursor conversation continuity across store:false chains", () => {
+  function fakeCursorTransportFactory(seenConversationIds: string[]): CursorTransportFactory {
+    return () => ({
+      async *run(request) {
+        seenConversationIds.push(request.conversationId);
+        yield { type: "text", text: "cursor ok" };
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, estimated: true } };
+      },
+      writeClient() {},
+      close() {},
+    });
+  }
+
+  async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
+    return handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stream: false, store: false, ...raw }),
+    }), config, { model: "", provider: "" }, {});
+  }
+
+  function cursorConfig(): OcxConfig {
+    return {
+      port: 0,
+      // Registry forces authMode=oauth for the canonical "cursor" name; a non-registry
+      // provider name keeps key auth so the fake transport is reachable without a login.
+      defaultProvider: "cursortest",
+      providers: {
+        cursortest: provider("cursor", "https://api2.cursor.sh", "fake-cursor-token"),
+      },
+    };
+  }
+
+  test("store:false chain reuses the SAME cursor conversationId (native model)", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+
+    const first = await postCursor(config, { model: "cursortest/composer-2", input: "hello" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    expect(seen).toHaveLength(1);
+
+    const second = await postCursor(config, {
+      model: "cursortest/composer-2",
+      previous_response_id: firstJson.id,
+      input: [{ role: "user", content: "continue" }],
+    });
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    // The whole point of forced continuation: the second turn continues the SAME
+    // Cursor conversation instead of minting a fresh id (which would miss the
+    // context-usage carry-forward and report output-delta-sized totals).
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("external-model toolResult continuation rotates and persists the NEW id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+
+    const first = await postCursor(config, { model: "cursortest/grok-4.5", input: "use tools" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    expect(seen).toHaveLength(1);
+
+    // A toolResult-terminated continuation on an external wire model forces a fresh
+    // conversation id (stateless replay; request-builder.ts forceFreshConversation).
+    const second = await postCursor(config, {
+      model: "cursortest/grok-4.5",
+      previous_response_id: firstJson.id,
+      input: [{ type: "function_call_output", call_id: "call_x", output: "tool says hi" }],
+    });
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBe(seen[0]);
+
+    // The NEW id is what continuation state persists for the next turn.
+    const secondJson = await second.json() as { id: string };
+    const { previousResponseProviderState } = await import("../src/responses/state");
+    expect(previousResponseProviderState(secondJson.id)?.cursor?.conversationId).toBe(seen[1]);
+  });
 });

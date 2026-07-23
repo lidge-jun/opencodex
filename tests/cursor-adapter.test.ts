@@ -201,6 +201,61 @@ describe("Cursor adapter live transport", () => {
     expect(body._cursorConversationId).toBe(seen[1]);
     expect(events.filter(event => event.type === "error")).toHaveLength(0);
   });
+
+  test("rotation rekeys context usage through the injectable seam", async () => {
+    const rekeyCalls: Array<[string, string]> = [];
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: (from, to) => rekeyCalls.push([from, to]),
+    });
+
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: {
+        messages: [
+          { role: "user", content: "read a file", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/gpt-5.6-sol",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", namespace: "mcp__fs", arguments: { path: "a.txt" } }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolNamespace: "mcp__fs",
+            content: "FILE CONTENTS HERE",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_prior",
+    };
+
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    // External-model toolResult continuation rotates the conversation id and the
+    // adapter must rekey the carry-forward context usage onto the new id.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBe("cursor_prior");
+    expect(rekeyCalls).toEqual([["cursor_prior", seen[0]!]]);
+    expect(body._cursorConversationId).toBe(seen[0]);
+  });
 });
 
   test("does not replay invalid_argument after non-heartbeat output was already emitted", async () => {

@@ -79,4 +79,37 @@ describe("inline error envelope in a 200 stream (F1)", () => {
       error: { type: "invalid_request_error", code: "tool_catalog_too_large" },
     });
   });
+
+  test("Cursor quota-style resource exhaustion maps to 429 rate limiting", async () => {
+    // Adapter-side classification (classifyCursorError) now emits the rate-limit prefix
+    // for generic resource_exhausted; the bridge must surface it as retry-with-backoff.
+    const message = "Cursor rate limit exceeded: Cursor Connect error resource limit exceeded: Error";
+    async function* gen(): AsyncGenerator<AdapterEvent> {
+      yield {
+        type: "error",
+        message,
+      };
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(gen(), "cursor/gpt-5"));
+    const failed = frames.find(f => f.event === "response.failed");
+    expect(failed).toBeDefined();
+    expect((failed!.data.response as Record<string, unknown>).error).toMatchObject({
+      type: "rate_limit_error",
+      code: "rate_limit_exceeded",
+    });
+    expect(adapterFailureFromMessage(message)).toMatchObject({
+      httpStatus: 429,
+      error: { type: "rate_limit_error", code: "rate_limit_exceeded" },
+    });
+  });
+
+  test("Cursor rate-limit prefix beats quota wording in the detail", async () => {
+    // The detail echoes "quota exhausted", which would otherwise classify as
+    // insufficient_quota; the adapter's cursor-specific prefix must win.
+    const message = "Cursor rate limit exceeded: resource limit exceeded while loading tool catalog: quota exhausted";
+    expect(adapterFailureFromMessage(message)).toMatchObject({
+      httpStatus: 429,
+      error: { type: "rate_limit_error", code: "rate_limit_exceeded" },
+    });
+  });
 });

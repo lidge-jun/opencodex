@@ -34,6 +34,8 @@ const CURSOR_TRANSPORT_DISABLED_MESSAGE = [
 export interface CursorAdapterDeps {
   createTransport?: CursorTransportFactory;
   kv?: CursorKvStore;
+  /** Test seam: observe/replace context-usage rekeying on conversation-id rotation. */
+  rekeyContextUsage?: (fromConversationId: string, toConversationId: string) => void;
 }
 
 function safeCursorTransportError(err: unknown): string {
@@ -74,13 +76,14 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore();
+        const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
         _parsed._cursorConversationId ??= generatedCursorConversationId();
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
         // Keep remembered conversation id in sync when the request builder mints a fresh id
         // for external-model tool-result continuations (stateless replay).
         if (request.conversationId !== previousConversationId) {
-          rekeyCursorContextUsage(previousConversationId, request.conversationId);
+          rekeyContextUsage(previousConversationId, request.conversationId);
         }
         _parsed._cursorConversationId = request.conversationId;
         let emittedOutput = false;
@@ -133,7 +136,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           const failedConversationId = request.conversationId;
           _parsed._cursorConversationId = undefined;
           request = createCursorRequest(_parsed, { forceFreshConversation: true });
-          rekeyCursorContextUsage(failedConversationId, request.conversationId);
+          rekeyContextUsage(failedConversationId, request.conversationId);
           _parsed._cursorConversationId = request.conversationId;
           await runOnce(request);
         }

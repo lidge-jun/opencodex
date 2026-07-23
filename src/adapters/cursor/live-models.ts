@@ -28,9 +28,26 @@ export interface CursorUsableModelsOptions {
 
 export type CursorUsableModelsResult =
   | { ok: true; models: string[] }
-  | { ok: false; error: "auth" | "http" | "timeout" | "decode" | "empty"; detail?: string };
+  | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty"; detail?: string };
 
+const RETRYABLE_DISCOVERY_ERRORS = new Set(["timeout", "transport"]);
+const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
+
+/**
+ * Live discovery with ONE bounded retry for transient pre-response failures (fresh HTTP/2
+ * session each attempt). Completed non-2xx responses ("http"), auth, decode, and empty are
+ * deterministic and never retried. The retry attempt's deadline is capped so a cache-miss
+ * catalog poll cannot stall much past the primary timeout (~11.5s worst case, accepted in
+ * devlog 260723_cursor_context_continuity/030).
+ */
 export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
+  const first = await fetchCursorUsableModelsOnce(opts);
+  if (first.ok || !RETRYABLE_DISCOVERY_ERRORS.has(first.error)) return first;
+  await new Promise(resolve => setTimeout(resolve, 250 + Math.floor(Math.random() * 250)));
+  return fetchCursorUsableModelsOnce({ ...opts, timeoutMs: Math.min(opts.timeoutMs ?? 8000, DISCOVERY_RETRY_TIMEOUT_MS) });
+}
+
+async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
   const baseUrl = (opts.baseUrl ?? "https://api2.cursor.sh").replace(/\/+$/, "");
   const timeoutMs = opts.timeoutMs ?? 8000;
 
@@ -46,7 +63,7 @@ export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): 
     try {
       client = http2.connect(baseUrl);
     } catch {
-      return finish({ ok: false, error: "http", detail: "HTTP/2 connection setup failed" });
+      return finish({ ok: false, error: "transport", detail: "HTTP/2 connection setup failed" });
     }
 
     const timer = setTimeout(() => {
@@ -59,7 +76,7 @@ export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): 
       finish(value);
     };
 
-    client.on("error", () => close({ ok: false, error: "http", detail: "HTTP/2 session failed" }));
+    client.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 session failed" }));
 
     let req: http2.ClientHttp2Stream;
     try {
@@ -75,7 +92,7 @@ export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): 
         "x-session-id": crypto.randomUUID(),
       });
     } catch {
-      return close({ ok: false, error: "http", detail: "HTTP/2 request setup failed" });
+      return close({ ok: false, error: "transport", detail: "HTTP/2 request setup failed" });
     }
 
     let status = 0;
@@ -84,7 +101,7 @@ export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): 
       status = Number(headers[":status"] ?? 0);
     });
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("error", () => close({ ok: false, error: "http", detail: "HTTP/2 request failed" }));
+    req.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 request failed" }));
     req.on("end", () => {
       if (status === 401 || status === 403) {
         return close({ ok: false, error: "auth", detail: `HTTP ${status}` });
