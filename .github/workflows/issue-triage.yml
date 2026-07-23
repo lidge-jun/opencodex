@@ -60,7 +60,8 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'requires_translation=true\n');
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'detected_language=' + (parsed.detected_language || 'non-English') + '\n');
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'translated_title=' + (parsed.translated_title || '').slice(0, 256) + '\n');
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'translated_body<<BODY_EOF\n' + (parsed.translated_body || '') + '\nBODY_EOF\n');
+            const bodyDelim = 'BODY_' + require('crypto').randomBytes(16).toString('hex');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'translated_body<<' + bodyDelim + '\n' + (parsed.translated_body || '') + '\n' + bodyDelim + '\n');
           "
 
   apply-translation:
@@ -175,13 +176,28 @@ jobs:
             let parsed;
             try { parsed = JSON.parse(raw.trim()); }
             catch { try { parsed = JSON.parse(raw.replace(/^\`\`\`(?:json)?\s*/,'').replace(/\s*\`\`\`\s*$/,'').trim()); } catch { process.exit(0); } }
+            const fs = require('fs');
             const cur = String(process.env.ISSUE_NUMBER);
-            const normalize = (value) => [...new Set((Array.isArray(value) ? value : []).map(String).filter(n => n && n !== cur))];
+            const known = new Set(
+              JSON.parse(fs.readFileSync('existing.json', 'utf8'))
+                .map(({ number }) => String(number))
+            );
+            const normalize = (value) => [...new Set(
+              (Array.isArray(value) ? value : [])
+                .map((entry) => String(entry).trim())
+                .filter((number) => number !== cur && known.has(number))
+            )];
+            const sanitizeReason = (raw) => String(raw || '')
+              .replace(/[\u0000-\u001f\u007f]/g, ' ')
+              .replace(/@/g, '(at)')
+              .replace(/[\x60*_~<>\[\]()#|]/g, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 240);
             const duplicates = normalize(parsed?.duplicates ?? parsed?.issues).slice(0, 5);
             const related = normalize(parsed?.related).filter(n => !duplicates.includes(n)).slice(0, 5);
-            const reason = String(parsed?.reason || '').trim() || 'No clear duplicates or related issues found.';
+            const reason = sanitizeReason(parsed?.reason) || 'No clear duplicates or related issues found.';
             if (!duplicates.length && !related.length) process.exit(0);
-            const fs = require('fs');
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'matches=' + JSON.stringify({ duplicates, related, reason }) + '\n');
           "
 
@@ -209,9 +225,16 @@ jobs:
             const related = Array.isArray(payload)
               ? []
               : (Array.isArray(payload.related) ? payload.related : []);
+            const sanitizeReason = (raw) => String(raw || '')
+              .replace(/[\u0000-\u001f\u007f]/g, ' ')
+              .replace(/@/g, '(at)')
+              .replace(/[\x60*_~<>\[\]()#|]/g, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 240);
             const reason = Array.isArray(payload)
               ? ''
-              : String(payload.reason || '').trim();
+              : sanitizeReason(payload.reason);
             if (!duplicates.length && !related.length) return;
 
             const sections = [MARKER];
@@ -222,7 +245,7 @@ jobs:
               sections.push('Possibly related issues:', '', related.map(n => `- #${n}`).join('\n'), '');
             }
             if (reason) {
-              sections.push(`Reason: ${reason}`, '');
+              sections.push('Reason: ' + reason, '');
             }
             sections.push('_Detected automatically via GitHub Models._');
             const body = sections.join('\n');
