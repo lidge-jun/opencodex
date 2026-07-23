@@ -120,7 +120,7 @@ const eagerDecision = winNoRepair
 if (eagerDecision?.useEagerRelay) {
   // #314 path: no tee — single eager bounded reader with inline inspection.
   // (constructed INSTEAD of the tee above; see restructure note below)
-} 
+}
 const clientBody = winNoRepair && !eagerDecision?.useEagerRelay
   ? nativeBody
   : relaySseWithFailedTail(repairedBody, upstream);
