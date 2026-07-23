@@ -8,6 +8,7 @@ on:
       - "bin/**"
       - "tests/**"
       - "scripts/**"
+      - "apps/macos-menu-bar/**"
       - "gui/**"
       - ".gitattributes"
       - ".npmignore"
@@ -24,6 +25,7 @@ on:
       - "bin/**"
       - "tests/**"
       - "scripts/**"
+      - "apps/macos-menu-bar/**"
       - "gui/**"
       - ".gitattributes"
       - ".npmignore"
@@ -77,6 +79,14 @@ jobs:
 
       - name: Privacy scan
         run: bun run privacy:scan
+
+      - name: Test macOS menu bar app
+        if: runner.os == 'macOS'
+        run: bun run test:macos
+
+      - name: Build macOS menu bar app
+        if: runner.os == 'macOS'
+        run: bun run build:macos
 
       - name: Check release helper syntax
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
