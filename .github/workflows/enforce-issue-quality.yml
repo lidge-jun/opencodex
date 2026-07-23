@@ -1,5 +1,9 @@
 name: Enforce issue quality
 
+# Issue events always load this workflow from the repository DEFAULT branch
+# (currently `main`), not from `dev`. Landing here on `dev` alone does not
+# change live issue-quality behavior until the change is also on that default
+# branch.
 on:
   issues:
     types:
@@ -36,6 +40,8 @@ jobs:
               detectIssueKind,
               validateIssue,
               shouldReopen,
+              shouldEnforceClosure,
+              labelForKind,
             } = require(path.join(process.cwd(), ".github", "scripts", "issue-quality.cjs"));
 
             const { owner, repo } = context.repo;
@@ -109,11 +115,12 @@ jobs:
             const labels = (issue.labels || []).map((l) =>
               typeof l === "string" ? l : l.name,
             );
+            const activeBotKind = botState?.active ? (botState.kind || null) : null;
             const kind = detectIssueKind({
               title: issue.title,
               body: issue.body || "",
               labels,
-              storedKind: botState?.kind || null,
+              storedKind: activeBotKind,
             });
 
             // If headings were stripped but the form label is still present,
@@ -133,19 +140,41 @@ jobs:
             const resolvedKind = kind ?? labelBasedKind;
 
             // -----------------------------------------------------------------
+            // Kind-based label (additive only)
+            // -----------------------------------------------------------------
+            const kindLabel = labelForKind(resolvedKind);
+            if (kindLabel && !labels.includes(kindLabel)) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number, labels: [kindLabel],
+                });
+                labels.push(kindLabel);
+                core.info(`Applied kind label "${kindLabel}".`);
+              } catch (err) {
+                core.warning(`Failed to apply kind label "${kindLabel}": ${err.message || err}`);
+              }
+            }
+
+            // -----------------------------------------------------------------
             // Validate
             // -----------------------------------------------------------------
             const result = validateIssue({
               title: issue.title,
               body: issue.body || "",
               labels,
-              storedKind: botState?.kind || resolvedKind || null,
+              // Active bot kind survives heading removal; resolvedKind covers
+              // label-based enforcement. Strong conflicting body forms override
+              // inside detectIssueKind.
+              storedKind: activeBotKind || resolvedKind || null,
             });
 
             // -----------------------------------------------------------------
-            // VALID issue
+            // VALID or soft-pass issue (do not close)
             // -----------------------------------------------------------------
-            if (result.valid) {
+            if (result.valid || result.softPass) {
+              if (result.softPass) {
+                core.info("Soft-pass: substantial content without mapped form headings; skipping closure.");
+              }
               // If the bot previously closed it, consider reopening.
               if (botState?.active && issue.state === "closed") {
                 // Normalise closed_by from the API object to a plain login string.
@@ -162,13 +191,16 @@ jobs:
                     owner, repo, issue_number, state: "open",
                   });
                   const doneState = { ...botState, active: false };
+                  const reopenBlurb = result.softPass
+                    ? "The automated check no longer treats this report as insufficient detail (substantial structured content was found). Thanks for updating it."
+                    : "The report now contains the information required by the automated check. Thanks for updating it.";
                   await upsertComment([
                     BOT_MARKER,
                     stateTag(doneState),
                     "",
                     "### Issue reopened",
                     "",
-                    "The report now contains the information required by the automated check. Thanks for updating it.",
+                    reopenBlurb,
                   ].join("\n"));
                 } else if (actorIsMaintainer) {
                   // Maintainer changed the state — respect it, mark inactive.
@@ -185,13 +217,16 @@ jobs:
               } else if (botState?.active && issue.state === "open") {
                 // Already open and valid — deactivate bot state silently.
                 const doneState = { ...botState, active: false };
+                const reopenBlurb = result.softPass
+                  ? "The automated check no longer treats this report as insufficient detail (substantial structured content was found). Thanks for updating it."
+                  : "The report now contains the information required by the automated check. Thanks for updating it.";
                 await upsertComment([
                   BOT_MARKER,
                   stateTag(doneState),
                   "",
                   "### Issue reopened",
                   "",
-                  "The report now contains the information required by the automated check. Thanks for updating it.",
+                  reopenBlurb,
                 ].join("\n"));
               }
               return;
@@ -207,20 +242,32 @@ jobs:
               return;
             }
 
-            // Maintainer intentionally reopened — do not close again.
+            // Maintainer intentionally reopened — deactivate enforcement permanently
+            // for this issue so later `edited` runs do not close it again.
             if (eventType === "reopened" && actorIsMaintainer) {
               core.info("Maintainer reopened the issue; respecting their decision.");
-              if (botState?.active) {
-                const doneState = { ...botState, active: false };
-                await upsertComment([
-                  BOT_MARKER,
-                  stateTag(doneState),
-                  "",
-                  "### Maintainer decision respected",
-                  "",
-                  "A maintainer has reopened this issue. The automated closure has been deactivated.",
-                ].join("\n"));
-              }
+              const doneState = {
+                version: 2,
+                active: false,
+                kind: botState?.kind || resolvedKind || null,
+                closedAt: botState?.closedAt || null,
+                stateReason: botState?.stateReason || null,
+                maintainerOverride: true,
+              };
+              await upsertComment([
+                BOT_MARKER,
+                stateTag(doneState),
+                "",
+                "### Maintainer decision respected",
+                "",
+                "A maintainer has reopened this issue. The automated closure has been deactivated.",
+              ].join("\n"));
+              return;
+            }
+
+            // Prior maintainer override — do not re-close on later edits.
+            if (!shouldEnforceClosure(botState)) {
+              core.info("Bot enforcement was deactivated by a maintainer; skipping closure.");
               return;
             }
 
@@ -241,7 +288,7 @@ jobs:
             const newBotState = {
               version: 2,
               active: true,
-              kind,
+              kind: resolvedKind,
               closedAt: closedIssue.closed_at,
               stateReason: closedIssue.state_reason || "not_planned",
             };
