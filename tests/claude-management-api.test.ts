@@ -13,6 +13,12 @@ let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
+const originalPlatform = process.platform;
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -32,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPlatform(originalPlatform);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -414,6 +421,37 @@ test("PUT validation rejects bad shapes", async () => {
       expect(((await r.json()) as { error: string }).error).toBe(error);
     }
     expect(loadConfig().claudeCode).toBeUndefined(); // nothing persisted on rejects
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("GET /api/claude-code reports Auto-connect support on Darwin", async () => {
+  setPlatform("darwin");
+  const server = startServer(0);
+  try {
+    const r = await fetch(new URL("/api/claude-code", server.url));
+    expect(r.status).toBe(200);
+    const d = await r.json() as Record<string, any>;
+    expect(d.autoConnectSupported).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("GET /api/claude-code reports Auto-connect unsupported outside Darwin", async () => {
+  saveConfig({
+    ...loadConfig(),
+    claudeCode: { systemEnv: true },
+  } as OcxConfig);
+  setPlatform("linux");
+  const server = startServer(0);
+  try {
+    const r = await fetch(new URL("/api/claude-code", server.url));
+    expect(r.status).toBe(200);
+    const d = await r.json() as Record<string, any>;
+    expect(d.systemEnv).toBe(true);              // raw stored preference
+    expect(d.autoConnectSupported).toBe(false);  // effective capability
   } finally {
     server.stop(true);
   }

@@ -26,6 +26,7 @@ import {
   targetKey,
 } from "../combos";
 import type { NormalizedComboConfig } from "../combos/types";
+import { providerDestinationResolvedError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
 
@@ -354,6 +355,100 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
     if (efforts.length > 0) out.set(callerSlug, efforts);
   }
   return out;
+}
+
+export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
+
+export type SpawnAgentSurface = "v1" | "v2";
+export type SubagentRosterExclusionReason =
+  | "missing_catalog_entry"
+  | "picker_hidden"
+  | "surface_incompatible"
+  | "outside_display_limit";
+
+export interface EffectiveSubagentModel {
+  model: string;
+  efforts: string[];
+}
+
+export interface SubagentRosterExclusion {
+  configured: string;
+  reason: SubagentRosterExclusionReason;
+  catalogModel?: string;
+}
+
+export interface EffectiveSubagentRoster {
+  candidates: EffectiveSubagentModel[];
+  advertised: EffectiveSubagentModel[];
+  excluded: SubagentRosterExclusion[];
+}
+
+function catalogEntryEfforts(entry: RawEntry): string[] {
+  const levels = Array.isArray(entry.supported_reasoning_levels)
+    ? entry.supported_reasoning_levels as Array<{ effort?: string }>
+    : [];
+  return levels.flatMap(level => typeof level.effort === "string" ? [level.effort] : []);
+}
+
+function configuredCatalogEntry(entries: RawEntry[], configured: string): RawEntry | undefined {
+  return entries.find(entry => entry.slug === configured)
+    ?? entries.find(entry => typeof entry.slug === "string" && slugsEquivalent(configured, entry.slug));
+}
+
+/**
+ * The effective sub-agent roster for a collaboration surface: Codex's picker-visible
+ * (`visibility === "list"`), surface-compatible, priority-sorted first five catalog
+ * entries (candidates), intersected with the configured subagentModels (advertised),
+ * plus a reason for every configured entry that did not make the set (excluded).
+ * Canonical `entry.slug` is returned; legacy raw aliases are matching inputs only.
+ */
+export function effectiveSubagentRoster(
+  configuredModels: readonly string[],
+  surface: SpawnAgentSurface,
+): EffectiveSubagentRoster {
+  const configured = configuredModels
+    .filter(model => model.trim().length > 0)
+    .filter((model, index, all) =>
+      !all.slice(0, index).some(previous => slugsEquivalent(previous, model))
+    );
+  const entries = readCatalog(readCodexCatalogPath())?.models ?? [];
+  const ordered = entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => typeof entry.slug === "string")
+    .filter(({ entry }) => entry.visibility === "list")
+    .filter(({ entry }) => surface !== "v2" || entry.multi_agent_version === "v2")
+    .sort((left, right) => {
+      const leftPriority = typeof left.entry.priority === "number" && Number.isFinite(left.entry.priority)
+        ? left.entry.priority : Number.MAX_SAFE_INTEGER;
+      const rightPriority = typeof right.entry.priority === "number" && Number.isFinite(right.entry.priority)
+        ? right.entry.priority : Number.MAX_SAFE_INTEGER;
+      return leftPriority - rightPriority || left.index - right.index;
+    })
+    .slice(0, MAX_SPAWN_AGENT_MODEL_OVERRIDES);
+
+  const candidates = ordered.map(({ entry }) => ({
+    model: entry.slug as string,
+    efforts: catalogEntryEfforts(entry),
+  }));
+  const advertised = candidates.filter(candidate =>
+    configured.some(model => slugsEquivalent(model, candidate.model))
+  );
+  const excluded = configured.flatMap((model): SubagentRosterExclusion[] => {
+    const entry = configuredCatalogEntry(entries, model);
+    if (!entry) return [{ configured: model, reason: "missing_catalog_entry" }];
+    const catalogModel = entry.slug as string;
+    if (entry.visibility !== "list") {
+      return [{ configured: model, catalogModel, reason: "picker_hidden" }];
+    }
+    if (surface === "v2" && entry.multi_agent_version !== "v2") {
+      return [{ configured: model, catalogModel, reason: "surface_incompatible" }];
+    }
+    if (!candidates.some(candidate => candidate.model === catalogModel)) {
+      return [{ configured: model, catalogModel, reason: "outside_display_limit" }];
+    }
+    return [];
+  });
+  return { candidates, advertised, excluded };
 }
 
 /**
@@ -1447,28 +1542,64 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
+  const failedDiscoveryFallback = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+    markModelsFetchFailure(name);
+    const stale = getStaleCached(name);
+    return {
+      models: stale
+        ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+        : configured,
+      fallback: stale ? "stale" : "configured",
+    };
+  };
   try {
+    const destinationError = await providerDestinationResolvedError(name, {
+      baseUrl: url,
+      allowPrivateNetwork: prov.allowPrivateNetwork,
+    });
+    if (destinationError) {
+      const { models, fallback } = failedDiscoveryFallback();
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+      return models;
+    }
+
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
-      markModelsFetchFailure(name);
-      const stale = getStaleCached(name);
-      const fallback = stale ? "stale" : "configured";
+      const { models, fallback } = failedDiscoveryFallback();
       console.warn(
         `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
       );
-      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+      return models;
     }
-    const json = await res.json() as unknown;
+
+    const contentType = (
+      res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
+    ).slice(0, 80);
+    const body = await res.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(body) as unknown;
+    } catch {
+      const { models, fallback } = failedDiscoveryFallback();
+      const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
+        ? "returned invalid JSON in a 2xx response"
+        : "returned a non-JSON 2xx response";
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+      return models;
+    }
     const data = json !== null && typeof json === "object" && !Array.isArray(json)
       ? (json as { data?: unknown }).data
       : undefined;
     if (!isProviderModelsApiItems(data)) {
-      markModelsFetchFailure(name);
+      const { models, fallback } = failedDiscoveryFallback();
       console.warn(
-        `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data; using stale/static catalog degradation.`,
+        `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
       );
-      const stale = getStaleCached(name);
-      return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+      return models;
     }
     const items = data;
     const live = items.map(m => applyProviderConfigHints(name, prov, {
@@ -1509,13 +1640,11 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
     setCached(name, live);
     return live;
   } catch (error) {
-    markModelsFetchFailure(name);
-    const stale = getStaleCached(name);
-    const fallback = stale ? "stale" : "configured";
+    const { models, fallback } = failedDiscoveryFallback();
     console.warn(
       `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
     );
-    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : configured;
+    return models;
   }
 }
 

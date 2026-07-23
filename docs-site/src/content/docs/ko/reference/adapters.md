@@ -45,7 +45,8 @@ interface ProviderAdapter {
 **변환하지 않은 채** 스트리밍합니다.
 **인증:** `forward`(호출자 헤더 중계) 또는 `key`.
 
-- `forward` URL → `{baseUrl}/responses`; `key` URL → `{baseUrl}/v1/responses`.
+- `forward` URL → `{baseUrl}/responses`. `key` provider는 기본적으로 기존 `{baseUrl}/v1/responses` 구성을 사용합니다.
+- `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
   [사이드카](/opencodex/ko/guides/sidecars/)에도 쓰입니다.

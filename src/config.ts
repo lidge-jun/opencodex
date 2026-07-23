@@ -329,6 +329,7 @@ const warnedConfigFallbacks = new Set<string>();
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  responsesPath: z.string().min(1).optional(),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   responsesItemIdRepair: z.object({
@@ -370,6 +371,18 @@ export function providerBaseUrlConfigError(baseUrl: string): string | null {
     if (parsed.search || parsed.hash) return "baseUrl must not include query strings or fragments";
   } catch {
     return "baseUrl must be a valid URL";
+  }
+  return null;
+}
+
+function providerResponsesPathConfigError(responsesPath: string | undefined): string | null {
+  if (responsesPath === undefined) return null;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(responsesPath) || responsesPath.includes("://")) {
+    return "responsesPath must be a relative path without a URL scheme";
+  }
+  if (!responsesPath.startsWith("/")) return "responsesPath must start with /";
+  if (responsesPath.includes("?") || responsesPath.includes("#")) {
+    return "responsesPath must not include query strings or fragments";
   }
   return null;
 }
@@ -416,6 +429,7 @@ const configSchema = z.object({
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
+  multiAgentGuidanceEnabled: z.boolean().optional(),
 }).passthrough().superRefine((config, ctx) => {
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {
@@ -463,6 +477,14 @@ const configSchema = z.object({
           message: destinationError,
         });
       }
+    }
+    const responsesPathError = providerResponsesPathConfigError(provider.responsesPath);
+    if (responsesPathError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "responsesPath"],
+        message: responsesPathError,
+      });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
@@ -728,6 +750,12 @@ export function codexAutoStartEnabled(config: Pick<OcxConfig, "codexAutoStart">)
   return config.codexAutoStart !== false;
 }
 
+export function multiAgentGuidanceEnabled(
+  config: Pick<OcxConfig, "multiAgentGuidanceEnabled">,
+): boolean {
+  return config.multiAgentGuidanceEnabled !== false;
+}
+
 export function getDefaultConfig(): OcxConfig {
   // Fresh-install default: works out of the box with Codex's ChatGPT OAuth (no API key).
   // gpt-* requests forward the caller's incoming OAuth headers to the ChatGPT backend.
@@ -748,6 +776,7 @@ export function getDefaultConfig(): OcxConfig {
     },
     defaultProvider: "openai",
     subagentModels: [...DEFAULT_SUBAGENT_MODELS],
+    multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,
   };

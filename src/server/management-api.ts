@@ -7,6 +7,7 @@ import {
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
+  multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfig,
@@ -1105,6 +1106,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         stored === m.namespaced || slugEquals(stored, m.provider, m.model)
       )));
     return jsonResponse({
+      multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
@@ -1113,34 +1115,69 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     });
   }
   if (url.pathname === "/api/injection-model" && req.method === "PUT") {
-    let body: { model?: unknown; effort?: unknown; prompt?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const { isCodexReasoningEffort } = await import("../reasoning-effort");
-    const model = typeof body.model === "string" && body.model.length > 0 ? body.model : undefined;
-    let effort = config.injectionEffort;
-    // `effort` key semantics: absent -> unchanged; null/"" -> clear; ladder value -> set;
-    // anything else -> 400. Clearing the model always clears the effort (it is meaningless alone).
-    if ("effort" in body) {
-      const requestedEffort = typeof body.effort === "string" && body.effort.length > 0 ? body.effort : undefined;
-      if (requestedEffort !== undefined && !isCodexReasoningEffort(requestedEffort)) {
-        return jsonResponse({ error: `unknown reasoning effort "${requestedEffort}"` }, 400);
-      }
-      effort = requestedEffort;
+    let parsedBody: unknown;
+    try { parsedBody = await req.json(); } catch {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (!model) effort = undefined;
-    if (model) config.injectionModel = model;
-    else delete config.injectionModel;
-    if (effort) config.injectionEffort = effort;
-    else delete config.injectionEffort;
-    // `prompt` key semantics mirror `effort`: absent -> unchanged; null/"" -> clear;
-    // non-empty string -> set (custom <multi_agent_mode> body, {{model}}/{{effort}}/{{roster}} placeholders).
+    if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+      return jsonResponse({ error: "body must be a JSON object" }, 400);
+    }
+    const body = parsedBody as {
+      multiAgentGuidanceEnabled?: unknown;
+      model?: unknown;
+      effort?: unknown;
+      prompt?: unknown;
+    };
+    const { isCodexReasoningEffort } = await import("../reasoning-effort");
+
+    let nextEnabled = config.multiAgentGuidanceEnabled;
+    let nextModel = config.injectionModel;
+    let nextEffort = config.injectionEffort;
+    let nextPrompt = config.injectionPrompt;
+
+    if ("multiAgentGuidanceEnabled" in body) {
+      if (typeof body.multiAgentGuidanceEnabled !== "boolean") {
+        return jsonResponse({ error: "multiAgentGuidanceEnabled must be a boolean" }, 400);
+      }
+      nextEnabled = body.multiAgentGuidanceEnabled;
+    }
+    if ("model" in body) {
+      if (body.model === null || body.model === "") nextModel = undefined;
+      else if (typeof body.model === "string" && body.model.length > 0) nextModel = body.model;
+      else return jsonResponse({ error: "model must be a non-empty string or null" }, 400);
+    }
+    if ("effort" in body) {
+      if (body.effort === null || body.effort === "") nextEffort = undefined;
+      else if (typeof body.effort === "string" && isCodexReasoningEffort(body.effort)) {
+        nextEffort = body.effort;
+      } else {
+        return jsonResponse({ error: `unknown reasoning effort "${String(body.effort)}"` }, 400);
+      }
+    }
     if ("prompt" in body) {
-      if (typeof body.prompt === "string" && body.prompt.trim().length > 0) config.injectionPrompt = body.prompt;
-      else if (body.prompt === null || body.prompt === "") delete config.injectionPrompt;
+      if (typeof body.prompt === "string" && body.prompt.trim().length > 0) nextPrompt = body.prompt;
+      else if (body.prompt === null || body.prompt === "") nextPrompt = undefined;
       else return jsonResponse({ error: "prompt must be a string or null" }, 400);
     }
+    // Clearing the model always clears the effort (it is meaningless alone).
+    if (!nextModel) nextEffort = undefined;
+
+    config.multiAgentGuidanceEnabled = nextEnabled;
+    if (nextModel) config.injectionModel = nextModel;
+    else delete config.injectionModel;
+    if (nextEffort) config.injectionEffort = nextEffort;
+    else delete config.injectionEffort;
+    if (nextPrompt) config.injectionPrompt = nextPrompt;
+    else delete config.injectionPrompt;
+
     saveConfig(config);
-    return jsonResponse({ ok: true, model: config.injectionModel ?? null, effort: config.injectionEffort ?? null, prompt: config.injectionPrompt ?? null });
+    return jsonResponse({
+      ok: true,
+      multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+      model: config.injectionModel ?? null,
+      effort: config.injectionEffort ?? null,
+      prompt: config.injectionPrompt ?? null,
+    });
   }
 
   // Hard reasoning-effort caps (devlog/260710_subagent_effort_intercept): a global ceiling and a
@@ -1241,6 +1278,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       tierModels: config.claudeCode?.tierModels ?? {},
       modelMap: config.claudeCode?.modelMap ?? {},
       systemEnv: config.claudeCode?.systemEnv === true,
+      autoConnectSupported: process.platform === "darwin",
       maxContextTokens: config.claudeCode?.maxContextTokens ?? null,
       alwaysEnableEffort: config.claudeCode?.alwaysEnableEffort === true,
       autoContext: config.claudeCode?.autoContext !== false,

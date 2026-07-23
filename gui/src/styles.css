@@ -1010,6 +1010,7 @@ button.prov-account-row.active { cursor: default; }
 .toggle input:checked + .slider { background: var(--toggle-on-bg); }
 .toggle input:checked + .slider::after { transform: translateX(calc(var(--toggle-w) - var(--toggle-dot) - 6px)); }
 .toggle input:focus-visible + .slider { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.toggle input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Setting row (label left, control right) ── */
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; gap: 16px; }

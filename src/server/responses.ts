@@ -2,6 +2,7 @@ import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
 import {
   getConfigPath,
+  multiAgentGuidanceEnabled,
   resolveEnvValue,
 } from "../config";
 import { parseRequest } from "../responses/parser";
@@ -59,6 +60,7 @@ import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { slugsEquivalent } from "../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "./request-decompress";
@@ -184,13 +186,9 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
  * model/effort overrides on a full-history fork (multi_agents_v2/spawn.rs
  * reject_full_fork_spawn_overrides), so the prompt mandates fork_turns "none" or a
  * partial fork plus a self-contained task message.
- * The published spawn_agent schema HIDES model/reasoning_effort by
- * default (hide_spawn_agent_metadata=true upstream — and it must STAY hidden: the
- * ChatGPT backend treats collaboration.spawn_agent as a reserved function and
- * rejects any request whose declared schema deviates, "Invalid Value: 'tools'").
- * That is prompt-workable: SpawnAgentArgs always parses model/reasoning_effort
- * regardless of the flag (spawn.rs), so the prompt tells the model to pass the
- * arguments even though the schema does not list them.
+ * Current Codex surfaces can expose model/reasoning_effort overrides directly or
+ * omit them. The proxy wording therefore stays schema-agnostic and advertises only
+ * the effective candidates described for this collaboration surface.
  *
  * The v2 body is budgeted to <= 700 chars (V2_GUIDANCE_CHAR_BUDGET): rules first,
  * then the preferred model, then the compact roster of configured `subagentModels`
@@ -199,7 +197,43 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
  * v2 body with {{model}}/{{effort}}/{{roster}} placeholder substitution (own length,
  * user-owned); firing gates are unchanged.
  */
-export async function multiAgentGuidanceText(parsed: OcxParsedRequest, injectionModel?: string, injectionEffort?: string, subagentModels?: string[], injectionPrompt?: string): Promise<string | null> {
+import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../codex/catalog";
+
+export interface MultiAgentGuidanceOptions {
+  multiAgentGuidanceEnabled?: boolean;
+  injectionModel?: string;
+  injectionEffort?: string;
+  subagentModels?: string[];
+  injectionPrompt?: string;
+}
+
+export interface MultiAgentGuidanceDeps {
+  resolveEffectiveSubagentRoster?: (
+    configuredModels: readonly string[],
+    surface: SpawnAgentSurface,
+  ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
+}
+
+async function resolveEffectiveSubagentRoster(
+  configuredModels: readonly string[],
+  surface: SpawnAgentSurface,
+): Promise<EffectiveSubagentRoster> {
+  const { effectiveSubagentRoster } = await import("../codex/catalog");
+  return effectiveSubagentRoster(configuredModels, surface);
+}
+
+export async function multiAgentGuidanceText(
+  parsed: OcxParsedRequest,
+  options: MultiAgentGuidanceOptions = {},
+  deps: MultiAgentGuidanceDeps = {},
+): Promise<string | null> {
+  if (options.multiAgentGuidanceEnabled === false) return null;
+  const {
+    injectionModel,
+    injectionEffort,
+    subagentModels,
+    injectionPrompt,
+  } = options;
   const surface = collabSurface(parsed);
   if (surface === null) return null;
 
@@ -207,17 +241,37 @@ export async function multiAgentGuidanceText(parsed: OcxParsedRequest, injection
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.
-    const roster = await subagentRosterText(subagentModels);
+    const configuredForGuidance = [
+      ...(subagentModels ?? []),
+      ...(injectionModel ? [injectionModel] : []),
+    ];
+    const resolveRoster = deps.resolveEffectiveSubagentRoster ?? resolveEffectiveSubagentRoster;
+    const effective = await resolveRoster(configuredForGuidance, "v2");
+    const rosterModels = effective.advertised.filter(candidate =>
+      (subagentModels ?? []).some(model => slugsEquivalent(model, candidate.model))
+    );
+    const roster = subagentRosterText(rosterModels);
+    const preferred = injectionModel
+      ? effective.candidates.find(candidate => slugsEquivalent(injectionModel, candidate.model))
+      : undefined;
+
+    if (isInjectionDebugEnabled() && effective.excluded.length > 0) {
+      injectionDebugLog(`[opencodex] multi-agent guidance excluded: ${effective.excluded
+        .map(item => `${item.configured}:${item.reason}`)
+        .join(", ")}`);
+    }
     if (!injectionModel && roster === "") return null;
     if (injectionPrompt) {
       return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, injectionModel, injectionEffort, roster)}</multi_agent_mode>`;
     }
-    let text = "spawn_agent also accepts hidden \"model\" and \"reasoning_effort\" string arguments "
-      + "(not in the schema, but parsed and applied) — never claim sub-agent models cannot be selected. "
-      + "When setting either, set fork_turns to \"none\" (or e.g. \"3\"; full-history forks reject overrides) "
-      + "and make the message self-contained.";
-    if (injectionModel) {
-      text += ` Preferred sub-agent: model "${injectionModel}"`
+    if (!preferred && roster === "") return null;
+    let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
+      + "use only models listed for this collaboration surface. "
+      + "When setting either override, set fork_turns to \"none\" "
+      + "(or a positive turn count such as \"3\"; full-history forks reject overrides) "
+      + "and make the task message self-contained.";
+    if (preferred) {
+      text += ` Preferred sub-agent: model "${preferred.model}"`
         + (injectionEffort ? `, reasoning_effort "${injectionEffort}"` : "")
         + " — use it unless the user names another.";
     }
@@ -248,25 +302,21 @@ function applyInjectionPlaceholders(prompt: string, model?: string, effort?: str
 }
 
 /**
- * Compact one-line roster of configured sub-agent models, or "" when no configured
- * model resolves to a catalog entry. Efforts come from the injected catalog
- * (catalogModelEfforts) so only rungs codex-rs will actually accept are advertised.
+ * Compact one-line roster of effective sub-agent candidates, or "" when empty.
+ * Efforts come from the injected catalog so only rungs codex-rs will actually
+ * accept are advertised.
  */
-async function subagentRosterText(subagentModels?: string[]): Promise<string> {
-  const featured = (subagentModels ?? []).filter(id => typeof id === "string" && id.trim().length > 0);
-  if (featured.length === 0) return "";
-  const { catalogModelEfforts } = await import("../codex/catalog");
-  const efforts = catalogModelEfforts(featured);
-  const resolved = featured.filter(id => efforts.has(id));
-  if (resolved.length === 0) return "";
-  const ladders = new Set(resolved.map(id => efforts.get(id)!.join("/")));
-  if (ladders.size === 1) {
-    // Shared ladder (the common case: the injected catalog advertises one rung set)
-    // -> state it once instead of per model, keeping the roster inside the budget.
-    const ids = resolved.map(id => `"${id}"`).join(", ");
-    return ` Available models (reasoning_effort ${[...ladders][0]}): ${ids}.`;
+function subagentRosterText(models: Array<{ model: string; efforts: string[] }>): string {
+  if (models.length === 0) return "";
+  const ladders = new Set(models.map(model => model.efforts.join("/")));
+  if (!ladders.has("") && ladders.size === 1) {
+    return ` Available models (reasoning_effort ${[...ladders][0]}): ${models
+      .map(model => `"${model.model}"`)
+      .join(", ")}.`;
   }
-  const entries = resolved.map(id => `"${id}" (${efforts.get(id)!.join("/")})`);
+  const entries = models.map(model => model.efforts.length > 0
+    ? `"${model.model}" (${model.efforts.join("/")})`
+    : `"${model.model}"`);
   return ` Available models (valid reasoning_effort): ${entries.join(", ")}.`;
 }
 
@@ -962,17 +1012,23 @@ export async function handleResponses(
   }
 
   // Multi-agent guidance shim: codex-rs emits its Proactive delegation developer
-  // message only on the v2 surface. The proxy fills both gaps: the Proactive text
-  // for v1 collab surfaces at the top tier, and the sub-agent model designation on
-  // BOTH surfaces when an injectionModel is configured (v2 additionally gets the
-  // fork_turns override rules). The surface is judged from the request's own tool list.
-  // Runs BEFORE the mock-max clamp below so the synthetic top tier (ultra arrives
-  // as max on the codex wire) is still visible. Both request shapes are rewritten.
+  // message only on the v2 surface. The proxy fills the gaps: the Proactive text
+  // for v1 collab surfaces at the top tier (no model designation on v1), and the
+  // sub-agent model/roster designation plus fork_turns override rules on v2.
+  // The surface is judged from the request's own tool list. Runs BEFORE the
+  // mock-max clamp below so the synthetic top tier (ultra arrives as max on the
+  // codex wire) is still visible. Both request shapes are rewritten.
   {
-    const guidance = await multiAgentGuidanceText(parsed, config.injectionModel, config.injectionEffort, config.subagentModels, config.injectionPrompt);
+    const guidance = await multiAgentGuidanceText(parsed, {
+      multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
+      injectionModel: config.injectionModel,
+      injectionEffort: config.injectionEffort,
+      subagentModels: config.subagentModels,
+      injectionPrompt: config.injectionPrompt,
+    });
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
-      if (isInjectionDebugEnabled()) injectionDebugLog(`[opencodex] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, ${guidance.length} chars)`);
+      if (isInjectionDebugEnabled()) injectionDebugLog(`[opencodex] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
     } else if (isInjectionDebugEnabled() && collabSurface(parsed) !== null) {
       injectionDebugLog(`[opencodex] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
     }

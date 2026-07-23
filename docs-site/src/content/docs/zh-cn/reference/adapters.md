@@ -43,7 +43,8 @@ interface ProviderAdapter {
 **不经转换**地流式传回。
 **认证：** `forward`（转发调用方 header）或 `key`。
 
-- `forward` URL → `{baseUrl}/responses`；`key` URL → `{baseUrl}/v1/responses`。
+- `forward` URL → `{baseUrl}/responses`。`key` provider 默认保留原有的 `{baseUrl}/v1/responses` 构造。
+- `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只会转发安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
   account id 和 OpenAI beta/originator/session header。这条 ChatGPT 登录路径也为
   [sidecar](/opencodex/zh-cn/guides/sidecars/) 提供支持。

@@ -8,6 +8,47 @@ const provider = {
   authMode: "forward" as const,
 };
 
+function buildKeyAuthUrl(baseUrl: string, responsesPath?: string): string {
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl,
+    authMode: "key" as const,
+    apiKey: "sk-test",
+    ...(responsesPath === undefined ? {} : { responsesPath }),
+  });
+  return adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers() }).url;
+}
+
+describe("OpenAI Responses key-auth URL construction", () => {
+  test("BUG-R289 preserves legacy /v1/responses URL when responsesPath is absent", () => {
+    for (const [baseUrl, expectedUrl] of [
+      ["https://api.openai.example", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1/", "https://api.openai.example/v1/responses"],
+    ] as const) {
+      expect(buildKeyAuthUrl(baseUrl)).toBe(expectedUrl);
+    }
+  });
+
+  test("BUG-R289 appends responsesPath to a baseUrl with one trailing slash", () => {
+    expect(buildKeyAuthUrl("https://gateway.example/api/v3/", "/responses"))
+      .toBe("https://gateway.example/api/v3/responses");
+  });
+
+  test("BUG-R289 routes Volcengine Ark Agent Plan to /api/plan/v3/responses", () => {
+    expect(buildKeyAuthUrl(
+      "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "/responses",
+    )).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/responses");
+  });
+});
+
 describe("OpenAI Responses passthrough sanitization", () => {
   test("agent_message conversion removes its non-OpenAI item id", () => {
     const input = [{

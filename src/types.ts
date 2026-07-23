@@ -454,6 +454,11 @@ export interface OcxConfig {
    */
   injectionPrompt?: string;
   /**
+   * Proxy-authored multi-agent developer guidance. Undefined/true = enabled for
+   * backward compatibility; false suppresses both v1 and v2 guidance injection.
+   */
+  multiAgentGuidanceEnabled?: boolean;
+  /**
    * Global hard ceiling for the reasoning effort of EVERY proxied turn (main agent AND
    * sub-agents). Ladder value "low".."max"; incoming efforts ranking above it are rewritten
    * in both request shapes before any adapter or clamp. Unset = no cap. codex-rs converts
@@ -686,6 +691,12 @@ export interface ResponsesItemIdRepairConfig {
 export interface OcxProviderConfig {
   adapter: string;
   baseUrl: string;
+  /**
+   * Optional relative resource path for key-auth openai-responses requests. Must start with `/`
+   * and must not include a URL scheme, query string, or fragment. When omitted, the adapter keeps
+   * the legacy `/v1/responses` construction.
+   */
+  responsesPath?: string;
   /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.

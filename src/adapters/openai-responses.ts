@@ -440,8 +440,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
       } else {
-        const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-        url = `${base}/v1/responses`;
+        if (provider.responsesPath === undefined) {
+          const base = provider.baseUrl.replace(/\/v1\/?$/, "");
+          url = `${base}/v1/responses`;
+        } else {
+          const base = provider.baseUrl.replace(/\/$/, "");
+          url = `${base}${provider.responsesPath}`;
+        }
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }

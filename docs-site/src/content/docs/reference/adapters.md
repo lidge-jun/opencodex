@@ -45,7 +45,8 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
 streams the response back **untranslated**.
 **Auth:** `forward` (relay the caller's headers) or `key`.
 
-- `forward` URL → `{baseUrl}/responses`; `key` URL → `{baseUrl}/v1/responses`.
+- `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to the legacy `{baseUrl}/v1/responses` construction.
+- A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
   that also powers the [sidecars](/opencodex/guides/sidecars/).

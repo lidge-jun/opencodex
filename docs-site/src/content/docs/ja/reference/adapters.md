@@ -38,7 +38,8 @@ interface ProviderAdapter {
 **対象:** OpenAI **Responses API**。**`passthrough: true`** — 元のリクエスト本文をそのまま渡し、レスポンスを **変換せずに** ストリーミングします。
 **認証:** `forward`（呼び出し元ヘッダー中継）または `key`。
 
-- `forward` URL → `{baseUrl}/responses`; `key` URL → `{baseUrl}/v1/responses`。
+- `forward` URL → `{baseUrl}/responses`。`key` provider はデフォルトで従来の `{baseUrl}/v1/responses` 構築を使います。
+- `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
 - `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/opencodex/ja/guides/sidecars/) にも使われます。
 
 ## `anthropic`

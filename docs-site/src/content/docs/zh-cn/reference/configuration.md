@@ -29,12 +29,13 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `providers` | `Record<string, OcxProviderConfig>` | — | provider 名称 → 配置的映射。 |
 | `openaiProviderTierVersion?` | `2` | migration 设置 | 单一选项式 OpenAI projection 完成标记。 |
 | `defaultProvider` | `string` | `"openai"` | 路由找不到更优匹配时使用的 provider。 |
-| `subagentModels?` | `string[]` | `gpt-5.5`、三款 GPT-5.6、`gpt-5.4-mini` | 最多 5 个原生 slug 或 `provider/model` id，优先显示在 Codex subagent picker 中。显式空数组会被保留。 也会作为可用模型清单注入 v2 委派指南，并标注各模型在目录中公布的 effort 阶梯。 |
+| `subagentModels?` | `string[]` | `gpt-5.5`、三款 GPT-5.6、`gpt-5.4-mini` | 最多 5 个原生 slug 或 `provider/model` id，优先显示在 Codex subagent picker 中。v2 指引清单是已配置模型与 Codex 中 picker 可见、兼容 v2、按 priority 排序后前五项的交集，并使用规范目录 slug 与可用 effort 档位；被排除的条目仍保留在配置中。显式空数组会被保留。 |
 | `injectionModel?` | `string` | — | 注入 multi-agent 指南（v2 界面）的首选原生或路由模型；委派指南会要求把该模型连同 `fork_turns: "none"` 一起传给 `spawn_agent`。 |
 | `injectionEffort?` | `string` | — | 首选 `spawn_agent` reasoning effort（`low` 到 `ultra`）。只有与 `injectionModel` 一起使用才有意义。 |
 | `effortCap?` | `string` | — | reasoning effort 的逐请求硬上限。这是多代理 V2 专属功能：适用于工具列表带有 V2 协作表面的主轮次，以及标记精确匹配 `x-openai-subagent: collab_spawn` 或 `x-codex-turn-metadata` 中 `"subagent_kind": "thread_spawn"` 的派生子轮次（带标记的子轮次无论自身工具表面如何都会被覆盖）。普通主轮次与 V1 表面主轮次不受影响，压缩（compaction）轮次始终绕过上限，`multiAgentMode: "v1"` 会完全禁用上限功能（仪表盘同时隐藏该面板）。接受 `low` 到 `ultra`；只会降低 effort，绝不会提高。会降至不高于上限的最高受支持档位。若模型不提供 effort 控制，或上限之下没有可用档位，则移除 effort 字段并采用 provider 默认值。`max` 和 `ultra` 均可使用，但不会形成更低的等级上限（客户端会将 `ultra` 转换为 `max`，因此请求以 `low` 到 `max` 的范围到达）；不过，已知的模型 effort 阶梯仍可能触发降档或移除字段。仪表盘选择器提供 `low` 到 `xhigh`。通过 `GET /api/effort-caps` 和 `PUT /api/effort-caps` 管理。 |
 | `subagentEffortCap?` | `string` | — | 同样的硬上限，但只用于 codex-rs 标记精确匹配的派生子轮次：`x-openai-subagent: collab_spawn`，或 `x-codex-turn-metadata` 中的 `"subagent_kind": "thread_spawn"`。其他内部子代理类别（评审、压缩、记忆整理）不会触发此上限，`multiAgentMode: "v1"` 会完全禁用该功能。接受 `low` 到 `ultra`；两个上限同时设置时取较低者，且只会降低 effort，绝不会提高。会降至不高于上限的最高受支持档位。若模型不提供 effort 控制，或上限之下没有可用档位，则移除 effort 字段并采用 provider 默认值。`max` 和 `ultra` 均可使用，但不会形成更低的等级上限（客户端会将 `ultra` 转换为 `max`，因此请求以 `low` 到 `max` 的范围到达）；不过，已知的模型 effort 阶梯仍可能触发降档或移除字段。仪表盘选择器提供 `low` 到 `xhigh`。通过 `GET /api/effort-caps` 和 `PUT /api/effort-caps` 管理。 |
 | `injectionPrompt?` | `string` | — | 整体替换注入的 v2 指南正文的自定义文本。`{{model}}`、`{{effort}}`、`{{roster}}` 占位符会被替换，触发条件保持不变。也可通过 `PUT /api/injection-model` 的 `prompt` 键设置。 |
+| `multiAgentGuidanceEnabled?` | `boolean` | `true` | 仅控制由 OpenCodex 添加的 multi-agent developer 指引。未设置/`true` 保持 v1/v2 指引；`false` 会同时禁止两者，但不改变协作界面、`subagentModels`、路由或 effort 上限。`GET/PUT /api/injection-model` 返回有效值，PUT 为部分更新。 |
 | `disabledModels?` | `string[]` | — | 从 Codex 隐藏的模型。路由 `provider/model` id 会从目录和 `/v1/models` 排除；bare 原生 GPT slug（如 `gpt-5.4`）的目录条目会改成 `visibility: "hide"`，并从 bare `/v1/models` 列表移除。可在仪表盘 Models 页面按模型切换。 |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 三态 multi-agent surface override。`"v1"` 覆盖 upstream pin，强制全部模型使用 v1；`"default"` 遵循 upstream model pin（sol/terra=v2，luna=v1）；`"v2"` 强制全部模型使用 v2。可在仪表盘 Models 页面或 `ocx v2 mode` 中设置。 |
 | `providerContextCaps?` | `Record<string,number>` | `{}` | provider 级 Codex 可见 context cap。只会降低已知 context window。 |
@@ -125,6 +126,7 @@ x-opencodex-api-key: your-secret-token
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
 | `baseUrl` | `string` | 上游 API base URL。 |
+| `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |

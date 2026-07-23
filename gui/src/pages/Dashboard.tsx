@@ -196,6 +196,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
   const [injectionEfforts, setInjectionEfforts] = useState<string[]>([]);
   const [injectionAvailable, setInjectionAvailable] = useState<Array<{ provider: string; model: string; namespaced: string }>>([]);
   const [injectionSaving, setInjectionSaving] = useState(false);
+  const [multiAgentGuidanceEnabled, setMultiAgentGuidanceEnabled] = useState(true);
   const [effortCap, setEffortCap] = useState<string>("");
   const [subagentEffortCap, setSubagentEffortCap] = useState<string>("");
   const [effortCapSaving, setEffortCapSaving] = useState(false);
@@ -261,7 +262,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
         try {
           const imRes = await fetch(`${apiBase}/api/injection-model`);
           if (imRes.ok) {
-            const imData = await imRes.json() as { model?: string | null; effort?: string | null; efforts?: string[]; available?: Array<{ provider: string; model: string; namespaced: string }> };
+            const imData = await imRes.json() as { multiAgentGuidanceEnabled?: boolean; model?: string | null; effort?: string | null; efforts?: string[]; available?: Array<{ provider: string; model: string; namespaced: string }> };
+            setMultiAgentGuidanceEnabled(imData.multiAgentGuidanceEnabled !== false);
             setInjectionModel(imData.model ?? "");
             setInjectionEffort(imData.effort ?? "");
             setInjectionEfforts(imData.efforts ?? []);
@@ -730,6 +732,37 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       )}
 
       <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="spread setting-row">
+          <div className="setting-copy" style={{ flex: 1 }}>
+            <div className="font-semibold">{t("dash.multiAgentGuidance")}</div>
+            <div className="muted setting-hint">{t("dash.multiAgentGuidanceHint")}</div>
+          </div>
+          <button
+            type="button"
+            className={`switch ${multiAgentGuidanceEnabled ? "on" : ""}`}
+            onClick={async () => {
+              if (injectionSaving) return;
+              setInjectionSaving(true);
+              try {
+                const res = await fetch(`${apiBase}/api/injection-model`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ multiAgentGuidanceEnabled: !multiAgentGuidanceEnabled }),
+                });
+                if (res.ok) {
+                  const data = await res.json() as { multiAgentGuidanceEnabled?: boolean };
+                  setMultiAgentGuidanceEnabled(data.multiAgentGuidanceEnabled !== false);
+                }
+              } catch { /* keep current value */ }
+              finally { setInjectionSaving(false); }
+            }}
+            disabled={injectionSaving}
+            aria-label={t("dash.multiAgentGuidance")}
+            aria-pressed={multiAgentGuidanceEnabled}
+          >
+            <span className="knob" />
+          </button>
+        </div>
         <div className="injection-head">
           <span className="injection-label">{t("dash.injectionLabel")}</span>
           <Select
@@ -755,7 +788,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
               } catch { /* ignore */ }
               finally { setInjectionSaving(false); }
             }}
-            disabled={injectionSaving}
+            disabled={injectionSaving || !multiAgentGuidanceEnabled}
             label={t("dash.injectionLabel")}
           />
           {injectionModel && injectionEfforts.length > 0 && (
@@ -782,11 +815,11 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                 } catch { /* ignore */ }
                 finally { setInjectionSaving(false); }
               }}
-              disabled={injectionSaving}
+              disabled={injectionSaving || !multiAgentGuidanceEnabled}
               label={t("dash.injectionEffortLabel")}
             />
           )}
-          {injectionModel && <span className="badge badge-green text-micro">{t("dash.injectionActive")}</span>}
+          {multiAgentGuidanceEnabled && injectionModel && <span className="badge badge-green text-micro">{t("dash.injectionActive")}</span>}
         </div>
         <div className="muted text-control" style={{ marginTop: 6 }}>{t("dash.injectionHint")}</div>
       </div>

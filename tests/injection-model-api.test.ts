@@ -4,9 +4,11 @@
  * model, and GET surfaces `{ effort, efforts }` next to the existing model picker.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getConfigPath, loadConfig } from "../src/config";
+import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { handleManagementAPI } from "../src/server/management-api";
 import { CODEX_REASONING_LEVELS } from "../src/reasoning-effort";
 import type { OcxConfig } from "../src/types";
@@ -45,7 +47,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig();
     const putRes = await put(config, { model: "openai/gpt-5.6-sol", effort: "xhigh" });
-    expect(await putRes.json()).toEqual({ ok: true, model: "openai/gpt-5.6-sol", effort: "xhigh", prompt: null });
+    expect(await putRes.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "openai/gpt-5.6-sol", effort: "xhigh", prompt: null });
     expect(config.injectionEffort).toBe("xhigh");
 
     const getRes = await handleManagementAPI(
@@ -87,7 +89,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "max" });
     const res = await put(config, { model: "openai/gpt-5.6-sol", effort: null });
-    expect(await res.json()).toEqual({ ok: true, model: "openai/gpt-5.6-sol", effort: null, prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "openai/gpt-5.6-sol", effort: null, prompt: null });
     expect(config.injectionEffort).toBeUndefined();
   });
 
@@ -95,7 +97,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "max" });
     const res = await put(config, { model: null });
-    expect(await res.json()).toEqual({ ok: true, model: null, effort: null, prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: null, effort: null, prompt: null });
     expect(config.injectionModel).toBeUndefined();
     expect(config.injectionEffort).toBeUndefined();
   });
@@ -104,7 +106,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "ultra" });
     const res = await put(config, { model: "anthropic/claude-sonnet-5" });
-    expect(await res.json()).toEqual({ ok: true, model: "anthropic/claude-sonnet-5", effort: "ultra", prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "anthropic/claude-sonnet-5", effort: "ultra", prompt: null });
   });
 
   test("GET round-trips combo aliases and excludes an alias-disabled combo", async () => {
@@ -143,5 +145,126 @@ describe("/api/injection-model reasoning effort", () => {
     );
     data = await response!.json() as typeof data;
     expect(data.available.some(model => model.namespaced === alias)).toBe(false);
+  });
+});
+
+describe("/api/injection-model guidance kill switch + partial update", () => {
+  test("flag-only PUT preserves model, effort, and prompt in memory and on disk", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      multiAgentGuidanceEnabled: true,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{model}} {{roster}}",
+    });
+
+    const response = await put(config, { multiAgentGuidanceEnabled: false });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      multiAgentGuidanceEnabled: false,
+      model: "gpt-5.6-terra",
+      effort: "max",
+      prompt: "RULES {{model}} {{roster}}",
+    });
+    expect(config).toMatchObject({
+      multiAgentGuidanceEnabled: false,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{model}} {{roster}}",
+    });
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted).toMatchObject({
+      multiAgentGuidanceEnabled: false,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{model}} {{roster}}",
+    });
+  });
+
+  test("explicit model clear clears effort but preserves prompt and guidance flag", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      multiAgentGuidanceEnabled: false,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{roster}}",
+    });
+
+    const response = await put(config, { model: null });
+    expect(await response.json()).toEqual({
+      ok: true,
+      multiAgentGuidanceEnabled: false,
+      model: null,
+      effort: null,
+      prompt: "RULES {{roster}}",
+    });
+    expect(config.injectionModel).toBeUndefined();
+    expect(config.injectionEffort).toBeUndefined();
+    expect(config.injectionPrompt).toBe("RULES {{roster}}");
+    expect(config.multiAgentGuidanceEnabled).toBe(false);
+  });
+
+  test.each([
+    ["null", null],
+    ["array", []],
+    ["scalar", "text"],
+  ] as const)("rejects top-level %s before any partial-update key check", async (_label, body) => {
+    isolatedHome();
+    const config = makeConfig({
+      multiAgentGuidanceEnabled: true,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "high",
+      injectionPrompt: "RULES",
+    });
+    const before = structuredClone(config);
+
+    const response = await put(config, body);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "body must be a JSON object" });
+    expect(config).toEqual(before);
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("guidance flag and injection settings survive save, catalog sync, and reload", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      multiAgentGuidanceEnabled: true,
+      multiAgentMode: "v2",
+      subagentModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{roster}}",
+    });
+    await put(config, { multiAgentGuidanceEnabled: false });
+
+    let flagSeenBySync: boolean | undefined;
+    await refreshCodexModelCatalog(config, {
+      syncCatalogModels: async syncedConfig => {
+        flagSeenBySync = syncedConfig.multiAgentGuidanceEnabled;
+        return { added: 0, path: join(tempHome!, "missing-catalog.json") };
+      },
+      invalidateCodexModelsCache: () => {},
+      existsSync: () => false,
+    });
+    expect(flagSeenBySync).toBe(false);
+    expect(config.multiAgentMode).toBe("v2");
+
+    const reloaded = loadConfig();
+    expect(reloaded).toMatchObject({
+      multiAgentGuidanceEnabled: false,
+      multiAgentMode: "v2",
+      subagentModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      injectionPrompt: "RULES {{roster}}",
+    });
   });
 });

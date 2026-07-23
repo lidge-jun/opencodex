@@ -4,11 +4,13 @@ import { IconPlus, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { useT } from "../i18n/shared";
 import { modelLabel } from "../model-display";
+import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv, type SidecarBackend, type SidecarOverride } from "./claude-manual-env";
 
 interface ClaudeCodeState {
   enabled: boolean;
   authMode: "subscription" | "proxy";
+  autoConnectSupported: boolean;
   systemEnv: boolean;
   fastMode: boolean | null;
   /** Legacy config override (no GUI control anymore) — still disables auto-context when hand-set. */
@@ -31,12 +33,71 @@ function formatCompactWindow(value: number): string {
   return value >= 1_000_000 ? "1M" : `${Math.round(value / 1_000)}k`;
 }
 
-function SettingToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function SettingToggle({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+  describedBy,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  disabled?: boolean;
+  describedBy?: string;
+}) {
   return (
     <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} aria-label={label} />
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        aria-describedby={describedBy}
+        onChange={event => onChange(event.target.checked)}
+      />
       <span className="slider" aria-hidden="true" />
     </label>
+  );
+}
+
+export function AutoConnectSetting({
+  supported,
+  checked,
+  onChange,
+}: {
+  supported: boolean;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const t = useT();
+  const unsupportedDescriptionId = supported ? undefined : "claude-system-env-unsupported";
+
+  return (
+    <div className="setting-row">
+      <div className="setting-label">
+        <span className="title">{t("claude.systemEnv")}</span>
+        {supported ? (
+          <span className="desc">{t("claude.systemEnvDesc")}</span>
+        ) : (
+          <span className="desc" id={unsupportedDescriptionId}>
+            <Trans k="claude.systemEnvUnsupported" cmd="ocx claude" />
+          </span>
+        )}
+        {supported && checked && (
+          <span className="desc" style={{ color: "var(--red)" }}>
+            {t("claude.systemEnvWarn")}
+          </span>
+        )}
+      </div>
+      <SettingToggle
+        label={t("claude.systemEnv")}
+        checked={supported && checked}
+        disabled={!supported}
+        describedBy={unsupportedDescriptionId}
+        onChange={onChange}
+      />
+    </div>
   );
 }
 
@@ -51,7 +112,17 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const load = useCallback(async () => {
     try {
       const r = await fetch(`${apiBase}/api/claude-code`).then(res => res.json());
-      setState({ ...r, authMode: r.authMode === "proxy" ? "proxy" : "subscription", systemEnv: r.systemEnv !== false, fastMode: r.fastMode ?? null, maxContextTokens: r.maxContextTokens ?? null, autoContext: r.autoContext !== false, autoCompactWindow: r.autoCompactWindow ?? null, injectAgents: r.injectAgents !== false, effectiveModelEnv: r.effectiveModelEnv ?? {} });
+      setState({
+        ...r,
+        authMode: r.authMode === "proxy" ? "proxy" : "subscription",
+        ...reconcileAutoConnectState(r),
+        fastMode: r.fastMode ?? null,
+        maxContextTokens: r.maxContextTokens ?? null,
+        autoContext: r.autoContext !== false,
+        autoCompactWindow: r.autoCompactWindow ?? null,
+        injectAgents: r.injectAgents !== false,
+        effectiveModelEnv: r.effectiveModelEnv ?? {},
+      });
       setRows(Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ from, to: String(to) })));
     } catch {
       setOk(false);
@@ -162,14 +233,11 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
           />
         </div>
 
-        <div className="setting-row">
-          <div className="setting-label">
-            <span className="title">{t("claude.systemEnv")}</span>
-            <span className="desc">{t("claude.systemEnvDesc")}</span>
-            {state.systemEnv && <span className="desc" style={{ color: "var(--red)" }}>{t("claude.systemEnvWarn")}</span>}
-          </div>
-          <SettingToggle label={t("claude.systemEnv")} checked={state.systemEnv} onChange={systemEnv => setState({ ...state, systemEnv })} />
-        </div>
+        <AutoConnectSetting
+          supported={state.autoConnectSupported}
+          checked={state.systemEnv}
+          onChange={systemEnv => setState({ ...state, systemEnv })}
+        />
 
         <div className="setting-row">
           <div className="setting-label">
