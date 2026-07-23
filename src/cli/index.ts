@@ -391,7 +391,9 @@ async function handleStop() {
     stoppedService = stopServiceIfInstalled();
     if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
   } catch (err) {
-    stopFailed = true;
+    // Service-manager failure (e.g. OPENCODEX_HOME mismatch guard) is warned but does not
+    // fail the whole stop: the local proxy/codex/grok teardown below is independent, and
+    // `ocx restart` must still be able to proceed to its ensure step.
     console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
