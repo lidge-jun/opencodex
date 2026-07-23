@@ -5,7 +5,11 @@ import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
-import { buildProviderModelGroups, type ConfiguredProviderSummary } from "../models-groups";
+import {
+  buildProviderModelGroups,
+  type ConfiguredProviderSummary,
+  type ProviderDiscoverySummary,
+} from "../models-groups";
 
 interface ModelRow {
   provider: string;
@@ -179,11 +183,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [data, capsData, providerData] = await Promise.all([
+      const [data, capsData] = await Promise.all([
         fetch(`${apiBase}/api/models`).then(r => r.json()) as Promise<ModelRow[]>,
         fetch(`${apiBase}/api/provider-context-caps`).then(r => r.json()) as Promise<ProviderContextCapsResponse>,
-        fetch(`${apiBase}/api/providers`).then(r => r.json()) as Promise<ConfiguredProviderSummary[]>,
       ]);
+      const providerData = await fetch(`${apiBase}/api/providers`)
+        .then(r => r.json()) as ConfiguredProviderSummary[];
       void loadV2(); // best-effort, independent of the models fetch
       void loadShadowCall();
       setModels(data);
@@ -726,7 +731,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
      {
        // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
-       groups.map(({ provider, rows, native: isNative, liveModels }) => {
+       groups.map(({ provider, rows, native: isNative, liveModels, discovery }) => {
        const isCollapsed = collapsed.has(provider);
        const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
        const capOn = contextCaps[provider] === contextCapValue;
@@ -792,7 +797,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
            {!isCollapsed && (
              <div style={{ padding: "6px 12px" }}>
                {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
-               {rows.length === 0 && <EmptyProviderHint liveModels={liveModels} />}
+               {rows.length === 0 && <EmptyProviderHint liveModels={liveModels} discovery={discovery} />}
                {rows.length > PAGE / 2 && (
                  <input
                    className="input"
@@ -1108,13 +1113,43 @@ export default function Models({ apiBase }: { apiBase: string }) {
   );
 }
 
-export function EmptyProviderHint({ liveModels }: { liveModels: boolean }) {
+function discoveryFailureReason(
+  t: ReturnType<typeof useT>,
+  discovery: Extract<ProviderDiscoverySummary, { status: "failed" }>,
+): string {
+  switch (discovery.reason) {
+    case "http":
+      return t("models.discoveryFailedHttp", { status: discovery.httpStatus });
+    case "blocked":
+      return t("models.discoveryFailedBlocked");
+    case "invalid_response":
+      return t("models.discoveryFailedInvalidResponse");
+    case "network":
+      return t("models.discoveryFailedNetwork");
+    case "provider":
+      return t("models.discoveryFailedProvider");
+    default:
+      return t("models.discoveryFailedGeneric");
+  }
+}
+
+export function EmptyProviderHint({
+  liveModels,
+  discovery,
+}: {
+  liveModels: boolean;
+  discovery?: ProviderDiscoverySummary;
+}) {
   const t = useT();
+  const failed = liveModels && discovery?.status === "failed" ? discovery : undefined;
   return (
     <div className="row muted text-label leading-body" role="status" style={{ alignItems: "flex-start", gap: 8, padding: "6px 0" }}>
       <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
       <span>
-        {t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")}{" "}
+        {failed && <><span className="badge badge-amber">{t("models.discoveryFailedBadge")}</span>{" "}</>}
+        {failed
+          ? `${discoveryFailureReason(t, failed)} `
+          : `${t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")} `}
         <a href="#providers">{t("models.openProviderSettings")}</a>
       </span>
     </div>
