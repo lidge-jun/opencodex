@@ -117,6 +117,7 @@ export {
 import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";
 export { disableResponsesRequestTimeout, linkAbortSignal } from "./responses";
 import { handleClaudeCountTokens, handleClaudeMessages } from "./claude-messages";
+import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
@@ -248,7 +249,7 @@ export function startServer(port?: number) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
-        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        const apiAuthError = requireResponsesApiAuth(req, config);
         if (apiAuthError) return withCors(apiAuthError, req, config);
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
@@ -467,6 +468,25 @@ export function startServer(port?: number) {
         return withCors(response, req, config);
       }
 
+
+      // OpenAI Chat Completions inbound (GitHub Copilot App / OpenAI-compatible clients).
+      if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) {
+          return new Response("Service shutting down", { status: 503, headers: { ...corsHeaders(req, config), "Retry-After": "5" } });
+        }
+        const apiAuthError = requireResponsesApiAuth(req, config);
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: "unknown", provider: "unknown" };
+        const response = await handleChatCompletions(req, config, logCtx, { requestId, start });
+        return withCors(response, req, config);
+      }
+
       // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
@@ -620,6 +640,7 @@ export function startServer(port?: number) {
 
   console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
   console.log(`   POST /v1/responses → provider translation`);
+  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
   console.log(`   GET  /healthz      → health check`);
   console.log(`   GET  /api/*        → management API`);
   console.log(`   GET  /             → GUI dashboard`);

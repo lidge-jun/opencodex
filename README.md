@@ -229,6 +229,7 @@ next Codex session. opencodex keeps these behaviors:
 
 - **Use any LLM with Codex.** 5 protocol adapters cover Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — that's 40+ providers out of the box.
 - **Use any LLM with Claude Code too.** The same daemon serves the Anthropic Messages API (`/v1/messages` + `count_tokens`): `ocx claude` launches Claude Code fully wired, and routed models appear in its native `/model` picker via gateway model discovery (`claude-ocx-<provider>--<model>` aliases, Claude Code 2.1.129+). Configure slots and model maps on the dashboard's Claude page.
+- **Use any LLM with GitHub Copilot App too.** Point Copilot's Model providers at `http://127.0.0.1:10100/v1` — OpenCodex serves OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions` so routed models sync into the app. See [docs/github-copilot-app.md](docs/github-copilot-app.md).
 - **Pool ChatGPT accounts safely.** Keep existing Codex threads on one account while new sessions
   can auto-pick a lower-usage account from the pool, with quota refresh and non-PII request labels.
 - **Log in once, skip the API key.** OAuth support for xAI, Anthropic, and Kimi means you can authenticate with your existing account. Tokens auto-refresh. Or forward your `codex login`, paste an API key, or use `${ENV_VAR}` references — your call.
