@@ -9,6 +9,14 @@
 import { providerTier, type ProviderTier, type WorkspaceProvider } from "../../provider-workspace/catalog";
 import type { ProviderPayload } from "../../provider-payload";
 
+export type ProviderAccessGroup =
+  | "recurring-or-keyless"
+  | "recurring-uncapped"
+  | "recurring-credit"
+  | "signup-credit";
+
+export type ProviderSupportLevel = "supported" | "experimental" | "reference";
+
 /** Row shape returned by GET /api/provider-presets (mirrors DerivedProviderPreset). */
 export interface CatalogPreset {
   id: string;
@@ -33,6 +41,53 @@ export interface CatalogPreset {
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   codexAccountMode?: "direct" | "pool";
   provider?: ProviderPayload;
+  accessGroups?: readonly ProviderAccessGroup[];
+  supportLevel?: ProviderSupportLevel;
+  verification?: "official" | "primary" | "unverified";
+  documentationUrl?: string;
+  modelsUrl?: string;
+  discovery?: "live" | "static" | "hybrid" | "unsupported";
+  lastVerified?: string;
+  models?: string[];
+  liveModels?: boolean;
+}
+
+export const ACCESS_GROUPS: ProviderAccessGroup[] = [
+  "recurring-or-keyless",
+  "recurring-uncapped",
+  "recurring-credit",
+  "signup-credit",
+];
+
+/** Curated free-directory rows. A provider may belong to more than one group. */
+export function curatedPresets(presets: CatalogPreset[]): CatalogPreset[] {
+  return presets.filter(p => (p.accessGroups?.length ?? 0) > 0);
+}
+
+export function accessGroupCounts(presets: CatalogPreset[]): Record<ProviderAccessGroup, number> {
+  const counts = Object.fromEntries(ACCESS_GROUPS.map(group => [group, 0])) as Record<ProviderAccessGroup, number>;
+  for (const preset of curatedPresets(presets)) {
+    for (const group of new Set(preset.accessGroups)) counts[group] += 1;
+  }
+  return counts;
+}
+
+export function filterByAccessGroup(presets: CatalogPreset[], group: ProviderAccessGroup | "all"): CatalogPreset[] {
+  const curated = curatedPresets(presets);
+  return group === "all" ? curated : curated.filter(p => p.accessGroups?.includes(group));
+}
+
+/** Keep the requested directory at 81 while retaining legacy free/local presets in a separate lane. */
+export function freeCatalogSections(presets: CatalogPreset[]): { directory: CatalogPreset[]; existing: CatalogPreset[] } {
+  const directory = curatedPresets(presets);
+  const free = bucketPresets(presets).free;
+  if (directory.length === 0) return { directory: free, existing: [] };
+  const directoryIds = new Set(directory.map(preset => preset.id));
+  return { directory, existing: free.filter(preset => !directoryIds.has(preset.id)) };
+}
+
+export function isPresetActionable(preset: CatalogPreset): boolean {
+  return preset.supportLevel !== "reference";
 }
 
 /**
