@@ -81,7 +81,9 @@ ocx status --json
     "health": {
       "ok": false,
       "url": "http://127.0.0.1:10100/healthz",
-      "message": "unreachable"
+      "message": "unreachable",
+      "version": null,
+      "uptimeSeconds": null
     }
   },
   "dashboard": {
@@ -106,7 +108,8 @@ ocx status --json
 }
 ```
 
-実際のオブジェクトには `listen`（ポート、ホスト名、ランタイム/設定出所）、設定ロード診断、バンドル Codex プラグイン
+正常時、`version` と `uptimeSeconds` には `/healthz` の構造化された値が入ります。実際のオブジェクトには
+`listen`（ポート、ホスト名、ランタイム/設定出所）、設定ロード診断、バンドル Codex プラグイン
 診断も入ります。JSON スキーマはフィールド追加のみを許すため、以降のバージョンでフィールドは増える可能性がありますが既存
 フィールドは維持されます。API キー、OAuth トークン、authorization ヘッダー、リクエスト内容、メール、アカウント識別子は
 意図的に除外します。

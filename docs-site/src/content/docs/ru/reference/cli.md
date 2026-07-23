@@ -90,7 +90,9 @@ ocx status --json
     "health": {
       "ok": false,
       "url": "http://127.0.0.1:10100/healthz",
-      "message": "unreachable"
+      "message": "unreachable",
+      "version": null,
+      "uptimeSeconds": null
     }
   },
   "dashboard": {
@@ -115,6 +117,7 @@ ocx status --json
 }
 ```
 
+Для здорового прокси `version` и `uptimeSeconds` содержат структурированные значения из `/healthz`.
 Реальный объект также включает `listen` (порт, имя хоста, источник runtime/конфигурации),
 диагностику загрузки конфигурации и диагностику встроенного плагина Codex. JSON-схема допускает
 только добавления: будущие версии могут вводить новые поля, но существующие поля должны

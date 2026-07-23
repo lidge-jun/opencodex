@@ -66,6 +66,21 @@ flowchart LR
 
 Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled automatically on `npm install` — no separate Bun install needed. All three platforms work natively (no WSL needed on Windows).
 
+### macOS menu bar companion
+
+macOS 12+ users can build a native menu bar companion that shows proxy health, version, uptime,
+PID, port, Bun runtime source, and launchd state. It can open the dashboard and start, restart, or
+gracefully stop the proxy without keeping a terminal open.
+
+```bash
+bun run build:macos
+open "dist/macos/OpenCodex.app"
+```
+
+The companion uses the installed `ocx` CLI as its control boundary and never edits PID files or
+Codex configuration directly. See the [macOS menu bar guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
+for CLI discovery, universal builds, and launch-at-login setup.
+
 ## Quick start
 
 ```bash
