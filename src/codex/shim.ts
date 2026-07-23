@@ -681,6 +681,7 @@ function rollbackGuardedRefresh(journal: readonly GuardedRefreshJournalEntry[]):
 function applyGuardedRefreshTransaction(
   operations: readonly GuardedRefreshOperation[],
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void,
+  commitState?: () => void,
 ): boolean {
   const journal: GuardedRefreshJournalEntry[] = [];
   let applyError: Error | null = null;
@@ -716,6 +717,14 @@ function applyGuardedRefreshTransaction(
     }
   }
 
+  if (!fingerprintMismatch && !applyError && commitState) {
+    try {
+      commitState();
+    } catch (error) {
+      applyError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
   if (fingerprintMismatch || applyError) {
     const rollbackErrors = rollbackGuardedRefresh(journal);
     if (applyError || rollbackErrors.length > 0) {
@@ -748,7 +757,23 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       if (!operations || operations.length === 0) {
         return { installed: false, message: "Codex shim auto-restore deferred because tracked launchers changed." };
       }
-      if (!applyGuardedRefreshTransaction(operations, options.beforeGuardedRefresh)) {
+      const originalStateBytes = readFileSync(statePath());
+      const commitState = (): void => {
+        try {
+          writeState(primaryState(files));
+        } catch (writeError) {
+          try {
+            writeFileSync(statePath(), originalStateBytes);
+          } catch (restoreError) {
+            throw new AggregateError(
+              [writeError, restoreError],
+              "Codex shim state commit and restoration failed",
+            );
+          }
+          throw writeError;
+        }
+      };
+      if (!applyGuardedRefreshTransaction(operations, options.beforeGuardedRefresh, commitState)) {
         return { installed: false, message: "Codex shim auto-restore deferred because tracked launchers changed." };
       }
       return {
