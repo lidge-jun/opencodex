@@ -8,7 +8,8 @@ import {
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
 import { gatherRoutedModels } from "../src/codex/catalog";
-import { clearModelCache } from "../src/codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus } from "../src/codex/model-cache";
+import { handleManagementAPI } from "../src/server/management-api";
 
 async function withDiscoveryServer<T>(
   handler: (stream: http2.ServerHttp2Stream) => void,
@@ -41,6 +42,25 @@ function respond(status: number, body = new Uint8Array()): (stream: http2.Server
   };
 }
 
+async function cursorDiscoveryDto(provider: string): Promise<Record<string, unknown>> {
+  const requestUrl = new URL("http://127.0.0.1/api/providers");
+  const response = await handleManagementAPI(
+    new Request(requestUrl),
+    requestUrl,
+    {
+      providers: {
+        [provider]: {
+          adapter: "cursor",
+          baseUrl: "https://api2.cursor.sh",
+          models: [],
+        },
+      },
+    },
+  );
+  const providers = await response!.json() as Array<Record<string, unknown>>;
+  return providers[0] ?? {};
+}
+
 describe("Cursor live-model discovery hardening", () => {
   test("returns discovered models as typed success", async () => {
     const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
@@ -57,6 +77,33 @@ describe("Cursor live-model discovery hardening", () => {
       fetchCursorUsableModels({ apiKey: "bad-token", baseUrl }));
 
     expect(result).toMatchObject({ ok: false, error: "auth", detail: "HTTP 401" });
+  });
+
+  test("Cursor catalog discovery failure records provider status", async () => {
+    const provider = "cursor-discovery-failed";
+    const rawDetail = "HTTP 401";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const models = await withDiscoveryServer(respond(401), baseUrl => gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "cursor",
+            baseUrl,
+            apiKey: "bad-token",
+            models: ["auto"],
+          },
+        },
+      }));
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([`${provider}/auto`]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "provider" });
+      const dto = await cursorDiscoveryDto(provider);
+      expect(dto).toMatchObject({ discovery: { status: "failed", reason: "provider" } });
+      expect(JSON.stringify(dto)).not.toContain(rawDetail);
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
   });
 
   test("classifies non-auth HTTP failures", async () => {
