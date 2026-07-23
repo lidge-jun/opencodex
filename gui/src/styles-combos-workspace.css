@@ -175,68 +175,6 @@
   padding: 20px 24px 32px;
 }
 
-.combos-workspace-empty-root {
-  display: flex;
-  min-height: 100%;
-  height: 100%;
-  align-items: center;
-  justify-content: center;
-}
-
-.cwi-empty-cta {
-  appearance: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  max-width: 44ch;
-  width: 100%;
-  margin: 0;
-  padding: 40px 28px;
-  border: 1px solid color-mix(in srgb, var(--border, var(--text)) 55%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface, transparent) 40%, transparent);
-  font: inherit;
-  text-align: center;
-  color: inherit;
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    background-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.cwi-empty-cta-title {
-  font-size: 20px;
-  font-weight: 650;
-  color: var(--text);
-  transition: color 0.15s ease;
-}
-
-.cwi-empty-cta .pwi-empty-right-icon {
-  transition: color 0.15s ease;
-}
-
-.cwi-empty-cta:hover {
-  border-color: color-mix(in srgb, var(--accent, var(--text)) 35%, var(--border, var(--text)));
-  background: color-mix(in srgb, var(--accent, var(--text)) 6%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, var(--text)) 12%, transparent);
-}
-
-.cwi-empty-cta:hover .pwi-empty-right-icon {
-  color: var(--muted);
-}
-
-.cwi-empty-cta:hover .cwi-empty-cta-title {
-  color: var(--accent, var(--text));
-}
-
-.cwi-empty-cta:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent, var(--text)) 45%, transparent);
-  outline-offset: 3px;
-}
-
 .combos-workspace-overview-head {
   display: flex;
   align-items: baseline;
