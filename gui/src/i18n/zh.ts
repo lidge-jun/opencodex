@@ -22,6 +22,10 @@ export const zh: Record<TKey, string> = {
   "theme.dark": "深色",
   "theme.system": "跟随系统",
   "lang.label": "语言",
+  "errorBoundary.title": "页面加载失败",
+  "errorBoundary.message": "此部分在渲染时发生错误。请重新加载后再试。",
+  "errorBoundary.details": "错误",
+  "errorBoundary.reload": "重新加载",
 
   // startup health
   "startup.title": "启动安全",

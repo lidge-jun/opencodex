@@ -27,6 +27,10 @@ export const ru: Record<TKey, string> = {
   "theme.dark": "Тёмная",
   "theme.system": "Системная",
   "lang.label": "Язык",
+  "errorBoundary.title": "Не удалось загрузить страницу",
+  "errorBoundary.message": "При отображении этого раздела произошла ошибка. Перезагрузите его, чтобы повторить попытку.",
+  "errorBoundary.details": "Ошибка",
+  "errorBoundary.reload": "Перезагрузить",
 
   // startup health
   "startup.title": "Безопасность запуска",

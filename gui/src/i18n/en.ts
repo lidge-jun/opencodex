@@ -27,6 +27,10 @@ export const en = {
   "theme.dark": "Dark",
   "theme.system": "System",
   "lang.label": "Language",
+  "errorBoundary.title": "Page failed to load",
+  "errorBoundary.message": "This section hit a rendering error. Reload it to try again.",
+  "errorBoundary.details": "Error",
+  "errorBoundary.reload": "Reload",
 
   // startup health
   "startup.title": "Startup safety",

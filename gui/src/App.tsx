@@ -11,6 +11,7 @@ import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
 import Startup from "./pages/Startup";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
@@ -22,6 +23,21 @@ type Page = "dashboard" | "startup" | "providers" | "models" | "combos" | "subag
 type Theme = "light" | "dark" | "system";
 
 const VALID_PAGES = new Set<Page>(["dashboard", "startup", "providers", "models", "combos", "subagents", "logs", "usage", "storage", "codex-auth", "api", "claude"]);
+
+const PAGE_TKEY: Record<Page, TKey> = {
+  dashboard: "nav.dashboard",
+  startup: "nav.startup",
+  providers: "nav.providers",
+  models: "nav.models",
+  combos: "nav.combos",
+  subagents: "nav.subagents",
+  logs: "nav.logs",
+  usage: "nav.usage",
+  storage: "nav.storage",
+  "codex-auth": "nav.codexAuth",
+  api: "nav.api",
+  claude: "nav.claude",
+};
 
 function readPageFromHash(): Page {
   const raw = location.hash.replace(/^#\/?/, "");
@@ -364,18 +380,27 @@ export default function App() {
 
       <main className="main" inert={navOpen}>
         <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
-          {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
-          {page === "startup" && <Startup apiBase={API_BASE} />}
-          {page === "providers" && <Providers apiBase={API_BASE} />}
-          {page === "models" && <Models apiBase={API_BASE} />}
-          {page === "combos" && <Combos apiBase={API_BASE} />}
-          {page === "subagents" && <Subagents apiBase={API_BASE} />}
-          {page === "logs" && <Logs apiBase={API_BASE} />}
-          {page === "usage" && <Usage apiBase={API_BASE} />}
-          {page === "storage" && <Storage apiBase={API_BASE} />}
-          {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
-          {page === "api" && <ApiKeys apiBase={API_BASE} />}
-          {page === "claude" && <ClaudeCode apiBase={API_BASE} />}
+          <ErrorBoundary
+            key={page}
+            pageName={t(PAGE_TKEY[page])}
+            title={t("errorBoundary.title")}
+            message={t("errorBoundary.message")}
+            detailsLabel={t("errorBoundary.details")}
+            reloadLabel={t("errorBoundary.reload")}
+          >
+            {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
+            {page === "startup" && <Startup apiBase={API_BASE} />}
+            {page === "providers" && <Providers apiBase={API_BASE} />}
+            {page === "models" && <Models apiBase={API_BASE} />}
+            {page === "combos" && <Combos apiBase={API_BASE} />}
+            {page === "subagents" && <Subagents apiBase={API_BASE} />}
+            {page === "logs" && <Logs apiBase={API_BASE} />}
+            {page === "usage" && <Usage apiBase={API_BASE} />}
+            {page === "storage" && <Storage apiBase={API_BASE} />}
+            {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
+            {page === "api" && <ApiKeys apiBase={API_BASE} />}
+            {page === "claude" && <ClaudeCode apiBase={API_BASE} />}
+          </ErrorBoundary>
         </div>
       </main>
     </div>

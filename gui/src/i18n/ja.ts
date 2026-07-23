@@ -27,6 +27,10 @@ export const ja: Record<TKey, string> = {
   "theme.dark": "ダーク",
   "theme.system": "システム",
   "lang.label": "言語",
+  "errorBoundary.title": "ページを読み込めませんでした",
+  "errorBoundary.message": "このセクションの表示中にエラーが発生しました。再読み込みしてもう一度お試しください。",
+  "errorBoundary.details": "エラー",
+  "errorBoundary.reload": "再読み込み",
 
   // startup health
   "startup.title": "起動安全性",

@@ -22,6 +22,10 @@ export const ko: Record<TKey, string> = {
   "theme.dark": "다크",
   "theme.system": "시스템",
   "lang.label": "언어",
+  "errorBoundary.title": "페이지를 불러오지 못했습니다",
+  "errorBoundary.message": "이 섹션을 렌더링하는 중 오류가 발생했습니다. 다시 불러와 재시도하세요.",
+  "errorBoundary.details": "오류",
+  "errorBoundary.reload": "다시 불러오기",
 
   // startup health
   "startup.title": "시작 안전성",
