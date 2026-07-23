@@ -119,6 +119,7 @@ export default defineConfig({
             { label: "Codex App Model Picker", translations: { ko: "Codex App 모델 선택기", "zh-CN": "Codex App 模型选择器", ru: "Выбор модели в Codex App", ja: "Codex App モデルピッカー" }, slug: "guides/codex-app-models" },
             { label: "Model Ordering", translations: { ko: "모델 정렬에 관하여", "zh-CN": "模型排序", ru: "Сортировка моделей", ja: "モデルの並び順" }, slug: "guides/model-ordering" },
             { label: "Claude Code", translations: { ko: "Claude Code", "zh-CN": "Claude Code", ru: "Claude Code", ja: "Claude Code" }, slug: "guides/claude-code" },
+            { label: "Grok Build", translations: { ko: "Grok Build", "zh-CN": "Grok Build", ru: "Grok Build", ja: "Grok Build" }, slug: "guides/grok-build" },
             { label: "Sidecars: Web Search & Vision", translations: { ko: "사이드카: 웹 검색 & 비전", "zh-CN": "边车：网络搜索与视觉", ru: "Сайдкары: веб-поиск и зрение", ja: "サイドカー: ウェブ検索 & ビジョン" }, slug: "guides/sidecars" },
             { label: "Web Dashboard", translations: { ko: "웹 대시보드", "zh-CN": "网页控制台", ru: "Веб-дашборд", ja: "ウェブダッシュボード" }, slug: "guides/web-dashboard" },
             { label: "Sub-agent Surface", translations: { ko: "서브에이전트 서피스", "zh-CN": "子代理界面", ru: "Интерфейс подагентов", ja: "サブエージェントサーフェス" }, slug: "guides/sub-agent-surface" },
