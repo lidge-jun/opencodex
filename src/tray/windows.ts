@@ -8,6 +8,7 @@ import { durableBunPath } from "../lib/bun-runtime";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
 const TRAY_STATE_VERSION = 1;
 const FOREIGN_RUN_VALUE = "<foreign-or-unreadable-registry-value>";
 
@@ -201,6 +202,27 @@ export function parseWindowsTrayRunValue(output: string, runValue: string): stri
   return match[2].trim();
 }
 
+export function windowsRegistryParentShowsRunKey(output: string): boolean {
+  const expected = RUN_KEY.toLowerCase();
+  return output.split(/\r?\n/).some(line => line.trim().toLowerCase()
+    .replace(/^hkey_current_user\\/, "hkcu\\") === expected);
+}
+
+function syncRegistryAbsenceIsProven(): boolean {
+  try {
+    runRegistry(["query", RUN_KEY, "/reg:64"]);
+    return true;
+  } catch (runError) {
+    if ((runError as { status?: unknown })?.status !== 1) return false;
+    try {
+      const parent = runRegistry(["query", RUN_PARENT_KEY, "/reg:64"]);
+      return !windowsRegistryParentShowsRunKey(parent);
+    } catch {
+      return false;
+    }
+  }
+}
+
 function readOwnedRunValue(runValue = windowsTrayRunValue(getConfigDir())): string | null {
   try {
     const output = runRegistry(["query", RUN_KEY, "/v", runValue, "/reg:64"]);
@@ -208,11 +230,9 @@ function readOwnedRunValue(runValue = windowsTrayRunValue(getConfigDir())): stri
   } catch (error) {
     if ((error as { status?: unknown })?.status === 1) {
       // reg.exe also uses exit 1 for access/query failures. Only treat the
-      // value as absent after proving that its parent key is readable.
-      try {
-        runRegistry(["query", RUN_KEY, "/reg:64"]);
-        return null;
-      } catch { /* fall through to the fail-closed error */ }
+      // value as absent after proving Run is readable or does not exist under
+      // a readable CurrentVersion parent.
+      if (syncRegistryAbsenceIsProven()) return null;
     }
     throw new Error("Unable to verify the owned Windows tray registry value; refusing to change persistence.");
   }
@@ -241,7 +261,14 @@ async function readOwnedRunValueAsync(runValue = windowsTrayRunValue(getConfigDi
       try {
         await runRegistryAsync(["query", RUN_KEY, "/reg:64"]);
         return null;
-      } catch { /* fall through to the fail-closed error */ }
+      } catch (runError) {
+        if (Number((runError as { code?: unknown }).code) === 1) {
+          try {
+            const parent = await runRegistryAsync(["query", RUN_PARENT_KEY, "/reg:64"]);
+            if (!windowsRegistryParentShowsRunKey(parent)) return null;
+          } catch { /* fall through to the fail-closed error */ }
+        }
+      }
     }
     throw new Error("Unable to verify Windows tray registry status.");
   }

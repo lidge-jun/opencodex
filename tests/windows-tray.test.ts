@@ -8,6 +8,7 @@ import {
   windowsTrayRunValue,
   windowsTrayStatePathsOwned,
   windowsTrayRegistrationIsStale,
+  windowsRegistryParentShowsRunKey,
   type WindowsTrayEntry,
 } from "../src/tray/windows";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -91,6 +92,16 @@ describe("Windows tray packaging and command safety", () => {
     expect(parseWindowsTrayRunValue(`    ${value}    REG_SZ    ${command}`, value)).toBe(command);
     expect(parseWindowsTrayRunValue(`    ${value}    REG_EXPAND_SZ    ${command}`, value)).not.toBe(command);
     expect(parseWindowsTrayRunValue("unexpected output", value)).not.toBeNull();
+  });
+
+  test("distinguishes a missing Run key from an unreadable existing key", () => {
+    const parent = [
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+    ].join("\r\n");
+    expect(windowsRegistryParentShowsRunKey(parent)).toBe(true);
+    expect(windowsRegistryParentShowsRunKey(parent.replace(/\\Run\r?\n?$/, ""))).toBe(false);
   });
 
   test("PowerShell controller uses mutex/event shutdown and bans command evaluation", () => {
