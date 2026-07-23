@@ -25,20 +25,40 @@ export function nextAutoSwitchThreshold(current: number, lastEnabled: number): n
     : DEFAULT_AUTO_SWITCH_THRESHOLD;
 }
 
+export type AutoSwitchThresholdReadDisposition = "apply" | "defer" | "ignore";
+
+export function autoSwitchThresholdReadDisposition(
+  editing: boolean,
+  saving: boolean,
+  startedRevision: number,
+  currentRevision: number,
+): AutoSwitchThresholdReadDisposition {
+  if (startedRevision !== currentRevision) return "ignore";
+  return editing || saving ? "defer" : "apply";
+}
+
+export interface AutoSwitchTogglePlan {
+  threshold: number;
+  lastEnabled: number;
+}
+
 /**
- * A toggle click keeps focus on the toggle so input blur cannot race a second
- * write. If the enabled draft changed, persist it first so a later re-enable
- * restores the last successfully saved positive threshold.
+ * Disabling is one server write. A valid dirty draft becomes the page-lifetime
+ * restore value, so re-enabling can persist it without a partial two-write
+ * failure state.
  */
-export function planAutoSwitchToggleWrites(
+export function planAutoSwitchToggleWrite(
   current: number,
   draft: string,
   lastEnabled: number,
-): number[] | null {
-  if (current <= 0) return [nextAutoSwitchThreshold(current, lastEnabled)];
+): AutoSwitchTogglePlan | null {
+  if (current <= 0) {
+    const threshold = nextAutoSwitchThreshold(current, lastEnabled);
+    return { threshold, lastEnabled: threshold };
+  }
   const parsedDraft = parseEnabledAutoSwitchThreshold(draft);
   if (parsedDraft === null) return null;
-  return parsedDraft === current ? [0] : [parsedDraft, 0];
+  return { threshold: 0, lastEnabled: parsedDraft };
 }
 
 export async function putAutoSwitchThreshold(

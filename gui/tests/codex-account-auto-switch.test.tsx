@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   DEFAULT_AUTO_SWITCH_THRESHOLD,
+  autoSwitchThresholdReadDisposition,
   nextAutoSwitchThreshold,
   normalizeAutoSwitchThreshold,
   parseEnabledAutoSwitchThreshold,
-  planAutoSwitchToggleWrites,
+  planAutoSwitchToggleWrite,
   putAutoSwitchThreshold,
   type AutoSwitchFetch,
 } from "../src/codex-auto-switch";
@@ -29,17 +30,27 @@ afterEach(() => {
   });
 });
 
-function renderSetting(threshold: number, draft = String(threshold), saving = false): string {
+function renderSetting(
+  threshold: number | null,
+  draft = threshold === null ? "" : String(threshold),
+  saving = false,
+  loadError = false,
+  feedback: { tone: "ok" | "err"; message: string } | null = null,
+): string {
   return renderToStaticMarkup(
     <LanguageProvider>
       <AutoSwitchSetting
         threshold={threshold}
         draft={draft}
         saving={saving}
+        loadError={loadError}
+        feedback={feedback}
         onDraftChange={() => {}}
         onEditingChange={() => {}}
         onCommit={async () => true}
+        onCancel={() => {}}
         onToggle={async () => true}
+        onRetry={() => {}}
       />
     </LanguageProvider>,
   );
@@ -71,15 +82,22 @@ describe("Codex account auto-switch threshold", () => {
     expect(nextAutoSwitchThreshold(0, 0)).toBe(DEFAULT_AUTO_SWITCH_THRESHOLD);
   });
 
-  test("toggle persists a changed valid draft before disabling", () => {
-    expect(planAutoSwitchToggleWrites(90, "95", 90)).toEqual([95, 0]);
-    expect(planAutoSwitchToggleWrites(90, "90", 90)).toEqual([0]);
-    expect(planAutoSwitchToggleWrites(0, "90", 95)).toEqual([95]);
+  test("toggle keeps a changed valid draft as the page restore value", () => {
+    expect(planAutoSwitchToggleWrite(90, "95", 90)).toEqual({ threshold: 0, lastEnabled: 95 });
+    expect(planAutoSwitchToggleWrite(90, "90", 90)).toEqual({ threshold: 0, lastEnabled: 90 });
+    expect(planAutoSwitchToggleWrite(0, "90", 95)).toEqual({ threshold: 95, lastEnabled: 95 });
   });
 
   test("toggle rejects an invalid enabled draft without writing", () => {
-    expect(planAutoSwitchToggleWrites(90, "50.5", 90)).toBeNull();
-    expect(planAutoSwitchToggleWrites(90, "", 90)).toBeNull();
+    expect(planAutoSwitchToggleWrite(90, "50.5", 90)).toBeNull();
+    expect(planAutoSwitchToggleWrite(90, "", 90)).toBeNull();
+  });
+
+  test("applies, defers, or ignores threshold reads by edit and revision state", () => {
+    expect(autoSwitchThresholdReadDisposition(false, false, 2, 2)).toBe("apply");
+    expect(autoSwitchThresholdReadDisposition(true, false, 2, 2)).toBe("defer");
+    expect(autoSwitchThresholdReadDisposition(false, true, 2, 2)).toBe("defer");
+    expect(autoSwitchThresholdReadDisposition(false, false, 1, 2)).toBe("ignore");
   });
 
   test("renders the persisted custom threshold and inclusive condition", () => {
@@ -87,6 +105,7 @@ describe("Codex account auto-switch threshold", () => {
     expect(html).toContain('value="95"');
     expect(html).toContain('min="1"');
     expect(html).toContain('max="100"');
+    expect(html).toContain('aria-label="Switch threshold, percent"');
     expect(html).toContain("95% usage or above");
     expect(html).toContain('aria-pressed="true"');
   });
@@ -106,10 +125,37 @@ describe("Codex account auto-switch threshold", () => {
     expect(html).not.toContain('type="number"');
   });
 
-  test("disables controls while a threshold write is pending", () => {
+  test("does not expose an actionable placeholder before hydration", () => {
+    const loading = renderSetting(null);
+    expect(loading).toContain("Loading…");
+    expect(loading).toContain('aria-busy="true"');
+    expect(loading).not.toContain('type="number"');
+    expect(loading).not.toContain('aria-pressed=');
+
+    const failed = renderSetting(null, "", false, true);
+    expect(failed).toContain("Automatic switching setting could not be loaded.");
+    expect(failed).toContain("Retry");
+    expect(failed).not.toContain('type="number"');
+  });
+
+  test("keeps the focused input present but read-only while a write is pending", () => {
     const html = renderSetting(80, "80", true);
     expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('readOnly=""');
+    expect(html).toContain("Saving…");
     expect(html).toContain('disabled=""');
+  });
+
+  test("renders contextual success and error feedback", () => {
+    const success = renderSetting(80, "80", false, false, { tone: "ok", message: "Saved here" });
+    expect(success).toContain('role="status"');
+    expect(success).toContain("Saved here");
+    expect(success).toContain("codex-auto-switch-feedback");
+
+    const failure = renderSetting(80, "80", false, false, { tone: "err", message: "Fix this value" });
+    expect(failure).toContain('role="alert"');
+    expect(failure).toContain("Fix this value");
+    expect(failure).toContain("is-error");
   });
 
   test("writes the requested threshold through the existing management endpoint", async () => {
