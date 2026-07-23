@@ -145,10 +145,15 @@ POST a follow-up with `previous_response_id` → assert the fake transport
 received the SAME `conversationId` both times, driven by the real `:1537`/`:1574`
 policy.
 
-Separate external-model case (audit r2 blocker 6): chain whose last message is
-a toolResult on an external wire model → assert the transport received a NEW
-conversationId (intentional rotation), the usage tracker was rekeyed, and the
-NEW id is what the continuation state persists.
+Separate external-model case (audit r2 blocker 6, r3 blocker 2): chain whose
+last message is a toolResult on an external wire model → server E2E asserts
+ONLY rotation (transport received a NEW conversationId) + persistence (the NEW
+id is what continuation state stores). Rekey invocation is NOT observable
+through a fake transport (module-private tracker, `live-transport.ts:71`);
+cover it at adapter level instead: `createCursorAdapter` deps gain an optional
+`rekeyContextUsage` (defaulting to the real `rekeyCursorContextUsage`), and an
+adapter unit test injects a spy asserting it was called with (oldId, newId) on
+the rotation path.
 
 ## Verification
 

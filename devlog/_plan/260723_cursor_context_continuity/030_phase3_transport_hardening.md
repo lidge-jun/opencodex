@@ -175,17 +175,21 @@ creates its own `http2.connect` session — no pooling added).
 Latency budget (explicit acceptance): worst case = 8000 (first) + ~500 jitter +
 3000 (capped retry) ≈ 11.5s on a cache-miss `/v1/models` / `/api/models` poll.
 
-### MODIFY `src/codex/catalog.ts` — failure cooldown (audit r2 blocker 5)
+### MODIFY `src/codex/catalog.ts` — failure cooldown (audit r2 blocker 5, r3 blocker 1)
 
 The Cursor branch (`catalog.ts:1536` region) bypasses the existing failure
-cooldown: on discovery failure it returns stale/static WITHOUT calling
-`markModelsFetchFailure` (machinery: `src/codex/model-cache.ts:22`), so during
-an outage EVERY poll would pay the ~11.5s worst case. Add the same
-`markModelsFetchFailure(...)` call the generic provider path uses on Cursor
-discovery failure, so repeated polls inside the cooldown window skip discovery
-entirely. Activation scenario: test drives two consecutive catalog refreshes
-with a failing discovery stub and asserts the second does NOT invoke discovery
-(cooldown hit).
+cooldown BOTH ways (r3 blocker 1): `markModelsFetchFailure` only records a
+timestamp (`model-cache.ts:28`), and the consult site
+`isModelsFetchCoolingDown` sits BELOW the cursor branch (`catalog.ts:1562`) —
+cursor has already returned by then. Two-sided fix in the cursor branch:
+
+1. GUARD (read side): after the fresh-cache check and BEFORE
+   `fetchCursorUsableModels`, `if (isModelsFetchCoolingDown(name))` → return
+   the same stale/configured degradation used after a failure.
+2. MARK (write side): on discovery failure, `markModelsFetchFailure(name)`.
+
+Activation scenario: two consecutive catalog refreshes with a failing
+discovery stub — the second does NOT invoke discovery (stub call count 1).
 
 ## Accept criteria + activation scenarios (C-ACTIVATION-GROUNDING-01)
 
@@ -196,8 +200,9 @@ with a failing discovery stub and asserts the second does NOT invoke discovery
    stream/session objects + short grace): destroy called on both when
    `destroyed=false`; skipped when already destroyed.
 3. Integration smoke (real local h2 server): session-level GOAWAY/destroy →
-   turn ends with exactly one thrown transport error (observed via the public
-   `runTurn` async-generator contract, not private callbacks).
+   the `LiveCursorTransport.run()` async iterable terminates with exactly one
+   thrown transport error (note: `createCursorAdapter.runTurn()` would emit an
+   error EVENT instead of throwing — observe at the transport layer).
 4. Discovery: first attempt `timeout`/`transport` → second attempt runs with a
    NEW session and its success is returned (server observed 2 requests); first
    attempt `auth` (401) or completed 404 (`http`) → NO retry (1 request).
