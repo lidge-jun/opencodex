@@ -255,9 +255,11 @@ export default function Startup({ apiBase }: { apiBase: string }) {
             <div className="startup-detail-row">
               <div><strong>{t("startup.shim")}</strong><span>{t("startup.shimHint")}</span></div>
               <StateBadge
-                ok={data.shimHealthy}
-                yes={t(!data.autostartEnabled ? "startup.installedDisabled" : data.shimCoverage === "cli-only" ? "startup.cliOnly" : "startup.healthy")}
-                no={t(data.shimInstalled ? "startup.stale" : "startup.notInstalled")}
+                ok={data.shimHealthy && data.autostartEnabled}
+                yes={t(data.shimCoverage === "cli-only" ? "startup.cliOnly" : "startup.healthy")}
+                no={t(data.shimInstalled
+                  ? data.shimHealthy && !data.autostartEnabled ? "startup.installedDisabled" : "startup.stale"
+                  : "startup.notInstalled")}
               />
             </div>
           </section>
@@ -292,7 +294,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
                 {!trayLoading && !trayError && tray?.running && !tray.stale && (
                   <button type="button" className="btn btn-ghost" disabled={trayBusy} onClick={() => void runTrayAction("stop")}>{t("startup.tray.stop")}</button>
                 )}
-                {!trayLoading && !trayError && tray?.installed && !tray.stale && (
+                {!trayLoading && !trayError && tray && (tray.installed || tray.stale) && (
                   <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => void runTrayAction("uninstall")}>{t("startup.tray.uninstall")}</button>
                 )}
               </div>

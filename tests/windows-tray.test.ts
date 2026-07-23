@@ -116,6 +116,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).toContain("GetPathRoot");
     expect(source).toContain("$heartbeat.hostPid = $HostPid");
     expect(source).toContain('Start-OcxCommand @("__tray-restart")');
+    expect(source).not.toContain("$menu.add_Opening({ Update-TrayState })");
     expect(source).not.toContain("Invoke-Expression");
     expect(source).not.toContain("taskkill");
     expect(source).not.toContain("Stop-Process");

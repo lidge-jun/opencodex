@@ -45,6 +45,13 @@ describe("CLI subcommand help", () => {
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
   });
 
+  test("tray help documents the install-only no-start flag", () => {
+    const result = runCli(["help", "tray"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--no-start");
+  });
+
   test("unknown command with help flag remains an error", () => {
     const result = runCli(["foobar", "--help"]);
     expect(result.status).toBe(1);

@@ -50,11 +50,12 @@ const helpEntries: Record<string, HelpEntry> = {
     details: ["Use `remove` as an alias for `uninstall`."],
   },
   tray: {
-    usage: "ocx tray <install|start|stop|status|uninstall|remove> [--json]",
+    usage: "ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]",
     summary: "Install and control the Windows status tray icon.",
     details: [
       "The tray starts at Windows login and provides one-click proxy controls.",
       "Tray start/stop controls the icon only; use its menu to start or stop the proxy.",
+      "--no-start (install only) installs the tray without launching it immediately.",
     ],
   },
   ensure: { usage: "ocx ensure", summary: "Ensure the proxy is running and Codex config/cache are current." },

@@ -241,7 +241,6 @@ $logsItem.add_Click({
 })
 $exitItem.add_Click({ [System.Windows.Forms.Application]::Exit() })
 $notify.add_DoubleClick({ Start-OcxCommand @("gui") })
-$menu.add_Opening({ Update-TrayState })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000

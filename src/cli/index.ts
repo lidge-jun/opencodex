@@ -26,7 +26,7 @@ import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSele
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { diagnoseService, serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
+import { diagnoseService, serviceCommand, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
@@ -311,7 +311,6 @@ async function handleTrayProxyStart(): Promise<void> {
     return;
   }
   const service = diagnoseService();
-  const { serviceStartableFromTray } = await import("../service");
   const serviceStartable = serviceStartableFromTray(service);
   if (service.installed && !serviceStartable) {
     console.error(`Cannot start from the tray because the installed service is not viable: ${service.summary}`);
