@@ -154,10 +154,20 @@ jobs:
 
           echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
 
-          previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-              head -n 1 || true
-          )"
+          # Compare within the release channel so preview and stable gates use matching history.
+          if [[ "$RELEASE_VERSION" == *-preview.* ]]; then
+            previous_tag="$(
+              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+                grep -- '-preview\.' |
+                head -n 1 || true
+            )"
+          else
+            previous_tag="$(
+              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+                grep -v -- '-preview\.' |
+                head -n 1 || true
+            )"
+          fi
           if [ -n "$previous_tag" ]; then
             changed_files="$(git diff --name-only "${previous_tag}..HEAD")"
           else
@@ -289,11 +299,22 @@ jobs:
             exit 1
           fi
 
-          previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-              grep -vx "$release_tag" |
-              head -n 1 || true
-          )"
+          # Generate notes against the previous tag from the same release channel.
+          if [[ "$RELEASE_VERSION" == *-preview.* ]]; then
+            previous_tag="$(
+              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+                grep -- '-preview\.' |
+                grep -vx "$release_tag" |
+                head -n 1 || true
+            )"
+          else
+            previous_tag="$(
+              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+                grep -v -- '-preview\.' |
+                grep -vx "$release_tag" |
+                head -n 1 || true
+            )"
+          fi
           npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
 
           if [ -z "$existing_tag_sha" ]; then
