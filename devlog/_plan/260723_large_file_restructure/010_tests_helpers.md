@@ -55,9 +55,15 @@ them shared, move to `tests/helpers/combo-api.ts` then — out of scope here.
 
 ## Split B — `tests/server-auth.test.ts` (2926) → move provider-management validation
 
-The provider-management validation block is `tests/server-auth.test.ts:349-1262`
-(17 sub-sections, see inventory: external forward-auth rejection through
-provider PATCH field-mask validation). NEW
+The provider-management validation tests are NOT one contiguous block. The
+core run is `tests/server-auth.test.ts:349-1280` (17 sub-sections, see
+inventory: external forward-auth rejection through provider PATCH field-mask
+validation, the field-mask test closing at `:1280`), but further
+provider-management tests reappear AFTER the safeConfigDTO test (e.g.
+`provider context-cap API persists toggles and annotates model rows` at
+`:1296`). Therefore Split B is done by TEST IDENTITY, not a single line range:
+at B, enumerate every `test(...)` name in the file and classify each as
+management-validation (MOVE) vs auth/safeConfigDTO (STAY). NEW
 `tests/management-provider-validation.test.ts` receives that block plus the
 shared setup it needs:
 
@@ -70,14 +76,18 @@ shared setup it needs:
 STAY in `tests/server-auth.test.ts`:
 
 - Server timeout/auth primitives `:102-166`.
-- safeConfigDTO tests `:167-278` and `:1263-1276` (freeTier badge).
+- safeConfigDTO tests `:179-278` and the freeTier-badge test `:1282-1294`
+  (verified anchors; `:1263-1280` is still inside the field-mask test and
+  MOVES with it).
 - `/v1/models` API-auth + Origin `:305-348`.
 - Management Origin/CORS + websocket admission/auth `:1433-1678`.
 - Routed/direct/pool/API credential propagation `:1802-2919`.
 
 Both files import `handleManagementAPI` (`:29`); the new file keeps that
-import. Verify the safeConfigDTO test at `:1263-1276` stays in the auth file
-(it sits just after the moved block — do not sweep it into the move).
+import. The per-test MOVE/STAY classification (including the post-`:1294`
+provider-management tests such as context-cap) is finalized at B against the
+real file and recorded in the B-phase commit message; C verifies the
+case-name set is preserved (no test deleted, none duplicated).
 
 ## Split C — shared SSE helper (small, optional but cheap)
 

@@ -53,7 +53,11 @@ stays together: `handleResponses`, `handleComboResponses`,
 combo/core seam and are called from the engine: `sidecarOutcomeRecorder`,
 `codexLogAccountId`, `usesCodexForwardPoolAuth`,
 `codexForwardTerminalOutcomeRecorder`, `decodeRequestErrorResponse`
-(`:502-573`). `core.ts` imports the leaf modules (collaboration,
+(`:502-573`), and `isShadowSourceModel` (EXPORTED `:528`, used inside
+`handleResponses` at `:977`, imported by
+`tests/responses-shadow-intercept.test.ts:7` — it is an engine helper, so it
+belongs in core.ts and is re-exported from the facade). `core.ts` imports the
+leaf modules (collaboration,
 encrypted-payload, fetch-helpers).
 
 MODIFY `src/server/responses.ts` → thin facade: re-export the full prior

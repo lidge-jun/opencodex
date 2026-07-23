@@ -23,6 +23,10 @@ the path `src/codex/catalog.ts`.
 
 ### `parsing.ts` — catalog read/parse/normalize
 
+`CatalogModel` `:464-490` (EXPORTED interface — the shared model contract;
+importers: `src/server/management-api.ts:3`, `src/claude/context-windows.ts:13`,
+`src/claude/model-info.ts:18`, `tests/selected-models.test.ts:2`,
+`tests/slug-codec.test.ts:18`; re-export from facade),
 `RawEntry`/`RawCatalog` `:491-492`, `JAWCODE_CATALOG_AUGMENT_PROVIDERS` `:493`,
 `ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS` `:500-503`,
 `isRoutedModelCompatibilityExcluded` `:505-513`, `MEDIA_GEN_FAMILIES`/
@@ -122,11 +126,18 @@ Re-export the full ~50-symbol public surface from the six modules. Target
 
 ## P-reverify flag (resolve before B)
 
-The inventory reports `RawEntry`/`RawCatalog` as NON-exported at `:491-492`
-yet `tests/slug-codec.test.ts:18` imports `RawEntry`. Confirm the actual
-export status at P-reverify and preserve it exactly (if exported, keep
-exported from parsing.ts + facade; if the test uses a local redeclaration,
-leave it). Do not change visibility.
+`RawEntry`/`RawCatalog` are NON-exported `type` declarations at `:491-492`
+(verified: no `export` keyword), yet `tests/slug-codec.test.ts:18` does
+`import type { RawEntry } from "../src/codex/catalog"`. This is a pre-existing
+contradiction in the current tree. The split MUST preserve the EXACT current
+declaration form: move `type RawEntry`/`type RawCatalog` to `parsing.ts`
+verbatim with NO added/removed `export` keyword, and the facade re-exports only
+what is currently exported (so the relative import surface is byte-identical).
+Do NOT "fix" the contradiction by exporting RawEntry — that would change the
+public surface. The C-phase `bun run typecheck` (after `bun install`) is the
+proof that the surface is unchanged: whatever compiles today must compile
+identically after the move. `CatalogModel` (exported) moves to `parsing.ts`
+and IS re-exported from the facade.
 
 ## Verification (C)
 
