@@ -122,3 +122,44 @@ Additionally the main session writes:
 3. Each investigation doc ends with: verdict (opencodex-bug / upstream / feature / needs-repro), recommended direction, effort estimate.
 4. No production code touched (`git diff --stat` shows only devlog).
 5. Unit committed on `codex/issue-triage-260723`; no push.
+
+---
+
+## Amendment 2026-07-23 (cycle 2) — fix roadmap for bucket 2
+
+Bucket-1 actions executed: replies + closes posted for #280, #288, #291, #297
+(URLs recorded in 009 addendum). This cycle is the docs-first roadmap pass for
+the four remaining fixable work items (#290 stays needs-repro, no fix planned).
+
+### Work-phase map (each = one future PABCD cycle, its own branch + PR)
+
+| WP | Issue(s) | Decade doc | Scope summary | Branch (planned) |
+|---|---|---|---|---|
+| 2 | #289 | `010_fix_289_responses_path.md` | optional relative `responsesPath` on provider config; absent = current behavior | `codex/fix-289-responses-path` |
+| 3 | #292 | `020_fix_292_discovery_guard.md` | destination-policy parity on model discovery + content-type-aware diagnostics | `codex/fix-292-discovery-guard` |
+| 4 | #287 | `030_fix_287_linux_autoconnect.md` | disable Auto-connect toggle on non-Darwin with localized explanation + server capability field | `codex/fix-287-linux-autoconnect` |
+| 5 | #295 | `040_fix_295_300_guidance.md` | neutral guidance wording + runtime-consistent roster + exclusion diagnostics (bug fix only; split per A-audit) | `codex/fix-295-guidance-accuracy` |
+| 6 | #300 | `041_fix_300_guidance_kill_switch.md` | `multiAgentGuidanceEnabled` kill switch + absent-key preservation in PUT /api/injection-model (dependency: none on WP5, but same handler area) | `codex/fix-300-guidance-kill-switch` |
+
+Dependency order: all four are independent; sequence follows the routing
+pipeline (adapter URL contract → discovery path → GUI/server platform surface →
+guidance/config/API surface), not effort. #297 Option B (version-gated clamp)
+is NOT scheduled — it is gated on reporter evidence of a parser/catalog
+mismatch binary.
+
+### This cycle's loop spec (docs-only)
+
+- Loop archetype: spec-satisfaction; deliverable is the four decade docs at
+  diff-level precision (paths, NEW/MODIFY, before/after, tests, activation
+  scenarios) + 009 addendum with the posted-reply record.
+- Verifier: each decade doc re-verified against the current tree (anchors
+  re-read, no stale references); A-gate reviewer audits diff-level
+  completeness; no production code touched.
+- Non-goals: implementing any fix, opening PRs, push.
+- Terminal outcomes: DONE (4 docs pass audit) / BLOCKED.
+
+### B-phase dispatch (4 Sol workers, parallel, gpt-5.6-sol/priority/high)
+
+Each worker reads its investigation doc (002/004/005/006/003) and writes ONE
+decade doc to diff-level precision. Write scopes disjoint (one file each).
+Main session integrates, writes the 009 addendum, commits.

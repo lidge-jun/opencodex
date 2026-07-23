@@ -55,3 +55,22 @@ anchors, including an independent re-run of `codex debug models --bundled`.
 - No GitHub comments/closes/labels posted — drafts in 007/008 await user approval.
 - No source fixes — each bucket-2 item now has a scoped direction + effort for its own PR.
 - No push.
+
+---
+
+## Addendum 2026-07-23 — bucket-1 actions executed (user-approved)
+
+| # | Action | Evidence |
+|---|---|---|
+| 280 | reply + close | https://github.com/lidge-jun/opencodex/issues/280#issuecomment-5053490275 |
+| 291 | reply + close | https://github.com/lidge-jun/opencodex/issues/291#issuecomment-5053490282 |
+| 288 | reply + close | https://github.com/lidge-jun/opencodex/issues/288#issuecomment-5053493021 |
+| 297 | reply + close (not-repro; reopen on version evidence) | https://github.com/lidge-jun/opencodex/issues/297#issuecomment-5053493027 |
+
+Extra evidence captured for #297 before closing: this machine's synced
+`/Users/jun/.codex/opencodex-catalog.json` retains `max`/`ultra` on
+gpt-5.6-sol, gpt-5.6-terra, AND gpt-5.5 — the clamp is a no-op under
+codex-cli 0.144.5, consistent with the six-rung bundled-catalog union.
+
+Remaining open from triage: #287, #289, #290 (needs-info reply not yet
+posted — outside the approved bucket-1 batch), #292, #294, #295, #300.
