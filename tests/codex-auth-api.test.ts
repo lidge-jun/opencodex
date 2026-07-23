@@ -109,11 +109,13 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_CODEX_HOME;
   delete process.env[MANUAL_IMPORT_ENV];
+  clearAccountNeedsReauth("__main__");
   clearAccountQuota();
   clearCodexWebSocketRegistry();
 });
 
 afterEach(() => {
+  clearAccountNeedsReauth("__main__");
   clearAccountQuota();
   clearCodexWebSocketRegistry();
   globalThis.fetch = previousFetch;
@@ -136,6 +138,38 @@ describe("codex-auth API", () => {
     expect(Array.isArray(data.accounts)).toBe(true);
     const main = (data.accounts as { isMain: boolean }[]).find(a => a.isMain);
     expect(main).toBeTruthy();
+  });
+
+  test("BUG-R327: main account exposes and updates needsReauth from WHAM auth responses", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "main-access",
+        account_id: "main-account",
+      },
+    }));
+    let status = 401;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
+      return status === 200
+        ? new Response(JSON.stringify({ email: "main@example.test", plan_type: "plus" }), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          })
+        : new Response(null, { status });
+    }) as typeof fetch;
+
+    const listMain = async (): Promise<{ needsReauth: boolean }> => {
+      const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const data = await resp!.json() as { accounts: Array<{ id: string; needsReauth: boolean }> };
+      return data.accounts.find(account => account.id === "__main__")!;
+    };
+
+    expect((await listMain()).needsReauth).toBe(true);
+    status = 403;
+    expect((await listMain()).needsReauth).toBe(true);
+    status = 200;
+    expect((await listMain()).needsReauth).toBe(false);
   });
 
   test("maskEmail hides local account names", () => {

@@ -13,7 +13,7 @@ import { deleteCodexAccount } from "./account-lifecycle";
 import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "./account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   clearAccountQuota,
   getAccountQuota,
@@ -228,7 +228,11 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
       signal: AbortSignal.timeout(8000),
     });
-    if (!resp.ok) return { email: null, plan: null, quota: null };
+    if (!resp.ok) {
+      if (resp.status === 401 || resp.status === 403) markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+      return { email: null, plan: null, quota: null };
+    }
+    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     const data = (await resp.json()) as WhamUsageResponse;
     const result = {
       email: data.email ?? null,
@@ -269,7 +273,7 @@ export interface CodexAuthAccountDto {
   logLabel?: string;
   isMain: boolean;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
-  needsReauth?: boolean;
+  needsReauth: boolean;
   hasCredential: boolean;
 }
 
@@ -378,6 +382,7 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
     email: maskEmail(mainInfo.email) ?? "Codex App login",
     plan: mainInfo.plan,
     isMain: true,
+    needsReauth: isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID),
     hasCredential: true,
     quota: mainInfo.quota ? { ...quotaForPlan({ ...mainInfo.quota, updatedAt: Date.now() }, mainInfo.plan) } : null,
   };
