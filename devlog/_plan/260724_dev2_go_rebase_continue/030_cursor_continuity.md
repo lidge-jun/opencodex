@@ -68,3 +68,27 @@ Re-verified against rebased dev2-go tree (ccef70ca):
 | TS reference: src/adapters/cursor.ts:81-170 | kv + continuity + recovery + isolate + RequestedModel wiring | match |
 
 All MODIFY/NEW rows verified current. No amendments needed.
+
+## A-gate round 1 — dependency deferral
+
+- Reviewer: Bohr (`019f93f1-ab23-7662-ac0b-21e5e77e19df`, Sol medium)
+- Verdict: `FAIL` (5 High + 3 Medium)
+- Synthesis (REVIEW-SYNTHESIS-01): all 8 findings ACCEPTED, no rebuttals.
+  Core blocker chain: the Go Cursor adapter (`go/internal/adapter/cursor/`)
+  has NO production caller — `BuildAgentRunRequest` is test-only, the package
+  does not implement `types.Adapter`, and production resolves `"cursor"` to
+  the generic OpenAI Chat adapter (`go/internal/cli/serve.go:240-244`).
+  Continuity, identity scoping, recovery, and isolation all require
+  production wiring that does not exist yet.
+- Decision: **DEPENDENCY-DEFERRED** — implementing continuity on a dead
+  library path is hardening unreachable code. This work-phase is blocked
+  until the Cursor adapter is wired as a production `types.Adapter` with
+  a server route caller.
+- Anchors for future activation:
+  - TS thread-continuity: `src/adapters/cursor/thread-continuity.ts`
+  - TS recovery flow: `src/adapters/cursor.ts:145-176`
+  - TS identity scoping: `src/adapters/cursor.ts:83-97`
+  - TS request-builder priority: `src/adapters/cursor/request-builder.ts:176-199`
+  - TS RequestedModel: router-only, NOT external (`src/adapters/cursor/protobuf-request.ts:575-587`)
+  - Go wiring gap: `go/internal/cli/serve.go:240-244` (resolves to openai-chat)
+  - Go interface gap: `go/internal/types/interfaces.go:10-14`
