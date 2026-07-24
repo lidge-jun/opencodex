@@ -95,6 +95,7 @@ public final class OcxClient {
         let stdoutBox = DataBox()
         let stderrBox = DataBox()
         let exitGroup = DispatchGroup()
+        let pipeGroup = DispatchGroup()
         exitGroup.enter()
         process.terminationHandler = { _ in
             exitGroup.leave()
@@ -102,11 +103,15 @@ public final class OcxClient {
 
         try process.run()
 
+        pipeGroup.enter()
         DispatchQueue.global(qos: .utility).async {
             stdoutBox.data = output.fileHandleForReading.readDataToEndOfFile()
+            pipeGroup.leave()
         }
+        pipeGroup.enter()
         DispatchQueue.global(qos: .utility).async {
             stderrBox.data = errors.fileHandleForReading.readDataToEndOfFile()
+            pipeGroup.leave()
         }
 
         let deadline = DispatchTime.now() + Self.commandTimeout
@@ -117,9 +122,15 @@ public final class OcxClient {
                 kill(process.processIdentifier, SIGKILL)
                 _ = exitGroup.wait(timeout: .now() + Self.forceKillGrace)
             }
+            // Close pipes so blocked readers can finish after forced termination.
+            try? output.fileHandleForReading.close()
+            try? errors.fileHandleForReading.close()
+            _ = pipeGroup.wait(timeout: .now() + Self.forceKillGrace)
             throw OcxClientError.commandFailed("ocx timed out after \(Int(Self.commandTimeout))s.")
         }
 
+        // Wait for pipe readers to finish before consuming buffers.
+        _ = pipeGroup.wait(timeout: .now() + Self.forceKillGrace)
         let stdout = stdoutBox.data
         let stderr = stderrBox.data
         guard process.terminationStatus == 0 else {
