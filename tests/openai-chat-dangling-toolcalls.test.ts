@@ -90,7 +90,7 @@ function assertWireInvariants(messages: ChatMsg[]): void {
 }
 
 describe("openai-chat dangling tool_calls hardening", () => {
-  test("T1 incident: call -> developer barrier -> real result reattaches to the original call", () => {
+  test("T1 incident: developer guidance is hoisted while the real result reattaches to the original call", () => {
     const messages = wire([
       user("hi"),
       assistantWithCalls([{ id: "call_x", name: "request_user_input" }]),
@@ -100,13 +100,14 @@ describe("openai-chat dangling tool_calls hardening", () => {
     ]);
     assertWireInvariants(messages);
     const roles = messages.map(m => m.role);
-    // canonical order: assistant, tool(real), developer-mapped system, user
+    expect(messages[0]).toEqual({ role: "system", content: "[injected guidance]" });
+    // canonical history order: assistant, tool(real), user; no in-history system barrier
     const aIdx = roles.indexOf("assistant");
     expect(roles[aIdx + 1]).toBe("tool");
     expect(messages[aIdx + 1].tool_call_id).toBe("call_x");
     expect(messages[aIdx + 1].content).toBe('{"answers":{}}');
-    expect(roles[aIdx + 2]).toBe("system");
-    expect(roles[aIdx + 3]).toBe("user");
+    expect(roles[aIdx + 2]).toBe("user");
+    expect(messages.slice(1).some(m => m.role === "system")).toBe(false);
     // no synthetic result fabricated for an answered call
     expect(messages.some(m => typeof m.content === "string" && m.content.includes("no tool result was recorded"))).toBe(false);
   });
@@ -165,8 +166,9 @@ describe("openai-chat dangling tool_calls hardening", () => {
     expect(String(synth?.content)).toContain("no tool result was recorded");
     const real = block.find(m => m.tool_call_id === "call_2");
     expect(real?.content).toBe("img-ok");
-    // deferred barrier lands after the round closes, before the next assistant
-    expect(messages[aIdx + 3].role).toBe("system");
+    expect(messages[0]).toEqual({ role: "system", content: "barrier while call_1 pending" });
+    expect(messages[aIdx + 3].role).toBe("assistant");
+    expect(messages.slice(1).some(m => m.role === "system")).toBe(false);
   });
 
   test("T6 mismatched result while calls pending: round closes synthetically, then orphan pair", () => {
@@ -181,7 +183,9 @@ describe("openai-chat dangling tool_calls hardening", () => {
     expect(messages[aIdx + 1].role).toBe("tool");
     expect(messages[aIdx + 1].tool_call_id).toBe("call_p");
     expect(String(messages[aIdx + 1].content)).toContain("no tool result was recorded");
-    expect(messages[aIdx + 2].role).toBe("system"); // released deferred barrier
+    expect(messages[0]).toEqual({ role: "system", content: "deferred barrier" });
+    expect(messages[aIdx + 2].role).toBe("assistant");
+    expect(messages.slice(1).some(m => m.role === "system")).toBe(false);
     const orphanIdx = messages.findIndex((m, i) => i > aIdx && m.role === "assistant");
     expect(messages[orphanIdx].tool_calls?.[0].id).toBe("call_unknown");
     expect(messages[orphanIdx + 1].tool_call_id).toBe("call_unknown");
