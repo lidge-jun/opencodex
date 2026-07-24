@@ -1,7 +1,7 @@
 # Implementation and verification record
 
 Date: 2026-07-24
-Status: implemented; local checks passed; remote proof pending
+Status: `DONE`; local and remote checks passed
 
 ## Planned diffs
 
@@ -38,9 +38,19 @@ Status: implemented; local checks passed; remote proof pending
 - Environment note: the first Bun gate attempt ran before this worktree had dependencies and failed on missing `bun-types`, `zod/v4`, `@bufbuild/protobuf`, and React runtime modules. No lockfile changed. Frozen installs restored the declared environment and the fresh rerun passed.
 - Intermediate GitHub exact-SHA Go CI: run `30064436430` at `05006fdd2bfb540810c517daf61ac00d86d7bd79` passed every job, but emitted five Node 20 action-runtime deprecation annotations. The C repair upgrades the immutable action pins to checkout v7.0.1 and setup-go v7.0.0 before final proof.
 - Node 24 action repair run: `30065013478` at `c7384bef8fac0008391989087ae6245f1cce48b9` removed the deprecation warnings but failed every Go command because setup-go v7 enforced the requested Go 1.24 locally while the module requires 1.26.4. Prior-run logs confirm v5 had silently downloaded 1.26.4 in every job. The second C repair makes `go/go.mod` the setup-go version source.
-- Final GitHub exact-SHA Go CI run: pending C repair.
-- Remote branch/PR postconditions: pending C.
+- Final implementation GitHub exact-SHA Go CI: run `30065187682` at `5564f84c27141df9058770df4c2e61594f586a18` passed Ubuntu/macOS/Windows build, vet, and tests; Ubuntu/macOS race detection; all five cross-compiles; and E2E. Log inspection found no Node 20 deprecation or forced-Node-24 warning.
+- Remote branch/PR postconditions: PR #368 is closed with `mergedAt: null` and an English evidence comment naming `dev2-go` and run `30065187682`; `origin/dev2-go` points to the verified implementation SHA; `origin/codex/260724-go-porting` is absent; no open PR remains for the old head.
+- Preservation: `/Users/jun/.codex/worktrees/6e3a/opencodex` still owns local branch `codex/260724-go-porting`; it was left intact to avoid mutating concurrent local work.
 
 ## D outcome
 
-Populate after the remote postconditions are verified.
+1. Deterministic OAuth regression: passed 100 race repetitions and full Go race.
+2. Go build/vet/test/race/E2E: passed locally and on hosted runners.
+3. Windows/Linux/Darwin cross-compiles: passed locally and in hosted CI.
+4. Workflow: `dev2-go` push plus manual dispatch only, read-only permissions, per-ref cancellation, immutable Node 24 action SHAs, module-derived Go toolchain.
+5. Governance: `preview` remains the TypeScript prerelease line; `dev2-go` is the no-standing-PR Go line.
+6. Replacement proof: run `30065187682` succeeded for exact implementation SHA `5564f84c27141df9058770df4c2e61594f586a18` before destructive cleanup.
+7. PR cleanup: #368 closed, never merged.
+8. Branch cleanup: old remote deleted after criteria 6 and 7; sibling local branch/worktree preserved.
+
+The archived devlog-only head is manually dispatchable and receives one final exact-head Go CI run after this record is committed, so the branch tip is also covered even though devlog paths do not trigger push CI.

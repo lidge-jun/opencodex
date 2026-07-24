@@ -93,3 +93,7 @@ Both releases declare `node24`. The branch replacement sequence remains unchange
 Run `30065013478` showed that setup-go v7 correctly sets `GOTOOLCHAIN=local`, exposing a pre-existing contradiction: the workflow requested Go 1.24 while `go/go.mod` requires Go 1.26.4. The old setup-go v5 run had set `GOTOOLCHAIN=auto`, so every job silently downloaded Go 1.26.4 after first installing 1.24.
 
 Replace the duplicated `go-version: "1.24"` inputs with `go-version-file: go/go.mod`. This makes the module declaration the single toolchain source of truth, avoids hidden second-stage downloads, and keeps all jobs aligned when the module version changes.
+
+## D decision
+
+`DONE`. The deterministic OAuth tests and local Go/repository gates passed; replacement SHA `5564f84c27141df9058770df4c2e61594f586a18` passed Go CI run `30065187682` on every supported lane with no Node 20 deprecation annotation; PR #368 was closed without merge; and `origin/codex/260724-go-porting` was deleted only after that proof. `origin/dev2-go` remains the independent Go track. The old local branch remains checked out in its sibling worktree and was intentionally not mutated.
