@@ -594,6 +594,10 @@ describe("provider registry parity", () => {
       adapter: "cursor",
       baseUrl: "https://api2.cursor.sh",
     }).name).toBe("cursor");
+    expect(resolveAdapter({
+      adapter: "open2-beta",
+      baseUrl: "https://open2-beta.upstage.ai",
+    }).name).toBe("open2-beta");
   });
 
   test("OAuth provider configs use canonical registry values", () => {

@@ -97,6 +97,28 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider add prints API-key guidance only when a required key is missing", () => {
+    for (const testCase of [
+      { provider: "deepseek", args: [] as string[], expectsGuidance: true },
+      { provider: "deepseek", args: ["--api-key", "configured"], expectsGuidance: false },
+      { provider: "open2-beta", args: [] as string[], expectsGuidance: false },
+      { provider: "open2-beta", args: ["--api-key", "configured"], expectsGuidance: false },
+    ]) {
+      const { dir } = freshConfig();
+      try {
+        const result = runCli(["provider", "add", testCase.provider, ...testCase.args], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        if (testCase.expectsGuidance) {
+          expect(result.stdout).toContain("Set API key with:");
+        } else {
+          expect(result.stdout).not.toContain("Set API key with:");
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("provider add custom provider requires --adapter and --base-url", () => {
     const { dir } = freshConfig();
     try {

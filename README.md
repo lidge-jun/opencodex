@@ -267,7 +267,9 @@ The Open2 adapter bridges Upstage's private beta web protocol rather than a stab
 automatically creates and refreshes an anonymous session, and is currently free and keyless only
 while that public beta remains open. Upstage may change, restrict, authenticate, or remove the
 protocol without notice. The current bridge supports text and reasoning, but not Codex client tools
-or native vision.
+or native vision, and does not advertise hosted web search. Refreshed session cookies stay only in
+memory and disappear on restart. When an outbound proxy is configured, the adapter fails closed
+unless the Open2 host is explicitly covered by `NO_PROXY`.
 
 Cursor support is a staged experimental bridge: it appears in `ocx init` and the dashboard Add
 Provider picker as a local config with Cursor's static public model catalog. Live

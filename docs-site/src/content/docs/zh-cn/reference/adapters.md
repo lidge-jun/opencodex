@@ -109,6 +109,24 @@ token。
   再用 `api-key` 替换 `Authorization`。配置的 URL 直接指向 Azure v1 Responses API，因此 adapter
   不会追加 `api-version`。
 
+## `open2-beta`
+
+**目标：** 使用 `solar-chat.v1` WebSocket frame 的 Upstage Open2 公测 Web 客户端。
+**认证：** 通过 `GET /api/session` 自动创建和刷新匿名 `solar_session` cookie；目前不需要 API key。
+即使配置了 API key，adapter 也会忽略它，绝不会把它复用为 HTTP 或 WebSocket cookie。
+
+- 这是连接 private-beta Web protocol 的非官方 bridge，并非稳定的公开 API。仅在匿名公测开放期间
+  暂时免费且无需 key；Upstage 可能随时更改、限制、要求认证或移除它。
+- 使用 `runTurn` 管理 WebSocket lifecycle，并验证 ready protocol 和 event sequence。独立的累计
+  usage snapshot 会保留，并与最终 usage 合并而不重复计数。
+- 刷新的 session cookie 只保存在进程内存中，不会持久化；OpenCodex 重启后即丢失。
+- `none` 是关闭 reasoning 的 sentinel。catalog 只公布 `medium`、`high`、`max`；`low`/`minimal`
+  映射到 `medium`，`xhigh` 映射到 `high`。
+- `runTurn` 绕过 sidecar，因此不会公布 hosted web search。当前 upstream wire 也不支持 Codex client
+  tool 或 native vision。
+- 配置 outbound HTTP(S) proxy 时会 fail closed，避免 WebSocket 绕过 proxy。只有确实需要直接连接时，
+  才应把 Open2 host 加入 `NO_PROXY`。
+
 ## 图像工具（`image.ts`）
 
 支持视觉的 adapter 共用以下 helper：

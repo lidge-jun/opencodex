@@ -111,8 +111,9 @@ diagnostics to bug reports.
 ## 3. API-key catalog
 
 opencodex ships 54 built-in presets: 43 key-based, seven OAuth, three local, and the default
-ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it. Notable entries:
+ChatGPT-forward preset. For entries that require a key, the dashboard's **Add provider** picker opens
+the provider dashboard, validates the key, and stores it. Key-optional entries can be added without
+one. Notable entries:
 
 | Provider | Base URL |
 | --- | --- |
@@ -152,7 +153,8 @@ public API. OpenCodex creates and refreshes its anonymous session automatically,
 free and needs no API key while the public beta remains open. Upstage may change, restrict,
 authenticate, or remove the protocol without notice, which can break the adapter. It currently
 supports text and reasoning only; Codex client tools and native vision are not exposed by the
-upstream wire.
+upstream wire. Refreshed `solar_session` values remain in process memory only, are never persisted,
+and are lost when OpenCodex restarts.
 :::
 
 > **Tencent Cloud Coding Plan usage restriction:** Tencent documents this subscription for

@@ -114,6 +114,26 @@ interface ProviderAdapter {
   없는지 검증하고 `Authorization`을 `api-key`로 바꿉니다. 설정 URL이 Azure v1 Responses API를
   직접 가리키므로 `api-version`은 덧붙이지 않습니다.
 
+## `open2-beta`
+
+**대상:** `solar-chat.v1` WebSocket frame을 사용하는 Upstage Open2 공개 베타 웹 클라이언트.
+**인증:** `GET /api/session`에서 자동 생성·갱신하는 익명 `solar_session` 쿠키. 현재 API 키는
+필요하지 않으며, 설정된 API 키가 있어도 무시하고 HTTP/WebSocket 쿠키로 재사용하지 않습니다.
+
+- 안정적인 공개 API가 아닌 비공식 private-beta 웹 프로토콜 bridge입니다. 익명 공개 베타가 열린
+  동안만 현재 무료·키리스이며, Upstage가 예고 없이 변경·제한·인증 요구·제거할 수 있습니다.
+- 일반 fetch/parse 경로 대신 `runTurn`으로 WebSocket lifecycle을 처리하고 ready protocol과 event
+  sequence를 검증합니다. 독립적인 누적 usage snapshot은 보존했다가 최종 usage와 중복 계산 없이
+  병합합니다.
+- 갱신된 세션 쿠키는 프로세스 메모리에만 두며 저장하지 않습니다. OpenCodex를 재시작하면
+  사라집니다.
+- `none`은 reasoning 비활성 sentinel입니다. catalog에는 `medium`, `high`, `max`를 표시하고,
+  `low`/`minimal`은 `medium`으로, `xhigh`는 `high`로 매핑합니다.
+- `runTurn`이 sidecar를 우회하므로 hosted web search를 광고하지 않습니다. Codex client tool과
+  native vision도 현재 upstream wire에서 지원하지 않습니다.
+- outbound HTTP(S) proxy가 설정되어 있으면 WebSocket이 이를 우회하지 않도록 fail-closed합니다.
+  직접 연결하려는 경우에만 Open2 host를 `NO_PROXY`에 추가해야 합니다.
+
 ## 이미지 유틸리티 (`image.ts`)
 
 이미지를 처리하는 어댑터가 함께 쓰는 헬퍼입니다.

@@ -91,6 +91,26 @@ interface ProviderAdapter {
 
 - リクエスト構成は Responses passthrough に任せます。`baseUrl` に未解釈のテンプレート placeholder がないか検証し、`Authorization` を `api-key` に差し替えます。設定 URL が Azure v1 Responses API を直接指すため、`api-version` は追加しません。
 
+## `open2-beta`
+
+**対象:** `solar-chat.v1` WebSocket frame を使う Upstage Open2 パブリックベータの Web クライアント。
+**認証:** `GET /api/session` で自動的に作成・更新する匿名 `solar_session` cookie。現在 API key は
+不要です。設定済み API key は無視され、HTTP/WebSocket cookie として再利用されません。
+
+- 安定した公開 API ではなく、private-beta Web protocol への非公式 bridge です。匿名公開ベータが
+  開いている間だけ現在は無料・keyless であり、Upstage は予告なく変更、制限、認証必須化、削除できます。
+- 通常の fetch/parse 経路ではなく `runTurn` で WebSocket lifecycle を処理し、ready protocol と
+  event sequence を検証します。独立した累積 usage snapshot は保持し、最終 usage と二重計上せずに
+  merge します。
+- 更新した session cookie は process memory のみに保持し、永続化しません。OpenCodex の再起動で
+  失われます。
+- `none` は reasoning 無効化 sentinel です。catalog は `medium`、`high`、`max` を表示し、
+  `low`/`minimal` は `medium`、`xhigh` は `high` に mapping します。
+- `runTurn` が sidecar を迂回するため hosted web search を advertise しません。Codex client tool と
+  native vision も現在の upstream wire では利用できません。
+- outbound HTTP(S) proxy が設定されている場合、WebSocket が proxy を迂回しないよう fail-closed
+  します。直接接続する場合に限り Open2 host を `NO_PROXY` に追加してください。
+
 ## 画像ユーティリティ（`image.ts`）
 
 画像を扱うアダプターが一緒に使うヘルパーです。

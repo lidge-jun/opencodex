@@ -151,16 +151,23 @@ advertised effort control on those models as proof of upstream-native reasoning 
 
 **Targets:** Upstage's Open2 public-beta web client over `solar-chat.v1` WebSocket frames.
 **Auth:** an anonymous `solar_session` cookie created and refreshed automatically through
-`GET /api/session`; no API key is currently required.
+`GET /api/session`; no API key is currently required. A configured API key is ignored by this
+adapter and is never reused as an HTTP or WebSocket cookie.
 
 - This is an unofficial bridge to a private beta web protocol, not a stable public API. It is
   currently free and keyless only while the anonymous public beta remains open; Upstage may change,
   restrict, authenticate, or remove it without notice.
 - Uses `runTurn` for the WebSocket lifecycle, checks the ready protocol and event sequence, maps text,
-  thinking, usage, completion, and errors into `AdapterEvent`s, and keeps refreshed cookies only in
-  memory.
-- Supports text and the beta UI's `none`, `medium`, `high`, and `max` reasoning choices. The upstream
-  wire does not currently expose Codex client tools or native vision.
+  thinking, usage, completion, and errors into `AdapterEvent`s, and retains standalone cumulative
+  usage snapshots until they can be merged with final usage without double-counting.
+- Refreshed session cookies stay in process memory only, are never persisted, and are lost on
+  restart.
+- `none` is the disable sentinel. Catalog entries advertise `medium`, `high`, and `max`; incoming
+  `low`/`minimal` map to `medium`, while `xhigh` maps to `high`.
+- Hosted web search is not advertised because `runTurn` bypasses the sidecar. The upstream wire also
+  does not currently expose Codex client tools or native vision.
+- Fails closed when an outbound HTTP(S) proxy is configured because the WebSocket library would
+  otherwise bypass it. Add the Open2 host to `NO_PROXY` only when a direct connection is intended.
 
 ## Image utilities (`image.ts`)
 
