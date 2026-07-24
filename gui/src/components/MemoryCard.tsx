@@ -44,6 +44,30 @@ interface Recommendation {
   rationale: string;
 }
 
+/** Per-probe measurement block (§7); optional so dashboards tolerate older servers. */
+interface MemoryBlock {
+  processPrivateBytes: number | null;
+  processPressureBytes: number;
+  processSource: string;
+  rssBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  physicalMemoryBytes: number;
+  availablePhysicalBytes: number | null;
+  systemCommittedBytes: number | null;
+  systemCommitLimitBytes: number | null;
+  systemCommitFraction: number | null;
+  systemCommitAvailable: boolean;
+  probeError?: string;
+}
+
+interface ResponseStateBlock {
+  count: number;
+  totalBytes: number;
+  largestBytes: number;
+  oldestAgeMs: number;
+}
+
 interface MemoryReport {
   enabled: boolean;
   decision: WatchdogDecision | null;
@@ -53,6 +77,10 @@ interface MemoryReport {
   supervisor?: { supervised: boolean; hint: string };
   recommendation?: Recommendation;
   restartCount?: number;
+  memory?: MemoryBlock | null;
+  responseState?: ResponseStateBlock | null;
+  lastProbeAt?: number | null;
+  lastSuccessfulSystemProbeAt?: number | null;
 }
 
 interface SettingsPatch {
@@ -74,8 +102,14 @@ const LEVEL_COLOR: Record<WatchdogLevel, string> = {
   critical: "var(--red)",
 };
 
+const MIB = 1024 * 1024;
+
 function pct(fraction: number): number {
   return Math.round(fraction * 1000) / 10;
+}
+
+function gb1(bytes: number): string {
+  return (bytes / (1024 * MIB)).toFixed(1);
 }
 
 /** Stateless fetch so the polling effect never calls setState synchronously in its body. */
@@ -92,6 +126,8 @@ async function loadReport(apiBase: string): Promise<MemoryReport | null> {
 export default function MemoryCard({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [report, setReport] = useState<MemoryReport | null>(null);
+  // Wall-clock of the last successful report fetch — probe age must not call Date.now() in render.
+  const [reportAt, setReportAt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -107,7 +143,10 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
     const refresh = async () => {
       const data = await loadReport(apiBase);
       if (cancelled) return;
-      if (data) setReport(data);
+      if (data) {
+        setReport(data);
+        setReportAt(Date.now());
+      }
       setLoaded(true);
     };
     void refresh();
@@ -165,6 +204,11 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
   const decision = report.decision;
   const rec = report.recommendation;
   const sup = report.supervisor;
+  const mem = report.memory ?? null;
+  const rs = report.responseState ?? null;
+  const probeAgeS = report.lastProbeAt == null || reportAt === 0
+    ? null
+    : Math.max(0, Math.round((reportAt - report.lastProbeAt) / 1000));
   const level = decision?.level ?? "ok";
   const fraction = decision?.fraction ?? 0;
   const warnPct = warnDraft ?? (cfg ? Math.round(cfg.warnFraction * 100) : 60);
@@ -233,6 +277,21 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
           <span>{t("memory.restartsLabel")} <span className="mono">{nf(report.restartCount ?? 0)}</span></span>
           <span>{t("memory.supervisorLabel")} <span className="mono" style={{ color: sup?.supervised ? "var(--green)" : "var(--muted)" }}>{sup?.supervised ? t("memory.supervisorDetected", { hint: sup.hint }) : t("memory.supervisorNotDetected")}</span></span>
         </div>
+        {mem && (
+          <div className="muted text-label" style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 4 }}>
+            {/* Actual Private Bytes vs the pressure value in the gauge above — deliberately distinct. */}
+            <span>{t("memory.privateLabel")} <span className="mono">{mem.processPrivateBytes === null ? t("memory.notAvailable") : t("memory.mbValue", { mb: nf(Math.round(mem.processPrivateBytes / MIB)) })}</span></span>
+            <span>{t("memory.commitLabel")} <span className="mono">{mem.systemCommitAvailable && mem.systemCommittedBytes !== null && mem.systemCommitLimitBytes !== null
+              ? t("memory.commitValue", { used: gb1(mem.systemCommittedBytes), limit: gb1(mem.systemCommitLimitBytes), pct: mem.systemCommitFraction === null ? "?" : Math.round(mem.systemCommitFraction * 100) })
+              : t("memory.notAvailable")}</span></span>
+            {rs && (
+              <span>{t("memory.responseCacheLabel")} <span className="mono">{t("memory.responseCacheValue", { count: nf(rs.count), mb: nf(Math.round(rs.totalBytes / MIB)) })}</span></span>
+            )}
+            <span>{t("memory.probeLabel")} <span className="mono">{probeAgeS === null ? t("memory.notAvailable") : t("memory.probeAgo", { s: probeAgeS })}</span>{mem.probeError && (
+              <span className="mono" style={{ color: "var(--red)", marginLeft: 6 }}>{t("memory.probeDegraded", { code: mem.probeError })}</span>
+            )}</span>
+          </div>
+        )}
       </div>
 
       {/* 2. Recommend */}

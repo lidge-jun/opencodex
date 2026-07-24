@@ -117,6 +117,17 @@ thresholds. By default it only warns. Optionally — and only when explicitly en
 gracefully restart the proxy at the critical threshold, as a mitigation for native
 committed-memory retention that cannot be fixed in application code.
 
+Measurement is fully asynchronous: on Windows a hidden child PowerShell process collects this
+PID's Private Bytes plus the system-wide **Committed Bytes / Commit Limit** in one spawn, so the
+proxy's event loop is never blocked by a slow probe (a timed-out probe is killed and that cycle
+degrades to an RSS fallback). The first probe fires immediately at startup. System commit is a
+separate **observe-only** axis: crossing an internal high-water (default 0.90 of the commit
+limit) logs one latched warning and re-arms only on a measured recovery — it **never triggers a
+restart**, because the commit pressure may come from another process that restarting OpenCodex
+would not free. Tunable via the experimental env-only override
+`OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER` (clamped to `[0.50, 0.99]`; no config/UI knob until the
+axis is validated by field measurement).
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | `true` | Master switch. The default observation mode is warn-only and cannot lose data. |
@@ -131,9 +142,17 @@ committed-memory retention that cannot be fixed in application code.
 
 Environment overrides (highest precedence): `OCX_MEMORY_WATCHDOG_ENABLED` / `_DISABLED`,
 `_INTERVAL_MS`, `_WARN_FRACTION`, `_CRITICAL_FRACTION`, `_AUTO_RESTART`, `_REQUIRE_SUPERVISOR`,
-`_RESTART_GRACE_MS`, `_MIN_RESTART_INTERVAL_MS`, `_MAX_RESTARTS` (all prefixed
-`OCX_MEMORY_WATCHDOG`). All entry paths — environment, `config.json`, and the dashboard /
-management API — go through the same final validation and clamping.
+`_RESTART_GRACE_MS`, `_MIN_RESTART_INTERVAL_MS`, `_MAX_RESTARTS`, `_COMMIT_HIGH_WATER`
+(experimental, env-only — all prefixed `OCX_MEMORY_WATCHDOG`). All entry paths — environment,
+`config.json`, and the dashboard / management API — go through the same final validation and
+clamping.
+
+The `/api/memory` report (and the dashboard's Memory card) additionally exposes the last probe's
+measurements: actual Private Bytes vs. the pressure value the decisions use (`processSource`
+names the origin — `windows-private`, `proc-status`, or the degraded `rss-fallback`), system
+commit used/limit/fraction, available physical memory, response-cache metrics (entry count /
+serialized bytes / largest entry), a sanitized `probeError` code when degraded, plus
+`lastProbeAt` / `lastSuccessfulSystemProbeAt` timestamps for staleness.
 
 :::note[Supervisors and Windows]
 A memory-driven restart works by **exiting with code 75** — a request to an external supervisor
