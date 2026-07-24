@@ -281,8 +281,10 @@ func compactionSummary(events []types.AdapterEvent) (string, error) {
 			}
 		case types.EventError:
 			return "", fmt.Errorf("%s", firstNonEmpty(event.Error, "compaction turn failed"))
-		case types.EventDone:
+		case types.EventDone, types.EventIncomplete:
 			done = true
+		case types.EventHeartbeat:
+			continue
 		}
 	}
 	if !done {

@@ -76,6 +76,50 @@ func TestLoopIterationBoundForcesFinalPass(t *testing.T) {
 	}
 }
 
+func TestScanSearchCallsAcceptsIncompleteTerminal(t *testing.T) {
+	events := []types.AdapterEvent{
+		{Type: types.EventTextDelta, Text: "partial"},
+		{Type: types.EventIncomplete, Reason: "max_output_tokens"},
+	}
+
+	calls, passthrough, realTool, err := scanSearchCalls(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 0 || realTool {
+		t.Fatalf("calls = %#v, realTool = %v", calls, realTool)
+	}
+	if len(passthrough) != 2 || passthrough[1].Type != types.EventIncomplete {
+		t.Fatalf("passthrough = %#v", passthrough)
+	}
+}
+
+func TestScanSearchCallsRejectsEventAfterIncompleteTerminal(t *testing.T) {
+	events := []types.AdapterEvent{
+		{Type: types.EventIncomplete, Reason: "adapter_eof"},
+		{Type: types.EventTextDelta, Text: "late"},
+	}
+
+	if _, _, _, err := scanSearchCalls(events); err == nil {
+		t.Fatal("expected protocol violation for event after terminal")
+	}
+}
+
+func TestScanSearchCallsPassesThroughHeartbeat(t *testing.T) {
+	events := []types.AdapterEvent{
+		{Type: types.EventHeartbeat},
+		{Type: types.EventDone},
+	}
+
+	_, passthrough, _, err := scanSearchCalls(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(passthrough) != 2 || passthrough[0].Type != types.EventHeartbeat || passthrough[1].Type != types.EventDone {
+		t.Fatalf("passthrough = %#v", passthrough)
+	}
+}
+
 func TestProgressStreamInjectsHeartbeat(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer writer.Close()

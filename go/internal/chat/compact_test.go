@@ -36,6 +36,22 @@ func TestCompactionEnvelopeAndReplay(t *testing.T) {
 	}
 }
 
+func TestCompactionSummaryIncompleteTerminalAndHeartbeat(t *testing.T) {
+	events := []types.AdapterEvent{
+		{Type: types.EventHeartbeat, Text: "ignored heartbeat"},
+		{Type: types.EventTextDelta, Text: "summary"},
+		{Type: types.EventIncomplete, Text: "ignored incomplete"},
+	}
+
+	summary, err := compactionSummary(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != "summary" {
+		t.Fatalf("summary = %q, want %q", summary, "summary")
+	}
+}
+
 type fakeCompactor struct{}
 
 func (fakeCompactor) Compact(context.Context, *types.CompactionRequest) (*types.CompactionResult, error) {

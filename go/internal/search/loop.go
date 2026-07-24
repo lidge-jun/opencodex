@@ -185,7 +185,11 @@ func scanSearchCalls(events []types.AdapterEvent) ([]searchCall, []types.Adapter
 	passthrough := make([]types.AdapterEvent, 0, len(events))
 	realTool := false
 	terminal := 0
-	for _, event := range events {
+	terminalIndex := -1
+	for index, event := range events {
+		if terminalIndex >= 0 {
+			return nil, nil, false, fmt.Errorf("web-search adapter stream emitted event after terminal at index %d", index)
+		}
 		switch event.Type {
 		case types.EventToolCall:
 			if event.ToolCall == nil {
@@ -197,8 +201,11 @@ func scanSearchCalls(events []types.AdapterEvent) ([]searchCall, []types.Adapter
 				realTool = true
 				passthrough = append(passthrough, event)
 			}
-		case types.EventDone:
+		case types.EventDone, types.EventIncomplete:
 			terminal++
+			terminalIndex = index
+			passthrough = append(passthrough, event)
+		case types.EventHeartbeat:
 			passthrough = append(passthrough, event)
 		case types.EventError:
 			return nil, nil, false, errors.New(event.Error)
@@ -208,6 +215,9 @@ func scanSearchCalls(events []types.AdapterEvent) ([]searchCall, []types.Adapter
 	}
 	if terminal != 1 {
 		return nil, nil, false, fmt.Errorf("web-search adapter stream requires one terminal event, got %d", terminal)
+	}
+	if terminalIndex != len(events)-1 {
+		return nil, nil, false, errors.New("web-search adapter stream terminal event must be last")
 	}
 	return calls, passthrough, realTool, nil
 }
