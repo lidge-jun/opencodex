@@ -525,10 +525,13 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     else warnUncataloguedComboOnce(id, combo, members);
   }
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
+  // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
+  const enrichedByName = new Map(activeProviders);
   const customModels = (config.customModels ?? []).map(cm => {
-    const provider = config.providers[cm.provider] as OcxProviderConfigWithReasoningSummaries | undefined;
-    const supportsReasoningSummaries = modelRecordValue(provider?.modelSupportsReasoningSummaries, cm.modelId);
-    return {
+    const rawProvider = config.providers[cm.provider] as OcxProviderConfigWithReasoningSummaries | undefined;
+    const supportsReasoningSummaries = modelRecordValue(rawProvider?.modelSupportsReasoningSummaries, cm.modelId);
+    const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
@@ -537,6 +540,19 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     };
+    // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
+    // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
+    // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
+    // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
+    // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
+    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
+    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, base.id)) {
+      const current = base.inputModalities ?? ["text"];
+      if (!current.includes("image")) {
+        return { ...base, inputModalities: [...current, "image"] };
+      }
+    }
+    return base;
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
