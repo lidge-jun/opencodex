@@ -283,6 +283,20 @@ describe("codex-rs compat surface (260707)", () => {
     expect(parsed.options.reasoning).toBeUndefined();
   });
 
+  test("detects image_generation hosted tool arriving via additional_tools (responses_lite WS shape)", () => {
+    // Codex Desktop responses_websockets lite path: NO body.tools; the hosted tool spec rides
+    // inside an input item {type:"additional_tools", tools:[...]}. extractHostedImageGeneration
+    // must still see it so the image bridge activates.
+    const parsed = parseRequest({
+      model: "p/m",
+      input: [
+        { type: "additional_tools", tools: [{ type: "image_generation" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "draw a cat" }] },
+      ],
+    });
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
+  });
+
   test("current parser ignores null empty and unknown string efforts", () => {
     expect(parseRequest({ model: "p/m", input: "hi", reasoning: null }).options.reasoning).toBeUndefined();
     expect(parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "" } }).options.reasoning).toBeUndefined();
