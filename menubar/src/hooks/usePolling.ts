@@ -20,18 +20,37 @@ export function usePolling<T>(
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  const consecutiveErrorsRef = useRef(0);
 
   const poll = useCallback(async () => {
     try {
       const data = await fetcherRef.current();
-      setState((prev) => ({
-        data: data ?? prev.data,
-        loading: false,
-        error: data === null,
-        lastUpdated: data !== null ? Date.now() : prev.lastUpdated,
-      }));
+      if (data !== null) {
+        consecutiveErrorsRef.current = 0;
+        setState({
+          data,
+          loading: false,
+          error: false,
+          lastUpdated: Date.now(),
+        });
+      } else {
+        consecutiveErrorsRef.current += 1;
+        setState((prev) => ({
+          // Clear stale data after 3 consecutive failures
+          data: consecutiveErrorsRef.current >= 3 ? null : prev.data,
+          loading: false,
+          error: true,
+          lastUpdated: prev.lastUpdated,
+        }));
+      }
     } catch {
-      setState((prev) => ({ ...prev, loading: false, error: true }));
+      consecutiveErrorsRef.current += 1;
+      setState((prev) => ({
+        data: consecutiveErrorsRef.current >= 3 ? null : prev.data,
+        loading: false,
+        error: true,
+        lastUpdated: prev.lastUpdated,
+      }));
     }
   }, []);
 

@@ -28,21 +28,16 @@
         "focus": true
       }
     ],
-    "trayIcon": {
-      "id": "main-tray",
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true
-    },
     "security": {
       "csp": "default-src 'self'; connect-src 'self' http://localhost:* https://localhost:*"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "icon": ["icons/icon.png"],
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "10.15"
     }
   }
 }

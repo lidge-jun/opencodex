@@ -24,11 +24,17 @@ else
 fi
 
 echo "==> Building frontend..."
-npx vite build
+npx tsc -b && npx vite build
 
 echo "==> Building Tauri app..."
-if command -v cargo &>/dev/null; then
-    source "$HOME/.cargo/env" 2>/dev/null || true
+# Source Cargo env before checking PATH (rustup installs may not be in non-interactive shells)
+if [ -f "$HOME/.cargo/env" ]; then
+    source "$HOME/.cargo/env"
+fi
+
+if ! command -v cargo &>/dev/null; then
+    echo "ERROR: cargo not found. Install Rust via https://rustup.rs/"
+    exit 1
 fi
 
 if $DEBUG; then

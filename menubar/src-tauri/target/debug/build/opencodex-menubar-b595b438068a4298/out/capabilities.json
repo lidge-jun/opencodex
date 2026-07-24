@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default capability for the menubar panel","local":true,"windows":["panel"],"permissions":["core:default","shell:allow-open"]}}

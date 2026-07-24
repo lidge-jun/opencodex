@@ -1,5 +1,5 @@
 import { usePolling } from "../hooks/usePolling";
-import { fetchHealth, restartProxy } from "../api";
+import { fetchHealth, stopProxy } from "../api";
 import { useState } from "react";
 
 function formatUptime(seconds: number): string {
@@ -13,17 +13,17 @@ function formatUptime(seconds: number): string {
 
 export default function Status() {
   const { data, loading, error } = usePolling(fetchHealth, 15000);
-  const [restarting, setRestarting] = useState(false);
-  const [restartResult, setRestartResult] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopResult, setStopResult] = useState<string | null>(null);
 
-  const handleRestart = async () => {
-    setRestarting(true);
-    setRestartResult(null);
-    const ok = await restartProxy();
-    setRestartResult(ok ? "Restarting…" : "Restart failed");
+  const handleStop = async () => {
+    setStopping(true);
+    setStopResult(null);
+    const ok = await stopProxy();
+    setStopResult(ok ? "Proxy stopped" : "Stop failed");
     setTimeout(() => {
-      setRestarting(false);
-      setRestartResult(null);
+      setStopping(false);
+      setStopResult(null);
     }, 5000);
   };
 
@@ -48,10 +48,10 @@ export default function Status() {
         </div>
       </div>
       <div className="actions-row">
-        <button className="action-btn restart" onClick={handleRestart} disabled={restarting}>
-          {restarting ? "Restarting…" : "Restart Proxy"}
+        <button className="action-btn restart" onClick={handleStop} disabled={stopping}>
+          {stopping ? "Stopping…" : "Stop Proxy"}
         </button>
-        {restartResult && <span className="action-result">{restartResult}</span>}
+        {stopResult && <span className="action-result">{stopResult}</span>}
       </div>
     </div>
   );

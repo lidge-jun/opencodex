@@ -24,10 +24,13 @@ export default function Activity() {
   if (error && !data) return <div className="section-error">Unable to fetch request log</div>;
   if (!data || data.length === 0) return <div className="section-empty">No recent requests</div>;
 
+  // Show newest first (API returns oldest-first)
+  const entries = [...data].reverse();
+
   return (
     <div className="section activity-section">
       <div className="request-list">
-        {data.map((r, i) => (
+        {entries.map((r, i) => (
           <div key={r.requestId ?? i} className="request-row">
             <span className={`req-status ${statusColor(r.status)}`}>{r.status}</span>
             <span className="req-model" title={r.model}>{r.model}</span>

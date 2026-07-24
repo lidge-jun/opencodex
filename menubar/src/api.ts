@@ -52,6 +52,7 @@ export interface ProviderInfo {
   defaultModel?: string;
   hasApiKey: boolean;
   disabled?: boolean;
+  authMode?: string;
 }
 
 export interface HealthData {
@@ -102,7 +103,7 @@ export async function fetchHealth(): Promise<HealthData | null> {
 
 export async function fetchRequestLog(limit = 20): Promise<RequestLogEntry[] | null> {
   try {
-    const res = await apiRequest<RequestLogEntry[]>(`/api/logs?limit=${limit}`);
+    const res = await apiRequest<RequestLogEntry[]>(`/api/logs?tail=${limit}`);
     if (!res.ok) return null;
     // The logs endpoint may return { entries: [...] } or an array
     const body = res.body as unknown;
@@ -116,7 +117,7 @@ export async function fetchRequestLog(limit = 20): Promise<RequestLogEntry[] | n
   }
 }
 
-export async function restartProxy(): Promise<boolean> {
+export async function stopProxy(): Promise<boolean> {
   try {
     const res = await apiRequest("/api/stop", "POST");
     return res.ok;
@@ -127,7 +128,8 @@ export async function restartProxy(): Promise<boolean> {
 
 export async function toggleProvider(name: string, disabled: boolean): Promise<boolean> {
   try {
-    const res = await apiRequest("/api/providers", "PATCH", { name, disabled });
+    const encoded = encodeURIComponent(name);
+    const res = await apiRequest(`/api/providers?name=${encoded}`, "PATCH", { disabled });
     return res.ok;
   } catch {
     return false;

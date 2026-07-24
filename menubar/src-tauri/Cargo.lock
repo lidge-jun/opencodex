@@ -2164,6 +2164,7 @@ dependencies = [
 name = "opencodex-menubar"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "reqwest 0.12.28",
  "security-framework",
  "serde",
