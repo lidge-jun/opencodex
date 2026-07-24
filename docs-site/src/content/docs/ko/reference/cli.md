@@ -84,7 +84,9 @@ ocx status --json
     "health": {
       "ok": false,
       "url": "http://127.0.0.1:10100/healthz",
-      "message": "unreachable"
+      "message": "unreachable",
+      "version": null,
+      "uptimeSeconds": null
     }
   },
   "dashboard": {
@@ -109,7 +111,8 @@ ocx status --json
 }
 ```
 
-실제 객체에는 `listen`(포트, 호스트명, 런타임/설정 출처), 설정 로드 진단, 번들 Codex 플러그인
+정상 상태에서는 `version`과 `uptimeSeconds`에 `/healthz`가 제공하는 구조화된 값이 들어갑니다. 엔드포인트에서 해당 필드를 생략하면 각 필드가 `null`일 수 있습니다. 실제 객체에는
+`listen`(포트, 호스트명, 런타임/설정 출처), 설정 로드 진단, 번들 Codex 플러그인
 진단도 들어갑니다. JSON 스키마는 필드 추가만 허용하므로 이후 버전에 필드가 늘 수 있지만 기존
 필드는 유지됩니다. API 키, OAuth 토큰, authorization 헤더, 요청 내용, 이메일, 계정 식별자는
 의도적으로 제외합니다.

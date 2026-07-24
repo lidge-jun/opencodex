@@ -15,6 +15,7 @@
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. |
+| `apps/macos-menu-bar/` | macOS 12+ AppKit companion. Reads the additive `ocx status --json` contract and delegates start/restart/stop to the CLI; it never signals PIDs or edits Codex state directly. |
 
 The `src/` root stays thin: process entry, shared config/types, router, bridge, service manager, and
 reasoning effort definitions live there. Feature code is grouped under `src/adapters/`, `src/codex/`,

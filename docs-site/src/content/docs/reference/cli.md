@@ -84,7 +84,9 @@ Abbreviated example shape:
     "health": {
       "ok": false,
       "url": "http://127.0.0.1:10100/healthz",
-      "message": "unreachable"
+      "message": "unreachable",
+      "version": null,
+      "uptimeSeconds": null
     }
   },
   "dashboard": {
@@ -109,7 +111,8 @@ Abbreviated example shape:
 }
 ```
 
-The real object also includes `listen` (port, hostname, runtime/config source), config load
+When healthy, `version` and `uptimeSeconds` contain structured values from `/healthz` when that endpoint provides them; either field may be `null` if the proxy omits it. The real
+object also includes `listen` (port, hostname, runtime/config source), config load
 diagnostics, and bundled Codex plugin diagnostics. The JSON schema is additive-only: future versions
 may add fields, but existing fields should stay stable. It intentionally excludes API keys, OAuth
 tokens, authorization headers, request content, emails, and account identities.

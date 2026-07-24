@@ -5,6 +5,10 @@
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`
 starts the proxy when needed and opens `http://localhost:<port>`.
 
+The native macOS menu bar companion under `apps/macos-menu-bar/` is a smaller lifecycle surface.
+It consumes `ocx status --json`, opens the dashboard URL reported there, and delegates lifecycle
+actions back to the CLI. It must not grow a parallel PID-kill, config-write, or authentication path.
+
 ## API ownership
 
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates the management surface to

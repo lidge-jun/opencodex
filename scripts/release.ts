@@ -292,5 +292,5 @@ await $`gh workflow run release.yml --ref ${branch} -f version=${version} -f tag
 const releaseRun = await waitForReleaseWorkflowRun(releaseSha, branch, dispatchStartedAt);
 await watchRun(releaseRun.databaseId);
 console.log(dryRun
-  ? "\n✓ Dry run complete. Re-run with --publish to publish for real."
-  : "\n✓ Published. Try:  npm install -g @bitkyc08/opencodex");
+  ? "\n✓ Dry run complete. npm packaging and the macOS release archive were verified. Re-run with --publish to publish for real."
+  : "\n✓ Published to npm and attached the macOS app to the GitHub Release. Try:  npm install -g @bitkyc08/opencodex");

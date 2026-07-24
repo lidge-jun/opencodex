@@ -1,9 +1,9 @@
 name: Release
 
-# Publish opencodex to npm — jawcode-style: triggered from the Actions tab with an explicit
-# version, dist-tag, and a dry-run-first default. Bump package.json on main BEFORE dispatching
-# (or use `bun run release <version>`, which does the bump+commit+push+dispatch for you); the
-# workflow verifies the version matches before publishing.
+# Publish opencodex to npm and package the OpenCodex macOS companion — jawcode-style: triggered
+# from the Actions tab with an explicit version, dist-tag, and a dry-run-first default. Bump
+# package.json on main BEFORE dispatching (or use `bun run release <version>`, which does the
+# bump+commit+push+dispatch for you); the workflow verifies the version matches before publishing.
 on:
   workflow_dispatch:
     inputs:
@@ -29,19 +29,53 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write # create the matching GitHub Release + version tag after npm publish
-  actions: read # verify the release commit already passed Cross-platform CI
-  id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  package-macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      archive_name: ${{ steps.package.outputs.archive_name }}
+      checksum_name: ${{ steps.package.outputs.checksum_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build universal macOS release asset
+        id: package
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          UNIVERSAL: "1"
+        run: bash scripts/package-macos-release.sh
+
+      - name: Upload macOS release asset
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: opencodex-macos-release
+          path: |
+            dist/release/${{ steps.package.outputs.archive_name }}
+            dist/release/${{ steps.package.outputs.checksum_name }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish:
+    needs: package-macos
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write # create the matching GitHub Release + version tag after npm publish
+      actions: read # verify CI and download the macOS workflow artifact
+      id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -58,6 +92,23 @@ jobs:
             echo "::error::branch moved after the release audit (expected ${EXPECTED_SHA}, got ${GITHUB_SHA}) — refusing to publish an unaudited commit"
             exit 1
           fi
+
+      - name: Download macOS release asset
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: opencodex-macos-release
+          path: dist/release
+
+      - name: Verify macOS release asset
+        env:
+          MACOS_ARCHIVE: ${{ needs.package-macos.outputs.archive_name }}
+          MACOS_CHECKSUM: ${{ needs.package-macos.outputs.checksum_name }}
+        run: |
+          set -euo pipefail
+          cd dist/release
+          test -f "$MACOS_ARCHIVE"
+          test -f "$MACOS_CHECKSUM"
+          sha256sum --check "$MACOS_CHECKSUM"
 
       # opencodex is bun-native (the prepublishOnly GUI build + typecheck run under bun).
       - name: Setup Bun
@@ -195,7 +246,7 @@ jobs:
           fi
 
       # Tokenless publish via Trusted Publishing (OIDC) — NO NPM_TOKEN secret. npm auto-detects the
-      # OIDC environment (`id-token: write` above) and generates provenance automatically, so neither a
+      # OIDC environment (`id-token: write` on this job) and generates provenance automatically, so neither a
       # token nor `--provenance` is needed. `npm publish` runs prepublishOnly first (typecheck + build
       # the GUI into gui/dist), so even a dry-run fully verifies the build.
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
@@ -286,10 +337,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
+          MACOS_ARCHIVE: ${{ needs.package-macos.outputs.archive_name }}
+          MACOS_CHECKSUM: ${{ needs.package-macos.outputs.checksum_name }}
         run: |
           set -euo pipefail
 
           release_tag="v${RELEASE_VERSION}"
+          macos_archive="dist/release/${MACOS_ARCHIVE}"
+          macos_checksum="dist/release/${MACOS_CHECKSUM}"
 
           git fetch --force --tags origin
 
@@ -358,6 +413,9 @@ jobs:
 
           {
             printf '%s\n\n' "$npm_metadata"
+            printf '## macOS app\n\n'
+            printf 'Download `%s` and verify it with `%s`.\n' "$MACOS_ARCHIVE" "$MACOS_CHECKSUM"
+            printf 'The app is ad-hoc signed and not notarized, so macOS may require manual approval on first launch.\n\n'
             if [ -n "$(printf '%s' "$pr_notes" | tr -d '[:space:]')" ]; then
               printf '%s\n\n' "$pr_notes"
             fi
@@ -376,5 +434,5 @@ jobs:
             git push origin "refs/tags/${release_tag}"
           fi
 
-          gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+          gh release create "$release_tag" "$macos_archive" "$macos_checksum" --target "$GITHUB_SHA" --title "$release_tag" \
             --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}

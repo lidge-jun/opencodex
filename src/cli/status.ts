@@ -15,6 +15,15 @@ type HealthCheck = {
   url: string;
   message: string;
   label: string;
+  version: string | null;
+  uptimeSeconds: number | null;
+};
+
+type HealthResponse = {
+  service?: unknown;
+  status?: unknown;
+  version?: unknown;
+  uptime?: unknown;
 };
 
 export type CliStatusJson = {
@@ -26,6 +35,8 @@ export type CliStatusJson = {
       ok: boolean;
       url: string;
       message: string;
+      version: string | null;
+      uptimeSeconds: number | null;
     };
   };
   dashboard: { url: string };
@@ -99,6 +110,17 @@ export function selectListenTarget(
   };
 }
 
+function failedHealthCheck(url: string, message: string): HealthCheck {
+  return {
+    ok: false,
+    url,
+    message,
+    label: `${url} ${message}`,
+    version: null,
+    uptimeSeconds: null,
+  };
+}
+
 async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
   const url = target.healthUrl;
   const controller = new AbortController();
@@ -106,21 +128,21 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
-      const message = `returned HTTP ${response.status}`;
-      return { ok: false, url, message, label: `${url} ${message}` };
+      return failedHealthCheck(url, `returned HTTP ${response.status}`);
     }
-    const body = await response.json().catch(() => null) as { service?: unknown; status?: unknown; version?: unknown; uptime?: unknown } | null;
+    const body = await response.json().catch(() => null) as HealthResponse | null;
     if (!isOpencodexHealthz(body)) {
-      const message = "responded, but not an opencodex proxy";
-      return { ok: false, url, message, label: `${url} ${message}` };
+      return failedHealthCheck(url, "responded, but not an opencodex proxy");
     }
-    const version = typeof body?.version === "string" ? ` v${body.version}` : "";
-    const uptime = typeof body?.uptime === "number" ? `, uptime ${Math.round(body.uptime)}s` : "";
-    const message = `ok${version}${uptime}`;
-    return { ok: true, url, message, label: `${url} ${message}` };
+    const version = typeof body?.version === "string" ? body.version : null;
+    const uptimeSeconds = typeof body?.uptime === "number" ? body.uptime : null;
+    const versionLabel = version ? ` v${version}` : "";
+    const uptimeLabel = uptimeSeconds !== null ? `, uptime ${Math.round(uptimeSeconds)}s` : "";
+    const message = `ok${versionLabel}${uptimeLabel}`;
+    return { ok: true, url, message, label: `${url} ${message}`, version, uptimeSeconds };
   } catch (error) {
     const reason = error instanceof Error && error.name === "AbortError" ? "timed out" : "unreachable";
-    return { ok: false, url, message: reason, label: `${url} ${reason}` };
+    return failedHealthCheck(url, reason);
   } finally {
     clearTimeout(timer);
   }
@@ -228,6 +250,8 @@ export async function collectStatus(): Promise<CliStatusView> {
           ok: health.ok,
           url: health.url,
           message: health.message,
+          version: health.version,
+          uptimeSeconds: health.uptimeSeconds,
         },
       },
       dashboard: { url: listen.dashboardUrl },

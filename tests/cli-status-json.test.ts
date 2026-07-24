@@ -47,7 +47,7 @@ describe("CLI status JSON", () => {
 
       const parsed = JSON.parse(result.stdout) as {
         schemaVersion?: unknown;
-        proxy?: { running?: unknown; pid?: unknown; health?: { ok?: unknown; url?: unknown; message?: unknown } };
+        proxy?: { running?: unknown; pid?: unknown; health?: { ok?: unknown; url?: unknown; message?: unknown; version?: unknown; uptimeSeconds?: unknown } };
         dashboard?: { url?: unknown };
         listen?: { port?: unknown; source?: unknown };
         paths?: { config?: unknown; pid?: unknown; runtime?: unknown };
@@ -84,6 +84,8 @@ describe("CLI status JSON", () => {
       expect(parsed.proxy?.health?.ok).toBe(false);
       expect(parsed.proxy?.health?.url).toBe("http://127.0.0.1:9/healthz");
       expect(typeof parsed.proxy?.health?.message).toBe("string");
+      expect(parsed.proxy?.health?.version).toBeNull();
+      expect(parsed.proxy?.health?.uptimeSeconds).toBeNull();
       expect(parsed.dashboard?.url).toBe("http://localhost:9/");
       expect(parsed.listen?.port).toBe(9);
       expect(parsed.listen?.source).toBe("config");
@@ -203,6 +205,56 @@ describe("CLI status JSON", () => {
       expect(result.stderr).toContain("Usage: ocx status [--json]");
       expect(result.stdout).toBe("");
     } finally {
+      rmSync(opencodexHome, { recursive: true, force: true });
+    }
+  });
+
+  test("status --json exposes structured version and uptime from a healthy proxy", async () => {
+    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname !== "/healthz") return new Response("not found", { status: 404 });
+        return Response.json({
+          status: "ok",
+          service: "opencodex",
+          version: "9.8.7",
+          uptime: 123.4,
+        });
+      },
+    });
+    try {
+      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+        port: server.port,
+        hostname: "127.0.0.1",
+        providers: {},
+        defaultProvider: "openai",
+      }), "utf8");
+
+      const child = Bun.spawn([process.execPath, cliPath, "status", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCODEX_HOME: opencodexHome },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const parsed = JSON.parse(stdout) as {
+        proxy?: { health?: { ok?: unknown; version?: unknown; uptimeSeconds?: unknown } };
+      };
+      expect(parsed.proxy?.health?.ok).toBe(true);
+      expect(parsed.proxy?.health?.version).toBe("9.8.7");
+      expect(parsed.proxy?.health?.uptimeSeconds).toBe(123.4);
+    } finally {
+      server.stop(true);
       rmSync(opencodexHome, { recursive: true, force: true });
     }
   });

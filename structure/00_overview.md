@@ -29,6 +29,10 @@ Codex CLI / TUI / App / SDK
   -> upstream provider
 ```
 
+The optional native companion under `apps/macos-menu-bar/` is a macOS control surface for this same
+runtime. It must delegate status and lifecycle operations to `ocx` instead of creating a parallel
+process-control or configuration path.
+
 The default install keeps native OpenAI/ChatGPT passthrough working through one option-aware
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
