@@ -23,6 +23,7 @@ export interface CodexAutoSwitchController {
   commit(): Promise<boolean>;
   cancel(): void;
   toggle(): Promise<boolean>;
+  retry(): void;
 }
 
 export function useCodexAutoSwitch(
@@ -208,6 +209,11 @@ export function useCodexAutoSwitch(
     editingRef.current = editing;
   }, []);
 
+  const retry = useCallback(() => {
+    setLoadError(false);
+    clearFeedback();
+  }, [clearFeedback]);
+
   return {
     threshold,
     draft,
@@ -222,5 +228,6 @@ export function useCodexAutoSwitch(
     commit,
     cancel,
     toggle,
+    retry,
   };
 }

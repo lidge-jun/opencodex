@@ -401,7 +401,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         onCommit={autoSwitch.commit}
         onCancel={autoSwitch.cancel}
         onToggle={autoSwitch.toggle}
-        onRetry={() => { void load(); }}
+        onRetry={() => {
+          autoSwitch.retry();
+          void load();
+        }}
       />
 
       {confirm && (
