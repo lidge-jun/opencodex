@@ -45,15 +45,19 @@ afterEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
-async function put(body: unknown): Promise<Response> {
+async function putWithConfig(body: unknown, config = loadConfig()): Promise<Response> {
   const url = new URL("http://localhost/api/model-visibility");
   const response = await handleManagementAPI(new Request(url, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
-  }), url, loadConfig(), { refreshCodexCatalog: async () => { refreshes += 1; } });
+  }), url, config, { refreshCodexCatalog: async () => { refreshes += 1; } });
   if (!response) throw new Error("model visibility route was not handled");
   return response;
+}
+
+async function put(body: unknown): Promise<Response> {
+  return putWithConfig(body);
 }
 
 describe("atomic model visibility management", () => {
@@ -88,6 +92,115 @@ describe("atomic model visibility management", () => {
     expect(refreshes).toBe(2);
   });
 
+  test("treats a physical combo provider with no configured combos as a routed provider", async () => {
+    saveConfig({
+      port: 0,
+      defaultProvider: "combo",
+      providers: {
+        combo: {
+          adapter: "openai-chat",
+          baseUrl: "https://combo.example.test/v1",
+          apiKey: "test-key",
+          liveModels: false,
+          models: ["model-a", "vendor/model"],
+          selectedModels: ["model-a"],
+        },
+      },
+      combos: {},
+      disabledModels: ["combo/vendor-model", "combo/temporarily-missing", "other/keep"],
+    });
+
+    expect((await put({ scope: "models", provider: "combo", targets: [{ id: "vendor/model" }], enabled: true })).status).toBe(200);
+    expect(loadConfig().providers.combo.selectedModels).toEqual(["model-a", "vendor/model"]);
+    expect(loadConfig().disabledModels).toEqual(["combo/temporarily-missing", "other/keep"]);
+    expect(refreshes).toBe(1);
+
+    expect((await put({ scope: "models", provider: "combo", targets: [{ id: "model-a" }], enabled: false })).status).toBe(200);
+    expect(loadConfig().providers.combo.selectedModels).toEqual(["model-a", "vendor/model"]);
+    expect(loadConfig().disabledModels).toEqual(["combo/temporarily-missing", "other/keep", "combo/model-a"]);
+    expect(refreshes).toBe(2);
+
+    const targets = [{ id: "model-a" }, { id: "vendor/model" }];
+    expect((await put({ scope: "provider", provider: "combo", targets, enabled: false })).status).toBe(200);
+    expect(loadConfig().providers.combo.selectedModels).toEqual(["model-a", "vendor/model"]);
+    expect(loadConfig().disabledModels).toEqual([
+      "combo/temporarily-missing",
+      "other/keep",
+      "combo/model-a",
+      "combo/vendor-model",
+    ]);
+    expect(loadConfig().disabledModels).not.toContain("combo/future-model");
+    expect(refreshes).toBe(3);
+
+    expect((await put({ scope: "provider", provider: "combo", targets, enabled: true })).status).toBe(200);
+    expect(loadConfig().providers.combo.selectedModels).toBeUndefined();
+    expect(loadConfig().disabledModels).toEqual(["other/keep"]);
+    expect(refreshes).toBe(4);
+  });
+
+  test("preserves provider-prefixed combo aliases until the combo provider enables them", async () => {
+    const config = loadConfig();
+    config.providers.anthropic = {
+      adapter: "openai-chat",
+      baseUrl: "https://anthropic.example.test/v1",
+      apiKey: "test-key",
+      liveModels: false,
+      models: ["claude-a"],
+      selectedModels: ["claude-a"],
+    };
+    config.combos!.free!.alias = "anthropic/fast";
+    config.disabledModels = [
+      "anthropic/claude-a",
+      "anthropic/temporarily-missing",
+      "anthropic/fast",
+      "combo/free",
+      "combo/plain",
+      "other/keep",
+      "other/provider",
+    ];
+    saveConfig(config);
+
+    expect((await put({ scope: "provider", provider: "anthropic", targets: [{ id: "claude-a" }], enabled: true })).status).toBe(200);
+    expect(loadConfig().providers.anthropic.selectedModels).toBeUndefined();
+    expect(loadConfig().disabledModels).toEqual([
+      "anthropic/fast",
+      "combo/free",
+      "combo/plain",
+      "other/keep",
+      "other/provider",
+    ]);
+    expect(refreshes).toBe(1);
+
+    expect((await put({ scope: "provider", provider: "combo", targets: [{ id: "free" }, { id: "plain" }], enabled: true })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual(["other/keep", "other/provider"]);
+    expect(refreshes).toBe(2);
+  });
+
+  test("keeps a colliding physical combo allowlist untouched when virtual combos take precedence", async () => {
+    const config = loadConfig();
+    config.providers.combo = {
+      adapter: "openai-chat",
+      baseUrl: "https://combo.example.test/v1",
+      models: ["physical-only"],
+      selectedModels: ["physical-only"],
+    };
+    config.combos = {
+      free: { alias: "anthropic/fast", targets: [{ provider: "google-antigravity", model: "gemini-3.1-pro" }] },
+    };
+    config.disabledModels = ["anthropic/fast", "other/keep"];
+
+    expect((await putWithConfig({ scope: "models", provider: "combo", targets: [{ id: "free" }], enabled: true }, config)).status).toBe(200);
+    expect(config.providers.combo.selectedModels).toEqual(["physical-only"]);
+    expect(config.disabledModels).toEqual(["other/keep"]);
+    expect(refreshes).toBe(1);
+
+    config.disabledModels = ["combo/free", "anthropic/fast", "other/keep"];
+    expect((await putWithConfig({ scope: "provider", provider: "combo", targets: [{ id: "free" }], enabled: true }, config)).status).toBe(200);
+    expect(config.providers.combo.selectedModels).toEqual(["physical-only"]);
+    expect(config.disabledModels).toEqual(["other/keep"]);
+    expect(refreshes).toBe(2);
+  });
+
   test("toggles canonical and aliased combo rows", async () => {
     const config = loadConfig();
     config.disabledModels?.push("fast-chat", "combo/plain");
@@ -96,8 +209,11 @@ describe("atomic model visibility management", () => {
     expect(loadConfig().disabledModels).toEqual(["google-antigravity/gpt-oss-120b-medium", "google-antigravity/temporarily-missing", "other/keep"]);
     expect((await put({ scope: "models", provider: "combo", targets: [{ id: "free" }], enabled: false })).status).toBe(200);
     expect(loadConfig().disabledModels).toContain("combo/free");
+    const beforeAllOn = loadConfig();
+    beforeAllOn.disabledModels?.push("fast-chat", "combo/plain");
+    saveConfig(beforeAllOn);
     expect((await put({ scope: "provider", provider: "combo", targets: [{ id: "free" }, { id: "plain" }], enabled: true })).status).toBe(200);
-    expect(loadConfig().disabledModels).not.toContain("combo/free");
+    expect(loadConfig().disabledModels).toEqual(["google-antigravity/gpt-oss-120b-medium", "google-antigravity/temporarily-missing", "other/keep"]);
     expect((await put({ scope: "provider", provider: "combo", targets: [{ id: "free" }, { id: "plain" }], enabled: false })).status).toBe(200);
     expect(loadConfig().disabledModels).toEqual(expect.arrayContaining(["combo/free", "combo/plain"]));
     expect((await put({ scope: "models", provider: "combo", targets: [{ id: "missing" }], enabled: true })).status).toBe(400);

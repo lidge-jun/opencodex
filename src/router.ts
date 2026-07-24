@@ -1,5 +1,5 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
-import { COMBO_NAMESPACE, tryPickComboModel, type ComboPick } from "./combos";
+import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } from "./combos";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
@@ -235,10 +235,7 @@ function routeResult(providerName: string, provider: OcxProviderConfig, modelId:
 }
 
 function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: boolean): RouteResult {
-  const preservePhysicalComboProvider =
-    hasOwnProvider(config.providers, COMBO_NAMESPACE)
-    && Object.keys(config.combos ?? {}).length === 0;
-  if (!bypassCombos && !preservePhysicalComboProvider) {
+  if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
     const combo = tryPickComboModel(config, modelId);
     if (combo) {
       const concrete = `${combo.target.provider}/${combo.target.model}`;

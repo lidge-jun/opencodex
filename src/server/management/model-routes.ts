@@ -27,7 +27,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { comboModelId, comboPublicModelId } from "../../combos";
+import { COMBO_NAMESPACE, comboModelId, comboPublicModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -144,8 +144,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
 
     const providerConfig = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
-    const comboProvider = provider === "combo";
-    if (!providerConfig && provider !== "openai" && !comboProvider) {
+    const isVirtualComboNamespace = provider === COMBO_NAMESPACE && !preservesPhysicalComboProvider(config);
+    if (!providerConfig && provider !== "openai" && !isVirtualComboNamespace) {
       return jsonResponse({ error: "unknown model visibility provider" }, 400);
     }
     const supportedNative = new Set(nativeModelRows(config).map(row => row.slug));
@@ -168,31 +168,41 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     if (targets.length === 0) return jsonResponse({ error: "model visibility targets required" }, 400);
 
-    const comboSlugs = new Map<string, Set<string>>();
-    if (comboProvider) {
+    const knownComboSelectors = new Set(
+      Object.entries(config.combos ?? {}).flatMap(([id, combo]) => [
+        comboModelId(id),
+        comboPublicModelId(id, combo),
+      ]),
+    );
+    const targetComboSelectors = new Map<string, Set<string>>();
+    if (isVirtualComboNamespace) {
       for (const target of targets) {
         const combo = config.combos && Object.hasOwn(config.combos, target.id) ? config.combos[target.id] : undefined;
         if (!combo) return jsonResponse({ error: "invalid model visibility target" }, 400);
-        comboSlugs.set(target.id, new Set([comboModelId(target.id), comboPublicModelId(target.id, combo)]));
+        targetComboSelectors.set(target.id, new Set([comboModelId(target.id), comboPublicModelId(target.id, combo)]));
       }
     }
     const matchesTarget = (stored: string, target: { id: string; native: boolean }) => target.native
       ? stored === target.id
-      : comboProvider ? comboSlugs.get(target.id)!.has(stored) : slugEquals(stored, provider, target.id);
+      : isVirtualComboNamespace
+        ? targetComboSelectors.get(target.id)!.has(stored)
+        : slugEquals(stored, provider, target.id);
 
     let disabled = [...new Set(config.disabledModels ?? [])];
     if (body.enabled) {
       if (scope === "provider") {
-        if (providerConfig) delete providerConfig.selectedModels;
-        if (comboProvider) {
-          const allComboSlugs = new Set(Object.entries(config.combos ?? {}).flatMap(([id, combo]) => [comboModelId(id), comboPublicModelId(id, combo)]));
-          disabled = disabled.filter(stored => !allComboSlugs.has(stored));
+        if (providerConfig && !isVirtualComboNamespace) delete providerConfig.selectedModels;
+        if (isVirtualComboNamespace) {
+          disabled = disabled.filter(stored => !knownComboSelectors.has(stored));
         } else {
           const nativeIds = new Set(targets.filter(target => target.native).map(target => target.id));
-          disabled = disabled.filter(stored => !stored.startsWith(`${provider}/`) && !nativeIds.has(stored));
+          disabled = disabled.filter(stored => (
+            knownComboSelectors.has(stored)
+            || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored))
+          ));
         }
       } else {
-        if (providerConfig?.selectedModels && providerConfig.selectedModels.length > 0) {
+        if (!isVirtualComboNamespace && providerConfig?.selectedModels && providerConfig.selectedModels.length > 0) {
           const additions = targets.filter(target => !target.native).map(target => target.id);
           providerConfig.selectedModels = [...new Set([...providerConfig.selectedModels, ...additions])];
         }
@@ -200,7 +210,11 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       }
     } else {
       for (const target of targets) {
-        const canonical = target.native ? target.id : comboProvider ? comboModelId(target.id) : routedSlug(provider, target.id);
+        const canonical = target.native
+          ? target.id
+          : isVirtualComboNamespace
+            ? comboModelId(target.id)
+            : routedSlug(provider, target.id);
         const alreadyDisabled = disabled.some(stored => matchesTarget(stored, target));
         if (!alreadyDisabled) disabled.push(canonical);
       }
