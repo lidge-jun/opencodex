@@ -13,6 +13,7 @@ const ANTIGRAVITY_WIRE_MODELS = [
   "gemini-3.6-flash-high",
   "gemini-3.1-pro-low",
   "gemini-pro-agent",
+  "gemini-3.1-flash-image",
   "claude-sonnet-4-6",
   "claude-opus-4-6-thinking",
   "gpt-oss-120b-medium",
@@ -85,6 +86,7 @@ export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
 export const ANTIGRAVITY_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.1-pro",
+  "gemini-3.1-flash-image",
   "claude-sonnet-4-6",
   "claude-opus-4-6-thinking",
   "gpt-oss-120b-medium",
@@ -97,6 +99,7 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3.6-flash-high": 1_048_576,
   "gemini-3.1-pro-low": 1_048_576,
   "gemini-pro-agent": 1_048_576,
+  "gemini-3.1-flash-image": 1_048_576,
   "claude-sonnet-4-6": 200_000,
   "claude-opus-4-6-thinking": 1_000_000,
   "gpt-oss-120b-medium": 131_072,

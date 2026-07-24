@@ -72,6 +72,7 @@ describe("antigravity CCA envelope", () => {
     expect(ANTIGRAVITY_MODELS).toEqual([
       "gemini-3.6-flash",
       "gemini-3.1-pro",
+      "gemini-3.1-flash-image",
       "claude-sonnet-4-6",
       "claude-opus-4-6-thinking",
       "gpt-oss-120b-medium",

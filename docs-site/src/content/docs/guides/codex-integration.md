@@ -43,9 +43,14 @@ points at opencodex, the proxy relays those calls to the OpenAI upstream:
 - **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
   failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
-  (Cursor, Gemini, Kiro, …) cannot serve image generation; if you don't want the tool offered at
-  all, disable it in Codex with `codex features disable image_generation`
+  (Cursor, Gemini, Kiro, …) cannot serve the `image_generation` tool relay; if you don't want the
+  tool offered at all, disable it in Codex with `codex features disable image_generation`
   (`[features] image_generation = false` in `config.toml`).
+
+  > **Note:** This refers only to the Codex `image_generation` tool (`/images/generations` relay).
+  > Gemini models that are image-capable produce inline images natively through the `google` adapter
+  > (via `responseModalities: ["TEXT", "IMAGE"]`), independent of this relay — see
+  > [Adapters](/reference/adapters/#google).
 
 For a non-loopback `hostname`, Codex must send the generated API auth header. The injector therefore
 uses a dedicated provider instead:
