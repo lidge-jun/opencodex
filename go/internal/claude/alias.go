@@ -44,12 +44,12 @@ func ClaudeCodeAlias(provider, model string) string {
 	if alias, ok := AliasForRoute(provider, model); ok {
 		return alias
 	}
-	return model
+	return Desktop3pAlias(provider, model)
 }
 
 func ClaudeCodeNativeAlias(model string) string {
 	if alias, ok := AliasForNative(model); ok {
 		return alias
 	}
-	return model
+	return Desktop3pAlias(nativeProvider, model)
 }
