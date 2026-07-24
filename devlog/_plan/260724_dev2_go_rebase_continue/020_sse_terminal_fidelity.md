@@ -20,12 +20,16 @@ worktree `/Users/jun/Developer/new/700_projects/opencodex-dev2-go-ports`
 |---|---|---|
 | `go/internal/types/types.go` | 6 event types; no heartbeat/incomplete | add `EventHeartbeat` + `EventIncomplete` with `Reason string` + `Message string` fields on `AdapterEvent` (`src/types.ts:237,264`) |
 | `go/internal/protocol/sse.go` | comment lines dropped silently (`sse.go:115`) | opt-in comment records: decoder option delivering comment events; default stays drop (`src/lib/sse-decoder.ts:58`, `includeComments`) |
-| `go/internal/adapter/anthropic/anthropic.go` | decoder without comment opt-in (`anthropic.go:543`); EOF+usage→Done (`anthropic.go:502`) | opt in comments → emit `EventHeartbeat` (`src/adapters/anthropic.ts:740`); terminal machine: `message_stop`→Done; EOF+`stopReason!=""`→Done(usage, mapped reason); EOF otherwise→EventError `"upstream stream ended before message_stop — possible truncation"` (`src/adapters/anthropic.ts:824-838`) |
+| `go/internal/adapter/anthropic/anthropic.go` | decoder without comment opt-in (`anthropic.go:543`); EOF+usage→Done (`anthropic.go:502`) | opt in comments → emit `EventHeartbeat` (`src/adapters/anthropic.ts:740`); terminal machine: `message_stop`→Done; EOF+`stopReason!=""`→Done(usage, EXACT mapping: `max_tokens`→`max_tokens`, `refusal\|content_filter`→`content_filter`, any other value→StopReason omitted) (`src/adapters/anthropic.ts:826-830`); EOF otherwise→EventError `"upstream stream ended before message_stop — possible truncation"` (`src/adapters/anthropic.ts:837`) |
 | `go/internal/adapter/openai/chat.go` | `!sawFinish && usage == nil`→Error, else Done (`chat.go:371`) | NO behavior change — already TS parity (`src/adapters/openai-chat.ts:724`); tests only |
-| `go/internal/adapter/google/google.go` | unconditional Done after scanner success (`google.go:481,520`) | track `sawAnyFrame` + `sawTerminalSignal` (usage metadata OR non-empty finishReason); malformed residual frame→Error `"upstream stream ended with an incomplete SSE frame — possible truncation"`; `!sawAnyFrame \|\| !sawTerminalSignal`→Error `"upstream stream ended without a terminal signal — possible truncation"`; keep Vertex/CCA tool-call-only truncation + `VertexTruncationErrorMessage` (`src/adapters/google.ts:388,400,453,470`, `src/adapters/google-truncation.ts:3`) |
-| `go/internal/adapter/openai/queue.go` | capacity = make hint; unbounded `Push` (`queue.go:19,38`) | explicit `maxBacklog` (default 1024); overflow→`OnBacklogExceeded()` callback + terminal `EventError "consumer backlog exceeded — turn aborted"` + Close; heartbeat skipped in `PreflightAdapterEvents` (`src/adapters/run-turn-queue.ts:42-43,52-60`) |
-| `go/internal/bridge/bridge.go` | no stall watchdog; EOF→incomplete w/o reason (`bridge.go:80,88`); `m.terminal` guard (`bridge.go:156`) | add stall watchdog: `StreamOptions.StallTimeout` (default 300s, `src/stall-timeout.ts:8`), reset on ANY adapter event incl. heartbeat, fire→close open items + `response.incomplete` w/ `incomplete_details.reason="upstream_stall_timeout"` + cancel (`src/bridge.ts:794-815`); EOF incomplete gets `reason="adapter_eof"` (`src/bridge.ts:756-770`); heartbeat consumed as activity only, never emitted; keep exactly-once guard |
+| `go/internal/adapter/google/google.go` (+`scanSSE`) | unconditional Done after scanner success (`google.go:481,520`); `scanSSE` drops non-`data:` lines and unterminated residuals silently (`google.go:633-664`) | redesign `scanSSE` to report framing state (clean EOF / `[DONE]` / residual bytes); non-`data:` non-comment residual→Error `"upstream stream ended with an incomplete SSE frame — possible truncation"` (`src/adapters/google.ts:453-460`); comment residual→heartbeat; invalid JSON in `data:` payload→Error `"malformed upstream SSE data frame"` (`src/adapters/google.ts:360`); liveness-only chunks (non-`data:` lines, no content event)→`EventHeartbeat` (`src/adapters/google.ts:447,456`); track `sawAnyFrame` + `sawTerminalSignal` (usage metadata OR non-empty finishReason); `!sawAnyFrame \|\| !sawTerminalSignal`→Error `"upstream stream ended without a terminal signal — possible truncation"` (`src/adapters/google.ts:470`); keep Vertex/CCA tool-call-only truncation + `VertexTruncationErrorMessage` (`src/adapters/google-truncation.ts:3`) |
+| `go/internal/adapter/openai/queue.go` | capacity = make hint; unbounded `Push`; `deliver()` goroutine dequeues before blocking on unbuffered `out` (`queue.go:19,38,72-75`) | redesign to the TS no-worker model: `Push` = non-blocking direct handoff to a waiting reader (not counted), else enqueue; overflow when `len(queued) >= maxBacklog` (default 1024)→`OnBacklogExceeded()` + enqueue terminal `EventError "consumer backlog exceeded — turn aborted"` + Close (`src/adapters/run-turn-queue.ts:60-67`); two senders never pair, so no-reader tests are deterministic; heartbeat skipped in `PreflightAdapterEvents` (`src/adapters/run-turn-queue.ts:42-43`) |
+| `go/internal/bridge/bridge.go` | no stall watchdog; EOF→incomplete w/o reason (`bridge.go:80,88`); `m.terminal` guard (`bridge.go:156`); `Buffered` terminal only on Done/Error (`bridge.go:129`) | add stall watchdog: `StreamOptions.StallTimeout` (default 300s, `src/stall-timeout.ts:8`) + `StreamOptions.OnCancel func()` (`src/bridge.ts:795`); timer callback only signals a buffered stall channel — ALL machine mutation/writes stay serialized in the bridge select loop; fire→close open items + `response.incomplete` w/ `incomplete_details.reason="upstream_stall_timeout"` + invoke `OnCancel` (`src/bridge.ts:794-815`); EOF incomplete gets `reason="adapter_eof"` (`src/bridge.ts:756-770`); `accept` handles adapter-emitted `EventIncomplete`→finish incomplete w/ reason passthrough (`src/bridge.ts:677-696`); `Buffered` treats `EventIncomplete` as terminal; heartbeat consumed as activity only, never emitted; keep exactly-once guard |
+| `go/internal/server/server.go` | Responses route builds `streamCtx` then calls `ParseStream` + `bridge.StreamWithOptions` (`server.go:288`) | create the cancellable stream context in the route, share it between `ParseStream` and the bridge, and pass its cancel as `StreamOptions.OnCancel` so a stall actually kills the adapter/upstream body (`src/server/responses/core.ts:1351`) |
 | `go/internal/chat/outbound.go` | EventError→error frame, no DONE (`outbound.go:145`); no incomplete handling | add `EventIncomplete` case: `max_output_tokens`→finish `length`+[DONE]; `content_filter`→finish `content_filter`+[DONE]; else→error frame `"upstream stream ended early (<reason>)"`, NO [DONE] (`src/chat/outbound.ts:351-360`); heartbeat ignored |
+| `go/internal/chat/messages_outbound.go` | two terminal switches w/o incomplete (`messages_outbound.go:19,132`) | add `EventIncomplete` case: `max_output_tokens`→finish `max_tokens`; `content_filter`→finish `refusal`; else→error `"upstream response was incomplete (<reason>)"` (or `details.message` when present) (`src/claude/outbound.ts:408-419`); heartbeat = explicit no-op |
+| `go/internal/chat/compact.go` | `compactionSummary` terminal = Done only (`compact.go:269`) | `EventIncomplete` = terminal boundary, no text contribution |
+| `go/internal/search/loop.go` | `scanSearchCalls` counts only EventDone as terminal; `terminal != 1` errors (`loop.go:200-208`) | count `EventDone` OR `EventIncomplete` as the single terminal; passthrough incomplete (`src/web-search/loop.ts:384`) |
 | Tests: `protocol/sse_test.go`, `adapter/anthropic/anthropic_test.go`, `adapter/openai/request_test.go`, `adapter/openai/queue_test.go`, `adapter/google/google_test.go`, `chat/outbound_test.go`, `bridge/bridge_test.go` | gaps per activation matrix | see matrix A1–A8 |
 
 ### NEW
@@ -44,6 +48,12 @@ None.
   (`go/internal/types/interfaces.go:10`). Unit-level contract port only.
   Anchors: `src/adapters/run-turn-queue.ts:52`, caller
   `src/server/responses/core.ts:1313`.
+- Adapter-emitted `EventIncomplete` producers — NONE in wp2 (TS producers are
+  the cursor adapter and web-search loop). Chat/Messages outbound incomplete
+  mappings are contract-level ports verified by unit injection at the boundary
+  TS defines; production activation arrives with wp3/wp6 cursor work. Bridge
+  reasons `adapter_eof`/`upstream_stall_timeout` are Responses-frame level and
+  never re-enter the adapter channel.
 - OpenAI adapters do NOT opt into comment records (TS does not).
 - GPT-Live (050), Cursor continuity store (030).
 
@@ -53,18 +63,21 @@ None.
 |---|---|---|---|---|
 | A1 | SSE `: keepalive` comments, opt-in decoder | bytes → decoder w/ comments | comment event surfaced; default decoder still drops | `protocol/sse_test.go` |
 | A2a | Anthropic EOF after usage, no `message_stop`, no stop_reason | ParseStream fixture | EventError, exact truncation message | `adapter/anthropic/anthropic_test.go` |
-| A2b | Anthropic `message_delta` stop_reason then EOF, no `message_stop` | fixture (TS pin `tests/anthropic-compatible-stream.test.ts:175`) | EventDone w/ usage+mapped stop reason | `adapter/anthropic/anthropic_test.go` |
+| A2b | Anthropic `message_delta` stop_reason then EOF, no `message_stop` | fixtures (TS pin `tests/anthropic-compatible-stream.test.ts:175`): `refusal`, `end_turn` | `refusal`→Done w/ StopReason `content_filter`; `end_turn`→Done w/ StopReason omitted | `adapter/anthropic/anthropic_test.go` |
 | A2c | Anthropic comment stream | fixture w/ `: keepalive` | EventHeartbeat emitted | `adapter/anthropic/anthropic_test.go` |
 | A3a | OpenAI chat usage-only EOF, no [DONE]/finish_reason | fixture (TS pin `tests/openai-chat-eof.test.ts:110`) | EventDone | `adapter/openai/request_test.go` |
 | A3b | OpenAI chat EOF, no [DONE]/finish_reason/usage | fixture | EventError, exact truncation message | `adapter/openai/request_test.go` |
-| A4a | Google usage-only final frame | fixture (TS pin `tests/google-vertex-stream.test.ts:58`) | EventDone | `adapter/google/google_test.go` |
-| A4b | Google text-only `MAX_TOKENS`, no tool calls | fixture (TS pin `tests/google-vertex-stream.test.ts:76`) | EventDone (no truncation error) | `adapter/google/google_test.go` |
-| A4c | Google malformed residual SSE frame | truncated fixture | EventError, incomplete-frame message | `adapter/google/google_test.go` |
+| A4a | Google usage-only final frame | fixture (TS pin `tests/google-vertex-stream.test.ts:76`) | EventDone | `adapter/google/google_test.go` |
+| A4b | Google text-only `MAX_TOKENS`, no tool calls | fixture (TS pin `tests/google-vertex-stream.test.ts:58`) | EventDone (no truncation error) | `adapter/google/google_test.go` |
+| A4c | Google unterminated non-`data:` residual | exact bytes `data: {...}\n\ngarbage-without-newline` (EOF, no trailing `\n`) | EventError `"upstream stream ended with an incomplete SSE frame — possible truncation"` | `adapter/google/google_test.go` |
 | A4d | Google frames w/o usage or finishReason | fixture | EventError, no-terminal message | `adapter/google/google_test.go` |
-| A5 | Push beyond maxBacklog (no reader) | direct backlog fill, deterministic | callback fired + terminal error event + closed; heartbeat skipped by preflight | `adapter/openai/queue_test.go` |
-| A6 | Bridge: adapter channel closes w/o terminal; stall timeout fires; heartbeat resets | bridge test w/ controlled clock/timeout | `response.incomplete` w/ reason `adapter_eof` / `upstream_stall_timeout`; exactly one terminal + one [DONE] | `bridge/bridge_test.go` |
+| A4e | Google `data:` frame with invalid JSON | fixture `{invalid` payload | EventError `"malformed upstream SSE data frame"` | `adapter/google/google_test.go` |
+| A4f | Google liveness-only chunk then EOF w/ terminal | comment/liveness lines only between content | EventHeartbeat emitted; default OpenAI path unchanged | `adapter/google/google_test.go` |
+| A5 | Push beyond maxBacklog (no reader) | no-reader fill (two senders never pair → deterministic) | callback fired + terminal error event + closed; direct handoff to a waiting reader NOT counted as backlog; heartbeat skipped by preflight | `adapter/openai/queue_test.go` |
+| A6 | Bridge: adapter channel closes w/o terminal; stall timeout fires; heartbeat resets | bridge test w/ short StallTimeout | `response.incomplete` w/ reason `adapter_eof` / `upstream_stall_timeout`; exactly one terminal + one [DONE]; `OnCancel` invoked on stall | `bridge/bridge_test.go` |
 | A7 | Second terminal event after first | bridge Stream fixture | terminal frame count == 1 across `completed\|failed\|incomplete`, one [DONE] | `bridge/bridge_test.go` |
 | A8 | Chat outbound EventIncomplete per reason | handler tests | `max_output_tokens`→length+[DONE]; `content_filter`→content_filter+[DONE]; `adapter_eof`→error frame, no [DONE] | `chat/outbound_test.go` |
+| A9 | Consumer terminal contract | unit tests per consumer | `Buffered` converts on incomplete; messages_outbound `max_output_tokens`→max_tokens / `content_filter`→refusal / else error; compact boundary; search loop accepts incomplete as the one terminal | `bridge/bridge_test.go`, `chat/messages_outbound_test.go`, `chat/compact_test.go`, `search/loop_test.go` |
 
 ## Verification
 
@@ -110,3 +123,37 @@ Re-verified every original MODIFY row against the rebased tree (`dev2-go` @
   8. A7 assertion widened to all terminal names + single [DONE].
 
 Round 2 must use the same reviewer and must pass before B.
+
+## A-gate round 2 fold-back
+
+- Reviewer: Anscombe (`019f93b6-88dd-7191-b933-93e7acfdbeb3`, Sol medium)
+- Verdict: `FAIL` (3 High + 2 Medium + 1 Low new findings; round-1 fixes
+  confirmed 2 resolved / 6 partial)
+- Synthesis (REVIEW-SYNTHESIS-01): all 6 findings ACCEPTED, no rebuttals.
+  Findings 1+2 share one root (incomplete/stall ownership was bridge-local
+  instead of route-level, and the terminal contract was not propagated to all
+  consumers) — folded as one ownership amendment. Main-agent addition beyond
+  the findings: Google liveness→heartbeat (`src/adapters/google.ts:447,456`)
+  folded into the same heartbeat contract for consistency.
+- Folded fixes:
+  1. Watchdog cancellation ownership → `StreamOptions.OnCancel func()` added;
+     `go/internal/server/server.go` added to MODIFY (route creates the shared
+     cancellable ctx for `ParseStream` + bridge); timer only signals a
+     buffered stall channel, mutation serialized in the select loop; A6 now
+     asserts `OnCancel` fires.
+  2. A8 reachability/consumers → `EventIncomplete` defined as a terminal
+     adapter event across ALL consumers: `bridge.Buffered`,
+     `chat/messages_outbound.go` (both switches, TS `src/claude/outbound.ts:408-419`
+     mapping), `chat/compact.go`, `search/loop.go`; adapter-producer
+     activation honestly deferred to wp3/wp6 (OUT section).
+  3. A4c feasibility → `scanSSE` framing redesign specified (typed residual
+     reporting); exact A4c bytes pinned; A4e malformed-JSON case added with
+     exact message `"malformed upstream SSE data frame"`.
+  4. A5 race → queue redesigned to the TS no-worker model (non-blocking
+     direct handoff, enqueue otherwise); determinism argument recorded.
+  5. Anthropic mapping → exact `max_tokens`/`refusal|content_filter`/omit
+     table in the After column; A2b pins `refusal` and `end_turn`.
+  6. A4a/A4b TS anchors swapped (Low).
+
+Round 3 must use the same reviewer and must pass before B. Third FAIL returns
+this work-phase to P with a changed plan (LOOP-REPAIR-01).
