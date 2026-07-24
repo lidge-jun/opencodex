@@ -122,7 +122,7 @@ import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
-import { handleLive, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
+import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
 
@@ -185,6 +185,7 @@ function attachLiveSidebandUpstream(ws: ServerWebSocket<WsData>): void {
   });
   upstream.addEventListener("message", (event) => {
     try {
+      logLiveSidebandFrame("u2c", event.data);
       if (typeof event.data === "string") ws.send(event.data);
       else if (event.data instanceof ArrayBuffer) ws.send(event.data);
       else if (ArrayBuffer.isView(event.data)) {
@@ -679,6 +680,7 @@ export function startServer(port?: number) {
       },
       message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
         if (ws.data.kind === "live-sideband") {
+          logLiveSidebandFrame("c2u", raw);
           const upstream = ws.data.liveUpstream;
           if (!upstream || upstream.readyState === WebSocket.CONNECTING || !ws.data.liveOpened) {
             const pending = ws.data.livePending ?? (ws.data.livePending = []);

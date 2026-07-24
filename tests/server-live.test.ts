@@ -3,7 +3,7 @@
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
@@ -601,4 +601,215 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
       callId: "rtc_2",
     }),
   ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
+});
+
+// Regression: Korean realtime transcripts must survive the sideband relay byte-identically.
+// A relay that re-decodes frames at arbitrary byte boundaries turns e.g. "얘" into "��"
+// (U+FFFD pairs); this test pins text, binary, and large-frame transparency.
+test("sideband relay preserves multibyte UTF-8 frames byte-identically in both directions", async () => {
+  const KOREAN_LINE = "가볍게 얘기핼봐요";
+  const KOREAN_EVENT = JSON.stringify({
+    type: "conversation.item.input_audio_transcription.delta",
+    delta: KOREAN_LINE,
+  });
+  const largeKorean = KOREAN_LINE.repeat(20_000); // ~1.3MB — forces TCP segmentation
+  const receivedByUpstream: Uint8Array[] = [];
+
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      open(ws) {
+        ws.send(KOREAN_EVENT);
+        ws.send(new TextEncoder().encode(KOREAN_LINE));
+        ws.send(largeKorean);
+      },
+      message(_ws, message) {
+        receivedByUpstream.push(
+          typeof message === "string"
+            ? new TextEncoder().encode(message)
+            : new Uint8Array(message as ArrayBuffer),
+        );
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_korean`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+    client.binaryType = "arraybuffer";
+
+    const inbound: Array<{ kind: string; data: unknown }> = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 10_000);
+      client.addEventListener("open", () => {
+        client.send(KOREAN_EVENT);
+        client.send(new TextEncoder().encode(KOREAN_LINE));
+      });
+      client.addEventListener("message", event => {
+        inbound.push({ kind: typeof event.data, data: event.data });
+        if (inbound.length >= 3) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+
+    expect(inbound[0]!.kind).toBe("string");
+    expect(inbound[0]!.data).toBe(KOREAN_EVENT);
+    expect(String(inbound[0]!.data)).not.toContain("�");
+    if (inbound[1]!.kind === "string") {
+      expect(inbound[1]!.data).toBe(KOREAN_LINE);
+    } else {
+      expect(new TextDecoder().decode(new Uint8Array(inbound[1]!.data as ArrayBuffer))).toBe(KOREAN_LINE);
+    }
+    expect(inbound[2]!.kind).toBe("string");
+    expect(inbound[2]!.data).toBe(largeKorean);
+    expect(String(inbound[2]!.data)).not.toContain("�");
+
+    const deadline = Date.now() + 5_000;
+    while (receivedByUpstream.length < 2 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    expect(receivedByUpstream).toHaveLength(2);
+    expect(new TextDecoder().decode(receivedByUpstream[0]!)).toBe(KOREAN_EVENT);
+    expect(new TextDecoder().decode(receivedByUpstream[1]!)).toBe(KOREAN_LINE);
+
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+// The env-gated frame forensic log (OCX_LIVE_FRAME_LOG) records per-frame metadata and
+// U+FFFD presence without writing full payloads — the attribution tool for multibyte
+// transcript corruption reports.
+test("sideband frame log records direction, kind, and U+FFFD context without full payloads", async () => {
+  const frameLogPath = join(TEST_DIR, "frames.jsonl");
+  process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
+  const FFFD_TEXT = "가볍게 ��기핼봐요";
+
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      open(ws) {
+        ws.send(FFFD_TEXT);
+      },
+      message(ws, message) {
+        if (typeof message === "string") ws.send(`ack:${message.length}`);
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_framelog`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("frame-log timeout")), 10_000);
+      let acks = 0;
+      client.addEventListener("open", () => {
+        client.send("clean-frame");
+      });
+      client.addEventListener("message", () => {
+        acks += 1;
+        if (acks >= 2) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(frameLogPath) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    const lines = readFileSync(frameLogPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
+    const u2cFffd = lines.find(l => l.dir === "u2c" && l.fffd === true);
+    const c2uClean = lines.find(l => l.dir === "c2u" && l.kind === "text");
+    expect(u2cFffd).toBeDefined();
+    expect(u2cFffd.kind).toBe("text");
+    expect(u2cFffd.bytes).toBeGreaterThan(0);
+    expect(u2cFffd.context).toContain("�");
+    expect(c2uClean).toBeDefined();
+    expect(c2uClean.fffd).toBe(false);
+    // Full payloads must never be logged — only short FFFD context excerpts.
+    for (const line of lines) {
+      expect(JSON.stringify(line)).not.toContain("clean-frame");
+    }
+
+    client.close();
+  } finally {
+    delete process.env.OCX_LIVE_FRAME_LOG;
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
 });
