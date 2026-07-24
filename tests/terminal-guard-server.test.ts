@@ -75,6 +75,6 @@ describe("server terminal guard integration", () => {
     expect(text).toContain("exec_command");
     const messages = requestBodies[1]?.messages as Array<{ role?: string; content?: Array<{ text?: string }> }>;
     expect(messages.at(-1)?.role).toBe("user");
-    expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
+    expect(messages.at(-1)?.content?.[0]?.text).toContain("本回合没有调用任何工具");
   });
 });

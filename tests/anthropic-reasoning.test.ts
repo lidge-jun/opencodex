@@ -34,6 +34,23 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.top_p).toBe(0.8);
   });
 
+  test("injects the execution advisory only when tools are available", async () => {
+    const withTools = parsed(undefined);
+    withTools.context.tools = [{ name: "exec_command", description: "run a command", parameters: {} }];
+    const withToolsBody = await bodyOf(withTools);
+    expect(JSON.stringify(withToolsBody.system)).toContain("call the necessary tool before ending the turn");
+
+    const withoutToolsBody = await bodyOf(parsed(undefined));
+    expect(JSON.stringify(withoutToolsBody.system)).not.toContain("call the necessary tool before ending the turn");
+  });
+
+  test("does not inject the execution advisory when tool use is explicitly disabled", async () => {
+    const request = parsed(undefined, { toolChoice: "none" });
+    request.context.tools = [{ name: "exec_command", description: "run a command", parameters: {} }];
+    const body = await bodyOf(request);
+    expect(JSON.stringify(body.system)).not.toContain("call the necessary tool before ending the turn");
+  });
+
   test("reasoning 'high' enables thinking and drops sampling (extended-thinking rule)", async () => {
     const b = await bodyOf(parsed("high", { temperature: 0.3, topP: 0.9 }));
     const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;

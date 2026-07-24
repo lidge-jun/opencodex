@@ -51,6 +51,17 @@ const COMPAT_TOOL_PREFIX = "cx_";
 type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
 const MAX_CACHE_BREAKPOINTS = 4;
 
+/**
+ * Provider-scoped advisory for the premature end_turn guard. This is deliberately short and
+ * language-neutral about the model's output: it tells Claude what constitutes an executable turn,
+ * while preserving an explicit user request for a plan-only answer. The proxy guard remains the
+ * bounded structural fallback when Claude still emits end_turn without a tool call.
+ */
+export const ANTHROPIC_EXECUTION_ADVISORY =
+  "When the user asks you to perform an operation and tools are available, call the necessary tool before ending the turn. " +
+  "Do not end the turn after only announcing a next step. If execution is unnecessary or blocked, state that clearly. " +
+  "If the user explicitly asks for a plan only or says not to use tools, follow that instruction.";
+
 function resolveCacheControl(retention: "none" | "short" | "long" | undefined): CacheControl | undefined {
   const r = retention ?? "short";
   if (r === "none") return undefined;
@@ -373,7 +384,14 @@ function messagesToAnthropicFormat(
     parsed.options.toolChoice,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+  const executionAdvisory = parsed.context.tools?.length && parsed.options.toolChoice !== "none"
+    ? [ANTHROPIC_EXECUTION_ADVISORY]
+    : [];
+  const systemParts = [
+    ...(parsed.context.systemPrompt ?? []),
+    ...(toolCatalogNudge ? [toolCatalogNudge] : []),
+    ...executionAdvisory,
+  ];
   const system = systemParts.length
     ? neutralizeIdentity(systemParts.join("\n\n")) || undefined
     : undefined;

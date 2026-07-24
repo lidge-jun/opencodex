@@ -48,22 +48,83 @@ describe("terminal guard", () => {
     expect(analysis.decision).toBe("pass");
   });
 
-  test("does not auto-repeat an explicit continue after a recent tool-backed turn", () => {
+  test("does not auto-repeat when the prior assistant marks its output as a final answer", () => {
+    // Structural pass signal: the persisted prior assistant message carries final_answer. This
+    // replaces the old language-regex heuristic that tried to guess "已经完成了" was a completion.
     const request = parsed("继续");
     request.context.messages = [
       { role: "user", content: "请检查代码", timestamp: 1 },
       { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "exec_command", arguments: {} }], timestamp: 2 },
       { role: "toolResult", toolCallId: "call_1", toolName: "exec_command", content: "ok", isError: false, timestamp: 3 },
-      { role: "user", content: "继续", timestamp: 4 },
+      { role: "assistant", phase: "final_answer", content: [{ type: "text", text: "已经完成了。" }], timestamp: 4 },
+      { role: "user", content: "继续", timestamp: 5 },
     ];
 
     const analysis = analyzeTerminalTurn(request, [
       { type: "text_delta", text: "已经完成了。" },
-      { type: "done" },
+      { type: "done", stopReason: "end_turn" },
     ]);
 
     expect(analysis.decision).toBe("pass");
-    expect(analysis.reason).toBe("recent_tool_activity");
+    expect(analysis.reason).toBe("substantive_answer");
+  });
+
+  test("a required toolChoice with no tool call is a structural continue, even on the first turn", () => {
+    const request = parsed("请检查并修复代码");
+    request.options = { toolChoice: "required" };
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "我接下来会修改相关文件。" },
+      { type: "done", stopReason: "end_turn" },
+    ]);
+
+    expect(analysis.decision).toBe("continue");
+    expect(analysis.reason).toBe("suspicious_no_tool");
+  });
+
+  test("an allowed-tools required mode with no tool call also continues", () => {
+    const request = parsed("请检查并修复代码");
+    request.options = { toolChoice: { allowedTools: ["exec_command"], mode: "required" } };
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "我接下来会修改相关文件。" },
+      { type: "done", stopReason: "end_turn" },
+    ]);
+
+    expect(analysis.decision).toBe("continue");
+  });
+
+  test("explicit plan-only user intent overrides a conflicting required tool choice", () => {
+    const request = parsed("只给我计划，不要调用工具");
+    request.options = { toolChoice: "required" };
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "下面是执行计划。" },
+      { type: "done", stopReason: "end_turn" },
+    ]);
+
+    expect(analysis.decision).toBe("pass");
+    expect(analysis.reason).toBe("no_actionable_request");
+  });
+
+  test("does not continue when toolChoice is none", () => {
+    const request = parsed("请检查并修复代码");
+    request.options = { toolChoice: "none" };
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "我接下来会修改相关文件。" },
+      { type: "done", stopReason: "end_turn" },
+    ]);
+
+    expect(analysis.decision).toBe("pass");
+    expect(analysis.reason).toBe("no_tools");
+  });
+
+  test("does not continue on a first-turn short final-answer phase output", () => {
+    // A short but declared final answer must not be re-asked just because it is short.
+    const analysis = analyzeTerminalTurn(parsed("请检查这个问题并修复代码"), [
+      { type: "text_delta", text: "已修复 README。", phase: "final_answer" },
+      { type: "done", stopReason: "end_turn" },
+    ]);
+
+    expect(analysis.decision).toBe("pass");
+    expect(analysis.reason).toBe("substantive_answer");
   });
 
   test("continues when the last assistant message was a plan-only stop after earlier tools", () => {
@@ -132,6 +193,26 @@ describe("terminal guard", () => {
 
     expect(analysis.decision).toBe("pass");
     expect(analysis.hasToolCall).toBe(true);
+  });
+
+  test.each(["tool_use", "stop_sequence", "max_tokens", "content_filter"])("does not re-ask on non-end terminal reason %s", async (stopReason) => {
+    let continuations = 0;
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", stopReason } as AdapterEvent;
+      })(),
+      continuation: () => {
+        continuations += 1;
+        return (async function* () { yield { type: "done" } as AdapterEvent; })();
+      },
+      adapterName: "anthropic",
+    })) actual.push(event);
+
+    expect(continuations).toBe(0);
+    expect(actual.at(-1)).toMatchObject({ type: "done", stopReason });
   });
 
   test("does not auto-continue an explicit clarification question", () => {
