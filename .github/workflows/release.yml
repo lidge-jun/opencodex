@@ -29,10 +29,7 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write # create the matching GitHub Release + version tag after npm publish
-  actions: read # verify CI and download the macOS workflow artifact
-  id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
+permissions: {}
 
 concurrency:
   group: release
@@ -42,12 +39,16 @@ jobs:
   package-macos:
     runs-on: macos-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
       archive_name: ${{ steps.package.outputs.archive_name }}
       checksum_name: ${{ steps.package.outputs.checksum_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
 
       - name: Build universal macOS release asset
         id: package
@@ -71,6 +72,10 @@ jobs:
     needs: package-macos
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write # create the matching GitHub Release + version tag after npm publish
+      actions: read # verify CI and download the macOS workflow artifact
+      id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -241,7 +246,7 @@ jobs:
           fi
 
       # Tokenless publish via Trusted Publishing (OIDC) — NO NPM_TOKEN secret. npm auto-detects the
-      # OIDC environment (`id-token: write` above) and generates provenance automatically, so neither a
+      # OIDC environment (`id-token: write` on this job) and generates provenance automatically, so neither a
       # token nor `--provenance` is needed. `npm publish` runs prepublishOnly first (typecheck + build
       # the GUI into gui/dist), so even a dry-run fully verifies the build.
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
