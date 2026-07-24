@@ -287,6 +287,50 @@ test("responsesSseToChatCompletionsSse emits parallel tool calls once with stabl
   ]);
 });
 
+test("responsesSseToChatCompletionsSse bounds upstream reads until the chat client pulls", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  let pulls = 0;
+  const upstream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoder.encode(
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: `${pulls}` })}\n\n`,
+      ));
+      if (pulls === 100) controller.close();
+    },
+  });
+
+  const stream = responsesSseToChatCompletionsSse(upstream, "mock/test-model");
+  await new Promise(resolve => setTimeout(resolve, 25));
+
+  expect(pulls).toBeLessThanOrEqual(2);
+  await stream.cancel();
+});
+
+test("responsesSseToChatCompletionsSse delivers the first frame before a macrotask turn", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(
+        `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { status: "in_progress" } })}\n\n`,
+      ));
+    },
+  });
+  const reader = responsesSseToChatCompletionsSse(upstream, "mock/test-model").getReader();
+  let macrotaskRan = false;
+  const timer = setTimeout(() => { macrotaskRan = true; }, 0);
+
+  const first = await reader.read();
+
+  clearTimeout(timer);
+  expect(first.done).toBe(false);
+  expect(new TextDecoder().decode(first.value)).toContain("chat.completion.chunk");
+  expect(macrotaskRan).toBe(false);
+  await reader.cancel();
+});
+
 test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
   const upstream = mockChatUpstream();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));

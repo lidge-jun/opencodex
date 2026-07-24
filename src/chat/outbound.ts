@@ -139,13 +139,15 @@ export function responsesSseToChatCompletionsSse(
   let nextToolIndex = 0;
   let sseIterator: AsyncGenerator<{ event?: string; data: string }> | undefined;
   const upstreamAbort = new AbortController();
-
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      let failed = false;
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let failed = false;
+  let emittedFrames = 0;
+  let stepping = false;
+  let decoderStarted = false;
       const emit = (payload: Rec | "[DONE]") => {
         if (failed) return;
         controller.enqueue(encoder.encode(dataFrame(payload)));
+        emittedFrames++;
       };
       const ensureRole = () => {
         if (started) return;
@@ -241,6 +243,7 @@ export function responsesSseToChatCompletionsSse(
                 : null,
             },
           })));
+          emittedFrames++;
         } catch {
           /* controller may already be closed */
         }
@@ -382,9 +385,25 @@ export function responsesSseToChatCompletionsSse(
       // multi-line data, and a terminal event without a trailing blank line (Sol audit
       // blocker 3 — the hand-rolled "\n\n" splitter misreported those as truncation).
       sseIterator = decodeServerSentEvents(upstream, { signal: upstreamAbort.signal });
-      void (async () => {
+      const step = async () => {
+        if (stepping || cancelled) return;
+        stepping = true;
+        const emittedAtStart = emittedFrames;
         try {
-          for await (const record of sseIterator!) {
+          while (!cancelled && emittedFrames === emittedAtStart) {
+            decoderStarted = true;
+            const next = await sseIterator!.next();
+            if (next.done) {
+              if (!cancelled && !terminated) {
+                fail("upstream stream ended before a terminal frame (truncated response)");
+              }
+              // Success path: close after [DONE]. Failure path closes inside fail().
+              if (!cancelled && terminated && !failed) {
+                try { controller.close(); } catch { /* already closed */ }
+              }
+              break;
+            }
+            const record = next.value;
             const eventName = record.event ?? "";
             const dataLine = record.data.trim();
             if (!eventName || !dataLine) continue;
@@ -397,15 +416,18 @@ export function responsesSseToChatCompletionsSse(
         } catch (err) {
           fail(err instanceof Error ? err.message : String(err));
         } finally {
-          if (!cancelled && !terminated) {
-            fail("upstream stream ended before a terminal frame (truncated response)");
-          }
-          // Success path: close after [DONE]. Failure path closes inside fail().
-          if (!cancelled && terminated && !failed) {
-            try { controller.close(); } catch { /* already closed */ }
-          }
+          stepping = false;
         }
-      })();
+      };
+
+  return new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      // Default HWM=1: one Responses event is translated atomically, then upstream
+      // decoding pauses until the chat consumer creates demand again.
+    },
+    pull() {
+      return step();
     },
     cancel(reason) {
       cancelled = true;
@@ -413,6 +435,9 @@ export function responsesSseToChatCompletionsSse(
       // read() so the generator's return() below resolves promptly instead of hanging
       // behind an idle upstream (Sol re-verification blocker).
       upstreamAbort.abort(reason);
+      if (!decoderStarted) {
+        return upstream.cancel(reason).then(() => undefined, () => undefined);
+      }
       return sseIterator?.return(undefined).then(() => undefined, () => undefined) ?? Promise.resolve(undefined);
     },
   });
