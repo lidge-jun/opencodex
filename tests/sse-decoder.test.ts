@@ -17,6 +17,14 @@ async function collect(chunks: string[]) {
   return records;
 }
 
+async function collectWithComments(chunks: string[]) {
+  const records = [];
+  for await (const record of decodeServerSentEvents(chunkedStream(chunks), { includeComments: true })) {
+    records.push(record);
+  }
+  return records;
+}
+
 describe("text/event-stream decoder", () => {
   test("preserves event state across arbitrary reader chunks", async () => {
     expect(await collect([
@@ -44,5 +52,25 @@ describe("text/event-stream decoder", () => {
       "event: custom\r\ndata: first\r\n",
       "data: second\r\n\r\n",
     ])).toEqual([{ event: "custom", data: "first\nsecond" }]);
+  });
+
+  test("yields comment and event records only when comments are opted in", async () => {
+    expect(await collectWithComments([
+      ": keepalive\n",
+      "event: custom\ndata: payload\n\n",
+    ])).toEqual([
+      { kind: "comment", comment: "keepalive" },
+      { kind: "event", event: "custom", data: "payload" },
+    ]);
+  });
+
+  test("default mode ignores comments and preserves the kind-less record shape", async () => {
+    const records = await collect([
+      ": keepalive\n",
+      "event: custom\ndata: payload\n\n",
+    ]);
+
+    expect(records).toEqual([{ event: "custom", data: "payload" }]);
+    expect("kind" in records[0]).toBe(false);
   });
 });

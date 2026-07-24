@@ -348,13 +348,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let sawAnyFrame = false;
       let sawTerminalSignal = false;
 
-      const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
-        if (!line.startsWith("data:")) {
-          if (line.trim()) debugDroppedFrame("google", line);
-          return "continue";
-        }
+      const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
         if (!payload) return "continue";
+        let emittedContentEvent = false;
 
         let chunk: Record<string, unknown>;
         try {
@@ -413,18 +410,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (parts) {
           for (const part of parts) {
             if (part.text) {
+              emittedContentEvent = true;
               yield { type: "text_delta", text: part.text };
             }
             if (part.functionCall) {
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
+              emittedContentEvent = true;
               yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
               yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
               yield { type: "tool_call_end" };
             }
           }
         }
-        return "continue";
+        return emittedContentEvent ? "content" : "continue";
       };
 
       try {
@@ -436,17 +435,29 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
 
+          let sawLiveness = false;
+          let sawContentEvent = false;
           for (const line of lines) {
-            if ((yield* handleDataLine(line)) === "terminate") return;
+            if (line.startsWith("data:")) {
+              const result = yield* handleDataLine(line);
+              if (result === "terminate") return;
+              if (result === "content") sawContentEvent = true;
+              continue;
+            }
+            sawLiveness = true;
+            if (line.startsWith(":") || !line.trim()) continue;
+            debugDroppedFrame("google", line);
           }
+          if (sawLiveness && !sawContentEvent) yield { type: "heartbeat" };
         }
         buffer += decoder.decode();
-        if (buffer.trim()) {
-          if (!buffer.startsWith("data:")) {
+        if (buffer.length > 0) {
+          if (buffer.startsWith(":")) {
+            yield { type: "heartbeat" };
+          } else if (!buffer.startsWith("data:")) {
             yield { type: "error", message: "upstream stream ended with an incomplete SSE frame — possible truncation" };
             return;
-          }
-          if ((yield* handleDataLine(buffer)) === "terminate") return;
+          } else if ((yield* handleDataLine(buffer)) === "terminate") return;
         }
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.

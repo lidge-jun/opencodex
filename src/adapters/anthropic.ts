@@ -737,7 +737,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         };
       };
 
-      for await (const record of decodeServerSentEvents(response.body)) {
+      for await (const record of decodeServerSentEvents(response.body, { includeComments: true })) {
+        if (record.kind === "comment") {
+          yield { type: "heartbeat" };
+          continue;
+        }
         const payload = record.data.trim();
         if (!payload) continue;
 
