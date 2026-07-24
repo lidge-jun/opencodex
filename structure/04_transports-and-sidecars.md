@@ -103,7 +103,8 @@ bridge-enqueued keepalive frames do NOT count as activity for the bridge's own w
 stall deadline (default 600 s, configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick)
 closes the stream with `response.incomplete` / `upstream_stall_timeout` and cancels the upstream
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
-the watchdog.
+the watchdog. The same ChatGPT forward/passthrough adapter and bridge streaming path powers the
+web-search and vision sidecars, so this stall deadline applies to those sidecar streams as well.
 
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
@@ -128,7 +129,7 @@ not response-body generation. Config-file-only
 raw response-byte inactivity for a routed-model iteration and resets on every non-empty byte.
 `webSearchSidecar.timeoutMs` (default 200 s) separately bounds one hosted search request. The
 effective web-search bridge watchdog is
-`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (230 s at defaults),
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (630 s at defaults),
 with seam heartbeats between bounded units. None of these clocks is a total generation deadline.
 
 ## Reasoning and tool-result compatibility
