@@ -3,6 +3,7 @@ import { fromJson, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { OcxAssistantContentPart, OcxMessage, OcxToolResultMessage } from "../../types";
 import { namespacedToolName } from "../../types";
+import { estimateTokens } from "../../lib/token-estimate";
 import type { CursorRunRequest } from "./types";
 import { isCursorExternalWireModel } from "./discovery";
 import { debugProviderDiagnostic } from "../../lib/debug";
@@ -314,6 +315,19 @@ export function activePromptText(request: CursorRunRequest): string {
     }
   }
   return last?.role === "tool" ? last.content : "";
+}
+
+/**
+ * Conservative request-local fallback when Cursor emits neither a checkpoint nor a previously
+ * observed context total. This is deliberately not persisted: a later authoritative checkpoint
+ * remains the only source carried across turns.
+ */
+export function estimateCursorInputTokens(request: CursorRunRequest): number {
+  return estimateTokens(JSON.stringify({
+    system: request.system,
+    messages: request.rawMessages ?? request.messages,
+    tools: request.tools,
+  }), request.modelId);
 }
 
 export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {

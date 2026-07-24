@@ -168,6 +168,19 @@ describe("partialUsageFromEventState", () => {
     expect(partialUsageFromEventState(state)).toEqual({ inputTokens: 0, outputTokens: 7, estimated: true });
   });
 
+  test("uses the request-local estimate after output when no checkpoint or carry exists", async () => {
+    const { partialUsageFromEventState } = await import("../src/adapters/cursor/live-transport");
+    const { createCursorProtobufEventState } = await import("../src/adapters/cursor/protobuf-events");
+    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_200 });
+    state.usage.outputTokens = 7;
+    expect(partialUsageFromEventState(state)).toEqual({
+      inputTokens: 1_200,
+      outputTokens: 7,
+      totalTokens: 1_207,
+      estimated: true,
+    });
+  });
+
   test("carries prior context usage on failure when the current turn had no checkpoint", async () => {
     const { partialUsageFromEventState } = await import("../src/adapters/cursor/live-transport");
     const { createCursorContextUsageTracker, createCursorProtobufEventState } = await import("../src/adapters/cursor/protobuf-events");
