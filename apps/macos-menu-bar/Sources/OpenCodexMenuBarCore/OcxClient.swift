@@ -81,6 +81,8 @@ public final class OcxClient {
         return url
     }
 
+    private static let commandTimeout: TimeInterval = 15
+
     private func run(_ executable: URL, arguments: [String]) throws -> String {
         let process = configuredProcess(executable, arguments: arguments)
         let output = Pipe()
@@ -89,10 +91,34 @@ public final class OcxClient {
         process.standardError = errors
         process.standardInput = FileHandle.nullDevice
 
+        let stdoutBox = DataBox()
+        let stderrBox = DataBox()
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stdoutBox.data = output.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stderrBox.data = errors.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
         try process.run()
+
+        let deadline = DispatchTime.now() + Self.commandTimeout
+        let waitResult = group.wait(timeout: deadline)
+        if waitResult == .timedOut || process.isRunning {
+            process.terminate()
+            _ = group.wait(timeout: .now() + 1)
+            throw OcxClientError.commandFailed("ocx timed out after \(Int(Self.commandTimeout))s.")
+        }
+
         process.waitUntilExit()
-        let stdout = output.fileHandleForReading.readDataToEndOfFile()
-        let stderr = errors.fileHandleForReading.readDataToEndOfFile()
+        let stdout = stdoutBox.data
+        let stderr = stderrBox.data
         guard process.terminationStatus == 0 else {
             let raw = String(decoding: stderr.isEmpty ? stdout : stderr, as: UTF8.self)
             let message = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,6 +126,10 @@ public final class OcxClient {
             throw OcxClientError.commandFailed(message.isEmpty ? fallback : String(message.prefix(600)))
         }
         return String(decoding: stdout, as: UTF8.self)
+    }
+
+    private final class DataBox: @unchecked Sendable {
+        var data = Data()
     }
 
     private func launch(_ executable: URL, arguments: [String]) throws {
