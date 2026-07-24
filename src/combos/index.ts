@@ -38,3 +38,8 @@ export {
   concreteComboRequestBody,
   resetComboEffortWarningStateForTests,
 } from "./request";
+export {
+  buildSmartRoutingCombo,
+  SMART_ROUTING_MODES,
+  type SmartRoutingMode,
+} from "./smart-routing";
