@@ -612,6 +612,8 @@ select.input { appearance: none; }
   border: 1px solid var(--border); border-radius: var(--radius);
   padding: 4px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.16);
 }
+.select-dropdown-portal { position: fixed; }
+.select-dropdown-portal { z-index: 60; }
 .select-dropdown-right { left: auto !important; right: 0; }
 .select-dropdown-beside { top: 0; left: calc(100% + 6px); right: auto; min-width: 10rem; }
 .select-option {
