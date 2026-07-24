@@ -5,6 +5,7 @@ import { Trans } from "../i18n/provider";
 import { useI18n, type TKey } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { EmptyState, Select } from "../ui";
+import MemoryCard from "../components/MemoryCard";
 
 interface HealthData { status: string; version: string; uptime: number }
 interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
@@ -616,6 +617,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           )}
         </div>
       </div>
+
+      <MemoryCard apiBase={apiBase} />
 
       {projectConfigWarnings.length > 0 && (
         <div className="notice notice-err maintenance-notice" style={{ marginBottom: 24 }} role="alert">

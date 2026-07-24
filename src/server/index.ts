@@ -114,6 +114,8 @@ export {
   jsonResponse,
   safeConfigDTO,
 } from "./auth-cors";
+import { startMemoryWatchdog } from "./memory-watchdog";
+export { memoryWatchdogSnapshot } from "./memory-watchdog";
 import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";
 export { disableResponsesRequestTimeout, linkAbortSignal } from "./responses";
 import { handleClaudeCountTokens, handleClaudeMessages } from "./claude-messages";
@@ -640,6 +642,11 @@ export function startServer(port?: number) {
   setServerRef(server);
   const actualPort = server.port ?? listenPort;
   setCorsOrigin(actualPort);
+
+  // Memory watchdog: warn (or, opt-in, gracefully restart) before the Bun/mimalloc native allocator
+  // can exhaust the system commit charge. Warn-only by default; the interval is unref'd so it never
+  // holds the process open on its own. Never throws — a watchdog failure must not block startup.
+  try { startMemoryWatchdog(config); } catch { /* observability is best-effort */ }
 
   console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
   console.log(`   POST /v1/responses → provider translation`);

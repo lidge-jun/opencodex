@@ -50,6 +50,12 @@ import {
 } from "../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
 import { drainAndShutdown } from "./lifecycle";
+import {
+  applyWatchdogRuntimeConfig,
+  memoryWatchdogReport,
+  startMemoryWatchdog,
+  stopMemoryWatchdog,
+} from "./memory-watchdog";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
@@ -247,6 +253,47 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     config.codexAutoStart = body.codexAutoStart;
     saveConfig(config);
     return jsonResponse({ ok: true, codexAutoStart: codexAutoStartEnabled(config) });
+  }
+
+  if (url.pathname === "/api/memory" && req.method === "GET") {
+    // Read-only Monitor + Recommend report. Degrades to { enabled: false } on disabled/old servers.
+    return jsonResponse(memoryWatchdogReport() ?? { enabled: false });
+  }
+
+  if (url.pathname === "/api/memory/settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const b = raw as Record<string, unknown>;
+    const isBool = (v: unknown) => typeof v === "boolean";
+    const isPosNum = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v > 0;
+    const isFrac = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v > 0 && v < 1;
+    if (b.enabled !== undefined && !isBool(b.enabled)) return jsonResponse({ error: "enabled must be boolean" }, 400);
+    if (b.autoRestart !== undefined && !isBool(b.autoRestart)) return jsonResponse({ error: "autoRestart must be boolean" }, 400);
+    if (b.requireSupervisor !== undefined && !isBool(b.requireSupervisor)) return jsonResponse({ error: "requireSupervisor must be boolean" }, 400);
+    if (b.intervalMs !== undefined && !isPosNum(b.intervalMs)) return jsonResponse({ error: "intervalMs must be a positive number" }, 400);
+    if (b.warnFraction !== undefined && !isFrac(b.warnFraction)) return jsonResponse({ error: "warnFraction must be a number in (0,1)" }, 400);
+    if (b.criticalFraction !== undefined && !isFrac(b.criticalFraction)) return jsonResponse({ error: "criticalFraction must be a number in (0,1)" }, 400);
+
+    const patch: NonNullable<OcxConfig["memoryWatchdog"]> = {};
+    if (b.enabled !== undefined) patch.enabled = b.enabled as boolean;
+    if (b.intervalMs !== undefined) patch.intervalMs = b.intervalMs as number;
+    if (b.warnFraction !== undefined) patch.warnFraction = b.warnFraction as number;
+    if (b.criticalFraction !== undefined) patch.criticalFraction = b.criticalFraction as number;
+    if (b.autoRestart !== undefined) patch.autoRestart = b.autoRestart as boolean;
+    if (b.requireSupervisor !== undefined) patch.requireSupervisor = b.requireSupervisor as boolean;
+
+    config.memoryWatchdog = { ...config.memoryWatchdog, ...patch };
+    saveConfig(config);
+
+    // Apply live so the change takes effect without a proxy restart.
+    if (patch.enabled === false) {
+      stopMemoryWatchdog();
+    } else if (applyWatchdogRuntimeConfig(patch) === null) {
+      // Not currently running (was disabled / first enable) — (re)start from the saved config.
+      startMemoryWatchdog(config);
+    }
+    return jsonResponse({ ok: true, memoryWatchdog: config.memoryWatchdog, report: memoryWatchdogReport() ?? { enabled: false } });
   }
 
   if (url.pathname === "/api/diagnostics/project-config" && req.method === "GET") {

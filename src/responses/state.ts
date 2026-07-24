@@ -179,6 +179,50 @@ export function previousResponseProviderState(responseId: string | undefined): O
   return providers ? structuredClone(providers) : undefined;
 }
 
+export interface ResponseStateMetrics {
+  /** Number of retained continuation entries currently in RAM. */
+  count: number;
+  /** Sum of serialized item bytes across all entries. Because expanded previous_response_id chains
+   * share prefix item references, this is an UPPER bound on true heap (it re-counts shared history),
+   * never an under-count — safe to use as a memory-pressure signal. */
+  totalBytes: number;
+  /** Serialized item bytes of the single largest entry (a long chain's head, or an image-heavy turn). */
+  largestBytes: number;
+  /** Age of the oldest retained entry, in ms (0 when the store is empty). */
+  oldestAgeMs: number;
+}
+
+/**
+ * Observe-only snapshot of the in-RAM continuation store. Additive and side-effect free — it does
+ * NOT lazy-load the disk snapshot, prune, or evict — so a diagnostics endpoint or benchmark harness
+ * can sample it without perturbing request handling. This is the instrumentation seam for deciding
+ * whether RAM growth originates in this store (JS heap) or in the runtime allocator (native).
+ */
+export function responseStateMetrics(): ResponseStateMetrics {
+  const at = now();
+  let totalBytes = 0;
+  let largestBytes = 0;
+  let oldestCreatedAt = at;
+  for (const state of states.values()) {
+    let bytes = 0;
+    try {
+      bytes = JSON.stringify(state.items).length;
+      if (state.providers) bytes += JSON.stringify(state.providers).length;
+    } catch {
+      /* unserializable entry (should not happen): count as 0 rather than throw in a metrics path */
+    }
+    totalBytes += bytes;
+    if (bytes > largestBytes) largestBytes = bytes;
+    if (state.createdAt < oldestCreatedAt) oldestCreatedAt = state.createdAt;
+  }
+  return {
+    count: states.size,
+    totalBytes,
+    largestBytes,
+    oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
+  };
+}
+
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown },

@@ -520,6 +520,30 @@ export interface OcxConfig {
   connectTimeoutMs?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
+  /**
+   * Memory watchdog: observe process memory pressure relative to total system RAM and warn (or,
+   * opt-in, gracefully restart) before the Bun/mimalloc native allocator can exhaust the system
+   * commit charge. Thresholds are fractions of total RAM so behavior is identical across machines.
+   * Default: enabled, warn-only (autoRestart false).
+   */
+  memoryWatchdog?: {
+    /** Master switch. Default true (warn-only observation is safe). */
+    enabled?: boolean;
+    /** Sampling interval (ms). Default 60000. */
+    intervalMs?: number;
+    /** Warn when pressure (committed-or-RSS) / total RAM crosses this fraction. Default 0.60. */
+    warnFraction?: number;
+    /** Critical threshold fraction; arms an opt-in restart. Default 0.75. */
+    criticalFraction?: number;
+    /** Opt in to a graceful restart at the critical threshold. Default false (warn only). */
+    autoRestart?: boolean;
+    /** When true (default), auto-restart only fires if a process supervisor is detected. */
+    requireSupervisor?: boolean;
+    /** Minimum ms between auto-restarts (loop guard). Default 600000. */
+    minRestartIntervalMs?: number;
+    /** Max auto-restarts before giving up and warning only (loop guard). Default 3. */
+    maxRestarts?: number;
+  };
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
   websockets?: boolean;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */

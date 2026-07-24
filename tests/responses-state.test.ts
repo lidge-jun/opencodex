@@ -14,6 +14,7 @@ import {
   previousResponseConversationId,
   previousResponseProviderState,
   rememberResponseState,
+  responseStateMetrics,
 } from "../src/responses/state";
 
 describe("Responses previous_response_id state", () => {
@@ -359,5 +360,46 @@ describe("Responses previous_response_id state", () => {
     expect(tracker.controlsForConversation(conversationId, {
       clearPrior: newlyCompactedRequest.contextUsageReset === true,
     }).carryForwardTokens).toBeUndefined();
+  });
+
+  test("responseStateMetrics reports an empty store as zeroed", () => {
+    expect(responseStateMetrics()).toEqual({
+      count: 0,
+      totalBytes: 0,
+      largestBytes: 0,
+      oldestAgeMs: 0,
+    });
+  });
+
+  test("responseStateMetrics counts entries and tracks the largest by serialized bytes", () => {
+    const small = buildResponseJSON([{ type: "text_delta", text: "hi" }, { type: "done" }], "gpt-5.5");
+    rememberResponseState({ model: "gpt-5.5", input: "small" }, small);
+
+    const bigText = "y".repeat(200 * 1024);
+    const big = buildResponseJSON([{ type: "text_delta", text: bigText }, { type: "done" }], "gpt-5.5");
+    rememberResponseState({ model: "gpt-5.5", input: "big" }, big);
+
+    const metrics = responseStateMetrics();
+    expect(metrics.count).toBe(2);
+    expect(metrics.largestBytes).toBeGreaterThan(200 * 1024);
+    expect(metrics.totalBytes).toBeGreaterThanOrEqual(metrics.largestBytes);
+    expect(metrics.oldestAgeMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("responseStateMetrics is side-effect free (does not lazy-load the disk snapshot)", () => {
+    // Seed a snapshot on disk, then wipe memory. A pure metrics read must NOT resurrect it: it
+    // reflects live RAM only, so a diagnostics probe never perturbs the store or triggers a load.
+    const first = buildResponseJSON([{ type: "text_delta", text: "persisted" }, { type: "done" }], "gpt-5.5");
+    rememberResponseState({ model: "gpt-5.5", input: "hi" }, first);
+    flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    expect(responseStateMetrics().count).toBe(0);
+
+    // A real read path still loads it, proving the snapshot was intact and metrics simply abstained.
+    expect((expandPreviousResponseInput({
+      model: "gpt-5.5", previous_response_id: first.id, input: "next",
+    }) as { input: unknown[] }).input).toHaveLength(3);
+    expect(responseStateMetrics().count).toBe(1);
   });
 });
