@@ -1,5 +1,7 @@
 export const DEFAULT_AUTO_SWITCH_THRESHOLD = 80;
 
+const AUTO_SWITCH_PUT_TIMEOUT_MS = 10_000;
+
 export type AutoSwitchFetch = (input: string, init: RequestInit) => Promise<Response>;
 
 export function normalizeAutoSwitchThreshold(value: unknown): number {
@@ -51,20 +53,21 @@ export function planAutoSwitchToggleWrite(
   current: number,
   draft: string,
   lastEnabled: number,
-): AutoSwitchTogglePlan | null {
+): AutoSwitchTogglePlan {
   if (current <= 0) {
     const threshold = nextAutoSwitchThreshold(current, lastEnabled);
     return { threshold, lastEnabled: threshold };
   }
-  const parsedDraft = parseEnabledAutoSwitchThreshold(draft);
-  if (parsedDraft === null) return null;
-  return { threshold: 0, lastEnabled: parsedDraft };
+  const restoreThreshold = parseEnabledAutoSwitchThreshold(draft)
+    ?? nextAutoSwitchThreshold(0, lastEnabled);
+  return { threshold: 0, lastEnabled: restoreThreshold };
 }
 
 export async function putAutoSwitchThreshold(
   apiBase: string,
   threshold: number,
   fetchImpl: AutoSwitchFetch = (input, init) => fetch(input, init),
+  timeoutMs = AUTO_SWITCH_PUT_TIMEOUT_MS,
 ): Promise<boolean> {
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 100) return false;
   try {
@@ -72,6 +75,7 @@ export async function putAutoSwitchThreshold(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ threshold }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return response.ok;
   } catch {

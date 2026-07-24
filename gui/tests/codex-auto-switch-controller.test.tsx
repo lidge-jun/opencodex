@@ -26,6 +26,8 @@ interface Harness {
   root: Root;
   input: HTMLInputElement;
   writes: number[];
+  currentInput(): HTMLInputElement | null;
+  currentToggle(): HTMLButtonElement;
   enqueueActive(response: Promise<Response> | Response): void;
   enqueuePut(response: Promise<Response> | Response): void;
   refresh(): void;
@@ -59,6 +61,19 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 function keyDown(input: HTMLInputElement, key: string): void {
   input.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+function pointerToggleAfterNullTargetBlur(
+  input: HTMLInputElement,
+  toggle: HTMLButtonElement,
+): void {
+  toggle.dispatchEvent(new testWindow.Event("pointerdown", { bubbles: true }));
+  input.dispatchEvent(new testWindow.FocusEvent("focusout", {
+    bubbles: true,
+    relatedTarget: null,
+  }));
+  toggle.dispatchEvent(new testWindow.Event("pointerup", { bubbles: true }));
+  toggle.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true }));
 }
 
 beforeEach(() => {
@@ -155,12 +170,23 @@ async function mountHarness(): Promise<Harness> {
   expect(input?.readOnly).toBe(false);
   expect(refreshCallback).not.toBeNull();
 
+  const currentInput = (): HTMLInputElement | null => (
+    container.querySelector<HTMLInputElement>('input[aria-label="Switch threshold, percent"]')
+  );
+  const currentToggle = (): HTMLButtonElement => {
+    const toggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
+    if (!toggle) throw new Error("auto-switch toggle was not rendered");
+    return toggle;
+  };
+
   return {
     container,
     outsideButton,
     root,
     input: input!,
     writes,
+    currentInput,
+    currentToggle,
     enqueueActive(response) {
       activeResponses.push(response);
     },
@@ -258,5 +284,79 @@ describe("Codex auto-switch controller interactions", () => {
     expect(harness.input.value).toBe("80");
     expect(harness.writes).toEqual([]);
     expect(harness.container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  test("pointer toggle disables a dirty valid draft before blur can commit it", async () => {
+    const harness = await mountHarness();
+    harness.enqueuePut(new Response(null, { status: 204 }));
+    harness.enqueuePut(new Response(null, { status: 204 }));
+
+    await act(async () => {
+      harness.input.focus();
+      setInputValue(harness.input, "95");
+      await flush();
+    });
+
+    const dirtyInput = harness.currentInput();
+    expect(dirtyInput).not.toBeNull();
+    expect(dirtyInput?.value).toBe("95");
+
+    await act(async () => {
+      pointerToggleAfterNullTargetBlur(dirtyInput!, harness.currentToggle());
+      await flush();
+    });
+
+    expect(harness.writes).toEqual([0]);
+    expect(harness.currentInput()).toBeNull();
+    expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("false");
+    expect(harness.container.textContent).toContain("Automatic account switching is off");
+    expect(harness.container.querySelector('[role="alert"]')).toBeNull();
+
+    await act(async () => {
+      harness.currentToggle().click();
+      await flush();
+    });
+
+    expect(harness.writes).toEqual([0, 95]);
+    expect(harness.currentInput()?.value).toBe("95");
+    expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("true");
+    expect(harness.container.textContent).toContain("95% usage or above");
+  });
+
+  test("pointer toggle disables an empty draft and restores the default", async () => {
+    const harness = await mountHarness();
+    harness.enqueuePut(new Response(null, { status: 204 }));
+    harness.enqueuePut(new Response(null, { status: 204 }));
+
+    await act(async () => {
+      harness.input.focus();
+      setInputValue(harness.input, "");
+      await flush();
+    });
+
+    const emptyInput = harness.currentInput();
+    expect(emptyInput).not.toBeNull();
+    expect(emptyInput?.value).toBe("");
+
+    await act(async () => {
+      pointerToggleAfterNullTargetBlur(emptyInput!, harness.currentToggle());
+      await flush();
+    });
+
+    expect(harness.writes).toEqual([0]);
+    expect(harness.currentInput()).toBeNull();
+    expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("false");
+    expect(harness.container.textContent).toContain("Automatic account switching is off");
+    expect(harness.container.querySelector('[role="alert"]')).toBeNull();
+
+    await act(async () => {
+      harness.currentToggle().click();
+      await flush();
+    });
+
+    expect(harness.writes).toEqual([0, 80]);
+    expect(harness.currentInput()?.value).toBe("80");
+    expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("true");
+    expect(harness.container.textContent).toContain("80% usage or above");
   });
 });

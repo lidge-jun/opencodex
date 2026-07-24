@@ -190,16 +190,12 @@ export function useCodexAutoSwitch(
     if (current === null || savingRef.current) return false;
     editingRef.current = false;
     const plan = planAutoSwitchToggleWrite(current, draft, lastEnabledRef.current);
-    if (plan === null) {
-      rejectDraft();
-      return false;
-    }
     const ok = await save(plan.threshold, current);
     if (!ok) return false;
     lastEnabledRef.current = plan.lastEnabled;
     if (plan.threshold === 0) setDraftState(String(plan.lastEnabled));
     return ok;
-  }, [draft, rejectDraft, save]);
+  }, [draft, save]);
 
   const setDraft = useCallback((value: string) => {
     editingRef.current = true;

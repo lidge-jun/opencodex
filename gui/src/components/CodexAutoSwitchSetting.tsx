@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useT } from "../i18n";
 
 export type AutoSwitchFeedback = { tone: "ok" | "err"; message: string } | null;
@@ -30,6 +31,7 @@ export function CodexAutoSwitchSetting({
   onRetry,
 }: CodexAutoSwitchSettingProps) {
   const t = useT();
+  const togglePointerIntentRef = useRef(false);
   const ready = threshold !== null;
   const enabled = ready && threshold > 0;
   const feedbackMessage = saving ? t("common.saving") : feedback?.message ?? "";
@@ -63,6 +65,10 @@ export function CodexAutoSwitchSetting({
           onBlur={(event) => {
             if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
             onEditingChange(false);
+            if (togglePointerIntentRef.current) {
+              togglePointerIntentRef.current = false;
+              return;
+            }
             if (enabled && !saving) void onCommit();
           }}
         >
@@ -102,7 +108,19 @@ export function CodexAutoSwitchSetting({
           <button
             type="button"
             className={`toggle ${enabled ? "on" : ""}`}
-            onClick={() => { void onToggle(); }}
+            onPointerDownCapture={() => {
+              togglePointerIntentRef.current = true;
+            }}
+            onPointerUp={() => {
+              togglePointerIntentRef.current = false;
+            }}
+            onPointerCancel={() => {
+              togglePointerIntentRef.current = false;
+            }}
+            onClick={() => {
+              togglePointerIntentRef.current = false;
+              void onToggle();
+            }}
             disabled={saving}
             aria-pressed={enabled}
             aria-label={t("codexAuth.autoSwitch")}

@@ -88,9 +88,17 @@ describe("Codex account auto-switch threshold", () => {
     expect(planAutoSwitchToggleWrite(0, "90", 95)).toEqual({ threshold: 95, lastEnabled: 95 });
   });
 
-  test("toggle rejects an invalid enabled draft without writing", () => {
-    expect(planAutoSwitchToggleWrite(90, "50.5", 90)).toBeNull();
-    expect(planAutoSwitchToggleWrite(90, "", 90)).toBeNull();
+  test("toggle disables despite an invalid draft and preserves a safe restore value", () => {
+    expect(planAutoSwitchToggleWrite(90, "", 90)).toEqual({ threshold: 0, lastEnabled: 90 });
+    expect(planAutoSwitchToggleWrite(90, "50.5", 90)).toEqual({ threshold: 0, lastEnabled: 90 });
+    expect(planAutoSwitchToggleWrite(90, "abc", 0)).toEqual({
+      threshold: 0,
+      lastEnabled: DEFAULT_AUTO_SWITCH_THRESHOLD,
+    });
+    expect(planAutoSwitchToggleWrite(90, "101", 101)).toEqual({
+      threshold: 0,
+      lastEnabled: DEFAULT_AUTO_SWITCH_THRESHOLD,
+    });
   });
 
   test("applies, defers, or ignores threshold reads by edit and revision state", () => {
@@ -176,6 +184,34 @@ describe("Codex account auto-switch threshold", () => {
     const networkFailure: AutoSwitchFetch = async () => { throw new Error("offline"); };
     expect(await putAutoSwitchThreshold("", 95, httpFailure)).toBe(false);
     expect(await putAutoSwitchThreshold("", 95, networkFailure)).toBe(false);
+  });
+
+  test("aborts a write that exceeds the browser-side saving timeout", async () => {
+    let calls = 0;
+    let receivedSignal: AbortSignal | null = null;
+    const fetchImpl: AutoSwitchFetch = async (_input, init) => {
+      calls += 1;
+      const signal = init.signal;
+      if (!signal) throw new Error("expected an abort signal");
+      receivedSignal = signal;
+      return await new Promise<Response>((_resolve, reject) => {
+        const guard = setTimeout(() => reject(new Error("abort signal did not fire")), 100);
+        const rejectOnAbort = () => {
+          clearTimeout(guard);
+          reject(signal.reason ?? new Error("aborted"));
+        };
+        if (signal.aborted) {
+          rejectOnAbort();
+          return;
+        }
+        signal.addEventListener("abort", rejectOnAbort, { once: true });
+      });
+    };
+
+    expect(await putAutoSwitchThreshold("", 95, fetchImpl, 5)).toBe(false);
+    expect(calls).toBe(1);
+    expect(receivedSignal).not.toBeNull();
+    expect(receivedSignal?.aborted).toBe(true);
   });
 
   test("does not send an invalid threshold", async () => {

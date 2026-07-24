@@ -118,19 +118,23 @@ Cycle 6 may update the contributor branch only when:
 - Rebased pre-repair head: `8feb0980`; `git range-diff` mapped both contributor commits exactly (`=`) to `458b3a39` and `8feb0980`.
 - Environment: macOS arm64 (`Darwin 25.6.0`), Bun `1.3.14`.
 - Evidence directory: `devlog/_plan/260724_bugfix_train/evidence/cycle6-pr337-root/`.
-- The contributor's retained public report contains only the aggregate `3780 passed, 4 skipped, 4 failed` and says the four failures were in this five-test file. It does not retain the four failing names, assertion text, stderr, or first-failure line. The four rows below map the report's four failure slots to the four success-path cases (the only four cases that require a zero release-helper exit); this mapping is an evidence limitation, not a recovered original log.
+- The contributor's retained public report contains only the aggregate `3780 passed, 4 skipped, 4 failed` and says the four failures were in this five-test file. It does not retain the four failing names, assertion text, stderr, or first-failure line. The original four failure identities therefore remain unresolved.
 
-| Reported test name | First failing log/line | Reproduction matrix | Classification | Causal evidence | Owner path | Disposition |
-|---|---|---|---|---|---|---|
-| `preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs` | Original log unavailable; current source line 216 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | No PR diff hunk reaches release tooling; every required PR/base order passed | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
-| `preview branch still defaults to preview tag and dry-run dispatch` | Original log unavailable; current source line 250 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; no repeatable order/resource trigger | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
-| `dispatch pins the audited release SHA via expected-sha` | Original log unavailable; current source line 263 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; `scripts/release.ts` is unchanged by the PR | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
-| `aborts before dispatch when the remote branch moved during the CI wait` | Original log unavailable; current source line 275 | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Non-reproduced (unconfirmed flake) | Same behavior and counts on PR and exact base; no observed child-process/temp-path leak | `tests/release-helper.test.ts` | No fix; require final two root runs and exact-head CI |
+### Inferred current candidates — not recovered failures
 
-Supporting logs:
+The four success-path cases below are investigation candidates only because they are the four cases in the current five-test file that require a zero release-helper exit. They are not recovered names for the originally reported failures and cannot receive per-failure classifications without the missing original reporter evidence.
+
+| Inferred current candidate | Original failing log/line | Current rerun evidence | What the rerun establishes | Owner path |
+|---|---|---|---|---|
+| `preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs` | Unavailable; current source line 216 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` |
+| `preview branch still defaults to preview tag and dry-run dispatch` | Unavailable; current source line 250 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` |
+| `dispatch pins the audited release SHA via expected-sha` | Unavailable; current source line 263 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` |
+| `aborts before dispatch when the remote branch moved during the CI wait` | Unavailable; current source line 275 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` |
+
+### Current green rerun evidence
 
 - PR initial/repeats: `pr337-root-initial.log`, `pr337-root-repeat-1.log`, `pr337-root-repeat-2.log` — each `3861 pass / 0 fail`.
 - PR standalone: `release-helper-1.log`, `release-helper-2.log`, `release-helper-3.log` — each `5 pass / 0 fail`.
 - Exact-base comparison: `baseline-release-helper.log` (`5 pass / 0 fail`), `baseline-root-1.log`, `baseline-root-2.log` (each `3861 pass / 0 fail`).
 
-Hypothesis disposition: H1 (PR-caused) is rejected because the PR and exact base are identically green and the PR diff has no causal release-helper path. H2 (baseline deterministic) is rejected by both base full-suite passes. H3 (order/concurrency defect) remains unconfirmed because every real-order full suite passed and no shared path, process overlap, environment leak, or collision reproduced. Therefore no root-suite source fix is justified, and the mandatory out-of-map amendment gate is not activated.
+The current reruns do not provide evidence for a release-helper source change in this scoped PR: the investigated current cases and full suites were green at the recorded PR and base heads, and no causal PR diff path was found. They do not reconstruct or resolve the original four failures. Their names, assertions, stderr, and first failing lines remain unresolved unless the original CI or test-reporter metadata is recovered. Accordingly, the historical suite-level disposition remains unresolved, and the final exact-head root gates are still required without changing release code or tests.
