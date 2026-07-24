@@ -543,6 +543,10 @@ export interface OcxConfig {
     minRestartIntervalMs?: number;
     /** Max auto-restarts before giving up and warning only (loop guard). Default 3. */
     maxRestarts?: number;
+    /** Quiet-window drain budget (ms) for a memory-driven restart: wait up to this long for
+     * in-flight turns to finish before aborting, so the restart lands on a natural idle gap.
+     * Default 30000. */
+    restartGraceMs?: number;
   };
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
   websockets?: boolean;

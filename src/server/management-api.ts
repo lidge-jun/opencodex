@@ -272,12 +272,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (b.autoRestart !== undefined && !isBool(b.autoRestart)) return jsonResponse({ error: "autoRestart must be boolean" }, 400);
     if (b.requireSupervisor !== undefined && !isBool(b.requireSupervisor)) return jsonResponse({ error: "requireSupervisor must be boolean" }, 400);
     if (b.intervalMs !== undefined && !isPosNum(b.intervalMs)) return jsonResponse({ error: "intervalMs must be a positive number" }, 400);
+    if (b.restartGraceMs !== undefined && !isPosNum(b.restartGraceMs)) return jsonResponse({ error: "restartGraceMs must be a positive number" }, 400);
     if (b.warnFraction !== undefined && !isFrac(b.warnFraction)) return jsonResponse({ error: "warnFraction must be a number in (0,1)" }, 400);
     if (b.criticalFraction !== undefined && !isFrac(b.criticalFraction)) return jsonResponse({ error: "criticalFraction must be a number in (0,1)" }, 400);
 
     const patch: NonNullable<OcxConfig["memoryWatchdog"]> = {};
     if (b.enabled !== undefined) patch.enabled = b.enabled as boolean;
     if (b.intervalMs !== undefined) patch.intervalMs = b.intervalMs as number;
+    if (b.restartGraceMs !== undefined) patch.restartGraceMs = b.restartGraceMs as number;
     if (b.warnFraction !== undefined) patch.warnFraction = b.warnFraction as number;
     if (b.criticalFraction !== undefined) patch.criticalFraction = b.criticalFraction as number;
     if (b.autoRestart !== undefined) patch.autoRestart = b.autoRestart as boolean;

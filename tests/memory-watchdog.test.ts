@@ -47,6 +47,7 @@ function cfg(over: Partial<ResolvedWatchdogConfig> = {}): ResolvedWatchdogConfig
     requireSupervisor: true,
     minRestartIntervalMs: 600_000,
     maxRestarts: 3,
+    restartGraceMs: 30_000,
     growthWindowMs: 600_000,
     ...over,
   };
@@ -139,6 +140,12 @@ describe("resolveWatchdogConfig", () => {
     expect(r.warnFraction).toBe(0.10);
     expect(r.criticalFraction).toBe(0.99);
   });
+
+  test("restartGraceMs defaults to the quiet-window budget and is config-overridable", () => {
+    expect(resolveWatchdogConfig({} as OcxConfig).restartGraceMs).toBe(30_000);
+    const r = resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: 120_000 } } as OcxConfig);
+    expect(r.restartGraceMs).toBe(120_000);
+  });
 });
 
 describe("evaluate (pure decision core)", () => {
@@ -225,23 +232,25 @@ describe("tick (driver wiring)", () => {
   test("logs on a warn action and invokes restart on a restart action", () => {
     const logs: string[] = [];
     let restarts = 0;
+    let restartGrace = 0;
     const s = createWatchdogState();
-    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
+    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0, restartGraceMs: 45_000 });
 
     // warn crossing
     tick(s, c, deps({ read: () => snapshot(65 * MiB), log: l => logs.push(l) }));
     expect(logs.length).toBe(1);
     expect(logs[0]).toContain("WARN");
 
-    // critical crossing → restart
+    // critical crossing → restart, and the running cfg (incl. the quiet-window budget) is threaded through
     const d = tick(s, c, deps({
       read: () => snapshot(80 * MiB),
       log: l => logs.push(l),
-      restart: () => { restarts += 1; },
+      restart: rc => { restarts += 1; restartGrace = rc.restartGraceMs; },
       now: () => 2_000,
     }));
     expect(d.action).toBe("restart");
     expect(restarts).toBe(1);
+    expect(restartGrace).toBe(45_000);
   });
 
   test("a read failure inside tick propagates as a thrown error only to the caller's try", () => {

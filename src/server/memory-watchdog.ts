@@ -13,6 +13,12 @@
  *   - Auto-restart is opt-in (config.memoryWatchdog.autoRestart / env). When it fires it reuses
  *     drainAndShutdown() — which drains in-flight turns and flushes the response-state snapshot —
  *     then exits with a distinct code so a supervisor can respawn.
+ *   - Quiet-window restart: the drain budget for a memory-driven restart is restartGraceMs (default
+ *     30s), much longer than a generic shutdown. Because drainAndShutdown rejects new turns and exits
+ *     the instant the in-flight set empties, the restart normally lands on a natural idle gap — so a
+ *     running turn is only cut when it outlives the whole grace window (bounded so the restart always
+ *     fires). A mid-stream turn that is still cut is regenerated on retry (context is preserved via
+ *     the flushed previous_response_id snapshot); the provider generation itself cannot be resumed.
  *   - A cooldown (minRestartIntervalMs) and a max-restart guard prevent restart loops.
  *   - The decision core (evaluate) is pure and injectable (clock + reader + restart hook) so the
  *     logic is unit-tested without real timers or a real process exit.
@@ -37,6 +43,9 @@ export interface ResolvedWatchdogConfig {
   requireSupervisor: boolean;
   minRestartIntervalMs: number;
   maxRestarts: number;
+  /** Drain budget (ms) for a memory-driven restart: wait up to this long for in-flight turns to
+   * finish before aborting, so the restart lands on a natural idle gap (quiet-window). */
+  restartGraceMs: number;
   growthWindowMs: number;
 }
 
@@ -49,6 +58,7 @@ const DEFAULTS: ResolvedWatchdogConfig = {
   requireSupervisor: true,
   minRestartIntervalMs: 600_000, // 10 min
   maxRestarts: 3,
+  restartGraceMs: 30_000, // quiet-window: wait up to 30s for in-flight turns before aborting
   growthWindowMs: 600_000, // 10 min growth-rate window (diagnostic)
 };
 
@@ -109,6 +119,8 @@ export function resolveWatchdogConfig(config: OcxConfig): ResolvedWatchdogConfig
     minRestartIntervalMs:
       envNum("OCX_MEMORY_WATCHDOG_MIN_RESTART_INTERVAL_MS") ?? c.minRestartIntervalMs ?? DEFAULTS.minRestartIntervalMs,
     maxRestarts: envNum("OCX_MEMORY_WATCHDOG_MAX_RESTARTS") ?? c.maxRestarts ?? DEFAULTS.maxRestarts,
+    restartGraceMs:
+      envNum("OCX_MEMORY_WATCHDOG_RESTART_GRACE_MS") ?? c.restartGraceMs ?? DEFAULTS.restartGraceMs,
     growthWindowMs: DEFAULTS.growthWindowMs,
   };
 }
@@ -311,13 +323,13 @@ export interface WatchdogDeps {
 function defaultRestart(cfg: ResolvedWatchdogConfig): void {
   void (async () => {
     try {
-      await drainAndShutdown(undefined, 5_000);
+      // Quiet-window: drainAndShutdown rejects new turns and returns the moment the in-flight set
+      // empties, so this waits for a natural idle gap and only aborts turns that outlive the budget.
+      await drainAndShutdown(undefined, cfg.restartGraceMs);
     } finally {
       process.exit(MEMORY_RESTART_EXIT_CODE);
     }
   })();
-  // Reference cfg so the signature stays honest for tests overriding it.
-  void cfg;
 }
 
 const DEFAULT_DEPS: WatchdogDeps = {
