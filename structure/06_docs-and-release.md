@@ -40,6 +40,7 @@ bun run build
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
+| `.github/workflows/go-ci.yml` | Pushes to `dev2-go` touching `go/**` or the workflow, or manual dispatch | Quality gate for the temporary Go rewrite track: build, vet, test, and race detection on Linux/macOS/Windows where supported; five-target cross-compilation; and the Go E2E suite. Superseded runs on the same ref are cancelled. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
 | `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli/index.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
@@ -48,6 +49,10 @@ Docs-only changes intentionally route through the docs workflow instead of the r
 docs change also edits runtime/package/release files, run the relevant local runtime checks before
 push and let `ci.yml` provide the Linux/Windows confirmation. Service-related changes
 (`src/service.ts`, `src/cli/index.ts`) additionally trigger the `service-lifecycle.yml` smoke test on Linux.
+
+The TypeScript prerelease line remains `preview`. `dev2-go` is a temporary, independently validated
+Go track, not a release-promotion branch and not a standing pull request into `dev`. Its head is
+stable only after Go CI succeeds for the exact commit.
 
 ## Root README
 

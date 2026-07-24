@@ -95,7 +95,34 @@ func TestCredentialStoreSerializesConcurrentMutations(t *testing.T) {
 	}
 }
 
-func TestCredentialStoreRefreshAdoptsCrossProcessWinner(t *testing.T) {
+func TestCredentialStoreRefreshSequential(t *testing.T) {
+	t.Parallel()
+	store := NewCredentialStore(filepath.Join(t.TempDir(), "auth.json"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	credential := OAuthCredentials{Access: "old", Refresh: "grant", Expires: 1, AccountID: "account"}
+	if err := store.SaveCredential(ctx, "anthropic", credential); err != nil {
+		t.Fatal(err)
+	}
+	set, _, _ := store.GetAccountSet("anthropic")
+
+	var calls atomic.Int32
+	result, err := store.RefreshAccount(ctx, "anthropic", set.ActiveAccountID, func(context.Context, string) (OAuthCredentials, error) {
+		calls.Add(1)
+		return OAuthCredentials{Access: "new", Refresh: "rotated", Expires: 999_999, AccountID: "account"}, nil
+	})
+	if err != nil {
+		t.Fatalf("RefreshAccount() error = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", calls.Load())
+	}
+	if !result.Refreshed || result.Superseded || result.Credential.Access != "new" {
+		t.Fatalf("RefreshAccount() result = %#v", result)
+	}
+}
+
+func TestCredentialStoreRefreshIfGenerationAdoptsWinner(t *testing.T) {
 	t.Parallel()
 	store := NewCredentialStore(filepath.Join(t.TempDir(), "auth.json"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -106,6 +133,7 @@ func TestCredentialStoreRefreshAdoptsCrossProcessWinner(t *testing.T) {
 	}
 	set, _, _ := store.GetAccountSet("anthropic")
 	accountID := set.ActiveAccountID
+	observedGeneration := CredentialGeneration(credential)
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -120,7 +148,7 @@ func TestCredentialStoreRefreshAdoptsCrossProcessWinner(t *testing.T) {
 	first := make(chan RefreshResult, 1)
 	second := make(chan RefreshResult, 1)
 	go func() {
-		result, err := store.RefreshAccount(ctx, "anthropic", accountID, refresh)
+		result, err := store.RefreshAccountIfGeneration(ctx, "anthropic", accountID, observedGeneration, refresh)
 		if err != nil {
 			t.Errorf("first refresh error = %v", err)
 		}
@@ -128,7 +156,7 @@ func TestCredentialStoreRefreshAdoptsCrossProcessWinner(t *testing.T) {
 	}()
 	<-entered
 	go func() {
-		result, err := store.RefreshAccount(ctx, "anthropic", accountID, refresh)
+		result, err := store.RefreshAccountIfGeneration(ctx, "anthropic", accountID, observedGeneration, refresh)
 		if err != nil {
 			t.Errorf("second refresh error = %v", err)
 		}

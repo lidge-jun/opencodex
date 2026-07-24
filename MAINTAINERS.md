@@ -25,6 +25,9 @@ through GitHub repository settings.
   practical.
 - Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
   recovery. The same CI and documentation requirements still apply.
+- `dev2-go` is a temporary maintainer-owned parallel track with no standing pull request into
+  `dev`. Direct pushes there require owner direction, and a head is not considered stable until
+  Go CI succeeds for that exact commit. It is not a release-promotion source.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
 
 ## Maintainer changes
