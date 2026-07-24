@@ -315,7 +315,7 @@ describe("usage and content retention (F2)", () => {
     });
   });
 
-  test("anthropic stream emits terminal usage on EOF when message_stop is missing", async () => {
+  test("anthropic stream fails closed on EOF when message_stop and stop_reason are missing", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const response = new Response([
       'event: message_start\n',
@@ -326,7 +326,11 @@ describe("usage and content retention (F2)", () => {
 
     const events = [];
     for await (const event of adapter.parseStream(response)) events.push(event);
-    expect(events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 7, outputTokens: 1 } });
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "upstream stream ended before message_stop — possible truncation",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
   });
 
   test("google emits exactly one done carrying usage", async () => {

@@ -322,6 +322,27 @@ describe("combo failure policy and advancement", () => {
     expect(third.attempted).toEqual(["a/m1", "b/m2", "c/m3"]);
     expect(exhausted).toBeNull();
   });
+
+  test("advancement preserves an explicit payload-eligibility filter", () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+            { provider: "c", model: "m3" },
+          ],
+        },
+      },
+    });
+    const first = pickComboTarget(config, "free")!;
+    const next = advanceComboAfterFailure(config, first, {
+      now: 1_000,
+      eligible: target => target.provider === "c",
+    });
+    expect(next?.target.provider).toBe("c");
+    expect(next?.attempted).toEqual(["a/m1", "c/m3"]);
+  });
 });
 
 describe("deterministic combo selection", () => {

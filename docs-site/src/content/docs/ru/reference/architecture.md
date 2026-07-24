@@ -50,7 +50,9 @@ src/
    `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (ретранслируются модулем `server/images.ts` вышестоящему провайдеру семейства OpenAI для
-   встроенного инструмента codex `image_gen`), а также необязательный WebSocket-апгрейд на
+   встроенного инструмента codex `image_gen`), `POST /v1/live` / `POST /v1/realtime/calls`
+   (создание голосового/Realtime-вызова ChatGPT / Codex App, ретранслируется `server/live.ts`),
+   sideband WebSocket на `/v1/live/{callId}`, а также необязательный WebSocket-апгрейд на
    `/v1/responses`.
 2. `server/responses/core.ts` распаковывает и парсит JSON, разворачивает локально запомненный вход
    `previous_response_id`, когда он доступен, затем вызывает `responses/parser.ts`.

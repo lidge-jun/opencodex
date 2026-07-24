@@ -432,6 +432,116 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input).toEqual(input);
   });
 
+  test("forward mode repairs oversized call ids consistently across paired replay items", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const oversizedCallId = `call_${"x".repeat(80)}`;
+    const input = [
+      { type: "function_call", call_id: oversizedCallId, name: "ping", arguments: "{}" },
+      { type: "function_call_output", call_id: oversizedCallId, output: "pong" },
+      { type: "function_call", call_id: "call_short", name: "keep", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_short", output: "kept" },
+    ];
+
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.6-sol", input },
+    }, meta).body) as { input: Record<string, unknown>[] };
+
+    const repairedCallId = body.input[0].call_id as string;
+    expect(repairedCallId).toStartWith("call_ocx_");
+    expect(repairedCallId.length).toBeLessThanOrEqual(64);
+    expect(body.input[1].call_id).toBe(repairedCallId);
+    expect(body.input[2].call_id).toBe("call_short");
+    expect(body.input[3].call_id).toBe("call_short");
+    expect(input[0].call_id).toBe(oversizedCallId);
+    expect(input[1].call_id).toBe(oversizedCallId);
+  });
+
+  test("forward mode assigns distinct stable aliases to oversized custom and tool-search pairs", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const customCallId = `call_custom_${"a".repeat(80)}`;
+    const searchCallId = `call_search_${"b".repeat(80)}`;
+    const input = [
+      { type: "custom_tool_call", call_id: customCallId, name: "apply_patch", input: "patch" },
+      { type: "custom_tool_call_output", call_id: customCallId, output: "done" },
+      { type: "tool_search_call", call_id: searchCallId, execution: "client", arguments: {} },
+      { type: "tool_search_output", call_id: searchCallId, tools: [] },
+    ];
+
+    const build = () => JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.6-sol", input },
+    }, meta).body) as { input: Record<string, unknown>[] };
+
+    const first = build().input;
+    const second = build().input;
+    expect(first[0].call_id).toBe(first[1].call_id);
+    expect(first[2].call_id).toBe(first[3].call_id);
+    expect(first[0].call_id).not.toBe(first[2].call_id);
+    expect((first[0].call_id as string).length).toBeLessThanOrEqual(64);
+    expect((first[2].call_id as string).length).toBeLessThanOrEqual(64);
+    expect(second.map(item => item.call_id)).toEqual(first.map(item => item.call_id));
+  });
+
+  test("api-key mode preserves oversized call ids that may reference upstream stored state", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.example/v1",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    });
+    const oversizedCallId = `call_${"stored".repeat(14)}`;
+    const input = [
+      { type: "function_call_output", call_id: oversizedCallId, output: "pong" },
+    ];
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      _rawBody: {
+        model: "gpt-5.5",
+        previous_response_id: "resp_stored",
+        input,
+      },
+    }, meta).body) as { previous_response_id: string; input: Array<{ call_id: string }> };
+
+    expect(body.previous_response_id).toBe("resp_stored");
+    expect(body.input[0]?.call_id).toBe(oversizedCallId);
+  });
+
+  test("api-key mode repairs oversized call ids after proxy-expanded replay", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.example/v1",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    });
+    const oversizedCallId = `call_${"expanded".repeat(12)}`;
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      _previousResponseInputExpanded: true,
+      _rawBody: {
+        model: "gpt-5.5",
+        previous_response_id: "resp_expanded",
+        input: [
+          { type: "function_call", call_id: oversizedCallId, name: "ping", arguments: "{}" },
+          { type: "function_call_output", call_id: oversizedCallId, output: "pong" },
+        ],
+      },
+    }, meta).body) as { previous_response_id?: string; input: Array<{ call_id: string }> };
+
+    expect(body.previous_response_id).toBeUndefined();
+    expect(body.input[0]?.call_id).toStartWith("call_ocx_");
+    expect(body.input[0]?.call_id.length).toBe(64);
+    expect(body.input[1]?.call_id).toBe(body.input[0]?.call_id);
+  });
+
   test("forward expanded replay keeps reasoning items (chain is intact)", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const body = JSON.parse(adapter.buildRequest({

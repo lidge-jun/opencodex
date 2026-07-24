@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
@@ -30,12 +31,39 @@ describe("openai-chat stream EOF fail-closed", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
+  test("[DONE] carries finish_reason length as max_tokens", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events.at(-1)).toEqual({ type: "done", usage: undefined, stopReason: "max_tokens" });
+  });
+
   test("EOF after a finish_reason (provider omits [DONE]) is accepted as done", async () => {
     const response = new Response('data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n');
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
     const last = events[events.length - 1];
     expect(last.type).toBe("done");
     expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("EOF carries content_filter through the bridge as incomplete", async () => {
+    const response = new Response(
+      'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"content_filter"}]}\n\n',
+    );
+    const adapter = createOpenAIChatAdapter(provider);
+    const events = await collect(adapter.parseStream(response.clone()));
+    expect(events.at(-1)).toEqual({ type: "done", usage: undefined, stopReason: "content_filter" });
+
+    const text = await new Response(bridgeToResponsesSSE(
+      adapter.parseStream(response),
+      "openai-chat/test-model",
+    )).text();
+    expect(text).toContain("event: response.incomplete");
+    expect(text).toContain('"incomplete_details":{"reason":"content_filter"}');
+    expect(text).not.toContain("event: response.completed");
   });
 
   test("inline error envelope still yields a terminal error (no regression)", async () => {

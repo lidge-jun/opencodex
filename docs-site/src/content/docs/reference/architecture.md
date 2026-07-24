@@ -48,7 +48,10 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    records request lifecycle metadata. It serves `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (relayed to an OpenAI-family upstream by `server/images.ts` for codex's built-in `image_gen`
-   tool), and the optional WebSocket upgrade on `/v1/responses`.
+   tool), `POST /v1/live` / `POST /v1/realtime/calls` (ChatGPT / Codex App voice and OpenAI
+   Realtime call-create, relayed by `server/live.ts`), sideband WebSocket joins on
+   `/v1/live/{callId}` (and `/v1/realtime?call_id=`), and the optional WebSocket upgrade on
+   `/v1/responses`.
 2. `server/responses/core.ts` decompresses and parses JSON, expands locally remembered
    `previous_response_id` input when available, then calls `responses/parser.ts`.
 3. `router.ts` resolves a bare or `provider/model` id. The server then resolves Codex account

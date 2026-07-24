@@ -49,10 +49,6 @@ function textFrame(text: string): Uint8Array {
   return eventFrame("assistantResponseEvent", { content: text });
 }
 
-function reasoningFrame(text: string): Uint8Array {
-  return eventFrame("reasoningContentEvent", { text });
-}
-
 function completionFrames(answer: string, id = "completion-1"): Uint8Array[] {
   const input = JSON.stringify({ answer });
   return [
@@ -132,9 +128,9 @@ function anthropicEvents(sse: string): Array<{ name: string; data: Record<string
 }
 
 describe("Kiro completion through public server endpoints", () => {
-  test("/v1/responses lets the bounded fallback complete after reasoning-only output", async () => {
+  test("/v1/responses keeps progress nonterminal and lets only the bounded fallback complete", async () => {
     const upstream = scriptedKiroUpstream([
-      [reasoningFrame("Checking the workspace.")],
+      [textFrame("Checking the workspace.")],
       completionFrames("The workspace is ready."),
     ]);
     saveConfig(kiroConfig(upstream.server.url.toString()));
@@ -156,20 +152,21 @@ describe("Kiro completion through public server endpoints", () => {
       const events = responseEvents(wire);
       const text = events.filter(event => event.name === "response.output_text.delta");
       expect(text.map(event => [event.data.delta, event.data.phase])).toEqual([
+        ["Checking the workspace.", undefined],
         ["The workspace is ready.", undefined],
       ]);
       const completed = events.filter(event => event.name === "response.completed");
       expect(completed).toHaveLength(1);
       expect(events.at(-1)?.name).toBe("response.completed");
       const messages = completed[0].data.response.output.filter((item: { type: string }) => item.type === "message");
-      expect(messages.map((item: { phase?: string }) => item.phase)).toEqual(["final_answer"]);
+      expect(messages.map((item: { phase?: string }) => item.phase)).toEqual(["commentary", "final_answer"]);
       expect(wire).not.toContain(KIRO_COMPLETION_TOOL_NAME);
 
       expect(upstream.requests).toHaveLength(2);
       expect(kiroToolNames(upstream.requests[0])).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
       expect(kiroToolNames(upstream.requests[1])).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
       expect(upstream.requests[1].conversationState.history.at(-1).assistantResponseMessage.content)
-        .toBe("");
+        .toBe("Checking the workspace.");
     } finally {
       proxy.stop(true);
       upstream.server.stop(true);
@@ -181,7 +178,7 @@ describe("Kiro completion through public server endpoints", () => {
     ["accepted text fallback", [textFrame("The Claude task is complete.")]],
   ])("/v1/messages hides the private tool and ends after %s", async (_label, fallbackFrames) => {
     const upstream = scriptedKiroUpstream([
-      [reasoningFrame("I am checking the Claude task.")],
+      [textFrame("I am checking the Claude task.")],
       fallbackFrames,
     ]);
     saveConfig(kiroConfig(upstream.server.url.toString()));
@@ -205,7 +202,7 @@ describe("Kiro completion through public server endpoints", () => {
       const deltas = events
         .filter(event => event.name === "content_block_delta" && event.data.delta?.type === "text_delta")
         .map(event => event.data.delta.text);
-      expect(deltas).toEqual(["The Claude task is complete."]);
+      expect(deltas).toEqual(["I am checking the Claude task.", "The Claude task is complete."]);
       expect(events.filter(event => event.name === "message_delta")).toHaveLength(1);
       expect(events.find(event => event.name === "message_delta")?.data.delta.stop_reason).toBe("end_turn");
       expect(events.at(-1)?.name).toBe("message_stop");

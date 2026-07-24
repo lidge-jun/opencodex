@@ -143,13 +143,18 @@ export function noteComboFailure(comboId: string, target: OcxComboTarget): void 
 export function advanceComboAfterFailure(
   config: OcxConfig,
   pick: ComboPick,
-  options: { retryAfter?: string | null; now?: number } = {},
+  options: {
+    retryAfter?: string | null;
+    now?: number;
+    eligible?: (target: Required<OcxComboTarget>) => boolean;
+  } = {},
 ): ComboPick | null {
   noteComboFailure(pick.comboId, pick.target);
   coolComboTarget(pick.comboId, pick.target, options);
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,
-    eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now),
+    eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now)
+      && (options.eligible?.(target) ?? true),
   });
 }
 

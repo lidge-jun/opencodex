@@ -47,7 +47,74 @@ async function collectAdapterEvents(response: Response): Promise<AdapterEvent[]>
   return events;
 }
 
+function liveCommentResponse(intervalMs: number): { response: Response; stop: () => void } {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearInterval(timer);
+    try { controller?.close(); } catch { /* already closed */ }
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      streamController.enqueue(encoder.encode(": keepalive\n\n"));
+      timer = setInterval(() => {
+        try { streamController.enqueue(encoder.encode(": keepalive\n\n")); } catch { stop(); }
+      }, intervalMs);
+    },
+    cancel: stop,
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    stop,
+  };
+}
+
 describe("Anthropic-compatible reasoning stream termination (#312)", () => {
+  test("comment-only stream records become adapter heartbeat events", async () => {
+    const events = await collectAdapterEvents(new Response(
+      ": keepalive\n\n: still-alive\n\n",
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+
+    expect(events.slice(0, 2)).toEqual([{ type: "heartbeat" }, { type: "heartbeat" }]);
+  });
+
+  test("comment-only live upstream does not trip the bridge stall watchdog", async () => {
+    const upstream = liveCommentResponse(25);
+    const stream = bridgeToResponsesSSE(
+      createAnthropicAdapter(provider).parseStream(upstream.response),
+      "kimi/k3",
+      undefined,
+      undefined,
+      undefined,
+      upstream.stop,
+      50,
+      { stallTimeoutSec: 1 },
+    );
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const probeElapsed = new Promise<null>(resolve => setTimeout(() => resolve(null), 1_200));
+
+    while (true) {
+      const result = await Promise.race([reader.read(), probeElapsed]);
+      if (result === null) break;
+      if (result.done) break;
+      if (result.value) text += decoder.decode(result.value, { stream: true });
+      if (text.includes("upstream_stall_timeout")) break;
+    }
+
+    await reader.cancel();
+    upstream.stop();
+    expect(text).not.toContain("upstream_stall_timeout");
+    expect(text).not.toContain("response.incomplete");
+  });
+
   test("preserves reasoning and visible text, then emits done from final message_stop", async () => {
     const events = await collectAdapterEvents(arbitrarilyChunkedResponse());
 
@@ -91,6 +158,44 @@ describe("Anthropic-compatible reasoning stream termination (#312)", () => {
     expect(text).toContain('"type":"thinking_delta","thinking":"think"');
     expect(text).toContain('"type":"text_delta","text":"visible"');
     expect(text).toContain("event: message_stop");
+  });
+
+  test("message_start followed by clean EOF fails closed before message_stop", async () => {
+    const events = await collectAdapterEvents(arbitrarilyChunkedResponse(
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":2}}}\n\n',
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "upstream stream ended before message_stop — possible truncation",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("compatible provider can omit message_stop after reporting max_tokens", async () => {
+    const events = await collectAdapterEvents(arbitrarilyChunkedResponse([
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":2}}}',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":3}}',
+    ].join("\n\n")));
+
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      usage: { inputTokens: 2, outputTokens: 3 },
+      stopReason: "max_tokens",
+    });
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("compatible provider EOF maps refusal to content_filter locally", async () => {
+    const events = await collectAdapterEvents(arbitrarilyChunkedResponse(
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"refusal"}}',
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      usage: undefined,
+      stopReason: "content_filter",
+    });
   });
 
   test("non-streaming compatible reasoning blocks map without hiding later text", async () => {

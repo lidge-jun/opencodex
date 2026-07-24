@@ -259,6 +259,43 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .nav-item svg { width: 17px; height: 17px; color: var(--faint); flex-shrink: 0; }
 .nav-item.active svg { color: var(--text); }
 
+.nav-entry { display: flex; align-items: center; min-width: 0; border-radius: var(--radius-sm); }
+.nav-entry .nav-item { flex: 1 1 auto; min-width: 0; }
+.nav-entry-claude {
+  padding-right: 2px;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.nav-entry-claude:hover,
+.nav-entry-claude.active { background: var(--accent-soft); color: var(--text); }
+.nav-entry-claude .nav-item,
+.nav-entry-claude .nav-item:hover,
+.nav-entry-claude .nav-item.active { width: auto; background: transparent; }
+.nav-entry-claude .switch {
+  position: relative;
+  width: 44px;
+  height: 36px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.nav-entry-claude .switch::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: 8px;
+  width: 28px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  transition: background var(--motion-normal), border-color var(--motion-normal);
+}
+.nav-entry-claude .switch.on { border-color: transparent; background: transparent; }
+.nav-entry-claude .switch.on::before { border-color: var(--toggle-on-bg); background: var(--toggle-on-bg); }
+.nav-entry-claude .switch .knob { position: absolute; top: 13px; left: 11px; z-index: 1; width: 10px; height: 10px; }
+.nav-entry-claude .switch.on .knob { transform: translateX(12px); }
+.nav-entry-claude .switch:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 0; }
+
 .sidebar-foot { margin-top: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 2px; }
 
 /* drawer header row: brand + close button (close is mobile-only) */

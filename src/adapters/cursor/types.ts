@@ -42,7 +42,9 @@ export type CursorServerMessage =
   | { type: "heartbeat" }
   | { type: "kv_get"; key: string }
   | { type: "kv_set"; key: string; value: Uint8Array }
-  | { type: "exec"; execCase: string; requestId: string };
+  | { type: "exec"; execCase: string; requestId: string }
+  /** A native exec/MCP action ran locally; retrying this turn could duplicate its side effects. */
+  | { type: "local_side_effect" };
 
 export type CursorClientMessage =
   | { type: "kv_value"; key: string; value?: Uint8Array }

@@ -29,7 +29,112 @@ async function collectEventNames(stream: ReadableStream<Uint8Array>): Promise<st
     .map(frame => frame.split("\n").find(line => line.startsWith("event: "))?.slice(7) ?? "");
 }
 
+async function collectTextDeltas(stream: ReadableStream<Uint8Array>): Promise<string[]> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  return text.split("\n\n")
+    .map(frame => frame.split("\n").find(line => line.startsWith("data: "))?.slice(6))
+    .filter((data): data is string => Boolean(data) && data !== "[DONE]")
+    .map(data => JSON.parse(data) as { type?: string; delta?: string })
+    .filter(data => data.type === "response.output_text.delta")
+    .map(data => data.delta ?? "");
+}
+
 describe("bridge stream lifecycle (RC1 / RC2)", () => {
+  test("pull backpressure bounds adapter consumption until the client reads", async () => {
+    let consumed = 0;
+    async function* burst(): AsyncGenerator<AdapterEvent> {
+      for (let i = 0; i < 100; i++) {
+        consumed += 1;
+        yield { type: "text_delta", text: `${i}` };
+      }
+      yield { type: "done" };
+    }
+
+    const stream = bridgeToResponsesSSE(burst(), "routed/model");
+    await new Promise(resolve => setTimeout(resolve, 25));
+
+    expect(consumed).toBeLessThanOrEqual(1);
+    await stream.cancel();
+  });
+
+  test("resuming a gated bridge preserves adapter FIFO ordering", async () => {
+    const events: AdapterEvent[] = [
+      { type: "text_delta", text: "alpha" },
+      { type: "text_delta", text: "beta" },
+      { type: "text_delta", text: "gamma" },
+      { type: "done" },
+    ];
+    const stream = bridgeToResponsesSSE(replay(events), "routed/model");
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    expect(await collectTextDeltas(stream)).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  test("a healthy unread upstream does not trigger a false stall while pull-gated", async () => {
+    let cancelled = false;
+    async function* healthy(): AsyncGenerator<AdapterEvent> {
+      let i = 0;
+      while (!cancelled) {
+        yield { type: "text_delta", text: `${i++}` };
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+    }
+    const terminals: string[] = [];
+    const stream = bridgeToResponsesSSE(
+      healthy(), "routed/model", undefined, undefined, undefined,
+      () => { cancelled = true; },
+      10,
+      { stallTimeoutSec: 1, onTerminal: status => terminals.push(status) },
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    expect(terminals).toEqual([]);
+    await stream.cancel();
+  });
+
+  test("a true upstream stall while reading emits incomplete, closes, and cancels upstream", async () => {
+    let cancelled = false;
+    const stream = bridgeToResponsesSSE(
+      hangs(), "routed/model", undefined, undefined, undefined,
+      () => { cancelled = true; },
+      10,
+      { stallTimeoutSec: 1 },
+    );
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const completed = (async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        text += decoder.decode(value, { stream: true });
+      }
+    })();
+    try {
+      await Promise.race([
+        completed,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stall stream did not close")), 2_500)),
+      ]);
+    } finally {
+      await reader.cancel();
+    }
+    const names = text.split("\n\n")
+      .map(frame => frame.split("\n").find(line => line.startsWith("event: "))?.slice(7) ?? "")
+      .filter(Boolean);
+
+    expect(names).toContain("response.incomplete");
+    expect(names).not.toContain("response.completed");
+    expect(cancelled).toBe(true);
+  }, 3_000);
+
   test("terminal callback reports completed for a normal done event", async () => {
     const terminals: string[] = [];
     await collectEventNames(bridgeToResponsesSSE(replay([

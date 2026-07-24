@@ -590,6 +590,19 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     expect(frames.find(f => f.event === "response.completed")).toBeUndefined();
   });
 
+  test("done with stopReason content_filter emits response.incomplete", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+      { type: "done", stopReason: "content_filter" },
+    ]), "routed/model"));
+    const terminal = frames.find(f => f.event === "response.incomplete");
+    expect(terminal).toBeDefined();
+    const response = terminal!.data.response as Record<string, unknown>;
+    expect(response.status).toBe("incomplete");
+    expect(response.incomplete_details).toEqual({ reason: "content_filter" });
+    expect(frames.find(f => f.event === "response.completed")).toBeUndefined();
+  });
+
   test("done without stopReason emits response.completed as before", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "text_delta", text: "hello" },

@@ -66,6 +66,41 @@ function mockConfig(baseUrl: string): OcxConfig {
   } as OcxConfig;
 }
 
+type StreamedToolCall = {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+};
+
+type ChatStreamChunk = {
+  choices?: Array<{
+    delta?: { tool_calls?: StreamedToolCall[] };
+    finish_reason?: string | null;
+  }>;
+};
+
+async function convertResponsesFrames(frames: string[], model = "gpt-test") {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  }), model);
+  const text = await new Response(stream).text();
+  const chunks = text.split("\n\n")
+    .map(block => block.trim())
+    .filter(block => block.startsWith("data: ") && !block.includes("[DONE]"))
+    .map(block => JSON.parse(block.slice(6)) as ChatStreamChunk);
+  return {
+    chunks,
+    toolCalls: chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls ?? []),
+    raw: text,
+  };
+}
+
 test("chatCompletionsToResponsesBody maps messages/tools/system", () => {
   const body = chatCompletionsToResponsesBody({
     model: "mock/test-model",
@@ -224,37 +259,76 @@ test("chatCompletionsToResponsesBody maps response_format and rejects unknown ty
   })).toThrow(ChatCompletionsRequestError);
 });
 
-test("responsesSseToChatCompletionsSse routes parallel tool argument deltas by item_id", async () => {
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+test("responsesSseToChatCompletionsSse emits parallel tool calls once with stable indices", async () => {
   const frames = [
     `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "alpha", arguments: "" } })}\n\n`,
     `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "beta", arguments: "" } })}\n\n`,
     `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"a":' })}\n\n`,
     `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_b", delta: '{"b":' })}\n\n`,
     `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "1}" })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "alpha", arguments: '{"a":1}' } })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 1, item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "beta", arguments: '{"b":2}' } })}\n\n`,
     `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
   ];
-  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
-    start(controller) {
-      const enc = new TextEncoder();
-      for (const frame of frames) controller.enqueue(enc.encode(frame));
-      controller.close();
+  const { toolCalls } = await convertResponsesFrames(frames, "mock/test-model");
+  expect(toolCalls).toEqual([
+    {
+      index: 0,
+      id: "call_a",
+      type: "function",
+      function: { name: "alpha", arguments: '{"a":1}' },
     },
-  }), "mock/test-model");
-  const text = await new Response(stream).text();
-  const chunks = text.split("\n\n")
-    .map(block => block.trim())
-    .filter(block => block.startsWith("data: ") && !block.includes("[DONE]"))
-    .map(block => JSON.parse(block.slice(6)) as {
-      choices?: Array<{ delta?: { tool_calls?: Array<{ index?: number; function?: { arguments?: string } }> } }>;
-    });
-  const argDeltas = chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls ?? [])
-    .filter(tc => typeof tc.function?.arguments === "string" && tc.function.arguments.length > 0);
-  expect(argDeltas.map(tc => ({ index: tc.index, arguments: tc.function?.arguments }))).toEqual([
-    { index: 0, arguments: '{"a":' },
-    { index: 1, arguments: '{"b":' },
-    { index: 0, arguments: "1}" },
+    {
+      index: 1,
+      id: "call_b",
+      type: "function",
+      function: { name: "beta", arguments: '{"b":2}' },
+    },
   ]);
+});
+
+test("responsesSseToChatCompletionsSse bounds upstream reads until the chat client pulls", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  let pulls = 0;
+  const upstream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoder.encode(
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: `${pulls}` })}\n\n`,
+      ));
+      if (pulls === 100) controller.close();
+    },
+  });
+
+  const stream = responsesSseToChatCompletionsSse(upstream, "mock/test-model");
+  await new Promise(resolve => setTimeout(resolve, 25));
+
+  expect(pulls).toBeLessThanOrEqual(2);
+  await stream.cancel();
+});
+
+test("responsesSseToChatCompletionsSse delivers the first frame before a macrotask turn", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(
+        `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { status: "in_progress" } })}\n\n`,
+      ));
+    },
+  });
+  const reader = responsesSseToChatCompletionsSse(upstream, "mock/test-model").getReader();
+  let macrotaskRan = false;
+  const timer = setTimeout(() => { macrotaskRan = true; }, 0);
+
+  const first = await reader.read();
+
+  clearTimeout(timer);
+  expect(first.done).toBe(false);
+  expect(new TextDecoder().decode(first.value)).toContain("chat.completion.chunk");
+  expect(macrotaskRan).toBe(false);
+  await reader.cancel();
 });
 
 test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
@@ -611,7 +685,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
 });
 
 
-test("responsesSseToChatCompletionsSse always re-emits function.name on args/done deltas", async () => {
+test("responsesSseToChatCompletionsSse emits one complete named tool call", async () => {
   const { responsesSseToChatCompletionsSse, collectChatCompletion } = await import("../src/chat/outbound");
   const frames = [
     `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
@@ -620,29 +694,16 @@ test("responsesSseToChatCompletionsSse always re-emits function.name on args/don
     `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: '{"cmd":"ls"}' } })}\n\n`,
     `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
   ];
-  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
-    start(controller) {
-      const enc = new TextEncoder();
-      for (const frame of frames) controller.enqueue(enc.encode(frame));
-      controller.close();
-    },
-  }), "gpt-test");
-  const text = await new Response(stream).text();
-  const chunks = text.split("\n\n")
-    .map(block => block.trim())
-    .filter(block => block.startsWith("data: ") && !block.includes("[DONE]"))
-    .map(block => JSON.parse(block.slice(6)) as {
-      choices?: Array<{ delta?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
-    });
-  const toolDeltas = chunks.flatMap(c => c.choices?.[0]?.delta?.tool_calls ?? [])
-    .filter(tc => tc.function && ("arguments" in (tc.function ?? {}) || "name" in (tc.function ?? {})));
-  // Every tool delta that carries arguments must also carry the name for replace-style clients.
-  for (const tc of toolDeltas) {
-    if (typeof tc.function?.arguments === "string") {
-      expect(tc.function?.name).toBe("exec_command");
-    }
-  }
-  // Last-write-wins collect still yields a complete named tool call.
+  const { toolCalls: toolDeltas } = await convertResponsesFrames(frames);
+  // Responses emits two argument deltas plus a full done snapshot. Chat Completions clients
+  // append function fields, so expose one complete tool-call delta rather than all three.
+  expect(toolDeltas).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"ls"}' },
+  }]);
+  // Buffered non-stream collection still yields the same complete named tool call.
   const completion = await collectChatCompletion(responsesSseToChatCompletionsSse(new ReadableStream({
     start(controller) {
       const enc = new TextEncoder();
@@ -654,6 +715,98 @@ test("responsesSseToChatCompletionsSse always re-emits function.name on args/don
     ?.message?.tool_calls ?? [];
   expect(toolCalls[0]?.function?.name).toBe("exec_command");
   expect(toolCalls[0]?.function?.arguments).toBe('{"cmd":"ls"}');
+});
+
+test("responsesSseToChatCompletionsSse falls back to buffered arguments when the done item omits them", async () => {
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '"pwd"}' })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command" } })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+  ];
+  const { toolCalls } = await convertResponsesFrames(frames);
+  expect(toolCalls).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"pwd"}' },
+  }]);
+});
+
+test("responsesSseToChatCompletionsSse flushes buffered tool calls before an incomplete terminal frame", async () => {
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '"pwd"}' })}\n\n`,
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } })}\n\n`,
+  ];
+  const { chunks, toolCalls } = await convertResponsesFrames(frames);
+  expect(toolCalls).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"pwd"}' },
+  }]);
+  const toolChunkIndex = chunks.findIndex(chunk =>
+    (chunk.choices?.[0]?.delta?.tool_calls?.length ?? 0) > 0
+  );
+  const finishChunkIndex = chunks.findIndex(chunk =>
+    chunk.choices?.[0]?.finish_reason === "length"
+  );
+  expect(toolChunkIndex).toBeGreaterThanOrEqual(0);
+  expect(finishChunkIndex).toBeGreaterThan(toolChunkIndex);
+});
+
+test("responsesSseToChatCompletionsSse keeps buffered arguments when the done snapshot is empty", async () => {
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":' })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '"pwd"}' })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+  ];
+  const { toolCalls } = await convertResponsesFrames(frames);
+  expect(toolCalls).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"pwd"}' },
+  }]);
+});
+
+test("responsesSseToChatCompletionsSse ignores duplicate done events for a tool call", async () => {
+  const done = `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: '{"cmd":"pwd"}' } })}\n\n`;
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    done,
+    done,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+  ];
+  const { toolCalls } = await convertResponsesFrames(frames);
+  expect(toolCalls).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"pwd"}' },
+  }]);
+});
+
+test("responsesSseToChatCompletionsSse uses finalized arguments when the item done event is absent", async () => {
+  const frames = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":"partial' })}\n\n`,
+    `event: response.function_call_arguments.done\ndata: ${JSON.stringify({ type: "response.function_call_arguments.done", item_id: "fc_a", name: "exec_command", arguments: '{"cmd":"final"}' })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+  ];
+  const { chunks, toolCalls } = await convertResponsesFrames(frames);
+  expect(toolCalls).toEqual([{
+    index: 0,
+    id: "call_a",
+    type: "function",
+    function: { name: "exec_command", arguments: '{"cmd":"final"}' },
+  }]);
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "tool_calls")).toBe(true);
 });
 
 test("chatCompletionsToResponsesBody recovers tool_calls function.name from earlier call_id", () => {
@@ -742,4 +895,70 @@ test("responsesSseToChatCompletionsSse cancel promptly cancels an idle upstream"
   // Give the abort->reader.cancel microtask a beat to reach the source.
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(upstreamCancelled).toBe(true);
+});
+
+// --- WP3/030: incomplete error fidelity -------------------------------------
+
+test("stall incomplete becomes an error frame with no [DONE] (WP3)", async () => {
+  const frames = [
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\n\n`,
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "upstream_stall_timeout" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  const errorChunk = chunks.find(chunk => (chunk as { error?: unknown }).error !== undefined);
+  expect(errorChunk).toBeDefined();
+  expect(raw).not.toContain("[DONE]");
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "stop")).toBe(false);
+});
+
+test("adapter_eof incomplete surfaces the upstream message and no [DONE] (WP3)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message: "upstream closed mid-turn" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  const errorChunk = chunks.find(chunk => (chunk as { error?: { message?: string } }).error !== undefined) as
+    { error: { message: string } } | undefined;
+  expect(errorChunk?.error.message).toBe("upstream closed mid-turn");
+  expect(raw).not.toContain("[DONE]");
+});
+
+test("max_output_tokens incomplete still maps to finish_reason length with [DONE] (WP3 pin)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "length")).toBe(true);
+  expect(raw).toContain("[DONE]");
+});
+
+test("content_filter incomplete still maps to finish_reason content_filter with [DONE] (WP3 pin)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "content_filter")).toBe(true);
+  expect(raw).toContain("[DONE]");
+});
+
+test("collectChatCompletion throws ChatCompletionsStreamError on a stall incomplete (WP3)", async () => {
+  const { responsesSseToChatCompletionsSse, collectChatCompletion, isChatCompletionsStreamError } =
+    await import("../src/chat/outbound");
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "upstream_stall_timeout" } } })}\n\n`,
+  ];
+  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  }), "gpt-test");
+  let caught: unknown;
+  try {
+    await collectChatCompletion(stream, "gpt-test");
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeDefined();
+  expect(isChatCompletionsStreamError(caught)).toBe(true);
 });

@@ -62,6 +62,28 @@ describe("resolveCodexRuntime", () => {
     expect(result.runtime.version).toBe("0.145.0-alpha.30");
   });
 
+  test("probe runs with a sandboxed CODEX_HOME, never the caller's", () => {
+    // A real Codex CLI writes state (tmp/) under CODEX_HOME even for --version;
+    // the probe must redirect it so read-only commands stay read-only.
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const execFileSync: RuntimeExecFile = (_file, _args, options) => {
+      seenEnv = options.env;
+      return "codex-cli 0.145.0";
+    };
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { CODEX_CLI_PATH: "C:\\new\\codex.exe", PATH: "", CODEX_HOME: "C:\\Users\\real\\.codex" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync,
+    });
+    expect(result.runtime.version).toBe("0.145.0");
+    expect(seenEnv).toBeDefined();
+    expect(seenEnv?.CODEX_HOME).toBeDefined();
+    expect(seenEnv?.CODEX_HOME).not.toBe("C:\\Users\\real\\.codex");
+    expect(seenEnv?.PATH).toBe("");
+  });
+
   test("invalid CODEX_CLI_PATH records a diagnostic and continues", () => {
     const result = resolveCodexRuntime({
       configDir: tempConfigDir(),

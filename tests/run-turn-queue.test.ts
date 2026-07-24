@@ -58,6 +58,49 @@ describe("run-turn adapter event queue", () => {
 
     expect(await queue.collect()).toEqual([]);
   });
+
+  test("aborts and closes with a terminal error when the default backlog cap is exceeded", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    for (let i = 0; i <= 1_024; i++) queue.push(text(String(i)));
+    queue.push(text("ignored after overflow"));
+
+    const collected = await queue.collect();
+    expect(backlogExceeded).toBe(1);
+    expect(collected).toHaveLength(1_025);
+    expect(collected.slice(0, 1_024)).toEqual(
+      Array.from({ length: 1_024 }, (_, i) => text(String(i))),
+    );
+    expect(collected.at(-1)).toEqual({
+      type: "error",
+      message: "consumer backlog exceeded — turn aborted",
+    });
+  });
+
+  test("does not count direct handoff to an active consumer toward the backlog cap", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+    const received: AdapterEvent[] = [];
+
+    for (let i = 0; i < 2_000; i++) {
+      const pending = iterator.next();
+      queue.push(text(String(i)));
+      const result = await pending;
+      expect(result.done).toBe(false);
+      if (!result.done) received.push(result.value);
+    }
+    queue.close();
+
+    expect(backlogExceeded).toBe(0);
+    expect(received).toEqual(Array.from({ length: 2_000 }, (_, i) => text(String(i))));
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+  });
 });
 
 describe("run-turn adapter event preflight", () => {

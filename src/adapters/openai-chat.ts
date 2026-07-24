@@ -604,7 +604,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // being reported as a clean completion (silent truncation). A graceful close is either an
       // explicit `[DONE]` sentinel OR a chunk carrying a non-null `finish_reason` (some
       // OpenAI-compatible providers omit `[DONE]` but do send finish_reason).
-      let sawFinish = false;
+      let finishReason: string | undefined;
 
       // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
       // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
@@ -615,7 +615,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const payload = line.slice(6).trim();
         if (payload === "[DONE]") {
           yield* flushToolCalls();
-          yield { type: "done", usage: pendingUsage };
+          const stopReason = finishReason === "length"
+            ? "max_tokens"
+            : finishReason === "content_filter"
+              ? "content_filter"
+              : undefined;
+          yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
           return "terminate";
         }
 
@@ -647,9 +652,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[] | undefined;
         if (!choices || choices.length === 0) return "continue";
         // Observe the terminator BEFORE the delta guard: a finish-only chunk (finish_reason set,
-        // no delta) is a graceful close and must mark sawFinish even though we skip it below.
+        // no delta) is a graceful close and must record finishReason even though we skip it below.
         if (typeof choices[0].finish_reason === "string" && choices[0].finish_reason) {
-          sawFinish = true;
+          finishReason = choices[0].finish_reason;
         }
         const delta = choices[0].delta;
         if (delta) {
@@ -720,12 +725,18 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // a non-null finish_reason (sawFinish), or a trailing usage chunk (providers emit usage only
         // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
         // closed so the bridge emits a classified response.failed rather than a silent truncation.
+        const sawFinish = finishReason !== undefined;
         if (!sawFinish && pendingUsage === undefined) {
           yield { type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" };
           return;
         }
         // Graceful close that omitted [DONE] but delivered finish_reason and/or final usage.
-        yield { type: "done", usage: pendingUsage };
+        const stopReason = finishReason === "length"
+          ? "max_tokens"
+          : finishReason === "content_filter"
+            ? "content_filter"
+            : undefined;
+        yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
       } finally {
         reader.releaseLock();
       }

@@ -273,10 +273,17 @@ opencodex にはプロキシを自動起動する方法が 2 つあります:
 | **方式** | OS サービスマネージャー(launchd / systemd / schtasks) | `codex` スクリプトランチャーをラップし実際の `codex.exe` は触らない |
 | **タイミング** | ログイン後に常時実行 | オンデマンド — `codex` 起動時に `ocx ensure` を実行 |
 | **再起動** | クラッシュ時に自動再起動 | `codex` 呼び出しごとに 1 回起動 |
-| **Codex 更新** | 影響なし | `ocx codex-shim install` または `ocx update` 時に修復 |
+| **Codex 更新** | 影響なし | 安定して置換されたランチャーは次の通常の `ocx` コマンドで修復 |
 | **削除** | `ocx service uninstall` | `ocx codex-shim uninstall` |
 
 常にプロキシを起動しておくには **service**(開発マシン推奨)、軽くオンデマンドで使うには **shim** を使ってください。
+
+外部の Codex 更新でインストール済み shim が上書きされた場合、次の通常の `ocx` コマンドが
+安定した新しいランチャーをバックアップして shim を復元します。まだ変更中のランチャーには触れず、
+後続のコマンドで再試行します。修復失敗は要求されたコマンドを失敗させず警告だけを表示し、手動の
+代替手段は `ocx codex-shim install` です。自動修復を無効にするには
+`codexShimAutoRestore` を `false` にするか、プロセスで
+`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
 shim 自動起動はデフォルトでオンで、GUI ダッシュボードからオフにできます。設定されたプロキシポートが既に使用
 中の場合、`ocx start` が自動的に別の空きローカルポートを選び、Codex の設定もそのポートに更新します。
 

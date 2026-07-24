@@ -22,6 +22,13 @@ export interface WsData {
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
+  /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
+  kind?: "responses" | "live-sideband";
+  liveUpstream?: WebSocket;
+  liveUpstreamUrl?: string;
+  liveUpstreamHeaders?: Record<string, string>;
+  livePending?: Array<string | Buffer>;
+  liveOpened?: boolean;
 }
 
 export class WsSendDroppedError extends Error {

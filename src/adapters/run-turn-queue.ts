@@ -49,9 +49,13 @@ export async function preflightAdapterEvents(
   }
 }
 
-export function createAdapterEventQueue(): AdapterEventQueue {
+export function createAdapterEventQueue(opts?: {
+  maxBacklog?: number;
+  onBacklogExceeded?: () => void;
+}): AdapterEventQueue {
   const queued: AdapterEvent[] = [];
   const readers: QueueReader[] = [];
+  const maxBacklog = opts?.maxBacklog ?? 1_024;
   let closed = false;
 
   const push = (event: AdapterEvent): void => {
@@ -59,6 +63,12 @@ export function createAdapterEventQueue(): AdapterEventQueue {
     const reader = readers.shift();
     if (reader) {
       reader({ done: false, value: event });
+      return;
+    }
+    if (queued.length >= maxBacklog) {
+      opts?.onBacklogExceeded?.();
+      queued.push({ type: "error", message: "consumer backlog exceeded — turn aborted" });
+      close();
       return;
     }
     queued.push(event);

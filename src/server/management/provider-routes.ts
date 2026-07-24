@@ -31,6 +31,7 @@ import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../provid
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import { getProviderDiscoveryStatus } from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
@@ -78,6 +79,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
+      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
   }
 
