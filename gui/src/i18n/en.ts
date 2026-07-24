@@ -24,6 +24,7 @@ export const en = {
   "memory.criticalLabel": "Critical %",
   "memory.applyThresholds": "Apply thresholds",
   "memory.autoRestartLabel": "Auto-restart on critical (opt-in)",
+  "memory.autoRestartNote": "When it fires, in-flight requests are drained first. A reply still streaming at that moment is regenerated on retry; the conversation context is preserved. Restarts are rate-limited.",
   "memory.autoRestartBlocked": "No supervisor detected — auto-restart stays off so the proxy is never left dead. Set OCX_SUPERVISED=1 (or run under pm2/systemd), or turn off \"Require supervisor\".",
   "memory.requireSupervisorLabel": "Require supervisor before auto-restart",
   "memory.yes": "yes",

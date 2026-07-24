@@ -251,6 +251,7 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
         {autoRestartBlocked && (
           <div className="muted text-label" style={{ marginTop: -4, marginLeft: 24 }}>{t("memory.autoRestartBlocked")}</div>
         )}
+        <div className="muted text-label" style={{ marginTop: -4, marginLeft: 24 }}>{t("memory.autoRestartNote")}</div>
         <label style={rowStyle}>
           <input type="checkbox" checked={cfg?.requireSupervisor ?? true} disabled={saving} onChange={e => void save({ requireSupervisor: e.target.checked })} />
           <span>{t("memory.requireSupervisorLabel")}</span>

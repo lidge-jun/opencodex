@@ -24,6 +24,7 @@ export const zh: Record<TKey, string> = {
   "memory.criticalLabel": "严重 %",
   "memory.applyThresholds": "应用阈值",
   "memory.autoRestartLabel": "严重时自动重启（可选）",
+  "memory.autoRestartNote": "触发时会先排空进行中的请求。此刻仍在流式传输的回复会在重试时重新生成，对话上下文会被保留。重启有频率限制。",
   "memory.autoRestartBlocked": "未检测到 supervisor — 自动重启保持关闭，以免代理直接退出。请设置 OCX_SUPERVISED=1（或在 pm2/systemd 下运行），或关闭\"需要 supervisor\"。",
   "memory.requireSupervisorLabel": "自动重启前需要 supervisor",
   "memory.yes": "是",

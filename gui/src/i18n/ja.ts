@@ -24,6 +24,7 @@ export const ja: Record<TKey, string> = {
   "memory.criticalLabel": "危険 %",
   "memory.applyThresholds": "しきい値を適用",
   "memory.autoRestartLabel": "危険時に自動再起動（オプトイン）",
+  "memory.autoRestartNote": "実行されると、進行中のリクエストを先に処理します。その瞬間ストリーミング中だった応答は再試行時に再生成されますが、会話のコンテキストは保持されます。再起動の頻度は制限されています。",
   "memory.autoRestartBlocked": "スーパーバイザーが検出されません — プロキシがそのまま停止しないよう自動再起動はオフのままです。OCX_SUPERVISED=1 を設定する（または pm2/systemd 下で実行する）か、「スーパーバイザーを必須にする」をオフにしてください。",
   "memory.requireSupervisorLabel": "自動再起動の前にスーパーバイザーを必須にする",
   "memory.yes": "はい",

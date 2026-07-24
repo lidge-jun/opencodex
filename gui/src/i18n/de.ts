@@ -23,6 +23,7 @@ export const de = {
   "memory.criticalLabel": "Kritisch %",
   "memory.applyThresholds": "Schwellen übernehmen",
   "memory.autoRestartLabel": "Auto-Neustart bei kritisch (optional)",
+  "memory.autoRestartNote": "Beim Auslösen werden laufende Anfragen zuerst abgeschlossen. Eine in diesem Moment noch streamende Antwort wird beim erneuten Versuch neu erzeugt; der Gesprächskontext bleibt erhalten. Neustarts sind ratenbegrenzt.",
   "memory.autoRestartBlocked": "Kein Supervisor erkannt — Auto-Neustart bleibt aus, damit der Proxy nie einfach beendet wird. Setzen Sie OCX_SUPERVISED=1 (oder betreiben Sie ihn unter pm2/systemd) oder deaktivieren Sie „Supervisor erforderlich“.",
   "memory.requireSupervisorLabel": "Supervisor vor Auto-Neustart erforderlich",
   "memory.yes": "ja",

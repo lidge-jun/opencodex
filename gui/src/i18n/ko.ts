@@ -24,6 +24,7 @@ export const ko: Record<TKey, string> = {
   "memory.criticalLabel": "위험 %",
   "memory.applyThresholds": "임계값 적용",
   "memory.autoRestartLabel": "위험 시 자동 재시작 (선택)",
+  "memory.autoRestartNote": "실행되면 진행 중인 요청을 먼저 정리합니다. 그 순간 스트리밍 중이던 응답은 재시도 시 다시 생성되며, 대화 맥락은 보존됩니다. 재시작 빈도는 제한됩니다.",
   "memory.autoRestartBlocked": "supervisor가 감지되지 않았습니다 — 프록시가 그냥 종료되지 않도록 자동 재시작이 꺼진 상태로 유지됩니다. OCX_SUPERVISED=1을 설정하거나(또는 pm2/systemd에서 실행) \"supervisor 필요\"를 끄세요.",
   "memory.requireSupervisorLabel": "자동 재시작 전에 supervisor 필요",
   "memory.yes": "예",
