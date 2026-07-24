@@ -110,9 +110,9 @@ diagnostics to bug reports.
 
 ## 3. API-key catalog
 
-opencodex ships built-in presets for key-based, OAuth, local, forwarded, and key-optional providers.
-The dashboard's **Add provider** picker opens a key provider's dashboard, validates the key, and
-stores it. Notable entries:
+opencodex ships 54 built-in presets: 43 key-based, seven OAuth, three local, and the default
+ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
+validates the key, and stores it. Notable entries:
 
 | Provider | Base URL |
 | --- | --- |
