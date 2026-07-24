@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { nativeModelRows } from "../src/codex/catalog";
 import { loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -90,6 +91,30 @@ describe("atomic model visibility management", () => {
     ]);
     expect(loadConfig().disabledModels).not.toContain("google-antigravity/future-model");
     expect(refreshes).toBe(2);
+  });
+
+  test("all-on clears stale native ids while preserving combo selectors", async () => {
+    const config = loadConfig();
+    const targets = nativeModelRows(config).map(row => ({ id: row.slug, native: true }));
+    expect(targets.length).toBeGreaterThan(0);
+    config.disabledModels = [
+      targets[0]!.id,
+      "stale-native-model",
+      "fast-chat",
+      "combo/free",
+      "google-antigravity/keep",
+      "other/keep",
+    ];
+    saveConfig(config);
+
+    expect((await put({ scope: "provider", provider: "openai", targets, enabled: true })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual([
+      "fast-chat",
+      "combo/free",
+      "google-antigravity/keep",
+      "other/keep",
+    ]);
+    expect(refreshes).toBe(1);
   });
 
   test("treats a physical combo provider with no configured combos as a routed provider", async () => {

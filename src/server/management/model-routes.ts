@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -195,7 +195,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         if (isVirtualComboNamespace) {
           disabled = disabled.filter(stored => !knownComboSelectors.has(stored));
         } else {
-          const nativeIds = new Set(targets.filter(target => target.native).map(target => target.id));
+          const nativeIds = provider === "openai"
+            ? disabledNativeSlugs({ disabledModels: disabled })
+            : new Set<string>();
           disabled = disabled.filter(stored => (
             knownComboSelectors.has(stored)
             || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored))
