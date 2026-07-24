@@ -5,6 +5,10 @@ describe("provider model catalog envelopes", () => {
   test("normalizes OpenAI, Google/Ollama, and top-level catalog shapes", () => {
     expect(parseProviderModelsApiItems({ data: [{ id: "openai-model" }] })?.map(model => model.id))
       .toEqual(["openai-model"]);
+    expect(parseProviderModelsApiItems({ data: [{ id: "free-model", pricing: { prompt: "0", completion: "0" } }] })?.[0]?.pricing)
+      .toEqual({ prompt: "0", completion: "0" });
+    expect(parseProviderModelsApiItems({ data: [{ id: "partial-price", pricing: { prompt: "0" } }] })?.[0]?.pricing)
+      .toBeUndefined();
     expect(parseProviderModelsApiItems({ models: [{ name: "models/gemini-flash", inputTokenLimit: 1_000_000 }] }, true))
       .toEqual([{ id: "gemini-flash", context_length: 1_000_000 }]);
     expect(parseProviderModelsApiItems([{ id: "accounts/fireworks/models/llama" }])?.map(model => model.id))

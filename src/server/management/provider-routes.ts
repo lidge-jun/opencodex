@@ -409,12 +409,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/provider-presets/discover" && req.method === "POST") {
-    let body: { presetId?: unknown; provider?: unknown };
+    let body: { presetId?: unknown; provider?: unknown; freeOnly?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
     if (!presetId || !isValidProviderName(presetId)) return jsonResponse({ error: "invalid presetId" }, 400);
     const entry = getProviderRegistryEntry(presetId);
     if (!entry) return jsonResponse({ error: "unknown provider preset" }, 404);
+    if (body.freeOnly !== undefined && typeof body.freeOnly !== "boolean") return jsonResponse({ error: "freeOnly must be a boolean" }, 400);
+    if (body.freeOnly === true && presetId !== "openrouter") return jsonResponse({ error: "freeOnly is only supported for OpenRouter" }, 400);
     if (entry.supportLevel === "reference") {
       return jsonResponse({ error: "reference-only provider presets cannot be connected automatically" }, 400);
     }
@@ -459,11 +461,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       id,
       ...(entry.modelContextWindows?.[id] ? { contextWindow: entry.modelContextWindows[id] } : {}),
     }));
+    const fallbackModels = body.freeOnly === true
+      ? staticModels.filter(model => model.id.endsWith(":free"))
+      : staticModels;
     const destinationError = await providerDestinationResolvedError(presetId, provider);
     if (destinationError) return jsonResponse({ error: destinationError }, 400);
     if (entry.discovery === "static" || entry.discovery === "unsupported" || entry.liveModels === false) {
-      return jsonResponse(staticModels.length
-        ? { ok: true, models: staticModels, source: "static", latencyMs: 0 }
+      return jsonResponse(fallbackModels.length
+        ? { ok: true, models: fallbackModels, source: "static", latencyMs: 0 }
         : { ok: false, models: [], source: "static", latencyMs: 0, error: "No static model catalog is available for this preset" });
     }
     const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
@@ -477,8 +482,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const latencyMs = Date.now() - started;
       if (!response.ok) {
         const error = `upstream model discovery returned ${response.status}`;
-        return jsonResponse(staticModels.length
-          ? { ok: true, models: staticModels, source: "static", latencyMs, error }
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
           : { ok: false, models: [], source: "live", latencyMs, error });
       }
       const allowsModelsEnvelope = (entry.adapter === "google" && (entry.googleMode ?? "ai-studio") === "ai-studio")
@@ -486,8 +491,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const rows = parseProviderModelsApiItems(await response.json().catch(() => null), allowsModelsEnvelope);
       if (!rows) {
         const error = "upstream model discovery returned an unexpected shape";
-        return jsonResponse(staticModels.length
-          ? { ok: true, models: staticModels, source: "static", latencyMs, error }
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
           : { ok: false, models: [], source: "live", latencyMs, error });
       }
       const uniqueRows = new Map<string, (typeof rows)[number]>();
@@ -496,22 +501,34 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         if (!current || (!current.context_length && row.context_length)) uniqueRows.set(row.id, row);
         if (uniqueRows.size >= 2000) break;
       }
-      const models = [...uniqueRows.values()].map(row => ({
+      const filteredRows = body.freeOnly === true
+        ? [...uniqueRows.values()].filter(row => {
+          const prompt = Number(row.pricing?.prompt);
+          const completion = Number(row.pricing?.completion);
+          return row.pricing !== undefined
+            && Number.isFinite(prompt) && prompt >= 0
+            && Number.isFinite(completion) && completion >= 0
+            && prompt === 0 && completion === 0;
+        })
+        : [...uniqueRows.values()];
+      const models = filteredRows.map(row => ({
         id: row.id,
         ...(row.context_length ? { contextWindow: row.context_length } : {}),
       }));
       if (models.length === 0) {
-        const error = "upstream model discovery returned an empty catalog";
-        return jsonResponse(staticModels.length
-          ? { ok: true, models: staticModels, source: "static", latencyMs, error }
+        const error = body.freeOnly === true
+          ? "OpenRouter currently reports no free models"
+          : "upstream model discovery returned an empty catalog";
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
           : { ok: false, models: [], source: "live", latencyMs, error });
       }
       return jsonResponse({ ok: true, models, source: "live", latencyMs });
     } catch {
       const latencyMs = Date.now() - started;
       const error = "model discovery request failed";
-      return jsonResponse(staticModels.length
-        ? { ok: true, models: staticModels, source: "static", latencyMs, error }
+      return jsonResponse(fallbackModels.length
+        ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
         : { ok: false, models: [], source: "live", latencyMs, error });
     }
   }

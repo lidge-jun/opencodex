@@ -822,6 +822,7 @@ export const ja: Record<TKey, string> = {
   "modal.modelDiscovery": "モデル検出",
   "modal.modelDiscoveryHint": "この設定で利用可能なモデルを検索します。",
   "modal.discoverModels": "モデルを検出",
+  "modal.openRouterFreeOnly": "OpenRouter の無料モデルのみを使用",
   "modal.discovering": "検出中…",
   "modal.modelsLive": "プロバイダーからのライブ応答",
   "modal.modelsStatic": "静的カタログ",

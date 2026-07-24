@@ -19,12 +19,12 @@ const config: OcxConfig = {
   providers: {},
 };
 
-function discover(presetId: string, provider: OcxProviderConfig): Promise<Response | null> {
+function discover(presetId: string, provider: OcxProviderConfig, freeOnly?: boolean): Promise<Response | null> {
   const url = new URL("http://127.0.0.1:10100/api/provider-presets/discover");
   return handleManagementAPI(new Request(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ presetId, provider }),
+    body: JSON.stringify({ presetId, provider, ...(freeOnly === undefined ? {} : { freeOnly }) }),
   }), url, config);
 }
 
@@ -128,6 +128,50 @@ describe("free provider directory", () => {
     expect(response?.status).toBe(200);
     expect(await response?.json()).toMatchObject({ ok: true, source: "live", models: [{ id: "command-a", contextWindow: 256000 }] });
     expect(config.providers.cohere).toBeUndefined();
+  });
+
+  test("filters OpenRouter discovery to models with complete valid zero pricing", async () => {
+    globalThis.fetch = (async () => Response.json({ data: [
+      { id: "paid/model", pricing: { prompt: "0.000001", completion: "0.000002" } },
+      { id: "free/by-price", context_length: 128000, pricing: { prompt: "0", completion: "0" } },
+      { id: "not-free/by-suffix:free" },
+      { id: "not-free/partial-price", pricing: { prompt: "0" } },
+      { id: "not-free/invalid-price", pricing: { prompt: "free", completion: "0" } },
+      { id: "not-free/negative-price", pricing: { prompt: "-1", completion: "0" } },
+      { id: "not-free/blank-price", pricing: { prompt: "", completion: "" } },
+    ] })) as typeof fetch;
+    const response = await discover("openrouter", {
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      authMode: "key",
+      apiKey: "secret",
+    }, true);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      ok: true,
+      source: "live",
+      models: [{ id: "free/by-price", contextWindow: 128000 }],
+    });
+  });
+
+  test("validates freeOnly at the discovery boundary", async () => {
+    const url = new URL("http://127.0.0.1:10100/api/provider-presets/discover");
+    const invalidType = await handleManagementAPI(new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ presetId: "openrouter", provider: {}, freeOnly: "yes" }),
+    }), url, config);
+    expect(invalidType?.status).toBe(400);
+    expect(await invalidType?.json()).toEqual({ error: "freeOnly must be a boolean" });
+
+    const unsupported = await discover("cohere", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cohere.com/compatibility/v1",
+      authMode: "key",
+      apiKey: "secret",
+    }, true);
+    expect(unsupported?.status).toBe(400);
+    expect(await unsupported?.json()).toEqual({ error: "freeOnly is only supported for OpenRouter" });
   });
 
   test("accepts only SiliconFlow's two official regional endpoints for discovery", async () => {

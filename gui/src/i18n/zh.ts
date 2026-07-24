@@ -1046,6 +1046,7 @@ export const zh: Record<TKey, string> = {
   "modal.modelDiscovery": "模型发现",
   "modal.modelDiscoveryHint": "查找此设置可用的模型。",
   "modal.discoverModels": "发现模型",
+  "modal.openRouterFreeOnly": "仅使用免费的 OpenRouter 模型",
   "modal.discovering": "正在发现…",
   "modal.modelsLive": "提供商实时响应",
   "modal.modelsStatic": "静态目录",

@@ -80,6 +80,7 @@
 .provider-model-discovery-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .provider-model-discovery-head strong { font-size: var(--text-control); }
 .provider-model-source { color: var(--muted); font-size: var(--text-label); }
+.provider-model-free-filter { display: inline-flex; align-items: center; gap: 7px; width: fit-content; color: var(--text); font-size: var(--text-label); cursor: pointer; }
 .provider-model-list { display: grid; max-height: 210px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .provider-model-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; font-size: var(--text-label); cursor: pointer; }
 .provider-model-row + .provider-model-row { border-top: 1px solid var(--border-soft); }

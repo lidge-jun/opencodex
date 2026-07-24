@@ -1046,6 +1046,7 @@ export const ko: Record<TKey, string> = {
   "modal.modelDiscovery": "모델 검색",
   "modal.modelDiscoveryHint": "이 설정에서 사용 가능한 모델을 찾습니다.",
   "modal.discoverModels": "모델 검색",
+  "modal.openRouterFreeOnly": "무료 OpenRouter 모델만 사용",
   "modal.discovering": "검색 중…",
   "modal.modelsLive": "프로바이더 실시간 응답",
   "modal.modelsStatic": "정적 카탈로그",

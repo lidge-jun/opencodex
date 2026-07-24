@@ -867,6 +867,7 @@ export const en = {
   "modal.modelDiscovery": "Model discovery",
   "modal.modelDiscoveryHint": "Find available models for this setup.",
   "modal.discoverModels": "Discover models",
+  "modal.openRouterFreeOnly": "Use free OpenRouter models only",
   "modal.discovering": "Discovering…",
   "modal.modelsLive": "Live provider response",
   "modal.modelsStatic": "Static catalog",

@@ -75,6 +75,7 @@ export default function AddProviderModal({
   const [discoverySource, setDiscoverySource] = useState<"live" | "static" | "">("");
   const [discoveredModels, setDiscoveredModels] = useState<Array<{ id: string; contextWindow?: number }>>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [openRouterFreeOnly, setOpenRouterFreeOnly] = useState(false);
   const discoveryRequestRef = useRef(0);
   const discoveryAbortRef = useRef<AbortController | null>(null);
   const aliveRef = useRef(true);
@@ -194,6 +195,7 @@ export default function AddProviderModal({
     const staticModels = (p.models ?? []).map(id => ({ id }));
     setDiscoveredModels(staticModels);
     setSelectedModels(staticModels.map(model => model.id));
+    setOpenRouterFreeOnly(false);
   };
 
   const back = () => {
@@ -211,6 +213,7 @@ export default function AddProviderModal({
     setDiscoverySource("");
     setDiscoveredModels([]);
     setSelectedModels([]);
+    setOpenRouterFreeOnly(false);
   };
 
   const providerPostBody = () => {
@@ -221,7 +224,7 @@ export default function AddProviderModal({
     return buildProviderPostBody(preset, { ...form, baseUrl: resolvedBaseUrl });
   };
 
-  const discoverModels = async () => {
+  const discoverModels = async (freeOnly = openRouterFreeOnly) => {
     const postBody = providerPostBody();
     if (!postBody || !preset || preset.supportLevel === "reference") return;
     const requestId = discoveryRequestRef.current + 1;
@@ -235,7 +238,7 @@ export default function AddProviderModal({
       const res = await fetch(`${apiBase}/api/provider-presets/discover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ presetId: preset.id, provider: postBody.provider }),
+        body: JSON.stringify({ presetId: preset.id, provider: postBody.provider, ...(preset.id === "openrouter" ? { freeOnly } : {}) }),
         signal: controller.signal,
       });
       const data = await res.json().catch(() => ({})) as {
@@ -252,7 +255,7 @@ export default function AddProviderModal({
       setSelectedModels(models.map(model => model.id));
       setDiscoverySource(data.source ?? (preset.discovery === "static" ? "static" : "live"));
       if (data.error) setDiscoveryError(data.error);
-      if (models[0]) setForm(current => current && !current.defaultModel ? { ...current, defaultModel: models[0]!.id } : current);
+      if (models[0]) setForm(current => current && (freeOnly || !current.defaultModel) ? { ...current, defaultModel: models[0]!.id } : current);
     } catch (cause) {
       if (requestId !== discoveryRequestRef.current || controller.signal.aborted) return;
       setDiscoveryError(cause instanceof Error ? cause.message : t("modal.networkError"));
@@ -662,6 +665,16 @@ export default function AddProviderModal({
                       {discoveryBusy ? t("modal.discovering") : t("modal.discoverModels")}
                     </button>
                   </div>
+                  {preset.id === "openrouter" && (
+                    <label className="provider-model-free-filter">
+                      <input type="checkbox" checked={openRouterFreeOnly} disabled={discoveryBusy} onChange={event => {
+                        const checked = event.target.checked;
+                        setOpenRouterFreeOnly(checked);
+                        void discoverModels(checked);
+                      }} />
+                      {t("modal.openRouterFreeOnly")}
+                    </label>
+                  )}
                   {discoveryError && <div className="text-label" role="alert" style={{ color: discoverySource === "static" && discoveredModels.length ? "var(--amber)" : "var(--red)" }}>{discoveryError}</div>}
                   {discoveredModels.length > 0 && (
                     <div className="provider-model-list" aria-label={t("modal.discoveredModels")}>

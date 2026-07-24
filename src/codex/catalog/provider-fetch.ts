@@ -57,6 +57,10 @@ export type ProviderModelsApiItem = {
   owned_by?: string;
   context_length?: number;
   max_model_len?: number;
+  pricing?: {
+    prompt: string;
+    completion: string;
+  };
   metadata?: {
     capabilities?: Record<string, unknown>;
     limits?: Record<string, unknown>;
@@ -100,10 +104,18 @@ export function parseProviderModelsApiItems(value: unknown, allowModelsEnvelope 
       item.max_context_length,
       item.max_model_len,
     ].find(candidate => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) as number | undefined;
+    const rawPricing = item.pricing !== null && typeof item.pricing === "object" && !Array.isArray(item.pricing)
+      ? item.pricing as Record<string, unknown>
+      : null;
+    const pricing = rawPricing && typeof rawPricing.prompt === "string" && rawPricing.prompt.trim()
+      && typeof rawPricing.completion === "string" && rawPricing.completion.trim()
+      ? { prompt: rawPricing.prompt, completion: rawPricing.completion }
+      : undefined;
     normalized.push({
       id,
       ...(typeof item.owned_by === "string" ? { owned_by: item.owned_by } : {}),
       ...(contextLength ? { context_length: contextLength } : {}),
+      ...(pricing ? { pricing } : {}),
       ...(item.metadata !== null && typeof item.metadata === "object" && !Array.isArray(item.metadata)
         ? { metadata: item.metadata as ProviderModelsApiItem["metadata"] }
         : {}),

@@ -867,6 +867,7 @@ export const ru: Record<TKey, string> = {
   "modal.modelDiscovery": "Поиск моделей",
   "modal.modelDiscoveryHint": "Найдите модели, доступные для этой настройки.",
   "modal.discoverModels": "Найти модели",
+  "modal.openRouterFreeOnly": "Использовать только бесплатные модели OpenRouter",
   "modal.discovering": "Поиск…",
   "modal.modelsLive": "Ответ провайдера в реальном времени",
   "modal.modelsStatic": "Статический каталог",
