@@ -650,4 +650,30 @@ describe("Cursor MCP display-name alias", () => {
     }), state);
     expect(events.some(e => e.type === "error")).toBe(true);
   });
+
+  test("accepts exec_command when only shell_command was advertised", () => {
+    const toolSchemas = new Map<string, unknown>([
+      ["shell_command", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }],
+    ]);
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["shell_command"],
+      toolSchemas,
+      cursorToolNameMap: new Map([["shell_command", "shell_command"]]),
+    });
+    const toolCall = mcpToolCall("exec_command", { cmd: "echo ok" });
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_alias", modelCallId: "m3", toolCall }),
+    }), state)).toEqual([]);
+
+    const events = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_alias", modelCallId: "m3", toolCall }),
+    }), state);
+    const start = events.find(e => e.type === "tool_call_start");
+    const delta = events.find(e => e.type === "tool_call_delta");
+    expect(start && start.type === "tool_call_start" ? start.name : undefined).toBe("shell_command");
+    expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ command: "echo ok" });
+  });
 });

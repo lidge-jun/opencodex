@@ -13,7 +13,7 @@ export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHE
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
   'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. This is not a sandbox denial.';
 export const CURSOR_SHELL_ALIAS_USER_HINT =
-  "Use the Codex shell bridge tool listed this turn (`shell_command` or `exec_command`, including the long `mcp_opencodex-responses_*` name). Do not tell the user shell access is blocked unless that bridge tool also fails.";
+  "Use the Codex shell bridge tool listed this turn (`shell_command` or `exec_command`, including the long `mcp_opencodex-responses_*` name). Cursor-native Shell/Read being unavailable is expected policy routing — silently use the bridge tool and do not tell the user shell access is blocked unless that bridge tool also fails.";
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS"] as const;
 
 export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
