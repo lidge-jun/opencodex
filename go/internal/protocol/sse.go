@@ -15,6 +15,8 @@ type SSEEvent struct {
 	Data  string
 	ID    string
 	Retry int
+	// Comment is non-nil only for comment records emitted by an opt-in decoder.
+	Comment *string
 }
 
 // SSEDecoder incrementally decodes a text/event-stream written in arbitrary chunks.
@@ -29,9 +31,19 @@ type SSEDecoder struct {
 // NewSSEDecoder creates a decoder that sends complete events to events.
 // The caller owns and closes the events channel.
 func NewSSEDecoder(events chan<- SSEEvent) *SSEDecoder {
+	return newSSEDecoder(events, false)
+}
+
+// NewSSEDecoderWithComments creates a decoder that also sends comment records.
+// The caller owns and closes the events channel.
+func NewSSEDecoderWithComments(events chan<- SSEEvent) *SSEDecoder {
+	return newSSEDecoder(events, true)
+}
+
+func newSSEDecoder(events chan<- SSEEvent, includeComments bool) *SSEDecoder {
 	pipeR, pipeW := io.Pipe()
 	d := &SSEDecoder{pipeW: pipeW, done: make(chan struct{})}
-	go d.decode(pipeR, events)
+	go d.decode(pipeR, events, includeComments)
 	return d
 }
 
@@ -71,7 +83,7 @@ func (d *SSEDecoder) result() error {
 	return d.err
 }
 
-func (d *SSEDecoder) decode(r io.ReadCloser, events chan<- SSEEvent) {
+func (d *SSEDecoder) decode(r io.ReadCloser, events chan<- SSEEvent, includeComments bool) {
 	defer close(d.done)
 	defer r.Close()
 
@@ -84,7 +96,7 @@ func (d *SSEDecoder) decode(r io.ReadCloser, events chan<- SSEEvent) {
 			if terminated {
 				line = strings.TrimSuffix(line, "\n")
 			}
-			state.acceptLine(strings.TrimSuffix(line, "\r"), events)
+			state.acceptLine(strings.TrimSuffix(line, "\r"), events, includeComments)
 		}
 		if err == nil {
 			continue
@@ -107,12 +119,16 @@ type sseState struct {
 	retry     int
 }
 
-func (s *sseState) acceptLine(line string, events chan<- SSEEvent) {
+func (s *sseState) acceptLine(line string, events chan<- SSEEvent, includeComments bool) {
 	if line == "" {
 		s.dispatch(events)
 		return
 	}
 	if strings.HasPrefix(line, ":") {
+		if includeComments {
+			comment := strings.TrimPrefix(strings.TrimPrefix(line, ":"), " ")
+			events <- SSEEvent{Comment: &comment}
+		}
 		return
 	}
 

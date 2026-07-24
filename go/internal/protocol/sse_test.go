@@ -65,3 +65,34 @@ func TestSSEDecoderSupportsLargeLines(t *testing.T) {
 		t.Fatalf("data length = %d, want %d", len(got.Data), len(data))
 	}
 }
+
+func TestSSEDecoderCommentsAreOptIn(t *testing.T) {
+	input := ": keepalive\n\n"
+
+	defaultEvents := make(chan SSEEvent, 1)
+	defaultDecoder := NewSSEDecoder(defaultEvents)
+	if _, err := defaultDecoder.Write([]byte(input)); err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultDecoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-defaultEvents:
+		t.Fatalf("default decoder surfaced comment: %#v", event)
+	default:
+	}
+
+	commentEvents := make(chan SSEEvent, 1)
+	commentDecoder := NewSSEDecoderWithComments(commentEvents)
+	if _, err := commentDecoder.Write([]byte(input)); err != nil {
+		t.Fatal(err)
+	}
+	if err := commentDecoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	event := <-commentEvents
+	if event.Comment == nil || *event.Comment != "keepalive" {
+		t.Fatalf("comment event = %#v", event)
+	}
+}

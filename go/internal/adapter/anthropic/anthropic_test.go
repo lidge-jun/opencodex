@@ -86,6 +86,49 @@ func TestParseStreamAndUnary(t *testing.T) {
 	}
 }
 
+func TestParseStreamUsageOnlyEOFIsTruncation(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":2}}}`, "", "",
+	}, "\n")
+	events := collectAdapterEvents((&Adapter{}).ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	if len(events) != 1 || events[0].Type != types.EventError || events[0].Error != "upstream stream ended before message_stop — possible truncation" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
+func TestParseStreamEOFMapsStopReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopReason string
+		want       string
+	}{
+		{name: "refusal", stopReason: "refusal", want: "content_filter"},
+		{name: "other reason omitted", stopReason: "end_turn", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := strings.Join([]string{
+				`event: message_delta`, `data: {"type":"message_delta","delta":{"stop_reason":"` + tt.stopReason + `"},"usage":{"output_tokens":4}}`, "", "",
+			}, "\n")
+			events := collectAdapterEvents((&Adapter{}).ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+			if len(events) != 1 || events[0].Type != types.EventDone || events[0].StopReason != tt.want || events[0].Usage.OutputTokens != 4 {
+				t.Fatalf("unexpected events: %#v", events)
+			}
+		})
+	}
+}
+
+func TestParseStreamCommentEmitsHeartbeat(t *testing.T) {
+	stream := strings.Join([]string{
+		`: keepalive`,
+		`event: message_stop`, `data: {"type":"message_stop"}`, "", "",
+	}, "\n")
+	events := collectAdapterEvents((&Adapter{}).ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	if len(events) != 2 || events[0].Type != types.EventHeartbeat || events[1].Type != types.EventDone {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
 func TestBuildRequestUsesAdaptiveThinkingForNewClaudeFamilies(t *testing.T) {
 	req := &types.NormalizedRequest{
 		ModelID: "claude-opus-4-7", Context: types.RequestContext{Messages: []types.Message{{Role: "user", Content: json.RawMessage(`"hello"`)}}},

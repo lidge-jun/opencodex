@@ -432,6 +432,10 @@ func (a *Adapter) ParseStream(ctx context.Context, body io.ReadCloser) <-chan ty
 		stopReason := ""
 		terminal := false
 		for frame := range decodeSSE(ctx, body) {
+			if frame.Comment != nil {
+				emit(ctx, out, types.AdapterEvent{Type: types.EventHeartbeat})
+				continue
+			}
 			var event map[string]any
 			if json.Unmarshal([]byte(frame.Data), &event) != nil {
 				emit(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "malformed upstream SSE data frame"})
@@ -500,11 +504,18 @@ func (a *Adapter) ParseStream(ctx context.Context, body io.ReadCloser) <-chan ty
 			}
 		}
 		if ctx.Err() == nil && !terminal {
-			if usage != nil {
-				emit(ctx, out, types.AdapterEvent{Type: types.EventDone, Usage: anthropicUsage(usage), StopReason: stopReason})
-			} else {
-				emit(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "upstream stream ended without a terminal signal"})
+			if stopReason == "" {
+				emit(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "upstream stream ended before message_stop — possible truncation"})
+				return
 			}
+			mappedStopReason := ""
+			switch stopReason {
+			case "max_tokens":
+				mappedStopReason = "max_tokens"
+			case "refusal", "content_filter":
+				mappedStopReason = "content_filter"
+			}
+			emit(ctx, out, types.AdapterEvent{Type: types.EventDone, Usage: anthropicUsage(usage), StopReason: mappedStopReason})
 		}
 	}()
 	return out
@@ -550,7 +561,7 @@ func decodeSSE(ctx context.Context, body io.ReadCloser) <-chan protocol.SSEEvent
 		defer close(out)
 		defer body.Close()
 		decoded := make(chan protocol.SSEEvent)
-		decoder := protocol.NewSSEDecoder(decoded)
+		decoder := protocol.NewSSEDecoderWithComments(decoded)
 		go func() {
 			_, _ = io.Copy(decoder, body)
 			_ = decoder.Close()
