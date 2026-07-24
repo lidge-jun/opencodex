@@ -206,6 +206,8 @@ export const ko: Record<TKey, string> = {
 
   // providers
   "prov.subtitle": "opencodex가 Codex로 라우팅하는 업스트림 프로바이더를 설정합니다. 계정으로 로그인하거나, 프로바이더를 추가하거나, 원본 설정을 편집하세요.",
+  "prov.connections": "연결된 프로바이더",
+  "prov.noConnections": "연결된 프로바이더가 없습니다. 프로바이더 추가에서 연결하세요.",
   "prov.add": "프로바이더 추가",
   "prov.editJson": "JSON 편집",
   "prov.accountLogin": "계정 로그인",

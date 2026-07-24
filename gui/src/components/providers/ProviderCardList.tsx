@@ -1,9 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { TFn } from "../../i18n";
 import type { AccountQuota } from "../../codex-quota-utils";
-import QuotaBars from "../QuotaBars";
+import QuotaBars, { buildQuotaRows } from "../QuotaBars";
 import { IconChevron, IconLock, IconPlus, IconPower, IconTrash } from "../../icons";
 import { oauthAccountDisplayLabel } from "../../provider-workspace/auth";
+import { formatTokenCount, type ProviderUsageTotals } from "../../provider-workspace/usage";
 
 interface Config {
   port: number;
@@ -20,6 +21,7 @@ export interface ProviderCardListProps {
   t: TFn;
   config: Config;
   quotaReports: Record<string, ProviderQuotaReport>;
+  usageTotals: Record<string, ProviderUsageTotals>;
   accountSets: Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>;
   keyPools: Record<string, ApiKeyEntry[]>;
   openAccounts: Record<string, boolean>;
@@ -46,7 +48,7 @@ export interface ProviderCardListProps {
 }
 
 export function ProviderCardList({
-  t, config, quotaReports, accountSets, keyPools, openAccounts, addingKeyFor,
+  t, config, quotaReports, usageTotals, accountSets, keyPools, openAccounts, addingKeyFor,
   newKeyValue, busy, modeBusy, activeAccountNeedsReauth, setOpenAccounts,
   setAddingKeyFor, setNewKeyValue, loginOAuth, requestLoginOAuth,
   setOpenAiAccountMode, setProviderDisabled, removeProvider, switchAccount,
@@ -54,14 +56,17 @@ export function ProviderCardList({
   resolvedOpenAiAccountMode,
 }: ProviderCardListProps) {
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div className="muted text-control" style={{ marginBottom: 4 }}>
+    <div className="provider-list">
+      <div className="muted text-control provider-list-meta">
         {t("prov.port")}: <code className="chip">{config.port}</code> · {t("prov.default")}: <code className="chip">{config.defaultProvider}</code>
       </div>
+      <div className="provider-card-grid">
       {Object.entries(config.providers).map(([name, prov]) => {
         const isDefault = name === config.defaultProvider;
         const isDisabled = prov.disabled === true;
         const quota = quotaReports[name]?.quota ?? null;
+        const hasQuotaRows = buildQuotaRows(quota, null, t).length > 0;
+        const totalTokens = usageTotals[name]?.totalTokens;
         const icon = providerIconSrc(name);
         const accountSet = prov.authMode === "oauth" ? accountSets[name] : undefined;
         const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward";
@@ -154,7 +159,17 @@ export function ProviderCardList({
                 <button className="btn btn-danger btn-sm" onClick={() => removeProvider(name)} aria-label={t("sub.removeAria", { m: name })}><IconTrash />{t("common.remove")}</button>
               </div>
             </div>
-            {quota && <QuotaBars quota={quota} threshold={80} t={t} className="provider-quota" />}
+            {(quota || (!hasQuotaRows && totalTokens !== undefined)) && (
+              <div className="prov-card-resource">
+                {quota && <QuotaBars quota={quota} threshold={80} t={t} className="provider-quota" />}
+                {!hasQuotaRows && totalTokens !== undefined && (
+                  <div className="provider-usage-fallback">
+                    <span>{t("dash.tokens30d")}</span>
+                    <strong>{formatTokenCount(totalTokens)}</strong>
+                  </div>
+                )}
+              </div>
+            )}
             {showAccounts && (
               <>
                 <button
@@ -261,6 +276,7 @@ export function ProviderCardList({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

@@ -54,6 +54,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthStatus, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
+  const [usageTotals, setUsageTotals] = useState<Record<string, { requests?: number; totalTokens?: number }>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
@@ -209,6 +210,18 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     } catch {
       /* keep last-good */
     }
+  }, [apiBase]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBase}/api/usage?range=30d`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { providers?: Array<{ provider: string; requests: number; totalTokens?: number }> } | null) => {
+        if (cancelled || !data) return;
+        setUsageTotals(Object.fromEntries((data.providers ?? []).map(row => [row.provider, { requests: row.requests, totalTokens: row.totalTokens }])));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, [apiBase]);
 
   const fetchCodexActiveReauth = useCallback(async () => {
@@ -614,7 +627,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <h2>{t("nav.providers")}</h2>
           <div className="row">
             <button className="btn btn-ghost btn-sm" onClick={toggleWorkspace}>{t("pws.classicToggle")}</button>
-            <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
+            <button className="btn btn-primary" onClick={() => { setAddIntent(null); setAdding(true); }}><IconPlus />{t("prov.add")}</button>
           </div>
         </div>
         {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
@@ -754,7 +767,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             </>
           ) : (
             <>
-              <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
+              <button className="btn btn-primary" onClick={() => { setAddIntent(null); setAdding(true); }}><IconPlus />{t("prov.add")}</button>
               <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t("prov.editJson")}</button>
             </>
           )}
@@ -766,14 +779,15 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
       <OAuthPanel
         t={t} oauthProviders={oauthProviders} keyProviders={keyCardProviders}
-        oauthStatus={oauthStatus} busy={busy} loginInfo={loginInfo}
+        oauthStatus={accountLoginStatus} busy={busy} loginInfo={loginInfo}
         linkCopied={linkCopied} deviceCodeCopied={deviceCodeCopied}
         manualCode={manualCode} manualCodeBusy={manualCodeBusy} manualCodeMsg={manualCodeMsg}
-        config={config} setAdding={setAdding} setLinkCopied={setLinkCopied}
+        config={config} setLinkCopied={setLinkCopied}
         setDeviceCodeCopied={setDeviceCodeCopied} setManualCode={setManualCode}
-        requestLoginOAuth={requestLoginOAuth} cancelLoginOAuth={cancelLoginOAuth}
+        cancelLoginOAuth={cancelLoginOAuth}
         logoutOAuth={logoutOAuth} submitManualCode={submitManualCode}
         providerIconSrc={providerIconSrc} oauthLabel={oauthLabel}
+        onAddProvider={intent => { setAddIntent(intent); setAdding(true); }}
       />
 
       {editing ? (
@@ -785,7 +799,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         />
       ) : (
         <ProviderCardList
-          t={t} config={config} quotaReports={quotaReports}
+          t={t} config={config} quotaReports={quotaReports} usageTotals={usageTotals}
           accountSets={accountSets} keyPools={keyPools} openAccounts={openAccounts}
           addingKeyFor={addingKeyFor} newKeyValue={newKeyValue}
           busy={busy} modeBusy={modeBusy} activeAccountNeedsReauth={activeAccountNeedsReauth}
@@ -803,11 +817,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         <AddProviderModal
           apiBase={apiBase}
           existingNames={Object.keys(config.providers)}
+          initialTier={addIntent?.tier}
+          initialCustom={addIntent?.custom}
           onClose={() => {
             if (busy) void cancelLoginOAuth(busy);
             setAdding(false);
+            setAddIntent(null);
           }}
-          onAdded={(name) => { setAdding(false); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
+          onAdded={(name) => { setAdding(false); setAddIntent(null); notify(t("prov.added", { name, cmd: "ocx sync" }), true); fetchConfig(); fetchOauth(); fetchProviderQuotas(true); setModelsRefreshToken(n => n + 1); }}
           accountRows={addModalAccountRows}
           accountStatus={accountLoginStatus}
           accountBusy={busy}

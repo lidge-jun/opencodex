@@ -340,6 +340,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 .main { min-width: 0; }
 .main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; }
+.main-inner.main-inner--providers { max-width: 1440px; }
 .main-inner.main-inner--combos {
   max-width: none;
   margin: 0;
@@ -870,19 +871,24 @@ table.logs-table { min-width: 960px; }
 .list-row .sub { font-size: var(--text-label); color: var(--muted); margin-top: 2px; }
 
 /* provider config card (Providers page) */
-.prov-card { overflow: hidden; }
-.prov-card-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 15px 16px; flex-wrap: wrap; }
+.prov-card { display: grid; grid-template-rows: minmax(0, 1fr) auto minmax(27px, auto); height: 100%; overflow: hidden; }
+.provider-list-meta { margin-bottom: 8px; }
+.provider-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+.prov-card-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; min-height: 128px; padding: 12px 14px 10px; }
 .prov-card-disabled { opacity: 0.62; }
-.prov-card-info { display: flex; align-items: flex-start; gap: 11px; min-width: 0; flex: 1 1 360px; }
+.prov-card-info { display: flex; align-items: flex-start; gap: 11px; min-width: 0; }
 .prov-card-copy { min-width: 0; flex: 1; }
-.prov-title { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; min-width: 0; }
+.prov-title { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; min-width: 0; }
 .provider-icon { width: 31px; height: 31px; border-radius: var(--radius-xs); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--raised); border: 1px solid var(--border-soft); color: var(--text); }
 .provider-icon img { width: 19px; height: 19px; object-fit: contain; display: block; }
 .prov-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
 .prov-meta > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.provider-quota { padding-left: 58px; }
-.provider-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.openai-mode-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.prov-card-resource { min-height: 31px; margin: 0 14px 8px 55px; padding-top: 7px; border-top: 1px solid var(--border-soft); }
+.provider-quota { padding: 0; }
+.provider-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+.provider-actions .btn { white-space: nowrap; }
+.openai-mode-row { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 9px; }
+.openai-mode-control { justify-self: start; }
 .openai-mode-control .usage-segmented-btn { min-width: 76px; }
 .link-btn { background: none; border: none; color: var(--accent-hover); font: inherit; font-size: var(--text-control); cursor: pointer; padding: 6px 2px; text-decoration: underline; }
 .link-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
@@ -930,9 +936,21 @@ button.prov-account-row.active { cursor: default; }
 .prov-account-keyform:hover { background: none; }
 .prov-account-keyform .input-sm { flex: 1 1 auto; min-width: 0; padding: 4px 8px; font-size: var(--text-label); height: var(--control-sm); }
 
-/* account login grid (Providers page): shared name | status | action columns across rows */
+/* connected providers: compact account/key groups with shared row columns */
+.provider-connections { margin-bottom: 16px; padding: 0; overflow: hidden; border-color: var(--border); }
+.provider-connections-head { min-height: 44px; padding: 0 16px; border-bottom: 1px solid var(--border-soft); background: var(--raised); }
+.provider-connection-groups { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.25fr) minmax(160px, .5fr); }
+.provider-connection-group { min-width: 0; padding: 14px 16px 16px; }
+.provider-connection-groups > .muted { grid-column: 1 / -1; padding: 12px 14px 14px; }
+.provider-connection-group + .provider-connection-group { border-left: 1px solid var(--border-soft); }
+.provider-connection-group > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; color: var(--text); font-size: var(--text-control); font-weight: var(--weight-semibold); }
+.provider-connection-group > header > span:last-child { font-family: var(--font-code); color: var(--faint); }
+.provider-connection-add { margin: -5px -5px -5px auto; white-space: nowrap; }
+.provider-connection-add svg, .provider-custom-add svg { width: 14px; height: 14px; }
+.provider-connection-group--custom { display: flex; flex-direction: column; justify-content: space-between; background: var(--raised); }
+.provider-custom-add { width: 100%; justify-content: center; border: 1px dashed var(--border); min-height: 36px; white-space: nowrap; }
 .oauth-grid { display: grid; grid-template-columns: minmax(140px, max-content) minmax(0, 1fr) max-content; column-gap: 16px; row-gap: 10px; align-items: center; }
-.oauth-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 30px; }
+.oauth-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 28px; }
 .oauth-name { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-control); font-weight: var(--weight-semibold); min-width: 0; }
 .oauth-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-icon-sm { width: 24px; height: 24px; border-radius: var(--radius-xs); }
@@ -947,6 +965,14 @@ button.prov-account-row.active { cursor: default; }
 .oauth-device-code { font-size: 20px; font-weight: 800; letter-spacing: .14em; color: var(--text); user-select: all; }
 .oauth-login-paste { display: flex; gap: 8px; align-items: center; width: 100%; }
 .oauth-login-paste .input { flex: 1; min-width: 0; font-size: var(--text-label); padding: 6px 10px; }
+.quota-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; padding: 0; }
+.quota-summary-item { display: inline-grid; grid-template-columns: max-content max-content minmax(0, max-content) max-content; align-items: baseline; gap: 5px; color: var(--muted); font-size: var(--text-caption); }
+.quota-summary-item strong { color: var(--text); font-family: var(--font-code); font-weight: var(--weight-semibold); }
+.quota-summary-item--warn strong { color: var(--amber); }
+.quota-summary-reset { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quota-summary-state { color: var(--amber); font-weight: var(--weight-semibold); }
+.provider-usage-fallback { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--muted); font-size: var(--text-caption); }
+.provider-usage-fallback strong { color: var(--text); font-family: var(--font-code); font-weight: var(--weight-semibold); }
 
 /* responsive: compact sticky top bar (menu + brand + stop) with the desktop sidebar
    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
@@ -999,14 +1025,25 @@ button.prov-account-row.active { cursor: default; }
   .stat-row > .stat { min-width: 100px; }
   .tbl { min-width: 460px; }   /* keep columns readable; .tbl-wrap scrolls horizontally */
   .usage-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-  .provider-quota { padding-left: 16px; }
+  .provider-card-grid { grid-template-columns: 1fr; }
+  .prov-card-main { grid-template-columns: 1fr; min-height: 0; }
+  .provider-actions { justify-content: flex-start; padding-left: 42px; }
+  .prov-card-resource { margin-left: 56px; }
   .prov-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); width: 100%; }
   .prov-meta .chip ~ span:not(:last-child) { display: none; }
   /* account login grid: let name/status truncate with ellipsis instead of wrapping */
   .oauth-grid { grid-template-columns: minmax(0, auto) minmax(0, 1fr) max-content; column-gap: 8px; }
+  .provider-connection-groups { grid-template-columns: 1fr; }
+  .provider-connection-group + .provider-connection-group { border-left: 0; border-top: 1px solid var(--border-soft); }
   /* language menu: the drawer scrolls (overflow-y) so the beside-placement would be
      clipped at the drawer edge — open upward from the foot row instead. */
   .sidebar .lang-toggle .select-dropdown-beside { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+}
+
+@media (max-width: 980px) {
+  .provider-card-grid { grid-template-columns: 1fr; }
+  .provider-connection-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .provider-connection-group--custom { grid-column: 1 / -1; border-left: 0 !important; border-top: 1px solid var(--border-soft); }
 }
 
 .usage-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }

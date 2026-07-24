@@ -198,6 +198,8 @@ export const de = {
   "dash.updateStatus.succeeded": "Update abgeschlossen.",
   "dash.updateStatus.failed": "Update fehlgeschlagen.",
   "prov.subtitle": "Konfiguriere die Upstream-Anbieter, die opencodex in Codex routet. Melde dich mit einem Konto an, füge einen Anbieter hinzu oder bearbeite die Rohkonfiguration.",
+  "prov.connections": "Verbundene Anbieter",
+  "prov.noConnections": "Noch keine Anbieter verbunden. Verwende Anbieter hinzufügen, um einen zu verbinden.",
   "prov.add": "Anbieter hinzufügen",
   "prov.editJson": "JSON bearbeiten",
   "prov.accountLogin": "Konto-Login",

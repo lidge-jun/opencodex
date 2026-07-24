@@ -206,6 +206,8 @@ export const zh: Record<TKey, string> = {
 
   // providers
   "prov.subtitle": "配置 opencodex 路由到 Codex 的上游提供方。使用账户登录、添加提供方，或编辑原始配置。",
+  "prov.connections": "已连接的提供方",
+  "prov.noConnections": "尚未连接提供方。请使用“添加提供方”进行连接。",
   "prov.add": "添加提供方",
   "prov.editJson": "编辑 JSON",
   "prov.accountLogin": "账户登录",

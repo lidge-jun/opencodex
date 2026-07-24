@@ -211,6 +211,8 @@ export const ja: Record<TKey, string> = {
 
   // providers
   "prov.subtitle": "opencodex が Codex にルーティングする上流プロバイダーを設定します。アカウントでログインするか、プロバイダーを追加、または生の設定を編集します。",
+  "prov.connections": "接続済みプロバイダー",
+  "prov.noConnections": "接続済みのプロバイダーはありません。プロバイダーを追加から接続してください。",
   "prov.add": "プロバイダーを追加",
   "prov.editJson": "JSON を編集",
   "prov.accountLogin": "アカウントログイン",

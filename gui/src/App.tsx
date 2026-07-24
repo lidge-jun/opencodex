@@ -343,7 +343,7 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
+        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "providers" ? " main-inner--providers" : ""}`}>
           <ErrorBoundary
             key={page}
             pageName={t(PAGE_TKEY[page])}

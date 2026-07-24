@@ -211,6 +211,8 @@ export const en = {
 
   // providers
   "prov.subtitle": "Configure the upstream providers opencodex routes into Codex. Log in with an account, add a provider, or edit the raw config.",
+  "prov.connections": "Connected providers",
+  "prov.noConnections": "No providers are connected yet. Use Add Provider to connect one.",
   "prov.add": "Add Provider",
   "prov.editJson": "Edit JSON",
   "prov.accountLogin": "Account login",

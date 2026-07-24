@@ -139,8 +139,8 @@ export default function QuotaBars({ quota, plan, threshold, t, className, layout
   threshold: number;
   t: TFn;
   className?: string;
-  /** compact = classic one-line rows; stacked = overview cards with clear reset copy */
-  layout?: "compact" | "stacked";
+  /** summary omits tracks for dense provider lists; stacked keeps the detailed overview. */
+  layout?: "compact" | "summary" | "stacked";
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
@@ -151,6 +151,28 @@ export default function QuotaBars({ quota, plan, threshold, t, className, layout
         {rows.map((row, index) => (
           <StackedQuotaRow key={`${row.limitLabel}-${index}`} row={row} threshold={threshold} t={t} locale={locale} />
         ))}
+      </div>
+    );
+  }
+  if (layout === "summary") {
+    return (
+      <div className={`quota-summary${className ? ` ${className}` : ""}`}>
+        {rows.map((row, index) => {
+          const warn = isQuotaWarn(row.percent, threshold);
+          const exhausted = isQuotaExhausted(row.percent);
+          return (
+            <span
+              key={`${row.label}-${index}`}
+              className={`quota-summary-item${warn ? " quota-summary-item--warn" : ""}`}
+              title={exhausted ? t("quota.limitReached") : undefined}
+            >
+              <span>{row.label}</span>
+              <strong>{Math.round(row.percent)}%</strong>
+              {row.resetAt && <span className="quota-summary-reset">{formatResetFuture(row.resetAt, t, locale)}</span>}
+              {exhausted && <span className="quota-summary-state">{t("quota.limitReached")}</span>}
+            </span>
+          );
+        })}
       </div>
     );
   }
