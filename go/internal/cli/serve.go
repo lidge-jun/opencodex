@@ -19,6 +19,7 @@ import (
 	"github.com/lidge-jun/opencodex-go/internal/adapter/google"
 	"github.com/lidge-jun/opencodex-go/internal/adapter/kiro"
 	openaiadapter "github.com/lidge-jun/opencodex-go/internal/adapter/openai"
+	"github.com/lidge-jun/opencodex-go/internal/combos"
 	"github.com/lidge-jun/opencodex-go/internal/config"
 	"github.com/lidge-jun/opencodex-go/internal/oauth"
 	"github.com/lidge-jun/opencodex-go/internal/platform"
@@ -82,12 +83,16 @@ func runServe(_ context.Context, args []string, streams IO) error {
 		token = cfg.AuthToken
 	}
 	reg := configuredRegistry(*cfg)
+	comboResolver, err := combos.New(cfg.Combos, configuredComboProviders(reg, *cfg))
+	if err != nil {
+		return err
+	}
 	auth, err := configuredAuth(*cfg)
 	if err != nil {
 		return err
 	}
 	stop := &stopRouter{channel: make(chan struct{})}
-	proxy := server.New(server.Config{Registry: reg, Auth: auth, ResolveAdapter: adapterResolver(reg, *cfg), Token: token, Version: Version, Management: stop})
+	proxy := server.New(server.Config{Registry: reg, Combos: comboResolver, Auth: auth, ResolveAdapter: adapterResolver(reg, *cfg), Token: token, Version: Version, Management: stop})
 	httpServer := proxy.HTTPServer(net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	listener, listenErr := net.Listen("tcp", httpServer.Addr)
 	if listenErr != nil {
@@ -101,6 +106,18 @@ func runServe(_ context.Context, args []string, streams IO) error {
 	defer removeRuntimeFiles()
 	fmt.Fprintf(streams.Out, "OpenCodex proxy listening on %s\n", listener.Addr())
 	return serveListener(httpServer, proxy.Lifecycle(), listener, stop.channel)
+}
+
+func configuredComboProviders(reg *registry.ProviderRegistry, cfg config.Config) map[string]combos.Provider {
+	providers := make(map[string]combos.Provider)
+	for _, entry := range reg.Entries() {
+		provider := combos.Provider{}
+		if configured, ok := cfg.Providers[entry.ID]; ok {
+			provider.Disabled = configured.Disabled
+		}
+		providers[entry.ID] = provider
+	}
+	return providers
 }
 
 type stopRouter struct {

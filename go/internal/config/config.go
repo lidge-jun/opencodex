@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/lidge-jun/opencodex-go/internal/combos"
 )
 
 const (
@@ -23,6 +25,7 @@ type Config struct {
 	Host            string                    `json:"hostname,omitempty"`
 	AuthToken       string                    `json:"authToken,omitempty"`
 	Providers       map[string]ProviderConfig `json:"providers"`
+	Combos          map[string]combos.Combo   `json:"combos,omitempty"`
 	DefaultProvider string                    `json:"defaultProvider"`
 	StreamMode      string                    `json:"streamMode,omitempty"`
 	Debug           DebugConfig               `json:"debug,omitempty"`
@@ -64,6 +67,7 @@ func Default() Config {
 		Port:            DefaultPort,
 		Host:            DefaultHost,
 		Providers:       make(map[string]ProviderConfig),
+		Combos:          make(map[string]combos.Combo),
 		DefaultProvider: "openai",
 		StreamMode:      "auto",
 	}
@@ -92,6 +96,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
+	}
+	if cfg.Combos == nil {
+		cfg.Combos = make(map[string]combos.Combo)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -179,6 +186,11 @@ func (c Config) Validate() error {
 		}
 		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return &ConfigError{Field: "providers." + name + ".baseUrl", Message: "must not contain credentials, query, or fragment"}
+		}
+	}
+	for id, combo := range c.Combos {
+		if err := combos.ValidateBasic(id, combo); err != nil {
+			return &ConfigError{Field: "combos." + id, Message: err.Error()}
 		}
 	}
 	return nil
