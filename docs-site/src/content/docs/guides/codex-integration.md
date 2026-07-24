@@ -47,8 +47,8 @@ points at opencodex, the proxy relays those calls to the OpenAI upstream:
   fails closed and never falls back to a different paid upstream. Registry-managed provider ids
   are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
-  (Cursor, Gemini, Kiro, …) cannot serve image generation; if you don't want the tool offered at
-  all, disable it in Codex with `codex features disable image_generation`
+  (Cursor, Gemini, Kiro, …) cannot serve the `image_generation` tool relay; if you don't want the
+  tool offered at all, disable it in Codex with `codex features disable image_generation`
   (`[features] image_generation = false` in `config.toml`).
 
 For an OpenAI-compatible custom gateway, configure a dedicated provider and select it only for
@@ -74,6 +74,11 @@ standalone Images requests:
 The custom endpoint must accept `POST /v1/images/generations` and `/v1/images/edits` and return the
 OpenAI Images response shape expected by Codex. The provider's configured key replaces any caller
 bearer before the upstream request.
+
+> **Note:** This refers only to the Codex `image_generation` tool (`/images/generations` relay).
+> Gemini models that are image-capable produce inline images natively through the `google` adapter
+> (via `responseModalities: ["TEXT", "IMAGE"]`), independent of this relay — see
+> [Adapters](/reference/adapters/#google).
 
 For a non-loopback `hostname`, Codex must send the generated API auth header. The injector therefore
 uses a dedicated provider instead:

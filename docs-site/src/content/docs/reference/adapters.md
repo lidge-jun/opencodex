@@ -79,6 +79,12 @@ streams the response back **untranslated**.
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
   `thoughtSignature` values so reasoning continuity survives later turns.
+- **Inline image output:** when the model is image-capable (`gemini-3.1-flash-image`,
+  `gemini-2.0-flash-preview-image-generation`, `imagen-4.0-generate-001`, or any model id matching
+  both `gemini` and `image`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`. Returned
+  `inlineData` parts are materialized to `~/.config/opencodex/artifacts/` and surfaced to the client
+  as a markdown image link (`![image](path)`). Each image is capped at 50 MB and each response at
+  100 MB of decoded data; malformed base64 payloads are rejected.
 
 ## `kiro`
 
