@@ -153,6 +153,59 @@ afterEach(() => {
 });
 
 describe("combo management API", () => {
+  test("smart routing builds the selected mode even when cost pricing is unavailable", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        providers: {
+          a: {
+            adapter: "openai-chat",
+            baseUrl: "https://a.example/v1",
+            apiKey: "key",
+            liveModels: false,
+            models: ["unknown-reasoning-model"],
+          },
+          b: {
+            adapter: "openai-chat",
+            baseUrl: "https://b.example/v1",
+            apiKey: "key",
+            liveModels: false,
+            models: ["unknown-agent-model"],
+          },
+        },
+        defaultProvider: "a",
+        combos: { manual: VALID_COMBO, "auto-balance": VALID_COMBO },
+      });
+      saveConfig(config);
+      let refreshes = 0;
+
+      const response = await comboApi(config, "POST", "/api/smart-routing", { mode: "intelligence" }, async () => { refreshes += 1; });
+      const body = await responseJson(response) as { id?: string };
+
+      expect(response?.status).toBe(200);
+      expect(body.id).toBe("auto-intelligence");
+      expect(Object.keys(config.combos ?? {}).sort()).toEqual(["auto-balance", "auto-intelligence", "manual"]);
+      expect(config.combos?.["auto-intelligence"]?.strategy).toBe("round-robin");
+      expect(config.combos?.["auto-balance"]).toEqual(VALID_COMBO);
+      expect(refreshes).toBe(1);
+      expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).combos["auto-intelligence"]).toBeDefined();
+    });
+  });
+
+  test("smart routing rejects an invalid mode without changing config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig();
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+
+      const response = await comboApi(config, "POST", "/api/smart-routing", { mode: "fastest" });
+      const body = await responseJson(response);
+
+      expect(response?.status).toBe(400);
+      expect(body.error).toBe("mode must be one of: intelligence, balance, cost");
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+    });
+  });
+
   test("bare alias precedence yields back to a non-OpenAI selector after rename and deletion", async () => {
     await withTempHome(async () => {
       const selector = "deepseek/deepseek-chat";

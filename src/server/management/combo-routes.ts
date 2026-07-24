@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -73,6 +73,39 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         ...combo,
       };
     }) });
+  }
+
+  if (url.pathname === "/api/smart-routing" && req.method === "POST") {
+    const { buildSmartRoutingCombo, clearComboSelectionState, clearComboTargetCooldowns, SMART_ROUTING_MODES } = await import("../../combos");
+    let body: unknown;
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const mode = isPlainRecord(body) && typeof body.mode === "string"
+      ? SMART_ROUTING_MODES.find(candidate => candidate === body.mode)
+      : undefined;
+    if (!mode) {
+      return jsonResponse({ error: `mode must be one of: ${SMART_ROUTING_MODES.join(", ")}` }, 400);
+    }
+    const models = filterCatalogVisibleModels(await fetchAllModels(config), config);
+    const combo = buildSmartRoutingCombo(mode, models, config);
+    if (!combo) {
+      const error = mode === "cost"
+        ? "no enabled models with verified pricing can be routed in cost mode"
+        : `no enabled models can be routed in ${mode} mode`;
+      return jsonResponse({ error }, 400);
+    }
+    const id = `auto-${mode}`;
+    config.combos = { ...(config.combos ?? {}), [id]: combo };
+    saveConfig(config);
+    clearComboSelectionState(id);
+    clearComboTargetCooldowns(id);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({
+      success: true,
+      mode,
+      id,
+      model: `combo/${id}`,
+      targets: combo.targets,
+    });
   }
 
   if (url.pathname === "/api/combos" && req.method === "PUT") {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconX, IconLock, IconKey, IconExternal } from "../icons";
 import { useT } from "../i18n";
+import { providerIconSrc } from "../provider-icons";
 import {
   buildProviderPostBody,
   codexPresetDescriptionKey,
@@ -12,7 +13,7 @@ import { oauthTosRisk } from "../oauth-tos-risk";
 import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
-import type { CatalogPreset } from "./provider-catalog/provider-presets";
+import { isPresetActionable, type CatalogPreset } from "./provider-catalog/provider-presets";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 
 export type ProviderConfig = ProviderPayload;
@@ -69,6 +70,13 @@ export default function AddProviderModal({
   const [usageRank, setUsageRank] = useState<Record<string, number>>({});
   const [endpointChoice, setEndpointChoice] = useState("custom");
   const [oauthTosPending, setOauthTosPending] = useState<string | null>(null);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState("");
+  const [discoverySource, setDiscoverySource] = useState<"live" | "static" | "">("");
+  const [discoveredModels, setDiscoveredModels] = useState<Array<{ id: string; contextWindow?: number }>>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const discoveryRequestRef = useRef(0);
+  const discoveryAbortRef = useRef<AbortController | null>(null);
   const aliveRef = useRef(true);
   const loadedPresetsRef = useRef(false);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -88,14 +96,35 @@ export default function AddProviderModal({
     }
     return () => {
       aliveRef.current = false;
+      discoveryRequestRef.current += 1;
+      discoveryAbortRef.current?.abort();
+      discoveryAbortRef.current = null;
       previousFocusRef.current?.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only open hook
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Child ToS warning owns Escape while it is open.
-      if (e.key === "Escape" && !oauthTosPending) onClose();
+      // Child ToS warning owns keyboard navigation while it is open.
+      if (e.key === "Escape" && !oauthTosPending) {
+        onClose();
+        return;
+      }
+      if (oauthTosPending) return;
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        "a[href], input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+      )).filter(node => node.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (e.shiftKey && (document.activeElement === first || !dialogRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -131,7 +160,15 @@ export default function AddProviderModal({
     return key ? t(key) : candidate.note;
   };
 
+  const invalidateDiscoveryRequest = () => {
+    discoveryRequestRef.current += 1;
+    discoveryAbortRef.current?.abort();
+    discoveryAbortRef.current = null;
+    setDiscoveryBusy(false);
+  };
+
   const choosePreset = (p: Preset) => {
+    invalidateDiscoveryRequest();
     setPreset(p);
     const choiceId = matchChoiceId(p.baseUrlChoices, p.baseUrl);
     setEndpointChoice(choiceId);
@@ -143,7 +180,7 @@ export default function AddProviderModal({
         : p.baseUrl,
       authMode: p.auth,
       apiKey: "",
-      defaultModel: p.defaultModel ?? "",
+      defaultModel: p.defaultModel ?? p.models?.[0] ?? "",
       allowPrivateNetwork: false,
     });
     setError("");
@@ -152,9 +189,15 @@ export default function AddProviderModal({
     setManualCode("");
     setManualCodeMsg("");
     setManualCodeOk(true);
+    setDiscoveryError("");
+    setDiscoverySource(p.models?.length ? "static" : "");
+    const staticModels = (p.models ?? []).map(id => ({ id }));
+    setDiscoveredModels(staticModels);
+    setSelectedModels(staticModels.map(model => model.id));
   };
 
   const back = () => {
+    invalidateDiscoveryRequest();
     setPreset(null);
     setForm(null);
     setEndpointChoice("custom");
@@ -164,6 +207,61 @@ export default function AddProviderModal({
     setManualCode("");
     setManualCodeMsg("");
     setManualCodeOk(true);
+    setDiscoveryError("");
+    setDiscoverySource("");
+    setDiscoveredModels([]);
+    setSelectedModels([]);
+  };
+
+  const providerPostBody = () => {
+    if (!form || !preset) return null;
+    const resolvedBaseUrl = preset.baseUrlChoices?.length
+      ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
+      : form.baseUrl.trim();
+    return buildProviderPostBody(preset, { ...form, baseUrl: resolvedBaseUrl });
+  };
+
+  const discoverModels = async () => {
+    const postBody = providerPostBody();
+    if (!postBody || !preset || preset.supportLevel === "reference") return;
+    const requestId = discoveryRequestRef.current + 1;
+    discoveryRequestRef.current = requestId;
+    discoveryAbortRef.current?.abort();
+    const controller = new AbortController();
+    discoveryAbortRef.current = controller;
+    setDiscoveryBusy(true);
+    setDiscoveryError("");
+    try {
+      const res = await fetch(`${apiBase}/api/provider-presets/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ presetId: preset.id, provider: postBody.provider }),
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({})) as {
+        ok?: boolean;
+        error?: string;
+        source?: "live" | "static";
+        models?: Array<string | { id: string; contextWindow?: number }>;
+      };
+      if (requestId !== discoveryRequestRef.current || controller.signal.aborted) return;
+      if (!res.ok) throw new Error(data.error || t("modal.failedStatus", { status: res.status }));
+      const models = (data.models ?? []).map(model => typeof model === "string" ? { id: model } : model).filter(model => model.id);
+      if (data.ok === false && models.length === 0) throw new Error(data.error || t("modal.discoveryFailed"));
+      setDiscoveredModels(models);
+      setSelectedModels(models.map(model => model.id));
+      setDiscoverySource(data.source ?? (preset.discovery === "static" ? "static" : "live"));
+      if (data.error) setDiscoveryError(data.error);
+      if (models[0]) setForm(current => current && !current.defaultModel ? { ...current, defaultModel: models[0]!.id } : current);
+    } catch (cause) {
+      if (requestId !== discoveryRequestRef.current || controller.signal.aborted) return;
+      setDiscoveryError(cause instanceof Error ? cause.message : t("modal.networkError"));
+    } finally {
+      if (requestId === discoveryRequestRef.current) {
+        discoveryAbortRef.current = null;
+        setDiscoveryBusy(false);
+      }
+    }
   };
 
   const submit = async () => {
@@ -187,10 +285,16 @@ export default function AddProviderModal({
     setSaving(true);
     setError("");
     try {
+      const selectedSubset = selectedModels.length > 0 && selectedModels.length < discoveredModels.length
+        ? selectedModels
+        : undefined;
       const res = await fetch(`${apiBase}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(postBody),
+        body: JSON.stringify({
+          ...postBody,
+          provider: selectedSubset ? { ...postBody.provider, selectedModels: selectedSubset } : postBody.provider,
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -301,35 +405,41 @@ export default function AddProviderModal({
   const isCustom = preset?.id === "custom";
   const isLocal = form?.authMode === "local";
   const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
+  const isReference = preset ? !isPresetActionable(preset) : false;
+  const selectedIcon = preset ? providerIconSrc(preset.id, { adapter: preset.adapter, baseUrl: preset.baseUrl }) : undefined;
+  const setupUrl = preset?.dashboardUrl ?? preset?.documentationUrl;
 
   return (
     <>
-    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay" onClick={onClose}>
-      <div ref={dialogRef} className="modal-card" onClick={e => e.stopPropagation()}>
+    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay provider-loader-overlay" onClick={onClose}>
+      <div ref={dialogRef} className="modal-card provider-loader-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
+          <h3>{t("modal.add")}</h3>
           <button className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
         </div>
 
-        {!preset ? (
-          <ProviderCatalog
-            presets={presets}
-            usageRank={usageRank}
-            presetsLoading={presetsLoading}
-            initialTier={initialTier}
-            onSelectPreset={p => choosePreset(p)}
-            onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
-            accountRows={accountRows}
-            accountStatus={accountStatus}
-            busyProvider={accountBusy}
-            onLogin={onAccountLogin}
-            onCancelLogin={onAccountCancelLogin}
-            onLogout={onAccountLogout}
-          />
-        ) : form && (
+        <ProviderCatalog
+          presets={presets}
+          usageRank={usageRank}
+          presetsLoading={presetsLoading}
+          initialTier={initialTier}
+          onSelectPreset={p => choosePreset(p)}
+          onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
+          accountRows={accountRows}
+          accountStatus={accountStatus}
+          busyProvider={accountBusy}
+          onLogin={onAccountLogin}
+          onCancelLogin={onAccountCancelLogin}
+          onLogout={onAccountLogout}
+          onClearSelection={back}
+          selectedPreset={preset}
+          standalone={initialCustom && preset?.id === "custom"}
+          detail={preset && form ? (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
             // OAuth login pane
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div className="provider-detail-form">
+              <button className="link-btn provider-detail-mobile-back" type="button" onClick={back}>{t("modal.backToDirectory")}</button>
+              <ProviderDetailHeader preset={preset} icon={selectedIcon} />
               <div className="muted text-control">{preset.note ?? t("modal.oauthDefaultNote")}</div>
               {oauthSupported.includes(preset.oauthProvider ?? "") ? (
                 <button className="btn btn-primary" onClick={() => requestLoginOAuth(preset.oauthProvider!)} disabled={oauthBusy}
@@ -405,32 +515,44 @@ export default function AddProviderModal({
             </div>
           ) : (
             // API key / Codex-forward / free-tier form
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
-                <details className="setup-guide">
-                  <summary>{t("modal.setupGuide")}</summary>
-                  <ol className="text-label leading-relaxed" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--muted)" }}>
+            <div className="provider-detail-form">
+              <button className="link-btn provider-detail-mobile-back" type="button" onClick={back}>{t("modal.backToDirectory")}</button>
+              <ProviderDetailHeader preset={preset} icon={selectedIcon} />
+              {!isReservedForward && !isCustom && !isLocal && (
+                <div className="provider-detail-guide">
+                  <strong>{t("modal.setupGuide")}</strong>
+                  <ol>
                     <li>
-                      {t("modal.setupStep1Prefix")}{" "}
-                      <a href={preset.dashboardUrl} target="_blank" rel="noreferrer">
-                        {t("modal.setupDashboardLink", { label: preset.label })}
-                      </a>{" "}
-                      {t("modal.setupStep1Suffix")}
+                      {setupUrl ? <>
+                        {t("modal.setupStep1Prefix")}{" "}
+                        <a href={setupUrl} target="_blank" rel="noreferrer">{t("modal.setupDashboardLink", { label: preset.label })}</a>
+                        {!preset.keyOptional && !isReference ? <> {t("modal.setupStep1Suffix")}</> : null}
+                      </> : t("modal.setupReviewProvider", { label: preset.label })}
                     </li>
-                    <li>{t("modal.setupStep2")}</li>
-                    <li>{t("modal.setupStep3")}</li>
+                    {isReference ? <li>{t("modal.setupReferenceStep")}</li> : preset.keyOptional ? <>
+                      <li>{t("modal.setupKeylessStep")}</li>
+                      <li>{t("modal.setupDiscoverStep")}</li>
+                    </> : <>
+                      <li>{t("modal.setupStep2")}</li>
+                      <li>{t("modal.setupStep3")}</li>
+                    </>}
                   </ol>
-                 {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
+                 {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 8 }}>{preset.note}</div>}
                   {/\{[^}]*\}/.test(form.baseUrl) && (<div className="text-label" style={{ color: "var(--amber)", marginTop: 6 }}>{t("modal.baseUrlPlaceholderHint")}</div>)}
-                </details>
+                </div>
               )}
+              {isReference && <div className="provider-detail-reference" role="status">{t("modal.referenceExplanation")}</div>}
+              {!isReference && <>
               <Field label={t("modal.providerName")}>
                 <input className="input" value={form.name} readOnly={isReservedForward} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t("modal.namePlaceholder")} />
               </Field>
               {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
               {!isReservedForward && <>
                 <Field label={t("modal.adapter")}>
-                  <select className="input" value={form.adapter} onChange={e => setForm({ ...form, adapter: e.target.value })}>
+                  <select className="input" value={form.adapter} onChange={e => {
+                    invalidateDiscoveryRequest();
+                    setForm({ ...form, adapter: e.target.value });
+                  }}>
                     {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </Field>
@@ -442,6 +564,7 @@ export default function AddProviderModal({
                         value={endpointChoice}
                         onChange={e => {
                           const id = e.target.value;
+                          invalidateDiscoveryRequest();
                           setEndpointChoice(id);
                           setForm({
                             ...form,
@@ -453,6 +576,8 @@ export default function AddProviderModal({
                           <option key={c.id} value={c.id}>
                             {c.id === "token-plan" ? t("modal.endpoint.tokenPlan")
                               : c.id === "payg" ? t("modal.endpoint.payAsYouGo")
+                              : c.id === "china-mainland" ? t("modal.endpoint.chinaMainland")
+                              : c.id === "international" ? t("modal.endpoint.international")
                               : c.id === "custom" ? t("modal.endpoint.custom")
                               : c.label}
                           </option>
@@ -464,7 +589,10 @@ export default function AddProviderModal({
                         <input
                           className="input"
                           value={form.baseUrl}
-                          onChange={e => setForm({ ...form, baseUrl: e.target.value })}
+                          onChange={e => {
+                            invalidateDiscoveryRequest();
+                            setForm({ ...form, baseUrl: e.target.value });
+                          }}
                           placeholder={t("modal.baseUrlPlaceholder")}
                         />
                       </Field>
@@ -472,12 +600,18 @@ export default function AddProviderModal({
                   </>
                 ) : (
                   <Field label={t("modal.baseUrl")}>
-                    <input className="input" value={form.baseUrl} onChange={e => setForm({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+                    <input className="input" value={form.baseUrl} onChange={e => {
+                      invalidateDiscoveryRequest();
+                      setForm({ ...form, baseUrl: e.target.value });
+                    }} placeholder={t("modal.baseUrlPlaceholder")} />
                   </Field>
                 )}
                 {!isReservedForward && (
                   <label className="modal-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <input type="checkbox" checked={form?.allowPrivateNetwork ?? false} onChange={e => setForm(f => f ? { ...f, allowPrivateNetwork: e.target.checked } : f)} />
+                    <input type="checkbox" checked={form?.allowPrivateNetwork ?? false} onChange={e => {
+                      invalidateDiscoveryRequest();
+                      setForm(f => f ? { ...f, allowPrivateNetwork: e.target.checked } : f);
+                    }} />
                     <span className="muted text-control">{t("modal.allowPrivateNetwork")}</span>
                   </label>
                 )}
@@ -505,23 +639,78 @@ export default function AddProviderModal({
                     </a>
                   )}
                   <Field label={t("modal.apiKey")}>
-                    <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder={t("modal.apiKeyPlaceholder")} />
+                    <input className="input" type="password" value={form.apiKey} onChange={e => {
+                      invalidateDiscoveryRequest();
+                      setForm({ ...form, apiKey: e.target.value });
+                    }} placeholder={t("modal.apiKeyPlaceholder")} />
                   </Field>
                 </>
               )}
               {!isReservedForward && <Field label={t("modal.defaultModel")}>
                 <input className="input" value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
               </Field>}
+              {!isReservedForward && !isCustom && (
+                <div className="provider-model-discovery">
+                  <div className="provider-model-discovery-head">
+                    <div>
+                      <strong>{t("modal.modelDiscovery")}</strong>
+                      <div className="provider-model-source">
+                        {discoverySource ? t(discoverySource === "live" ? "modal.modelsLive" : "modal.modelsStatic") : t("modal.modelDiscoveryHint")}
+                      </div>
+                    </div>
+                    <button className="btn btn-ghost" type="button" onClick={() => void discoverModels()} disabled={discoveryBusy || isReference || preset.discovery === "unsupported"}>
+                      {discoveryBusy ? t("modal.discovering") : t("modal.discoverModels")}
+                    </button>
+                  </div>
+                  {discoveryError && <div className="text-label" role="alert" style={{ color: discoverySource === "static" && discoveredModels.length ? "var(--amber)" : "var(--red)" }}>{discoveryError}</div>}
+                  {discoveredModels.length > 0 && (
+                    <div className="provider-model-list" aria-label={t("modal.discoveredModels")}>
+                      {discoveredModels.map(model => {
+                        const checked = selectedModels.includes(model.id);
+                        return (
+                          <label key={model.id} className="provider-model-row">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={checked && selectedModels.length === 1}
+                              onChange={() => {
+                                const nextSelected = checked
+                                  ? selectedModels.filter(id => id !== model.id)
+                                  : [...selectedModels, model.id];
+                                setSelectedModels(nextSelected);
+                                setForm(current => current ? {
+                                  ...current,
+                                  defaultModel: checked && current.defaultModel === model.id
+                                    ? (nextSelected[0] ?? "")
+                                    : !checked ? model.id : current.defaultModel,
+                                } : current);
+                              }}
+                            />
+                            <code>{model.id}</code>
+                            {model.contextWindow && <span className="muted" style={{ marginLeft: "auto" }}>{model.contextWindow.toLocaleString()}</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              </>}
               {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
-              <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
-                <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>
-                {preset.auth === "oauth" && <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "oauth" }); setError(""); }}>{t("modal.useOauthLogin")}</button>}
-                <div style={{ flex: 1 }} />
+              <div className="provider-detail-actions">
+                {!isReference && <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? t("modal.adding") : t("modal.add")}</button>}
+                {preset.auth === "oauth" && <button className="link-btn" onClick={() => {
+                  invalidateDiscoveryRequest();
+                  setForm({ ...form, authMode: "oauth" });
+                  setError("");
+                }}>{t("modal.useOauthLogin")}</button>}
+                <div className="provider-detail-spacer" />
                 <button className="btn btn-ghost" onClick={back}>{t("modal.back")}</button>
               </div>
             </div>
           )
-        )}
+          ) : undefined}
+        />
       </div>
     </div>
     {oauthTosPending && (
@@ -548,5 +737,31 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="field-label">{label}</span>
       {children}
     </label>
+  );
+}
+
+function ProviderDetailHeader({ preset, icon }: { preset: Preset; icon?: string }) {
+  const t = useT();
+  const docs = preset.documentationUrl ?? preset.dashboardUrl;
+  return (
+    <div className="provider-detail-header">
+      <span className="provider-catalog-icon">{icon ? <img src={icon} alt="" aria-hidden="true" /> : preset.label.slice(0, 1)}</span>
+      <div className="provider-detail-title">
+        <h4>{preset.label}</h4>
+        <code className="muted">{preset.id}</code>
+        <div className="provider-detail-meta">
+          {preset.accessGroups?.map(group => (
+            <span key={group} className={`badge ${group === "signup-credit" ? "badge-amber" : "badge-green"}`}>
+              {t(`modal.group.${group}`)}
+            </span>
+          ))}
+          {preset.supportLevel && <span className={`badge ${preset.supportLevel === "reference" ? "badge-amber" : preset.supportLevel === "experimental" ? "badge-muted" : "badge-accent"}`}>
+            {t(preset.supportLevel === "reference" ? "modal.badge.reference" : preset.supportLevel === "experimental" ? "modal.badge.experimental" : "modal.badge.supported")}
+          </span>}
+          {preset.verification && <span className="badge badge-muted">{t(`modal.verification.${preset.verification}`)}</span>}
+        </div>
+      </div>
+      {docs && <a className="provider-detail-docs" href={docs} target="_blank" rel="noreferrer">{t("modal.providerDocs")}<IconExternal /></a>}
+    </div>
   );
 }
