@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
+import { normalizeArgKeys } from "../src/adapters/cursor/arg-normalize";
 import {
   appendCursorGenericToolUseHint,
   buildCursorToolDefinitions,
@@ -8,6 +9,8 @@ import {
   buildCursorToolGuidanceSystemNote,
   CURSOR_EXEC_COMMAND_INPUT_SCHEMA,
   cursorRequestAdvertisesApplyPatch,
+  cursorToolArgNormalizeSchema,
+  cursorToolInputSchema,
   cursorToolWireName,
   isGenericToolUseCountDemoPrompt,
 } from "../src/adapters/cursor/tool-definitions";
@@ -82,6 +85,34 @@ describe("Cursor tool definitions", () => {
     expect(defs[0]?.name).toBe("shell_command");
     expect(defs[0]?.toolName).toBe("shell_command");
     expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
+  });
+
+  test("normalizes advertised shell_command cmd args to Responses command before Codex sees them", () => {
+    // Live #399 failure: Cursor advertisement requires `cmd`, models send `cmd`, but Codex
+    // shell_command validates `command` → "missing field `command`". Normalization must use the
+    // Responses-side schema, not the Cursor advertisement schema.
+    const tool: OcxTool = {
+      name: "shell_command",
+      description: "Run a command",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          workdir: { type: "string" },
+        },
+        required: ["command"],
+      },
+    };
+
+    expect(cursorToolInputSchema(tool)).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
+    expect(normalizeArgKeys({ cmd: "git status" }, cursorToolInputSchema(tool))).toEqual({ cmd: "git status" });
+    expect(normalizeArgKeys({ cmd: "git status", workdir: "C:/repo" }, cursorToolArgNormalizeSchema(tool))).toEqual({
+      command: "git status",
+      workdir: "C:/repo",
+    });
+    expect(normalizeArgKeys({ command: "git status" }, cursorToolArgNormalizeSchema(tool))).toEqual({
+      command: "git status",
+    });
   });
 
   test("does not alias namespaced exec_command tools", () => {

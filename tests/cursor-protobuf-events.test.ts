@@ -428,6 +428,27 @@ describe("Cursor protobuf tool-call events", () => {
     expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ path: "a.txt" });
   });
 
+  test("rewrites shell_command cmd args to command for Codex Responses validation", () => {
+    const toolSchemas = new Map<string, unknown>([
+      ["shell_command", { type: "object", properties: { command: { type: "string" }, workdir: { type: "string" } }, required: ["command"] }],
+    ]);
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["shell_command"],
+      toolSchemas,
+      cursorToolNameMap: new Map([["shell_command", "shell_command"]]),
+    });
+    const toolCall = mcpToolCall("shell_command", { cmd: "git status", workdir: "C:/repo" });
+    const events = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state);
+    const delta = events.find(e => e.type === "tool_call_delta");
+    expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({
+      command: "git status",
+      workdir: "C:/repo",
+    });
+  });
+
   test("normalizes mis-keyed args that arrived only via streamed text (no completed map)", () => {
     // The P1 audit case: model streamed `{"filepath":"a.txt"}` complete and the completion has no
     // map bytes. Buffered text must still be schema-normalized to `path` before reaching Codex.

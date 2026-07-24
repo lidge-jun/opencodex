@@ -43,6 +43,25 @@ export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/**
+ * Responses/Codex-side schema used ONLY for arg-key normalization after Cursor returns a call.
+ * Cursor models are trained to emit `cmd`; Codex `shell_command` / `exec_command` validate
+ * `command`. Keeping `cmd` out of this schema lets `normalizeArgKeys` rewrite `cmd` → `command`.
+ */
+export const CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA = {
+  type: "object",
+  properties: {
+    command: { type: "string", description: "Shell command to execute." },
+    workdir: { type: "string", description: "Working directory for the command. Defaults to the turn cwd." },
+    shell: { type: "string", description: "Shell binary to launch. Defaults to the user's default shell." },
+    tty: { type: "boolean", description: "True allocates a PTY for the command; false or omitted uses plain pipes." },
+    yield_time_ms: { type: "number", description: "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms." },
+    max_output_tokens: { type: "number", description: "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy." },
+    max_output_chars: { type: "number", description: "Output character budget when the Responses tool uses chars instead of tokens." },
+  },
+  required: ["command"],
+} as const;
+
 export function isCodexShellBridgeToolName(name: string): boolean {
   return (CODEX_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).includes(name);
 }
@@ -97,8 +116,44 @@ export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?
   return normalized;
 }
 
+/** Schema advertised to Cursor for this tool (may use Cursor-preferred field names like `cmd`). */
 export function cursorToolInputSchema(tool: OcxTool): unknown {
   return isBareCodexExecCommandTool(tool) ? CURSOR_EXEC_COMMAND_INPUT_SCHEMA : (tool.parameters ?? {});
+}
+
+/**
+ * Schema used to normalize completed Cursor tool args back to Responses/Codex field names.
+ * Must NOT reuse `cursorToolInputSchema` for the shell bridge: advertising `cmd` while also
+ * treating `cmd` as canonical prevents the `cmd` → `command` rewrite Codex requires (#399).
+ */
+export function cursorToolArgNormalizeSchema(tool: OcxTool): unknown {
+  if (isBareCodexShellBridgeTool(tool)) {
+    return shellBridgeArgNormalizeSchema(tool.parameters);
+  }
+  return tool.parameters ?? {};
+}
+
+function shellBridgeArgNormalizeSchema(parameters: unknown): unknown {
+  if (!parameters || typeof parameters !== "object") return CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA;
+  const base = parameters as Record<string, unknown>;
+  const rawProps = base.properties && typeof base.properties === "object"
+    ? { ...(base.properties as Record<string, unknown>) }
+    : {};
+  // Drop Cursor-preferred aliases so normalizeArgKeys can rewrite them to Responses keys.
+  delete rawProps.cmd;
+  const properties = {
+    ...CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA.properties,
+    ...rawProps,
+    command: rawProps.command ?? CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA.properties.command,
+  };
+  return {
+    ...base,
+    type: "object",
+    properties,
+    required: Array.isArray(base.required) && (base.required as unknown[]).includes("command")
+      ? base.required
+      : ["command"],
+  };
 }
 
 function activeTextMentionsExecCommand(text: string): boolean {
