@@ -38,6 +38,68 @@ describe("Cursor request builder", () => {
     expect(request.conversationId).toBe("cursor_stable");
   });
 
+  test("native composer pins conversation id to prompt_cache_key when none remembered", () => {
+    const a = createCursorRequest({
+      modelId: "cursor/composer-2.5",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: { promptCacheKey: "thread-abc" },
+    });
+    const b = createCursorRequest({
+      modelId: "composer-2.5",
+      context: {
+        messages: [
+          { role: "user", content: "hi", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "shell",
+            content: "ok",
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      },
+      stream: false,
+      options: { promptCacheKey: "thread-abc" },
+    });
+    expect(a.conversationId).toBe(b.conversationId);
+    expect(a.conversationId.startsWith("cursor_")).toBe(true);
+    expect(a.conversationId).toHaveLength("cursor_".length + 32);
+  });
+
+  test("external toolResult still force-fresh even with prompt_cache_key", () => {
+    const first = createCursorRequest({
+      modelId: "cursor/grok-4.5",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: { promptCacheKey: "thread-xyz" },
+      _cursorConversationId: "cursor_prior",
+    });
+    expect(first.conversationId).toBe("cursor_prior");
+
+    const second = createCursorRequest({
+      modelId: "cursor/grok-4.5",
+      context: {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "shell",
+            content: "ok",
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      },
+      stream: false,
+      options: { promptCacheKey: "thread-xyz" },
+      _cursorConversationId: "cursor_prior",
+    });
+    expect(second.conversationId).not.toBe("cursor_prior");
+    expect(second.conversationId.startsWith("cursor_")).toBe(true);
+  });
+
   test("marks Cursor context-usage boundaries for compaction epochs", () => {
     expect(createCursorRequest({ ...base, _contextCompactionBoundary: true }).contextUsageReset).toBe(true);
 

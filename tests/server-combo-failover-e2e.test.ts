@@ -1555,4 +1555,83 @@ describe("cursor conversation continuity across store:false chains", () => {
     const { previousResponseProviderState } = await import("../src/responses/state");
     expect(previousResponseProviderState(secondJson.id)?.cursor?.conversationId).toBe(seen[1]);
   });
+
+  test("native composer-2.5 toolResult stream chain reuses conversationId", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = () => ({
+      async *run(request) {
+        seen.push(request.conversationId);
+        if (seen.length === 1) {
+          yield { type: "tool_call_start", id: "call_1", name: "shell" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          yield { type: "tool_call_end", id: "call_1" };
+        } else {
+          yield { type: "text", text: "done" };
+        }
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, estimated: true } };
+      },
+      writeClient() {},
+      close() {},
+    });
+    const config = cursorConfig();
+
+    const postStream = async (raw: Record<string, unknown>) =>
+      handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true, store: false, ...raw }),
+      }), config, { model: "", provider: "" }, {});
+
+    const first = await postStream({ model: "cursortest/composer-2.5", input: "hello" });
+    expect(first.status).toBe(200);
+    const text1 = await first.text();
+    const completed = [...text1.matchAll(/event: response\.completed\ndata: ({.*})\n/g)]
+      .map(match => JSON.parse(match[1]!) as { response?: { id?: string }; id?: string });
+    const firstId = completed.at(-1)?.response?.id ?? completed.at(-1)?.id;
+    expect(typeof firstId).toBe("string");
+    expect(seen).toHaveLength(1);
+
+    const { previousResponseProviderState } = await import("../src/responses/state");
+    expect(previousResponseProviderState(firstId!)?.cursor?.conversationId).toBe(seen[0]);
+
+    const second = await postStream({
+      model: "cursortest/composer-2.5",
+      previous_response_id: firstId,
+      input: [{ type: "function_call_output", call_id: "call_1", output: "ok" }],
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("native composer reuses conversationId across store:false turns via prompt_cache_key alone", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+
+    const first = await postCursor(config, {
+      model: "cursortest/composer-2.5",
+      input: "hello",
+      prompt_cache_key: "desktop-thread-1",
+    });
+    expect(first.status).toBe(200);
+    await first.json();
+    expect(seen).toHaveLength(1);
+
+    // No previous_response_id — Codex Desktop often replays full history under store:false.
+    const second = await postCursor(config, {
+      model: "cursortest/composer-2.5",
+      input: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "continue" },
+      ],
+      prompt_cache_key: "desktop-thread-1",
+    });
+    expect(second.status).toBe(200);
+    await second.json();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
 });

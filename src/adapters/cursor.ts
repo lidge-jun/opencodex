@@ -5,7 +5,7 @@ import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErro
 import { isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
-import { createCursorRequest, generatedCursorConversationId } from "./cursor/request-builder";
+import { createCursorRequest } from "./cursor/request-builder";
 import {
   createLiveCursorTransport,
   CursorMissingCredentialError,
@@ -77,12 +77,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore();
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
-        _parsed._cursorConversationId ??= generatedCursorConversationId();
+        // Do NOT pre-mint a random conversation id here. createCursorRequest resolves
+        // remembered id → native prompt_cache_key pin → random. Pre-minting would hide
+        // the prompt_cache_key pin and break Cursor cache/context carry-forward when
+        // Codex sends full history under store:false without previous_response_id.
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
         // Keep remembered conversation id in sync when the request builder mints a fresh id
         // for external-model tool-result continuations (stateless replay).
-        if (request.conversationId !== previousConversationId) {
+        if (previousConversationId && request.conversationId !== previousConversationId) {
           rekeyContextUsage(previousConversationId, request.conversationId);
         }
         _parsed._cursorConversationId = request.conversationId;
