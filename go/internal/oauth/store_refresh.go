@@ -14,6 +14,9 @@ import (
 // persists with a generation compare-and-swap. A process that waited for another
 // refresher adopts the newer credential instead of replaying the old grant.
 func (s *CredentialStore) RefreshAccount(ctx context.Context, provider, accountID string, refresh RefreshFunc) (RefreshResult, error) {
+	// Read the current generation BEFORE acquiring the lock. If another
+	// goroutine or process refreshes while we wait, the generation inside
+	// the lock will differ and we adopt the winner without calling refresh.
 	observed, ok, err := s.GetAccountCredential(provider, accountID)
 	if err != nil {
 		return RefreshResult{}, err
@@ -21,7 +24,39 @@ func (s *CredentialStore) RefreshAccount(ctx context.Context, provider, accountI
 	if !ok {
 		return RefreshResult{}, ErrLoginRequired
 	}
-	return s.RefreshAccountIfGeneration(ctx, provider, accountID, CredentialGeneration(observed), refresh)
+	observedGen := CredentialGeneration(observed)
+
+	lock, err := acquireFileLock(ctx, s.refreshLockPath(provider, accountID))
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	defer lock.release()
+
+	// Re-read inside the lock. If the generation changed, another refresher
+	// won the race — adopt their result.
+	current, ok, err := s.GetAccountCredential(provider, accountID)
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	if !ok {
+		return RefreshResult{}, ErrLoginRequired
+	}
+	currentGen := CredentialGeneration(current)
+	if currentGen != observedGen {
+		return RefreshResult{Credential: current, Generation: currentGen, Superseded: true}, nil
+	}
+
+	updated, err := refresh(ctx, current.Refresh)
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	if updated.Refresh == "" {
+		updated.Refresh = current.Refresh
+	}
+	if !validCredential(updated) {
+		return RefreshResult{}, errors.New("provider returned an invalid OAuth credential")
+	}
+	return s.mergeRefreshed(ctx, provider, accountID, currentGen, updated)
 }
 
 // RefreshAccountIfGeneration refreshes only when the locked store still has the
