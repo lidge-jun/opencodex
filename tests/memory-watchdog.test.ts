@@ -4,14 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setRestartHistoryPathForTests } from "../src/server/memory-restart-history";
 import {
+  captureMemorySnapshot,
   parseProcStatusCommitted,
-  pressureBytes,
-  pressureSource,
-  readMemorySnapshot,
   setMemoryPlatformForTests,
   setProcStatusReaderForTests,
   setWindowsProbeRunnerForTests,
   type MemorySnapshot,
+  type WindowsProbeResult,
 } from "../src/lib/memory-usage";
 import {
   applyWatchdogRuntimeConfig,
@@ -33,12 +32,19 @@ const MiB = 1024 * 1024;
 
 function snapshot(pressure: number, opts: Partial<MemorySnapshot> = {}): MemorySnapshot {
   return {
-    rssBytes: opts.rssBytes ?? pressure,
-    heapUsedBytes: opts.heapUsedBytes ?? 10 * MiB,
-    externalBytes: opts.externalBytes ?? 0,
-    committedBytes: opts.committedBytes ?? pressure,
-    committedSource: opts.committedSource ?? "windows-private",
-    totalSystemBytes: opts.totalSystemBytes ?? 100 * MiB,
+    rssBytes: pressure,
+    heapUsedBytes: 10 * MiB,
+    externalBytes: 0,
+    physicalMemoryBytes: 100 * MiB,
+    processPrivateBytes: pressure,
+    processPressureBytes: pressure,
+    processSource: "windows-private",
+    systemCommittedBytes: null,
+    systemCommitLimitBytes: null,
+    systemCommitAvailable: false,
+    availablePhysicalBytes: null,
+    capturedAt: 0,
+    ...opts,
   };
 }
 
@@ -53,6 +59,7 @@ function cfg(over: Partial<ResolvedWatchdogConfig> = {}): ResolvedWatchdogConfig
     minRestartIntervalMs: 600_000,
     maxRestarts: 3,
     restartGraceMs: 30_000,
+    systemCommitHighWater: 0.90,
     growthWindowMs: 600_000,
     ...over,
   };
@@ -69,48 +76,113 @@ describe("memory-usage snapshot", () => {
     expect(parseProcStatusCommitted("VmData:\t 100 kB\n")).toBeNull();
   });
 
-  test("linux snapshot reports committed from /proc/self/status", () => {
+  function probe(over: Partial<WindowsProbeResult> = {}): WindowsProbeResult {
+    return {
+      privateBytes: null,
+      systemCommittedBytes: null,
+      systemCommitLimitBytes: null,
+      availablePhysicalBytes: null,
+      timedOut: false,
+      ...over,
+    };
+  }
+
+  test("linux snapshot fills pressure from /proc/self/status; system commit stays unavailable (v1)", async () => {
     setMemoryPlatformForTests("linux");
     setProcStatusReaderForTests(() => "VmRSS:\t 4096 kB\nVmSwap:\t 0 kB\n");
     try {
-      const snap = readMemorySnapshot();
-      expect(snap.committedSource).toBe("proc-status");
-      expect(snap.committedBytes).toBe(4096 * 1024);
-      expect(pressureSource(snap)).toBe("proc-status");
+      const snap = await captureMemorySnapshot(1_000);
+      expect(snap.processSource).toBe("proc-status");
+      expect(snap.processPressureBytes).toBe(4096 * 1024);
+      expect(snap.processPrivateBytes).toBeNull(); // Private Bytes is a Windows concept
+      expect(snap.systemCommitAvailable).toBe(false);
+      expect(snap.capturedAt).toBe(1_000);
     } finally {
       setMemoryPlatformForTests(null);
       setProcStatusReaderForTests(null);
     }
   });
 
-  test("windows snapshot uses the private-bytes probe", () => {
+  test("windows snapshot carries private bytes AND the system commit values from one probe", async () => {
     setMemoryPlatformForTests("win32");
-    setWindowsProbeRunnerForTests(() => ({ privateBytes: 79 * 1024 * MiB, timedOut: false }));
+    setWindowsProbeRunnerForTests(async () => probe({
+      privateBytes: 79 * 1024 * MiB,
+      systemCommittedBytes: 120 * 1024 * MiB,
+      systemCommitLimitBytes: 140 * 1024 * MiB,
+      availablePhysicalBytes: 40 * 1024 * MiB,
+    }));
     try {
-      const snap = readMemorySnapshot();
-      expect(snap.committedSource).toBe("windows-private");
-      expect(snap.committedBytes).toBe(79 * 1024 * MiB);
+      const snap = await captureMemorySnapshot(2_000);
+      expect(snap.processSource).toBe("windows-private");
+      expect(snap.processPrivateBytes).toBe(79 * 1024 * MiB);
+      expect(snap.processPressureBytes).toBe(79 * 1024 * MiB);
+      expect(snap.systemCommitAvailable).toBe(true);
+      expect(snap.systemCommittedBytes).toBe(120 * 1024 * MiB);
+      expect(snap.systemCommitLimitBytes).toBe(140 * 1024 * MiB);
+      expect(snap.availablePhysicalBytes).toBe(40 * 1024 * MiB);
+      expect(snap.probeError).toBeUndefined();
     } finally {
       setMemoryPlatformForTests(null);
       setWindowsProbeRunnerForTests(null);
     }
   });
 
-  test("a timed-out windows probe soft-fails to the RSS fallback", () => {
+  test("a timed-out windows probe degrades to the RSS fallback with an honest probeError", async () => {
     setMemoryPlatformForTests("win32");
-    setWindowsProbeRunnerForTests(() => ({ privateBytes: null, timedOut: true }));
+    setWindowsProbeRunnerForTests(async () => probe({ timedOut: true, error: "timeout" }));
     try {
-      const snap = readMemorySnapshot();
-      expect(snap.committedBytes).toBeNull();
-      expect(snap.committedSource).toBe("none");
-      // pressure falls back to RSS so the watchdog still functions.
-      expect(pressureBytes(snap)).toBe(snap.rssBytes);
-      expect(pressureSource(snap)).toBe("rss-fallback");
+      const snap = await captureMemorySnapshot();
+      expect(snap.processPrivateBytes).toBeNull();
+      expect(snap.processSource).toBe("rss-fallback");
+      expect(snap.processPressureBytes).toBe(snap.rssBytes); // watchdog still functions, degraded
+      expect(snap.systemCommitAvailable).toBe(false);
+      expect(snap.probeError).toBe("timeout");
     } finally {
       setMemoryPlatformForTests(null);
       setWindowsProbeRunnerForTests(null);
     }
   });
+
+  test("a partial probe (private only) keeps pressure but reports commit as unavailable", async () => {
+    setMemoryPlatformForTests("win32");
+    setWindowsProbeRunnerForTests(async () => probe({ privateBytes: 5 * 1024 * MiB }));
+    try {
+      const snap = await captureMemorySnapshot();
+      expect(snap.processSource).toBe("windows-private");
+      expect(snap.systemCommitAvailable).toBe(false); // BOTH commit values are required
+      expect(snap.systemCommittedBytes).toBeNull();
+    } finally {
+      setMemoryPlatformForTests(null);
+      setWindowsProbeRunnerForTests(null);
+    }
+  });
+
+  test("a throwing probe runner degrades to the RSS fallback instead of propagating", async () => {
+    setMemoryPlatformForTests("win32");
+    setWindowsProbeRunnerForTests(async () => { throw new Error("boom"); });
+    try {
+      const snap = await captureMemorySnapshot();
+      expect(snap.processSource).toBe("rss-fallback");
+      expect(snap.probeError).toBe("probe-failed");
+    } finally {
+      setMemoryPlatformForTests(null);
+      setWindowsProbeRunnerForTests(null);
+    }
+  });
+
+  // Real end-to-end probe: only meaningful (and only run) on an actual Windows host. Verifies the
+  // §4 field/unit assumptions live: private bytes for this PID plus system CommittedBytes /
+  // CommitLimit in bytes, all from a single async PowerShell spawn that never blocks the loop.
+  const testOnWindows = process.platform === "win32" ? test : test.skip;
+  testOnWindows("REAL windows probe measures private bytes and a sane commit fraction", async () => {
+    const snap = await captureMemorySnapshot();
+    expect(snap.processSource).toBe("windows-private");
+    expect(snap.processPrivateBytes).toBeGreaterThan(0);
+    expect(snap.systemCommitAvailable).toBe(true);
+    const fraction = snap.systemCommittedBytes! / snap.systemCommitLimitBytes!;
+    expect(fraction).toBeGreaterThan(0);
+    expect(fraction).toBeLessThan(1);
+  }, 20_000);
 });
 
 describe("resolveWatchdogConfig", () => {
@@ -184,6 +256,20 @@ describe("resolveWatchdogConfig", () => {
     expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: -3 } } as OcxConfig).maxRestarts).toBe(3);
     expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: Number.NaN } } as OcxConfig).maxRestarts).toBe(3);
   });
+
+  test("systemCommitHighWater defaults to 0.90 and the env-only override is clamped", () => {
+    expect(resolveWatchdogConfig({} as OcxConfig).systemCommitHighWater).toBe(0.90);
+    try {
+      process.env.OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER = "0.85";
+      expect(resolveWatchdogConfig({} as OcxConfig).systemCommitHighWater).toBe(0.85);
+      process.env.OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER = "0.10"; // absurdly low → clamped
+      expect(resolveWatchdogConfig({} as OcxConfig).systemCommitHighWater).toBe(0.50);
+      process.env.OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER = "junk"; // unparseable → default
+      expect(resolveWatchdogConfig({} as OcxConfig).systemCommitHighWater).toBe(0.90);
+    } finally {
+      delete process.env.OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER;
+    }
+  });
 });
 
 describe("evaluate (pure decision core)", () => {
@@ -256,10 +342,10 @@ describe("evaluate (pure decision core)", () => {
 });
 
 describe("tick (driver wiring)", () => {
-  function deps(over: Partial<WatchdogDeps>): WatchdogDeps {
+  function deps(over: Partial<WatchdogDeps> = {}): WatchdogDeps {
     return {
       now: () => 1_000,
-      read: () => snapshot(50 * MiB),
+      capture: async () => snapshot(50 * MiB),
       supervised: true,
       restart: () => {},
       log: () => {},
@@ -275,27 +361,19 @@ describe("tick (driver wiring)", () => {
     const c = cfg({ autoRestart: true, minRestartIntervalMs: 0, restartGraceMs: 45_000 });
 
     // warn crossing
-    tick(s, c, deps({ read: () => snapshot(65 * MiB), log: l => logs.push(l) }));
+    tick(s, c, deps({ log: l => logs.push(l) }), snapshot(65 * MiB));
     expect(logs.length).toBe(1);
     expect(logs[0]).toContain("WARN");
 
     // critical crossing → restart, and the running cfg (incl. the quiet-window budget) is threaded through
     const d = tick(s, c, deps({
-      read: () => snapshot(80 * MiB),
       log: l => logs.push(l),
       restart: rc => { restarts += 1; restartGrace = rc.restartGraceMs; },
       now: () => 2_000,
-    }));
+    }), snapshot(80 * MiB));
     expect(d.action).toBe("restart");
     expect(restarts).toBe(1);
     expect(restartGrace).toBe(45_000);
-  });
-
-  test("a read failure inside tick propagates as a thrown error only to the caller's try", () => {
-    // startMemoryWatchdog wraps tick in try/catch; here we assert tick itself surfaces the error
-    // so the wrapper (not the timer) owns swallowing it.
-    const s = createWatchdogState();
-    expect(() => tick(s, cfg(), deps({ read: () => { throw new Error("probe boom"); } }))).toThrow("probe boom");
   });
 
   test("a synchronously-throwing restart hook is logged, not thrown out of tick", () => {
@@ -303,10 +381,9 @@ describe("tick (driver wiring)", () => {
     const s = createWatchdogState();
     const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
     const d = tick(s, c, deps({
-      read: () => snapshot(80 * MiB),
       log: l => logs.push(l),
       restart: () => { throw new Error("hook boom"); },
-    }));
+    }), snapshot(80 * MiB));
     expect(d.action).toBe("restart");
     expect(logs.some(l => l.includes("restart hook failed") && l.includes("hook boom"))).toBe(true);
   });
@@ -316,10 +393,9 @@ describe("tick (driver wiring)", () => {
     const s = createWatchdogState();
     const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
     tick(s, c, deps({
-      read: () => snapshot(80 * MiB),
       log: l => logs.push(l),
       restart: () => Promise.reject(new Error("async boom")),
-    }));
+    }), snapshot(80 * MiB));
     await Bun.sleep(0); // let the rejection handler run
     expect(logs.some(l => l.includes("restart hook failed") && l.includes("async boom"))).toBe(true);
   });
@@ -329,18 +405,37 @@ describe("tick (driver wiring)", () => {
     const s = createWatchdogState();
     const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
     tick(s, c, deps({
-      read: () => snapshot(80 * MiB),
       now: () => 42_000,
       recordRestart: at => recorded.push(at),
-    }));
+    }), snapshot(80 * MiB));
     expect(recorded).toEqual([42_000]);
   });
 
   test("a warn action does not touch the restart history", () => {
     const recorded: number[] = [];
     const s = createWatchdogState();
-    tick(s, cfg(), deps({ read: () => snapshot(65 * MiB), recordRestart: at => recorded.push(at) }));
+    tick(s, cfg(), deps({ recordRestart: at => recorded.push(at) }), snapshot(65 * MiB));
     expect(recorded).toEqual([]);
+  });
+
+  test("a system-commit high-water crossing logs its own warning line without restarting", () => {
+    const logs: string[] = [];
+    let restarts = 0;
+    const s = createWatchdogState();
+    // Process pressure LOW (50%), commit HIGH (97%): the field incident's exact shape.
+    const d = tick(s, cfg({ autoRestart: true, minRestartIntervalMs: 0 }), deps({
+      log: l => logs.push(l),
+      restart: () => { restarts += 1; },
+    }), snapshot(50 * MiB, {
+      systemCommittedBytes: 97 * MiB,
+      systemCommitLimitBytes: 100 * MiB,
+      systemCommitAvailable: true,
+    }));
+    expect(d.action).toBe("none"); // process axis untriggered
+    expect(d.commitAction).toBe("warn");
+    expect(restarts).toBe(0); // commit axis NEVER restarts
+    expect(logs.length).toBe(1);
+    expect(logs[0]).toContain("SYSTEM-COMMIT");
   });
 });
 
@@ -442,6 +537,72 @@ describe("evaluate — requireSupervisor gate", () => {
   });
 });
 
+describe("evaluate — system-commit axis (observe-only, v1)", () => {
+  const withCommit = (pressure: number, fraction: number, available = true) =>
+    snapshot(pressure, {
+      systemCommittedBytes: Math.round(fraction * 100) * MiB,
+      systemCommitLimitBytes: 100 * MiB,
+      systemCommitAvailable: available,
+    });
+
+  test("a healthy commit level (0.70) produces no commit warning", () => {
+    const s = createWatchdogState();
+    const d = evaluate(s, withCommit(50 * MiB, 0.70), cfg(), 1_000);
+    expect(d.commitAction).toBe("none");
+    expect(d.systemCommitFraction).toBeCloseTo(0.70);
+  });
+
+  test("crossing the high-water warns exactly once, then latches", () => {
+    const s = createWatchdogState();
+    const first = evaluate(s, withCommit(50 * MiB, 0.95), cfg(), 1_000);
+    expect(first.commitAction).toBe("warn");
+    const second = evaluate(s, withCommit(50 * MiB, 0.96), cfg(), 2_000);
+    expect(second.commitAction).toBe("none"); // latched — no per-interval spam
+  });
+
+  test("a MEASURED recovery below the high-water re-arms the warning", () => {
+    const s = createWatchdogState();
+    evaluate(s, withCommit(50 * MiB, 0.95), cfg(), 1_000); // warn + latch
+    evaluate(s, withCommit(50 * MiB, 0.70), cfg(), 2_000); // measured recovery → re-arm
+    const again = evaluate(s, withCommit(50 * MiB, 0.95), cfg(), 3_000);
+    expect(again.commitAction).toBe("warn");
+  });
+
+  test("measurement loss holds the latch: no re-arm, no duplicate warn when the probe flaps", () => {
+    const s = createWatchdogState();
+    evaluate(s, withCommit(50 * MiB, 0.95), cfg(), 1_000); // warn + latch
+    // Probe drops out (systemCommitAvailable=false) — NOT a recovery.
+    evaluate(s, snapshot(50 * MiB), cfg(), 2_000);
+    // Probe comes back, still above high-water: latch must have held (no duplicate warning).
+    const back = evaluate(s, withCommit(50 * MiB, 0.95), cfg(), 3_000);
+    expect(back.commitAction).toBe("none");
+  });
+
+  test("the commit axis NEVER restarts — even with auto-restart armed and commit at 0.99", () => {
+    const s = createWatchdogState();
+    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
+    const d = evaluate(s, withCommit(50 * MiB, 0.99), c, 1_000, /* supervised */ true);
+    expect(d.action).toBe("none"); // process axis at 50% — quiet
+    expect(d.commitAction).toBe("warn");
+    expect(s.restartCount).toBe(0);
+  });
+
+  test("unavailable commit values are null-safe: no NaN, all commit fields null", () => {
+    const s = createWatchdogState();
+    const d = evaluate(s, snapshot(50 * MiB), cfg(), 1_000);
+    expect(d.systemCommitFraction).toBeNull();
+    expect(d.systemCommitUsedMb).toBeNull();
+    expect(d.systemCommitLimitMb).toBeNull();
+    expect(d.commitAction).toBe("none");
+  });
+
+  test("the env-tuned high-water is honored", () => {
+    const s = createWatchdogState();
+    const d = evaluate(s, withCommit(50 * MiB, 0.86), cfg({ systemCommitHighWater: 0.85 }), 1_000);
+    expect(d.commitAction).toBe("warn");
+  });
+});
+
 describe("applyWatchdogRuntimeConfig (live tuning)", () => {
   test("returns null when the watchdog is not running", () => {
     stopMemoryWatchdog();
@@ -450,7 +611,7 @@ describe("applyWatchdogRuntimeConfig (live tuning)", () => {
 
   test("live-updates fractions with clamping and critical > warn", () => {
     try {
-      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 0, log: () => {} });
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => 0, log: () => {} });
       const applied = applyWatchdogRuntimeConfig({ warnFraction: 0.01, criticalFraction: 5 });
       expect(applied).not.toBeNull();
       expect(applied!.warnFraction).toBe(0.10); // clamped up
@@ -464,7 +625,7 @@ describe("applyWatchdogRuntimeConfig (live tuning)", () => {
 
   test("updates requireSupervisor / autoRestart in place", () => {
     try {
-      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 0, log: () => {} });
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => 0, log: () => {} });
       const applied = applyWatchdogRuntimeConfig({ autoRestart: true, requireSupervisor: false });
       expect(applied!.autoRestart).toBe(true);
       expect(applied!.requireSupervisor).toBe(false);
@@ -475,7 +636,7 @@ describe("applyWatchdogRuntimeConfig (live tuning)", () => {
 
   test("live-tuned restartGraceMs is clamped and the cooldown is raised to match", () => {
     try {
-      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 0, log: () => {} });
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => 0, log: () => {} });
       const clamped = applyWatchdogRuntimeConfig({ restartGraceMs: 86_400_000 });
       expect(clamped!.restartGraceMs).toBe(600_000);
       // Default cooldown is exactly 10 min — equal to the clamped grace, so it is untouched.
@@ -491,6 +652,103 @@ describe("applyWatchdogRuntimeConfig (live tuning)", () => {
   });
 });
 
+describe("startMemoryWatchdog — probe-driven loop (§2, §8)", () => {
+  test("the first probe fires immediately and its completion evaluates + fills the report cache", async () => {
+    try {
+      startMemoryWatchdog({} as OcxConfig, {
+        capture: async () => snapshot(65 * MiB, { capturedAt: 7_000 }),
+        now: () => 7_000,
+        log: () => {},
+      });
+      await Bun.sleep(0); // let the immediate probe's microtasks complete
+      const report = memoryWatchdogReport();
+      expect(report!.decision).not.toBeNull(); // evaluated without waiting one interval
+      expect(report!.decision!.level).toBe("warn");
+      expect(report!.lastProbeAt).toBe(7_000);
+      expect(report!.memory).not.toBeNull();
+      expect(report!.responseState).not.toBeNull(); // §7 cache computed at probe completion
+    } finally {
+      stopMemoryWatchdog();
+    }
+  });
+
+  test("a successful system probe stamps lastSuccessfulSystemProbeAt; a fallback does not", async () => {
+    try {
+      startMemoryWatchdog({} as OcxConfig, {
+        capture: async () => snapshot(50 * MiB, { capturedAt: 9_000 }), // systemCommitAvailable=false
+        now: () => 9_000,
+        log: () => {},
+      });
+      await Bun.sleep(0);
+      expect(memoryWatchdogReport()!.lastProbeAt).toBe(9_000);
+      expect(memoryWatchdogReport()!.lastSuccessfulSystemProbeAt).toBeNull();
+    } finally {
+      stopMemoryWatchdog();
+    }
+
+    try {
+      startMemoryWatchdog({} as OcxConfig, {
+        capture: async () => snapshot(50 * MiB, {
+          capturedAt: 11_000,
+          systemCommittedBytes: 50 * MiB,
+          systemCommitLimitBytes: 100 * MiB,
+          systemCommitAvailable: true,
+        }),
+        now: () => 11_000,
+        log: () => {},
+      });
+      await Bun.sleep(0);
+      expect(memoryWatchdogReport()!.lastSuccessfulSystemProbeAt).toBe(11_000);
+    } finally {
+      stopMemoryWatchdog();
+    }
+  });
+
+  test("a probe completing after stop is dropped: no evaluation, no state revival", async () => {
+    let release: ((s: MemorySnapshot) => void) | null = null;
+    const logs: string[] = [];
+    startMemoryWatchdog({} as OcxConfig, {
+      capture: () => new Promise<MemorySnapshot>(resolve => { release = resolve; }),
+      now: () => 1_000,
+      log: l => logs.push(l),
+    });
+    expect(release).not.toBeNull(); // immediate probe is in flight
+    stopMemoryWatchdog();
+    release!(snapshot(80 * MiB)); // late result arrives AFTER stop
+    await Bun.sleep(0);
+    expect(memoryWatchdogReport()).toBeNull(); // nothing revived
+    expect(logs.length).toBe(0); // and nothing was evaluated/logged
+  });
+
+  test("self-rescheduling: no second capture starts while one is still in flight", async () => {
+    let calls = 0;
+    startMemoryWatchdog({} as OcxConfig, {
+      capture: () => { calls += 1; return new Promise<MemorySnapshot>(() => { /* never resolves */ }); },
+      now: () => 1_000,
+      log: () => {},
+    });
+    try {
+      await Bun.sleep(30); // give any (buggy) parallel scheduling a chance to fire
+      expect(calls).toBe(1); // next probe is armed only after the previous one completes
+    } finally {
+      stopMemoryWatchdog();
+    }
+  });
+
+  test("stop aborts the in-flight capture's signal so the child probe can be killed", async () => {
+    let aborted = false;
+    startMemoryWatchdog({} as OcxConfig, {
+      capture: (_now, signal) => new Promise<MemorySnapshot>(() => {
+        signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+      }),
+      now: () => 1_000,
+      log: () => {},
+    });
+    stopMemoryWatchdog();
+    expect(aborted).toBe(true);
+  });
+});
+
 describe("startMemoryWatchdog — cross-process history seeding", () => {
   test("seeds cooldown clock and restarts-in-window count from the persisted history", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-watchdog-seed-"));
@@ -499,7 +757,7 @@ describe("startMemoryWatchdog — cross-process history seeding", () => {
     try {
       writeFileSync(path, JSON.stringify({ version: 1, restarts: [NOW - 120_000, NOW - 60_000] }), "utf-8");
       setRestartHistoryPathForTests(path);
-      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => NOW, log: () => {} });
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => NOW, log: () => {} });
       const report = memoryWatchdogReport();
       expect(report!.restartCount).toBe(2);
     } finally {
@@ -513,7 +771,7 @@ describe("startMemoryWatchdog — cross-process history seeding", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-watchdog-seed-"));
     try {
       setRestartHistoryPathForTests(join(root, "absent.json"));
-      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 1_000, log: () => {} });
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => 1_000, log: () => {} });
       expect(memoryWatchdogReport()!.restartCount).toBe(0);
     } finally {
       stopMemoryWatchdog();

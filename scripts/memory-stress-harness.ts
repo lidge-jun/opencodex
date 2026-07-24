@@ -37,6 +37,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildResponseJSON } from "../src/bridge";
+import { captureMemorySnapshot } from "../src/lib/memory-usage";
 import {
   clearResponseStateMemoryForTests,
   expandPreviousResponseInput,
@@ -147,13 +148,54 @@ interface ChildSummary {
     rssAfterClearGcMb: number;
     reclaimedMb: number;
   };
+  /**
+   * Committed-memory probe points (§7): the field signature is PRIVATE/COMMITTED >> RSS, which the
+   * RSS-only columns above cannot see. Probed asynchronously at three points only (each Windows
+   * probe spawns a child, ~4-6s on a slow box) — start, before clear, after clear+GC. HONEST
+   * LIMIT: these columns verify the pattern is DETECTABLE on this machine; a passing run does not
+   * prove the leak cannot recur.
+   */
+  committed: {
+    available: boolean; // false on non-Windows (v1) or probe failure
+    source: string;
+    startPrivateMb: number | null;
+    beforeClearPrivateMb: number | null;
+    afterClearPrivateMb: number | null;
+    afterClearRssMb: number;
+    /** Private/RSS after clear+GC — >> 1 is the native-retention (hypothesis B) detectability signal. */
+    afterClearPrivateToRssRatio: number | null;
+    systemCommittedMb: number | null;
+    systemCommitLimitMb: number | null;
+    systemCommitFraction: number | null;
+  };
 }
 
 function emitSample(s: MemSample): void {
   process.stderr.write(JSON.stringify({ kind: "sample", ...s }) + "\n");
 }
 
-function runChild(): void {
+interface CommittedProbe {
+  privateMb: number | null;
+  systemCommittedMb: number | null;
+  systemCommitLimitMb: number | null;
+  available: boolean;
+  source: string;
+}
+
+async function probeCommitted(label: string): Promise<CommittedProbe> {
+  const snap = await captureMemorySnapshot();
+  const probe: CommittedProbe = {
+    privateMb: snap.processPrivateBytes === null ? null : round(snap.processPrivateBytes / MiB),
+    systemCommittedMb: snap.systemCommittedBytes === null ? null : round(snap.systemCommittedBytes / MiB),
+    systemCommitLimitMb: snap.systemCommitLimitBytes === null ? null : round(snap.systemCommitLimitBytes / MiB),
+    available: snap.systemCommitAvailable,
+    source: snap.processSource,
+  };
+  process.stderr.write(JSON.stringify({ kind: "probe", label, ...probe }) + "\n");
+  return probe;
+}
+
+async function runChild(): Promise<void> {
   const label = process.env["OCX_STRESS_LABEL"] ?? "child";
   const summary: ChildSummary = {
     label,
@@ -164,7 +206,15 @@ function runChild(): void {
     },
     sessions: { created: 0, peakStoreCount: 0, peakStoreTotalMb: 0, peakRssMb: 0 },
     returnToOs: { rssBeforeClearMb: 0, rssAfterClearGcMb: 0, reclaimedMb: 0 },
+    committed: {
+      available: false, source: "rss-fallback",
+      startPrivateMb: null, beforeClearPrivateMb: null, afterClearPrivateMb: null,
+      afterClearRssMb: 0, afterClearPrivateToRssRatio: null,
+      systemCommittedMb: null, systemCommitLimitMb: null, systemCommitFraction: null,
+    },
   };
+
+  const startProbe = await probeCommitted("start");
 
   // --- Scenario A: one long chain (prefix reference sharing / C-type proof) ---
   clearResponseStateMemoryForTests();
@@ -231,19 +281,39 @@ function runChild(): void {
     }
   }
 
-  // --- Return-to-OS check: clear + GC, then see if RSS actually falls ---
+  // --- Return-to-OS check: clear + GC, then see if RSS (and Private) actually fall ---
+  const beforeClearProbe = await probeCommitted("before-clear");
   const rssBeforeClear = round(process.memoryUsage().rss / MiB);
   clearResponseStateMemoryForTests();
   forceGc();
-  // Give the allocator a beat to purge (best-effort; synchronous script).
-  const spinUntil = Date.now() + 250;
-  while (Date.now() < spinUntil) { /* brief settle */ }
+  // Give the allocator a beat to purge.
+  await new Promise(resolve => setTimeout(resolve, 250));
   forceGc();
   const rssAfterClearGc = round(process.memoryUsage().rss / MiB);
   summary.returnToOs = {
     rssBeforeClearMb: rssBeforeClear,
     rssAfterClearGcMb: rssAfterClearGc,
     reclaimedMb: round(rssBeforeClear - rssAfterClearGc),
+  };
+
+  // The detectability signal for the field incident: committed/private staying high after the JS
+  // heap released everything, i.e. Private >> RSS post-clear.
+  const afterClearProbe = await probeCommitted("after-clear-gc");
+  summary.committed = {
+    available: afterClearProbe.available || beforeClearProbe.available || startProbe.available,
+    source: afterClearProbe.source,
+    startPrivateMb: startProbe.privateMb,
+    beforeClearPrivateMb: beforeClearProbe.privateMb,
+    afterClearPrivateMb: afterClearProbe.privateMb,
+    afterClearRssMb: rssAfterClearGc,
+    afterClearPrivateToRssRatio: afterClearProbe.privateMb !== null && rssAfterClearGc > 0
+      ? round(afterClearProbe.privateMb / rssAfterClearGc)
+      : null,
+    systemCommittedMb: afterClearProbe.systemCommittedMb,
+    systemCommitLimitMb: afterClearProbe.systemCommitLimitMb,
+    systemCommitFraction: afterClearProbe.systemCommittedMb !== null && afterClearProbe.systemCommitLimitMb !== null && afterClearProbe.systemCommitLimitMb > 0
+      ? round(afterClearProbe.systemCommittedMb / afterClearProbe.systemCommitLimitMb)
+      : null,
   };
 
   process.stdout.write("SUMMARY " + JSON.stringify(summary) + "\n");
@@ -330,6 +400,14 @@ function printReport(summaries: ChildSummary[]): void {
     console.log(`    created=${s.sessions.created}  peakStoreCount=${s.sessions.peakStoreCount}  peakStoreTotal=${s.sessions.peakStoreTotalMb}MB  peakRss=${s.sessions.peakRssMb}MB`);
     console.log("  return-to-OS (native-retention signal):");
     console.log(`    rssBeforeClear=${s.returnToOs.rssBeforeClearMb}MB  rssAfterClear+GC=${s.returnToOs.rssAfterClearGcMb}MB  reclaimed=${s.returnToOs.reclaimedMb}MB`);
+    console.log("  committed probes (Private>>RSS detectability; NOT a non-regression proof):");
+    if (s.committed.available) {
+      console.log(`    private: start=${s.committed.startPrivateMb}MB  beforeClear=${s.committed.beforeClearPrivateMb}MB  afterClear+GC=${s.committed.afterClearPrivateMb}MB`);
+      console.log(`    afterClear private/RSS=${s.committed.afterClearPrivateToRssRatio} (>>1 => committed retained past the JS release)`);
+      console.log(`    system commit: ${s.committed.systemCommittedMb}MB / ${s.committed.systemCommitLimitMb}MB (fraction=${s.committed.systemCommitFraction})`);
+    } else {
+      console.log(`    unavailable on this platform/run (source=${s.committed.source}) — RSS-only columns above still apply`);
+    }
     console.log("");
   }
   if (summaries.length >= 2) {
@@ -345,12 +423,14 @@ function printReport(summaries: ChildSummary[]): void {
   console.log("  - storeTotal/heapUsed >> 1    => the JSON-serialized byte metric over-counts (upper bound), as designed.");
   console.log("  - sessions peakRss high with peakStoreCount pinned at the count cap => a BYTE budget would help (hygiene).");
   console.log("  - reclaimed ~ 0 after clear+GC => native retention dominates => the fix is a watchdog + preemptive restart.");
+  console.log("  - afterClear private/RSS >> 1  => the committed>>RSS field signature is DETECTABLE here (the watchdog's");
+  console.log("    windows-private source would see it). A clean run does NOT prove the leak cannot recur.");
 }
 
 // ---------------------------------------------------------------------------
 
 if (process.argv.includes("--child")) {
-  runChild();
+  await runChild();
 } else {
   runParent();
 }

@@ -8,8 +8,17 @@
  * restart path. This module NEVER decides thresholds in absolute GB: every trigger is a fraction of
  * total system RAM, so one code path behaves the same on a 16 GB laptop and a 128 GB worker.
  *
+ * DRIVER SHAPE (async collect, sync decide): a self-rescheduling probe loop captures snapshots
+ * asynchronously (the Windows probe is a child process — never a synchronous event-loop block) and
+ * each completed probe triggers exactly one evaluation. The first probe fires immediately at
+ * start; a generation guard drops late probe results after stop/replace.
+ *
  * SAFETY MODEL:
  *   - Default action is WARN ONLY. It cannot lose data or kill the process.
+ *   - SYSTEM-COMMIT axis is observe-only (v1): crossing the high-water logs one latched warning
+ *     and never arms a restart — the commit pressure may come from another process, and
+ *     restarting OpenCodex would not free it. Auto-restart integration waits for field
+ *     measurement (see docs).
  *   - Auto-restart is opt-in (config.memoryWatchdog.autoRestart / env). When it fires it reuses
  *     drainAndShutdown() — which drains in-flight turns and flushes the response-state snapshot —
  *     then exits with a distinct code so a supervisor can respawn.
@@ -33,7 +42,8 @@
  *     logic is unit-tested without real timers or a real process exit.
  */
 
-import { pressureBytes, pressureSource, readMemorySnapshot, type MemorySnapshot } from "../lib/memory-usage";
+import { captureMemorySnapshot, type MemorySnapshot } from "../lib/memory-usage";
+import { responseStateMetrics, type ResponseStateMetrics } from "../responses/state";
 import { drainAndShutdown } from "./lifecycle";
 import { loadMemoryRestartHistory, recordMemoryRestart } from "./memory-restart-history";
 import type { OcxConfig } from "../types";
@@ -65,6 +75,13 @@ export interface ResolvedWatchdogConfig {
   /** Drain budget (ms) for a memory-driven restart: wait up to this long for in-flight turns to
    * finish before aborting, so the restart lands on a natural idle gap (quiet-window). */
   restartGraceMs: number;
+  /**
+   * System-commit high-water fraction for the OBSERVE-ONLY warning axis (v1). Crossing it logs a
+   * separate warning; it NEVER arms a restart — the cause may be another process, so restarting
+   * OpenCodex would not help. Internal default 0.90; env-only override
+   * (OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER, experimental — for field measurement, not the UI).
+   */
+  systemCommitHighWater: number;
   growthWindowMs: number;
 }
 
@@ -78,6 +95,7 @@ const DEFAULTS: ResolvedWatchdogConfig = {
   minRestartIntervalMs: 600_000, // 10 min
   maxRestarts: 3,
   restartGraceMs: 30_000, // quiet-window: wait up to 30s for in-flight turns before aborting
+  systemCommitHighWater: 0.90, // conservative: a healthy system sits well below (field baseline ~0.2-0.7)
   growthWindowMs: 600_000, // 10 min growth-rate window (diagnostic)
 };
 
@@ -172,6 +190,13 @@ export function resolveWatchdogConfig(config: OcxConfig): ResolvedWatchdogConfig
       envNum("OCX_MEMORY_WATCHDOG_RESTART_GRACE_MS") ?? c.restartGraceMs,
       RESTART_GRACE_MIN_MS, RESTART_GRACE_MAX_MS, DEFAULTS.restartGraceMs,
     ),
+    // Env-only (experimental): no config-file/UI knob until the axis is validated by field
+    // measurement — a persisted setting for an unproven threshold would just be dead config.
+    systemCommitHighWater: (() => {
+      const raw = envNum("OCX_MEMORY_WATCHDOG_COMMIT_HIGH_WATER");
+      if (raw === undefined) return DEFAULTS.systemCommitHighWater;
+      return Math.min(0.99, Math.max(0.50, raw));
+    })(),
     growthWindowMs: DEFAULTS.growthWindowMs,
   });
 }
@@ -208,6 +233,13 @@ export interface WatchdogState {
   samples: { t: number; bytes: number; fraction: number }[];
   /** Highest level already reported since the last drop back to ok — prevents per-interval log spam. */
   reportedLevel: WatchdogLevel;
+  /**
+   * Latch for the observe-only system-commit warning: set on the first high-water crossing,
+   * re-armed only when a MEASURED fraction drops back below the high-water. A probe that merely
+   * fails to measure (systemCommitAvailable=false) holds the latch — measurement loss is not
+   * recovery, and a flapping probe must not re-warn every time it comes back.
+   */
+  commitReported: boolean;
   restartCount: number;
   lastRestartAt: number;
 }
@@ -221,10 +253,19 @@ export interface WatchdogDecision {
   source: string;
   growthMbPerHour: number | null;
   reason: string;
+  /** Actual Windows Private Bytes (MB); null when the platform/probe does not provide it. */
+  processPrivateMb: number | null;
+  /** System commit axis (observe-only): all null when the probe did not measure it. */
+  systemCommitFraction: number | null;
+  systemCommitUsedMb: number | null;
+  systemCommitLimitMb: number | null;
+  /** "warn" exactly once per high-water crossing; NEVER "restart" — see §6 of the v1 spec. */
+  commitAction: "none" | "warn";
+  commitReason: string;
 }
 
 export function createWatchdogState(): WatchdogState {
-  return { samples: [], reportedLevel: "ok", restartCount: 0, lastRestartAt: 0 };
+  return { samples: [], reportedLevel: "ok", commitReported: false, restartCount: 0, lastRestartAt: 0 };
 }
 
 function levelFor(fraction: number, cfg: ResolvedWatchdogConfig): WatchdogLevel {
@@ -244,10 +285,15 @@ function growthBytesPerHour(state: WatchdogState): number | null {
 }
 
 /**
- * Pure evaluation of one sample. Mutates `state` (sample ring, report latch, restart bookkeeping)
- * and returns the decision. Emits action "restart" only when level is critical AND auto-restart is
- * enabled AND the cooldown + max-restart guards allow it; otherwise a critical level degrades to a
- * "warn" action (loud log, no restart).
+ * Pure evaluation of one snapshot. Mutates `state` (sample ring, report latches, restart
+ * bookkeeping) and returns the decision. Two independent axes:
+ *   - PROCESS pressure (processPressureBytes / physicalMemoryBytes): unchanged semantics — emits
+ *     action "restart" only when level is critical AND auto-restart is enabled AND the cooldown +
+ *     max-restart guards allow it; otherwise a critical level degrades to a "warn" action.
+ *   - SYSTEM commit (systemCommittedBytes / systemCommitLimitBytes): observe-only. Crossing the
+ *     high-water emits commitAction "warn" exactly once (latched, re-armed on measured recovery);
+ *     it NEVER contributes to the restart decision — the cause may be another process, and
+ *     restarting OpenCodex would not free it. Skipped null-safely when not measured.
  */
 export function evaluate(
   state: WatchdogState,
@@ -256,8 +302,8 @@ export function evaluate(
   nowMs: number,
   supervised = true,
 ): WatchdogDecision {
-  const bytes = pressureBytes(snapshot);
-  const total = snapshot.totalSystemBytes > 0 ? snapshot.totalSystemBytes : bytes;
+  const bytes = snapshot.processPressureBytes;
+  const total = snapshot.physicalMemoryBytes > 0 ? snapshot.physicalMemoryBytes : bytes;
   const fraction = total > 0 ? bytes / total : 0;
 
   state.samples.push({ t: nowMs, bytes, fraction });
@@ -298,15 +344,44 @@ export function evaluate(
     state.reportedLevel = "critical";
   }
 
+  // System-commit axis (observe-only, null-safe). Never touches `action` above.
+  let commitAction: "none" | "warn" = "none";
+  let commitReason = "";
+  let commitFraction: number | null = null;
+  if (
+    snapshot.systemCommitAvailable
+    && snapshot.systemCommittedBytes !== null
+    && snapshot.systemCommitLimitBytes !== null
+    && snapshot.systemCommitLimitBytes > 0
+  ) {
+    commitFraction = snapshot.systemCommittedBytes / snapshot.systemCommitLimitBytes;
+    if (commitFraction >= cfg.systemCommitHighWater) {
+      if (!state.commitReported) {
+        commitAction = "warn";
+        commitReason = "system commit charge crossed high-water (observe-only; the cause may be another process — no restart)";
+        state.commitReported = true;
+      }
+    } else {
+      state.commitReported = false; // measured recovery below high-water → re-arm
+    }
+  }
+  // Not measured (non-Windows / probe failure): skip entirely — the latch holds either way.
+
   return {
     level,
     action,
     fraction,
     pressureMb: Math.round(bytes / MiB),
     totalMb: Math.round(total / MiB),
-    source: pressureSource(snapshot),
+    source: snapshot.processSource,
     growthMbPerHour: growth === null ? null : Math.round(growth / MiB),
     reason,
+    processPrivateMb: snapshot.processPrivateBytes === null ? null : Math.round(snapshot.processPrivateBytes / MiB),
+    systemCommitFraction: commitFraction,
+    systemCommitUsedMb: snapshot.systemCommittedBytes === null ? null : Math.round(snapshot.systemCommittedBytes / MiB),
+    systemCommitLimitMb: snapshot.systemCommitLimitBytes === null ? null : Math.round(snapshot.systemCommitLimitBytes / MiB),
+    commitAction,
+    commitReason,
   };
 }
 
@@ -363,7 +438,8 @@ export function recommend(
 
 export interface WatchdogDeps {
   now: () => number;
-  read: () => MemorySnapshot;
+  /** Async snapshot capture (Windows probes a child process). Must not throw or block the loop. */
+  capture: (nowMs: number, signal?: AbortSignal) => Promise<MemorySnapshot>;
   /** Whether an external supervisor will respawn us; gates auto-restart when requireSupervisor is on. */
   supervised: boolean;
   /** Perform the graceful restart. Default: drain + flush snapshot, then exit with the restart code. */
@@ -397,7 +473,7 @@ function defaultRestart(cfg: ResolvedWatchdogConfig): void {
 
 const DEFAULT_DEPS: WatchdogDeps = {
   now: Date.now,
-  read: readMemorySnapshot,
+  capture: (nowMs, signal) => captureMemorySnapshot(nowMs, signal),
   supervised: detectSupervisor().supervised,
   restart: defaultRestart,
   log: line => console.warn(line),
@@ -410,19 +486,42 @@ function formatLine(d: WatchdogDecision): string {
   return `[opencodex] memory watchdog ${d.level.toUpperCase()}: ${d.pressureMb}MB / ${d.totalMb}MB (${pct}% of RAM, source=${d.source}, growth=${growth}) — ${d.reason}`;
 }
 
+function formatCommitLine(d: WatchdogDecision): string {
+  const pct = d.systemCommitFraction === null ? "?" : (d.systemCommitFraction * 100).toFixed(1);
+  return `[opencodex] memory watchdog SYSTEM-COMMIT: ${d.systemCommitUsedMb}MB / ${d.systemCommitLimitMb}MB (${pct}% of commit limit) — ${d.commitReason}`;
+}
+
 interface RunningWatchdog {
-  timer: ReturnType<typeof setInterval>;
+  /** Monotonic start id — a late probe completion from a stopped/replaced watchdog is ignored. */
+  generation: number;
+  /** Pending self-rescheduled probe timer; null while a probe is in flight. */
+  timer: ReturnType<typeof setTimeout> | null;
+  /** Aborts the in-flight capture (kills the child probe) on stop. */
+  abort: AbortController | null;
   state: WatchdogState;
   last: WatchdogDecision | null;
   cfg: ResolvedWatchdogConfig;
   deps: WatchdogDeps;
+  // Observability cache — computed once per probe completion (§7), NOT on every 5s dashboard poll.
+  lastSnapshot: MemorySnapshot | null;
+  responseState: ResponseStateMetrics | null;
+  lastProbeAt: number | null;
+  lastSuccessfulSystemProbeAt: number | null;
 }
 
 let running: RunningWatchdog | null = null;
+let generationCounter = 0;
 
-/** One sampling tick: read → evaluate → act. Exported for deterministic tests. */
-export function tick(state: WatchdogState, cfg: ResolvedWatchdogConfig, deps: WatchdogDeps): WatchdogDecision {
-  const snapshot = deps.read();
+/**
+ * Apply one completed probe snapshot: evaluate → log/restart actions. Sync and deterministic —
+ * exported for tests (the async probe loop is just "capture, then this, then reschedule").
+ */
+export function tick(
+  state: WatchdogState,
+  cfg: ResolvedWatchdogConfig,
+  deps: WatchdogDeps,
+  snapshot: MemorySnapshot,
+): WatchdogDecision {
   const nowMs = deps.now();
   const decision = evaluate(state, snapshot, cfg, nowMs, deps.supervised);
   if (decision.action === "warn") {
@@ -443,12 +542,61 @@ export function tick(state: WatchdogState, cfg: ResolvedWatchdogConfig, deps: Wa
       deps.log(`[opencodex] memory watchdog restart hook failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  // Observe-only commit axis: an independent log line, never a restart (see evaluate()).
+  if (decision.commitAction === "warn") {
+    deps.log(formatCommitLine(decision));
+  }
   return decision;
 }
 
 /**
+ * One probe cycle: capture (async, non-blocking) → evaluate exactly once → cache observability →
+ * self-reschedule. Self-rescheduling (next setTimeout armed only after this probe fully completes)
+ * structurally prevents overlapping probes; the generation guard drops results that complete after
+ * stopMemoryWatchdog()/a restart replaced the singleton, so a late probe can never revive state.
+ */
+async function probeOnce(generation: number): Promise<void> {
+  const r = running;
+  if (!r || r.generation !== generation) return;
+  r.timer = null;
+  r.abort = new AbortController();
+  let snapshot: MemorySnapshot | null = null;
+  try {
+    snapshot = await r.deps.capture(r.deps.now(), r.abort.signal);
+  } catch {
+    snapshot = null; // capture is contractually non-throwing; treat a bug as a skipped cycle
+  }
+  if (!running || running.generation !== generation) return; // stopped mid-probe — drop late result
+  running.abort = null;
+  try {
+    if (snapshot) {
+      running.last = tick(running.state, running.cfg, running.deps, snapshot);
+      running.lastSnapshot = snapshot;
+      // §7: COMPLETION time, not capture start — a slow probe must read as fresh, not stale.
+      const completedAt = running.deps.now();
+      running.lastProbeAt = completedAt;
+      if (snapshot.systemCommitAvailable) running.lastSuccessfulSystemProbeAt = completedAt;
+      // Response-state metrics serialize every entry — compute once per probe, not per poll.
+      try { running.responseState = responseStateMetrics(); } catch { running.responseState = null; }
+    }
+  } catch {
+    /* an evaluation failure must never crash the proxy */
+  }
+  scheduleNextProbe(generation, running.cfg.intervalMs);
+}
+
+function scheduleNextProbe(generation: number, delayMs: number): void {
+  if (!running || running.generation !== generation) return;
+  const timer = setTimeout(() => { void probeOnce(generation); }, delayMs);
+  (timer as { unref?: () => void }).unref?.();
+  running.timer = timer;
+}
+
+/**
  * Start the watchdog. No-op (returns false) when disabled. Idempotent: a second call replaces the
- * previous timer. The interval is unref'd so it never keeps the event loop alive on its own.
+ * previous instance (its generation is invalidated, so in-flight probes are dropped). The first
+ * probe fires IMMEDIATELY — a proxy booting into an already-critical box is evaluated as soon as
+ * the first capture completes, not one interval later. Timers are unref'd.
  */
 export function startMemoryWatchdog(config: OcxConfig, deps: Partial<WatchdogDeps> = {}): boolean {
   const cfg = resolveWatchdogConfig(config);
@@ -461,15 +609,21 @@ export function startMemoryWatchdog(config: OcxConfig, deps: Partial<WatchdogDep
   const seeded = loadMemoryRestartHistory(d.now());
   state.lastRestartAt = seeded.lastRestartAt;
   state.restartCount = seeded.recentCount;
-  const timer = setInterval(() => {
-    try {
-      running!.last = tick(running!.state, running!.cfg, running!.deps);
-    } catch {
-      /* a sampling failure must never crash the proxy */
-    }
-  }, cfg.intervalMs);
-  (timer as { unref?: () => void }).unref?.();
-  running = { timer, state, last: null, cfg, deps: d };
+  const generation = ++generationCounter;
+  running = {
+    generation,
+    timer: null,
+    abort: null,
+    state,
+    last: null,
+    cfg,
+    deps: d,
+    lastSnapshot: null,
+    responseState: null,
+    lastProbeAt: null,
+    lastSuccessfulSystemProbeAt: null,
+  };
+  void probeOnce(generation);
   return true;
 }
 
@@ -494,27 +648,28 @@ export function applyWatchdogRuntimeConfig(
   next.minRestartIntervalMs = posNumOr(next.minRestartIntervalMs, running.cfg.minRestartIntervalMs);
   normalizeRestartTiming(next);
   next.intervalMs = Math.max(1_000, posNumOr(next.intervalMs, running.cfg.intervalMs));
-  const intervalChanged = next.intervalMs !== running.cfg.intervalMs && next.intervalMs > 0;
+  const intervalChanged = next.intervalMs !== running.cfg.intervalMs;
   running.cfg = next;
-  if (intervalChanged) {
-    clearInterval(running.timer);
-    const timer = setInterval(() => {
-      try {
-        running!.last = tick(running!.state, running!.cfg, running!.deps);
-      } catch {
-        /* a sampling failure must never crash the proxy */
-      }
-    }, next.intervalMs);
-    (timer as { unref?: () => void }).unref?.();
-    running.timer = timer;
+  // Self-rescheduling loop: a probe in flight (timer === null) picks the new interval up on its
+  // own completion; only a PENDING timer needs re-arming to honor the new cadence promptly.
+  if (intervalChanged && running.timer !== null) {
+    clearTimeout(running.timer);
+    running.timer = null;
+    scheduleNextProbe(running.generation, next.intervalMs);
   }
   return next;
 }
 
-/** Stop the watchdog timer (graceful shutdown / tests). Idempotent. */
+/**
+ * Stop the watchdog (graceful shutdown / tests). Idempotent. Cancels the pending probe timer,
+ * aborts an in-flight capture (killing its child probe process), and clears the singleton — a
+ * probe result that still arrives sees no matching generation and is dropped instead of reviving
+ * state.
+ */
 export function stopMemoryWatchdog(): void {
   if (!running) return;
-  clearInterval(running.timer);
+  if (running.timer !== null) clearTimeout(running.timer);
+  try { running.abort?.abort(); } catch { /* already settled */ }
   running = null;
 }
 
@@ -522,6 +677,23 @@ export function stopMemoryWatchdog(): void {
 export function memoryWatchdogSnapshot(): (WatchdogDecision & { restartCount: number }) | null {
   if (!running || !running.last) return null;
   return { ...running.last, restartCount: running.state.restartCount };
+}
+
+/** Snapshot-derived observability block (§7) — cached at probe completion, null before the first. */
+export interface WatchdogMemoryReport {
+  processPrivateBytes: number | null;
+  processPressureBytes: number;
+  processSource: string;
+  rssBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  physicalMemoryBytes: number;
+  availablePhysicalBytes: number | null;
+  systemCommittedBytes: number | null;
+  systemCommitLimitBytes: number | null;
+  systemCommitFraction: number | null;
+  systemCommitAvailable: boolean;
+  probeError?: string;
 }
 
 export interface WatchdogReport {
@@ -533,16 +705,26 @@ export interface WatchdogReport {
   supervisor: { supervised: boolean; hint: string };
   recommendation: WatchdogRecommendation;
   restartCount: number;
+  /** Last completed probe's measurements; null until the first probe completes. */
+  memory: WatchdogMemoryReport | null;
+  /** Response-state cache metrics, computed once per probe completion (not per poll). */
+  responseState: ResponseStateMetrics | null;
+  /** Last probe COMPLETION time (RSS fallback included); null before the first. */
+  lastProbeAt: number | null;
+  /** Last probe that measured the system commit values successfully; null when never. */
+  lastSuccessfulSystemProbeAt: number | null;
 }
 
 /**
  * Full observability report for the dashboard (Monitor + Recommend). Read-only: it never mutates
- * config or state. Returns null when the watchdog is not running (disabled); the caller reports that
- * as { enabled: false } so old/disabled servers degrade gracefully.
+ * config or state, and the per-probe blocks (memory/responseState) come from the probe-completion
+ * cache so a 5s dashboard poll never re-serializes the response store. Returns null when the
+ * watchdog is not running (disabled); the caller reports that as { enabled: false }.
  */
 export function memoryWatchdogReport(): WatchdogReport | null {
   if (!running) return null;
   const supervisor = detectSupervisor();
+  const s = running.lastSnapshot;
   return {
     enabled: true,
     decision: running.last,
@@ -552,5 +734,25 @@ export function memoryWatchdogReport(): WatchdogReport | null {
     supervisor,
     recommendation: recommend(running.state, running.cfg, supervisor.supervised),
     restartCount: running.state.restartCount,
+    memory: s === null ? null : {
+      processPrivateBytes: s.processPrivateBytes,
+      processPressureBytes: s.processPressureBytes,
+      processSource: s.processSource,
+      rssBytes: s.rssBytes,
+      heapUsedBytes: s.heapUsedBytes,
+      externalBytes: s.externalBytes,
+      physicalMemoryBytes: s.physicalMemoryBytes,
+      availablePhysicalBytes: s.availablePhysicalBytes,
+      systemCommittedBytes: s.systemCommittedBytes,
+      systemCommitLimitBytes: s.systemCommitLimitBytes,
+      systemCommitFraction: s.systemCommitAvailable && s.systemCommittedBytes !== null && s.systemCommitLimitBytes !== null && s.systemCommitLimitBytes > 0
+        ? s.systemCommittedBytes / s.systemCommitLimitBytes
+        : null,
+      systemCommitAvailable: s.systemCommitAvailable,
+      ...(s.probeError !== undefined ? { probeError: s.probeError } : {}),
+    },
+    responseState: running.responseState,
+    lastProbeAt: running.lastProbeAt,
+    lastSuccessfulSystemProbeAt: running.lastSuccessfulSystemProbeAt,
   };
 }
