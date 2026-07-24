@@ -58,6 +58,12 @@ const (
 	EventUsage     AdapterEventType = "usage"
 	EventError     AdapterEventType = "error"
 	EventDone      AdapterEventType = "done"
+	// EventHeartbeat is a liveness signal with no payload (TS src/types.ts:237).
+	// Consumers must treat it as activity only and never emit it downstream.
+	EventHeartbeat AdapterEventType = "heartbeat"
+	// EventIncomplete ends a turn early for a structured reason
+	// (TS src/types.ts:264). Terminal like done/error.
+	EventIncomplete AdapterEventType = "incomplete"
 )
 
 type AdapterEvent struct {
@@ -71,6 +77,11 @@ type AdapterEvent struct {
 	StatusCode int              `json:"statusCode,omitempty"`
 	Retryable  bool             `json:"retryable,omitempty"`
 	StopReason string           `json:"stopReason,omitempty"`
+	// Reason/Message carry EventIncomplete details
+	// (e.g. "max_output_tokens", "content_filter", "adapter_eof",
+	// "upstream_stall_timeout").
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type ToolCall struct {
