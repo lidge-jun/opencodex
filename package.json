@@ -44,6 +44,7 @@
     "prepare:package": "bun scripts/prepare-package.ts",
     "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run typecheck && bun run build:gui",
+    "local:update": "bun scripts/local-update.ts",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
     "prepush": "bun run typecheck && bun run lint:gui && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
