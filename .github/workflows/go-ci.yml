@@ -1,0 +1,94 @@
+name: Go CI
+
+on:
+  pull_request:
+    branches: [main, dev, preview]
+    paths:
+      - "go/**"
+      - ".github/workflows/go-ci.yml"
+  push:
+    branches: [main, preview, dev, "codex/*go*"]
+    paths:
+      - "go/**"
+      - ".github/workflows/go-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build + Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1 -timeout 120s
+
+      - name: Race detector
+        run: go test -race ./... -count=1 -timeout 180s
+        if: matrix.os != 'windows-latest'
+
+  cross-compile:
+    name: Cross-compile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go/go.sum
+
+      - name: windows/amd64
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: linux/amd64
+        run: GOOS=linux GOARCH=amd64 go build ./...
+
+      - name: darwin/arm64
+        run: GOOS=darwin GOARCH=arm64 go build ./...
+
+      - name: darwin/amd64
+        run: GOOS=darwin GOARCH=amd64 go build ./...
+
+      - name: linux/arm64
+        run: GOOS=linux GOARCH=arm64 go build ./...
+
+  e2e:
+    name: E2E Integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go/go.sum
+
+      - name: E2E tests
+        run: go test ./test/e2e/... -v -count=1 -timeout 60s
