@@ -21,11 +21,13 @@ import (
 	openaiadapter "github.com/lidge-jun/opencodex-go/internal/adapter/openai"
 	"github.com/lidge-jun/opencodex-go/internal/combos"
 	"github.com/lidge-jun/opencodex-go/internal/config"
+	"github.com/lidge-jun/opencodex-go/internal/management"
 	"github.com/lidge-jun/opencodex-go/internal/oauth"
 	"github.com/lidge-jun/opencodex-go/internal/platform"
 	"github.com/lidge-jun/opencodex-go/internal/registry"
 	"github.com/lidge-jun/opencodex-go/internal/server"
 	"github.com/lidge-jun/opencodex-go/internal/types"
+	"github.com/lidge-jun/opencodex-go/internal/usage"
 )
 
 func runServe(_ context.Context, args []string, streams IO) error {
@@ -53,11 +55,13 @@ func runServe(_ context.Context, args []string, streams IO) error {
 		_ = os.Setenv("OCX_SERVICE", "1")
 	}
 	var cfg *config.Config
+	var loadedConfigPath string
 	var err error
 	if *configFile != "" {
 		cfg, err = config.Load(*configFile)
+		loadedConfigPath, _ = filepath.Abs(*configFile)
 	} else {
-		cfg, _, err = loadConfig()
+		cfg, loadedConfigPath, err = loadConfig()
 	}
 	if err != nil {
 		return err
@@ -87,12 +91,20 @@ func runServe(_ context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	auth, err := configuredAuth(*cfg)
+	configHome, err := configDir()
 	if err != nil {
 		return err
 	}
+	credentialStore := oauth.NewCredentialStore(filepath.Join(configHome, "auth.json"))
+	auth, err := configuredAuthWithStore(*cfg, credentialStore)
+	if err != nil {
+		return err
+	}
+	usageLog := usage.NewLog(filepath.Join(configHome, "usage.jsonl"))
+	debugLog := usage.NewDebugLog(filepath.Join(configHome, "usage-debug.jsonl"))
+	requestLogs := management.NewRequestLog(200)
 	stop := &stopRouter{channel: make(chan struct{})}
-	proxy := server.New(server.Config{Registry: reg, Combos: comboResolver, Auth: auth, ResolveAdapter: adapterResolver(reg, *cfg), Token: token, Version: Version, Management: stop})
+	proxy := server.New(server.Config{Registry: reg, Combos: comboResolver, Auth: auth, ResolveAdapter: adapterResolver(reg, *cfg), Token: token, Version: Version, UsageRecorder: usageLog, RequestLogs: requestLogs, ManagementConfig: cfg, ConfigPath: loadedConfigPath, DebugLog: debugLog, StorageHome: os.Getenv("CODEX_HOME"), Stop: stop.Stop})
 	httpServer := proxy.HTTPServer(net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	listener, listenErr := net.Listen("tcp", httpServer.Addr)
 	if listenErr != nil {
@@ -125,11 +137,13 @@ type stopRouter struct {
 	channel chan struct{}
 }
 
+func (s *stopRouter) Stop() { s.once.Do(func() { close(s.channel) }) }
+
 func (s *stopRouter) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/stop", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"ok":true,"status":"stopping"}`))
-		s.once.Do(func() { close(s.channel) })
+		s.Stop()
 	})
 }
 
@@ -184,6 +198,10 @@ func configuredAuth(cfg config.Config) (*oauth.AuthResolver, error) {
 	if err != nil {
 		return nil, err
 	}
+	return configuredAuthWithStore(cfg, oauth.NewCredentialStore(filepath.Join(dir, "auth.json")))
+}
+
+func configuredAuthWithStore(cfg config.Config, store *oauth.CredentialStore) (*oauth.AuthResolver, error) {
 	configs := map[string]oauth.ProviderAuthConfig{"openai": {Mode: oauth.AuthModeForward}}
 	reg := registry.New()
 	for name, provider := range cfg.Providers {
@@ -200,7 +218,7 @@ func configuredAuth(cfg config.Config) (*oauth.AuthResolver, error) {
 		}
 		configs[name] = oauth.ProviderAuthConfig{Mode: mode, APIKey: provider.APIKey}
 	}
-	return oauth.NewAuthResolver(oauth.NewCredentialStore(filepath.Join(dir, "auth.json")), configs, nil), nil
+	return oauth.NewAuthResolver(store, configs, nil), nil
 }
 
 func adapterResolver(reg *registry.ProviderRegistry, cfg config.Config) server.AdapterResolver {

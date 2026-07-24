@@ -14,6 +14,12 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
+	case "/api/system":
+		result := a.runtimeInfo()
+		result["pid"] = os.Getpid()
+		result["uptimeSeconds"] = time.Since(processStarted).Seconds()
+		writeJSON(w, http.StatusOK, result)
+		return true
 	case "/api/system/runtime":
 		result := a.runtimeInfo()
 		result["pid"] = os.Getpid()

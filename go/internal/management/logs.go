@@ -1,6 +1,8 @@
 package management
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -78,7 +80,56 @@ func (l *RequestLog) Finish(attempt RequestAttempt, status int, value *types.Usa
 	l.Add(entry)
 	return entry
 }
+
+// Record adapts terminal bridge usage into the in-memory request log and
+// forwards the complete record to the attached JSONL usage recorder.
+func (l *RequestLog) Record(ctx context.Context, record *types.UsageRecord) error {
+	if record == nil {
+		return errors.New("usage record is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	total := usage.CanonicalTotal(record.Usage)
+	status := usage.StatusReported
+	if record.Usage.Estimated {
+		status = usage.StatusEstimated
+	}
+	value := record.Usage
+	l.add(RequestLogEntry{
+		RequestID: record.RequestID, Timestamp: record.StartedAt.UnixMilli(),
+		Provider: record.Provider, Model: record.Model, Status: outcomeStatus(record.Status),
+		DurationMS: record.Duration.Milliseconds(), UsageStatus: status,
+		Usage: &value, TotalTokens: &total,
+	}, false)
+	l.mu.RLock()
+	persist := l.usage
+	l.mu.RUnlock()
+	if persist != nil {
+		return persist.Record(ctx, record)
+	}
+	return nil
+}
+
+func outcomeStatus(status types.OutcomeStatus) int {
+	switch status {
+	case types.OutcomeSuccess:
+		return http.StatusOK
+	case types.OutcomeAuthError:
+		return http.StatusUnauthorized
+	case types.OutcomeRateLimited:
+		return http.StatusTooManyRequests
+	case types.OutcomeCancelled:
+		return 499
+	default:
+		return http.StatusBadGateway
+	}
+}
 func (l *RequestLog) Add(entry RequestLogEntry) {
+	l.add(entry, true)
+}
+
+func (l *RequestLog) add(entry RequestLogEntry, persistEntry bool) {
 	entry.UpstreamError = config.RedactString(entry.UpstreamError)
 	l.mu.Lock()
 	l.entries = append(l.entries, entry)
@@ -88,7 +139,7 @@ func (l *RequestLog) Add(entry RequestLogEntry) {
 	}
 	persist := l.usage
 	l.mu.Unlock()
-	if persist != nil {
+	if persistEntry && persist != nil {
 		_ = persist.Append(usage.Entry{RequestID: entry.RequestID, Timestamp: entry.Timestamp, Provider: entry.Provider, Model: entry.Model, Status: entry.Status, DurationMS: entry.DurationMS, FirstOutputMS: entry.FirstOutputMS, UsageStatus: entry.UsageStatus, Usage: entry.Usage, TotalTokens: entry.TotalTokens, ErrorCode: entry.ErrorCode, UpstreamError: entry.UpstreamError})
 	}
 }
@@ -262,3 +313,5 @@ func httpErrorCode(status int) string {
 		return fmt.Sprintf("http_%d", status)
 	}
 }
+
+var _ types.UsageRecorder = (*RequestLog)(nil)

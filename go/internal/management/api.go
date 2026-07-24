@@ -65,6 +65,10 @@ func New(options Options) (*API, error) {
 	return &API{config: cfg, configPath: options.ConfigPath, registry: options.Registry, usageLog: options.UsageLog, debugLog: options.DebugLog, requestLogs: options.RequestLogs, oauth: options.OAuth, fetchModels: options.FetchModels, storageHome: options.StorageHome, version: options.Version, stop: options.Stop, customModels: map[string]CustomModel{}, aliases: map[string]string{}, contextCaps: map[string]int{}, combos: map[string]Combo{}, agents: AgentSettings{MaxConcurrency: 1, MultiAgentMode: "default"}}, nil
 }
 
+// NewAPI names the management composition point explicitly while preserving
+// New for existing callers.
+func NewAPI(options Options) (*API, error) { return New(options) }
+
 var routes = []string{
 	"GET /api/config", "PUT /api/config", "GET /api/settings", "PUT /api/settings", "GET /api/diagnostics/project-config",
 	"GET /api/providers", "POST /api/providers", "PATCH /api/providers", "DELETE /api/providers", "POST /api/providers/test", "GET /api/provider-presets",
@@ -72,7 +76,7 @@ var routes = []string{
 	"GET /api/oauth/providers", "POST /api/oauth/login", "POST /api/oauth/login/cancel", "POST /api/oauth/login/code", "GET /api/oauth/status", "POST /api/oauth/logout", "GET /api/oauth/accounts", "PUT /api/oauth/accounts/active", "PUT /api/oauth/accounts/alias", "DELETE /api/oauth/accounts",
 	"GET /api/combos", "PUT /api/combos", "DELETE /api/combos", "POST /api/combos/reset",
 	"GET /api/logs", "DELETE /api/logs", "GET /api/debug", "PUT /api/debug", "GET /api/debug/usage-logs", "DELETE /api/debug/usage-logs", "GET /api/usage", "DELETE /api/usage", "GET /api/storage",
-	"GET /api/system/memory", "GET /api/system/runtime", "GET /api/subagent-models", "PUT /api/subagent-models", "GET /api/injection-model", "PUT /api/injection-model", "GET /api/effort-caps", "PUT /api/effort-caps", "GET /api/v2", "PUT /api/v2", "POST /api/stop",
+	"GET /api/system", "GET /api/system/memory", "GET /api/system/runtime", "GET /api/subagent-models", "PUT /api/subagent-models", "GET /api/injection-model", "PUT /api/injection-model", "GET /api/effort-caps", "PUT /api/effort-caps", "GET /api/v2", "PUT /api/v2", "POST /api/stop",
 }
 
 func RegisteredRoutes() []string { return append([]string(nil), routes...) }
