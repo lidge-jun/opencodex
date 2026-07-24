@@ -53,7 +53,7 @@ else
   architecture_label="${architectures// /-}"
 fi
 
-archive_name="OpenCodex-${package_version}-macOS-${architecture_label}.zip"
+archive_name="OpenCodex-${package_version}-macos-${architecture_label}.zip"
 checksum_name="${archive_name}.sha256"
 archive_path="$output_dir/$archive_name"
 checksum_path="$output_dir/$checksum_name"
