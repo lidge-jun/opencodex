@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setRestartHistoryPathForTests } from "../src/server/memory-restart-history";
 import {
   parseProcStatusCommitted,
   pressureBytes,
@@ -14,6 +18,7 @@ import {
   createWatchdogState,
   detectSupervisor,
   evaluate,
+  memoryWatchdogReport,
   recommend,
   resolveWatchdogConfig,
   startMemoryWatchdog,
@@ -146,6 +151,39 @@ describe("resolveWatchdogConfig", () => {
     const r = resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: 120_000 } } as OcxConfig);
     expect(r.restartGraceMs).toBe(120_000);
   });
+
+  test("restartGraceMs is clamped into [1s, 10min]; junk falls back to the default", () => {
+    expect(resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: 5 } } as OcxConfig).restartGraceMs).toBe(1_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: 86_400_000 } } as OcxConfig).restartGraceMs).toBe(600_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: -1 } } as OcxConfig).restartGraceMs).toBe(30_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: Number.NaN } } as OcxConfig).restartGraceMs).toBe(30_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { restartGraceMs: Number.POSITIVE_INFINITY } } as OcxConfig).restartGraceMs).toBe(30_000);
+  });
+
+  test("cooldown < grace is raised to the grace so a drain can never overlap the next restart", () => {
+    const r = resolveWatchdogConfig({
+      memoryWatchdog: { restartGraceMs: 120_000, minRestartIntervalMs: 5_000 },
+    } as OcxConfig);
+    expect(r.minRestartIntervalMs).toBe(120_000);
+    // A cooldown already >= grace is untouched.
+    const ok = resolveWatchdogConfig({
+      memoryWatchdog: { restartGraceMs: 30_000, minRestartIntervalMs: 900_000 },
+    } as OcxConfig);
+    expect(ok.minRestartIntervalMs).toBe(900_000);
+  });
+
+  test("intervalMs gets a 1s floor and junk falls back to the default", () => {
+    expect(resolveWatchdogConfig({ memoryWatchdog: { intervalMs: 5 } } as OcxConfig).intervalMs).toBe(1_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { intervalMs: -60_000 } } as OcxConfig).intervalMs).toBe(60_000);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { intervalMs: Number.NaN } } as OcxConfig).intervalMs).toBe(60_000);
+  });
+
+  test("maxRestarts keeps 0 (meaning: never auto-restart) and rejects negatives/junk", () => {
+    expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: 0 } } as OcxConfig).maxRestarts).toBe(0);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: 2.9 } } as OcxConfig).maxRestarts).toBe(2);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: -3 } } as OcxConfig).maxRestarts).toBe(3);
+    expect(resolveWatchdogConfig({ memoryWatchdog: { maxRestarts: Number.NaN } } as OcxConfig).maxRestarts).toBe(3);
+  });
 });
 
 describe("evaluate (pure decision core)", () => {
@@ -258,6 +296,51 @@ describe("tick (driver wiring)", () => {
     // so the wrapper (not the timer) owns swallowing it.
     const s = createWatchdogState();
     expect(() => tick(s, cfg(), deps({ read: () => { throw new Error("probe boom"); } }))).toThrow("probe boom");
+  });
+
+  test("a synchronously-throwing restart hook is logged, not thrown out of tick", () => {
+    const logs: string[] = [];
+    const s = createWatchdogState();
+    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
+    const d = tick(s, c, deps({
+      read: () => snapshot(80 * MiB),
+      log: l => logs.push(l),
+      restart: () => { throw new Error("hook boom"); },
+    }));
+    expect(d.action).toBe("restart");
+    expect(logs.some(l => l.includes("restart hook failed") && l.includes("hook boom"))).toBe(true);
+  });
+
+  test("a rejecting async restart hook is logged instead of surfacing as an unhandled rejection", async () => {
+    const logs: string[] = [];
+    const s = createWatchdogState();
+    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
+    tick(s, c, deps({
+      read: () => snapshot(80 * MiB),
+      log: l => logs.push(l),
+      restart: () => Promise.reject(new Error("async boom")),
+    }));
+    await Bun.sleep(0); // let the rejection handler run
+    expect(logs.some(l => l.includes("restart hook failed") && l.includes("async boom"))).toBe(true);
+  });
+
+  test("a restart decision is persisted via recordRestart with the decision timestamp", () => {
+    const recorded: number[] = [];
+    const s = createWatchdogState();
+    const c = cfg({ autoRestart: true, minRestartIntervalMs: 0 });
+    tick(s, c, deps({
+      read: () => snapshot(80 * MiB),
+      now: () => 42_000,
+      recordRestart: at => recorded.push(at),
+    }));
+    expect(recorded).toEqual([42_000]);
+  });
+
+  test("a warn action does not touch the restart history", () => {
+    const recorded: number[] = [];
+    const s = createWatchdogState();
+    tick(s, cfg(), deps({ read: () => snapshot(65 * MiB), recordRestart: at => recorded.push(at) }));
+    expect(recorded).toEqual([]);
   });
 });
 
@@ -387,6 +470,55 @@ describe("applyWatchdogRuntimeConfig (live tuning)", () => {
       expect(applied!.requireSupervisor).toBe(false);
     } finally {
       stopMemoryWatchdog();
+    }
+  });
+
+  test("live-tuned restartGraceMs is clamped and the cooldown is raised to match", () => {
+    try {
+      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 0, log: () => {} });
+      const clamped = applyWatchdogRuntimeConfig({ restartGraceMs: 86_400_000 });
+      expect(clamped!.restartGraceMs).toBe(600_000);
+      // Default cooldown is exactly 10 min — equal to the clamped grace, so it is untouched.
+      expect(clamped!.minRestartIntervalMs).toBe(600_000);
+      const raised = applyWatchdogRuntimeConfig({ restartGraceMs: 300_000, minRestartIntervalMs: 60_000 });
+      expect(raised!.restartGraceMs).toBe(300_000);
+      expect(raised!.minRestartIntervalMs).toBe(300_000); // raised from 60s to the grace
+      const junk = applyWatchdogRuntimeConfig({ restartGraceMs: Number.NaN });
+      expect(junk!.restartGraceMs).toBe(300_000); // invalid live input keeps the running value
+    } finally {
+      stopMemoryWatchdog();
+    }
+  });
+});
+
+describe("startMemoryWatchdog — cross-process history seeding", () => {
+  test("seeds cooldown clock and restarts-in-window count from the persisted history", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-watchdog-seed-"));
+    const path = join(root, "memory-watchdog-restarts.json");
+    const NOW = 100 * 3_600_000;
+    try {
+      writeFileSync(path, JSON.stringify({ version: 1, restarts: [NOW - 120_000, NOW - 60_000] }), "utf-8");
+      setRestartHistoryPathForTests(path);
+      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => NOW, log: () => {} });
+      const report = memoryWatchdogReport();
+      expect(report!.restartCount).toBe(2);
+    } finally {
+      stopMemoryWatchdog();
+      setRestartHistoryPathForTests(null);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing history file seeds a fresh slate", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-watchdog-seed-"));
+    try {
+      setRestartHistoryPathForTests(join(root, "absent.json"));
+      startMemoryWatchdog({} as OcxConfig, { read: () => snapshot(50 * MiB), now: () => 1_000, log: () => {} });
+      expect(memoryWatchdogReport()!.restartCount).toBe(0);
+    } finally {
+      stopMemoryWatchdog();
+      setRestartHistoryPathForTests(null);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

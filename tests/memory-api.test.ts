@@ -126,6 +126,10 @@ describe("PUT /api/memory/settings", () => {
     ["non-boolean autoRestart", { autoRestart: "yes" }],
     ["non-boolean requireSupervisor", { requireSupervisor: 1 }],
     ["non-positive intervalMs", { intervalMs: 0 }],
+    ["below-minimum restartGraceMs", { restartGraceMs: 500 }],
+    ["above-maximum restartGraceMs", { restartGraceMs: 900_000 }],
+    ["non-numeric restartGraceMs", { restartGraceMs: "30s" }],
+    ["non-finite restartGraceMs", { restartGraceMs: Number.NaN }],
   ] as const)("rejects %s with 400 and does not persist", async (_label, body) => {
     isolatedHome();
     const config = makeConfig();
@@ -133,6 +137,21 @@ describe("PUT /api/memory/settings", () => {
     expect(res.status).toBe(400);
     expect(config.memoryWatchdog).toBeUndefined();
     expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("a valid restartGraceMs persists, applies live, and raises a shorter cooldown", async () => {
+    isolatedHome();
+    // A config-file cooldown SHORTER than the requested grace: the runtime must raise it.
+    const config = makeConfig({ memoryWatchdog: { minRestartIntervalMs: 60_000 } } as Partial<OcxConfig>);
+    await put(config, { enabled: true });
+    const res = await put(config, { restartGraceMs: 300_000 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; report: { resolvedConfig?: { restartGraceMs?: number; minRestartIntervalMs?: number } } };
+    expect(body.ok).toBe(true);
+    expect(body.report.resolvedConfig?.restartGraceMs).toBe(300_000);
+    expect(body.report.resolvedConfig?.minRestartIntervalMs).toBe(300_000); // cooldown >= grace
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.memoryWatchdog?.restartGraceMs).toBe(300_000);
   });
 
   test("rejects a non-object body with 400", async () => {

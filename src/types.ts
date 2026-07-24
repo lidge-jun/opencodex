@@ -537,15 +537,25 @@ export interface OcxConfig {
     criticalFraction?: number;
     /** Opt in to a graceful restart at the critical threshold. Default false (warn only). */
     autoRestart?: boolean;
-    /** When true (default), auto-restart only fires if a process supervisor is detected. */
+    /** When true (default), auto-restart only fires if a process supervisor is detected.
+     * Detection covers pm2, systemd and an explicit OCX_SUPERVISED=1; NSSM / Windows services /
+     * sc.exe are NOT auto-detected — set OCX_SUPERVISED=1 there. */
     requireSupervisor?: boolean;
-    /** Minimum ms between auto-restarts (loop guard). Default 600000. */
+    /** Minimum ms between auto-restart requests. Raised to at least restartGraceMs so a second
+     * restart can never arm while the first drain is still inside its grace window. Seeded across
+     * process boundaries from a best-effort history file; when that file is unavailable the
+     * cooldown restarts from zero in the new process and the supervisor's own restart throttle is
+     * the remaining cross-boundary protection. Default 600000 (10 min). */
     minRestartIntervalMs?: number;
-    /** Max auto-restarts before giving up and warning only (loop guard). Default 3. */
+    /** Max memory-driven restarts within a rolling ~6h window before the watchdog degrades to
+     * warn-only. Counted best-effort across process boundaries via a small timestamps file — NOT
+     * a permanent all-time cap, and not a substitute for the supervisor's restart limit/backoff
+     * policy. 0 disables auto-restart entirely. Default 3. */
     maxRestarts?: number;
     /** Quiet-window drain budget (ms) for a memory-driven restart: wait up to this long for
      * in-flight turns to finish before aborting, so the restart lands on a natural idle gap.
-     * Default 30000. */
+     * While draining, new requests receive 503 + Retry-After — this value bounds that window.
+     * Clamped to [1000, 600000]. Default 30000. */
     restartGraceMs?: number;
   };
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */

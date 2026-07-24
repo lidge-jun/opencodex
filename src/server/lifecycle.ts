@@ -48,6 +48,17 @@ export function trackStreamLifetime(
   });
 }
 
+/**
+ * Drain in-flight turns (rejecting new ones via the draining flag), then abort whatever outlived
+ * the deadline, flush the replay-state snapshot, and stop the server. timeoutMs is a DEADLINE,
+ * not a delay: the loop returns the moment the in-flight set empties.
+ *
+ * Concurrent invocations (e.g. a signal-path shutdown racing the memory watchdog's restart) are
+ * safe without extra locking: both poll the same turn set, flushResponseState is a no-op when
+ * nothing is pending, server.stop is idempotent, and whichever caller exits the process first
+ * wins. Callers that exit afterwards do so synchronously in the same microtask as their drain's
+ * resolution, so the draining=false reset below cannot let a new request slip in before exit.
+ */
 export async function drainAndShutdown(
   server: ReturnType<typeof Bun.serve> | undefined,
   timeoutMs: number,

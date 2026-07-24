@@ -19,17 +19,36 @@
  *     running turn is only cut when it outlives the whole grace window (bounded so the restart always
  *     fires). A mid-stream turn that is still cut is regenerated on retry (context is preserved via
  *     the flushed previous_response_id snapshot); the provider generation itself cannot be resumed.
- *   - A cooldown (minRestartIntervalMs) and a max-restart guard prevent restart loops.
+ *   - Restart-loop guards, honestly scoped: a cooldown (minRestartIntervalMs, normalized to at
+ *     least restartGraceMs) and a max-restart cap limit repeated restart REQUESTS. Both counters
+ *     live in process memory, and a fired restart ends the process — so on their own they cannot
+ *     bind across the process boundary. A small best-effort history file (timestamps only, see
+ *     memory-restart-history.ts) re-seeds them in the respawned process; when that file cannot be
+ *     read or written, cross-boundary protection falls back to the SUPERVISOR's own restart
+ *     limit/backoff policy, which operators should configure regardless. maxRestarts is therefore
+ *     a rolling-window rate limit (RESTART_HISTORY_WINDOW_MS), not a permanent all-time cap.
+ *   - Exit code 75 (EX_TEMPFAIL) is a REQUEST to the supervisor to respawn — nothing more. A
+ *     supervisor that treats it as a normal exit will simply leave the proxy stopped.
  *   - The decision core (evaluate) is pure and injectable (clock + reader + restart hook) so the
  *     logic is unit-tested without real timers or a real process exit.
  */
 
 import { pressureBytes, pressureSource, readMemorySnapshot, type MemorySnapshot } from "../lib/memory-usage";
 import { drainAndShutdown } from "./lifecycle";
+import { loadMemoryRestartHistory, recordMemoryRestart } from "./memory-restart-history";
 import type { OcxConfig } from "../types";
 
 /** Exit code used for an intentional memory-driven restart (distinct from crash/normal exit). */
 export const MEMORY_RESTART_EXIT_CODE = 75; // EX_TEMPFAIL: "transient, retry" — a supervisor should respawn.
+
+/**
+ * Hard bounds for the quiet-window drain budget. The floor keeps a "grace" meaningful (below 1s
+ * it is an immediate abort); the ceiling bounds how long a restart may hold the proxy in the
+ * draining state (new requests 503) when a stuck turn never finishes — 10 minutes, matching the
+ * default cooldown so the default config stays self-consistent even at the extreme.
+ */
+export const RESTART_GRACE_MIN_MS = 1_000;
+export const RESTART_GRACE_MAX_MS = 600_000;
 
 const MiB = 1024 * 1024;
 
@@ -87,10 +106,35 @@ function clampFraction(value: number | undefined, fallback: number): number {
   return Math.min(0.99, Math.max(0.10, value));
 }
 
+/** Positive finite number, else fallback — config-file values bypass envNum's guard. */
+function posNumOr(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/** Positive finite duration clamped into [min, max]; anything else falls back. */
+function clampMs(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * cooldown >= grace: a shorter cooldown could let the watchdog arm a second restart while the
+ * first drain is still inside its grace window. defaultRestart also stops the sampling timer, so
+ * for the default path this is belt-and-braces — but injected restart hooks (tests, embedders)
+ * rely on it. Normalization (raise the cooldown) mirrors the warn/critical nudge and is the safe
+ * direction: it never extends the 503 drain window, only spaces restarts further apart.
+ */
+function normalizeRestartTiming(cfg: ResolvedWatchdogConfig): ResolvedWatchdogConfig {
+  if (cfg.minRestartIntervalMs < cfg.restartGraceMs) cfg.minRestartIntervalMs = cfg.restartGraceMs;
+  return cfg;
+}
+
 /**
  * Resolve config → runtime knobs. Precedence: env override > config file > default. Fractions are
  * clamped to [0.10, 0.99]; a criticalFraction <= warnFraction is nudged above warn so the two
- * levels never collapse.
+ * levels never collapse. Durations are validated the same way on every entry path (env, config
+ * file, management API): non-finite/non-positive values fall back, restartGraceMs is clamped into
+ * [RESTART_GRACE_MIN_MS, RESTART_GRACE_MAX_MS], and the cooldown is raised to at least the grace.
  */
 export function resolveWatchdogConfig(config: OcxConfig): ResolvedWatchdogConfig {
   const c = config.memoryWatchdog ?? {};
@@ -108,21 +152,28 @@ export function resolveWatchdogConfig(config: OcxConfig): ResolvedWatchdogConfig
   );
   if (criticalFraction <= warnFraction) criticalFraction = Math.min(0.99, warnFraction + 0.10);
 
-  return {
+  const maxRestartsRaw = envNum("OCX_MEMORY_WATCHDOG_MAX_RESTARTS") ?? c.maxRestarts;
+  return normalizeRestartTiming({
     enabled,
-    intervalMs: envNum("OCX_MEMORY_WATCHDOG_INTERVAL_MS") ?? c.intervalMs ?? DEFAULTS.intervalMs,
+    // Sub-second sampling is pure CPU churn for a signal that moves over minutes — floor at 1s.
+    intervalMs: Math.max(1_000, posNumOr(envNum("OCX_MEMORY_WATCHDOG_INTERVAL_MS") ?? c.intervalMs, DEFAULTS.intervalMs)),
     warnFraction,
     criticalFraction,
     autoRestart: envFlag("OCX_MEMORY_WATCHDOG_AUTO_RESTART") ?? c.autoRestart ?? DEFAULTS.autoRestart,
     requireSupervisor:
       envFlag("OCX_MEMORY_WATCHDOG_REQUIRE_SUPERVISOR") ?? c.requireSupervisor ?? DEFAULTS.requireSupervisor,
     minRestartIntervalMs:
-      envNum("OCX_MEMORY_WATCHDOG_MIN_RESTART_INTERVAL_MS") ?? c.minRestartIntervalMs ?? DEFAULTS.minRestartIntervalMs,
-    maxRestarts: envNum("OCX_MEMORY_WATCHDOG_MAX_RESTARTS") ?? c.maxRestarts ?? DEFAULTS.maxRestarts,
-    restartGraceMs:
-      envNum("OCX_MEMORY_WATCHDOG_RESTART_GRACE_MS") ?? c.restartGraceMs ?? DEFAULTS.restartGraceMs,
+      posNumOr(envNum("OCX_MEMORY_WATCHDOG_MIN_RESTART_INTERVAL_MS") ?? c.minRestartIntervalMs, DEFAULTS.minRestartIntervalMs),
+    // 0 is meaningful ("never auto-restart"), so only reject negatives/non-finite here.
+    maxRestarts: maxRestartsRaw !== undefined && Number.isFinite(maxRestartsRaw) && maxRestartsRaw >= 0
+      ? Math.floor(maxRestartsRaw)
+      : DEFAULTS.maxRestarts,
+    restartGraceMs: clampMs(
+      envNum("OCX_MEMORY_WATCHDOG_RESTART_GRACE_MS") ?? c.restartGraceMs,
+      RESTART_GRACE_MIN_MS, RESTART_GRACE_MAX_MS, DEFAULTS.restartGraceMs,
+    ),
     growthWindowMs: DEFAULTS.growthWindowMs,
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -318,15 +369,27 @@ export interface WatchdogDeps {
   /** Perform the graceful restart. Default: drain + flush snapshot, then exit with the restart code. */
   restart: (cfg: ResolvedWatchdogConfig) => void | Promise<void>;
   log: (line: string) => void;
+  /** Persist a restart decision timestamp (cross-process guard seed). Optional so tests stay disk-free. */
+  recordRestart?: (atMs: number) => void;
 }
 
+/** One restart owns the exit: concurrent or repeated invocations must not start a second drain. */
+let restartInFlight = false;
+
 function defaultRestart(cfg: ResolvedWatchdogConfig): void {
+  if (restartInFlight) return;
+  restartInFlight = true;
+  // The decision is made — stop sampling so mid-drain ticks can neither spam logs nor (with a
+  // mis-tuned cooldown) arm a second restart while this drain is still inside its grace window.
+  stopMemoryWatchdog();
   void (async () => {
     try {
       // Quiet-window: drainAndShutdown rejects new turns and returns the moment the in-flight set
       // empties, so this waits for a natural idle gap and only aborts turns that outlive the budget.
       await drainAndShutdown(undefined, cfg.restartGraceMs);
     } finally {
+      // drainAndShutdown resets its draining flag, but nothing can interleave here: the server is
+      // already stopped and this exit runs in the same microtask chain as the drain's resolution.
       process.exit(MEMORY_RESTART_EXIT_CODE);
     }
   })();
@@ -338,6 +401,7 @@ const DEFAULT_DEPS: WatchdogDeps = {
   supervised: detectSupervisor().supervised,
   restart: defaultRestart,
   log: line => console.warn(line),
+  recordRestart: recordMemoryRestart,
 };
 
 function formatLine(d: WatchdogDecision): string {
@@ -359,12 +423,25 @@ let running: RunningWatchdog | null = null;
 /** One sampling tick: read → evaluate → act. Exported for deterministic tests. */
 export function tick(state: WatchdogState, cfg: ResolvedWatchdogConfig, deps: WatchdogDeps): WatchdogDecision {
   const snapshot = deps.read();
-  const decision = evaluate(state, snapshot, cfg, deps.now(), deps.supervised);
+  const nowMs = deps.now();
+  const decision = evaluate(state, snapshot, cfg, nowMs, deps.supervised);
   if (decision.action === "warn") {
     deps.log(formatLine(decision));
   } else if (decision.action === "restart") {
     deps.log(formatLine(decision));
-    void deps.restart(cfg);
+    // Persist first: even if the restart hook fails, the DECISION happened and must count
+    // toward the cross-process cooldown/cap when the next process seeds from history.
+    try { deps.recordRestart?.(nowMs); } catch { /* best-effort */ }
+    // A failing restart hook must be visible, not an unhandled rejection or a thrown tick:
+    // the watchdog keeps running (warn-only until the cooldown re-arms) either way.
+    try {
+      const result: unknown = deps.restart(cfg);
+      if (result instanceof Promise) {
+        result.catch((err: unknown) => deps.log(`[opencodex] memory watchdog restart hook failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    } catch (err) {
+      deps.log(`[opencodex] memory watchdog restart hook failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   return decision;
 }
@@ -379,6 +456,11 @@ export function startMemoryWatchdog(config: OcxConfig, deps: Partial<WatchdogDep
   stopMemoryWatchdog();
   const d: WatchdogDeps = { ...DEFAULT_DEPS, ...deps };
   const state = createWatchdogState();
+  // Seed the restart guards from the best-effort history so cooldown/maxRestarts bind across the
+  // process boundary a fired restart creates. A missing/corrupt file seeds zeros (fresh slate).
+  const seeded = loadMemoryRestartHistory(d.now());
+  state.lastRestartAt = seeded.lastRestartAt;
+  state.restartCount = seeded.recentCount;
   const timer = setInterval(() => {
     try {
       running!.last = tick(running!.state, running!.cfg, running!.deps);
@@ -392,9 +474,11 @@ export function startMemoryWatchdog(config: OcxConfig, deps: Partial<WatchdogDep
 }
 
 /**
- * Live-update knobs on a running watchdog without a restart (Adjust UI / management API). Fractions
- * are clamped and critical is kept above warn, mirroring resolveWatchdogConfig. An intervalMs change
- * re-arms the timer. Returns the applied config, or null when the watchdog is not running.
+ * Live-update knobs on a running watchdog without a restart (Adjust UI / management API). The same
+ * final validation as resolveWatchdogConfig applies: fractions are clamped and critical is kept
+ * above warn, durations are clamped/normalized (grace bounds, cooldown >= grace, 1s interval
+ * floor). An intervalMs change re-arms the timer. Returns the applied config, or null when the
+ * watchdog is not running.
  */
 export function applyWatchdogRuntimeConfig(
   partial: Partial<ResolvedWatchdogConfig>,
@@ -406,6 +490,10 @@ export function applyWatchdogRuntimeConfig(
   if (next.criticalFraction <= next.warnFraction) {
     next.criticalFraction = Math.min(0.99, next.warnFraction + 0.10);
   }
+  next.restartGraceMs = clampMs(next.restartGraceMs, RESTART_GRACE_MIN_MS, RESTART_GRACE_MAX_MS, running.cfg.restartGraceMs);
+  next.minRestartIntervalMs = posNumOr(next.minRestartIntervalMs, running.cfg.minRestartIntervalMs);
+  normalizeRestartTiming(next);
+  next.intervalMs = Math.max(1_000, posNumOr(next.intervalMs, running.cfg.intervalMs));
   const intervalChanged = next.intervalMs !== running.cfg.intervalMs && next.intervalMs > 0;
   running.cfg = next;
   if (intervalChanged) {
