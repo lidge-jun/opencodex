@@ -110,6 +110,7 @@ function mergeLatest(version: string): void {
 function verifySource(): void {
   console.log("\n[2/5] Verifying merged source");
   command(bunBin, ["install", "--frozen-lockfile"], { inherit: true });
+  command(bunBin, ["install", "--frozen-lockfile"], { cwd: join(root, "gui"), inherit: true });
   command(bunBin, ["run", "typecheck"], { inherit: true });
   command(bunBin, ["run", "lint:gui"], { inherit: true });
   command(bunBin, ["run", "test"], { inherit: true });
