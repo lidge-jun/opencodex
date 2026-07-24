@@ -64,6 +64,10 @@ streams the response back **untranslated**.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
+- For routed Anthropic Responses turns with client tools, a bounded terminal guard detects the
+  high-confidence case where the user requested an action but Claude ends with an execution claim
+  and no tool call. It performs at most one internal continuation; normal answers, clarification
+  questions, tool-using turns, and transport-incomplete responses are not auto-retried.
 
 ## `google`
 
