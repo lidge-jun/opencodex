@@ -48,6 +48,28 @@ describe("terminal guard", () => {
     expect(analysis.decision).toBe("pass");
   });
 
+  test("does not force tools for an ordinary plan/proposal request without explicit tool prohibition", () => {
+    // Regression (#394 review blocker 2): a plain 'write a concise implementation plan' request
+    // must NOT be treated as a suspicious no-tool completion, even though it contains the
+    // actionable verbs 'write'/'implementation'. Otherwise the guard nudges Claude to run tools
+    // against a plan-only ask, causing side effects.
+    for (const ask of [
+      "Write a concise implementation plan for this change",
+      "Give me a high-level plan before we start",
+      "Draft a migration plan for the schema",
+      "Propose an approach for refactoring the router",
+      "先写一个实现方案",
+      "给我一个重构计划",
+    ]) {
+      const analysis = analyzeTerminalTurn(parsed(ask), [
+        { type: "text_delta", text: "Here is the plan: 1) ... 2) ... 3) ..." },
+        { type: "done" },
+      ]);
+      expect(analysis.decision).toBe("pass");
+      expect(analysis.reason).toBe("no_actionable_request");
+    }
+  });
+
   test("does not auto-repeat an explicit continue after a recent tool-backed turn", () => {
     const request = parsed("继续");
     request.context.messages = [

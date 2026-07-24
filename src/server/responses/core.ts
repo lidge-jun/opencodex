@@ -1718,15 +1718,27 @@ export async function handleResponses(
     }
 
     try {
-      if (nextParsed.stream) {
-        yield* activeAdapter.parseStream(response);
-      } else if (activeAdapter.parseResponse) {
-        yield* await activeAdapter.parseResponse(response);
-      } else {
-        yield { type: "error", message: "Provider continuation does not support response parsing" };
+      // Protect the continuation body against a client abort landing between fetch resolution and
+      // reader attach, exactly as the initial response is guarded above (#390/366e3053). Without
+      // this, a client cancel during the continuation reopens the Bun fetch-to-reader abort race.
+      const detachContinuationBodyGuard = cancelBodyOnAbort(response.body, upstream.signal);
+      try {
+        if (nextParsed.stream) {
+          yield* activeAdapter.parseStream(response);
+        } else if (activeAdapter.parseResponse) {
+          yield* await activeAdapter.parseResponse(response);
+        } else {
+          yield { type: "error", message: "Provider continuation does not support response parsing" };
+        }
+      } finally {
+        detachContinuationBodyGuard();
       }
     } catch (error) {
-      yield { type: "error", message: `Provider continuation parse failed: ${error instanceof Error ? error.message : String(error)}` };
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
+      } else {
+        yield { type: "error", message: `Provider continuation parse failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
+      }
     }
   };
 

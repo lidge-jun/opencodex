@@ -77,4 +77,5 @@ describe("server terminal guard integration", () => {
     expect(messages.at(-1)?.role).toBe("user");
     expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
   });
+
 });

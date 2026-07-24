@@ -7,7 +7,7 @@ import type {
 } from "../../types";
 
 const ACTIONABLE_REQUEST_RE = /(?:\b(?:add|change|check|continue|create|debug|delete|deploy|edit|execute|fix|implement|inspect|keep going|modify|patch|proceed|refactor|remove|review|run|test|update|write)\b|继续|接着|往下|升级|修改|改(?:一下|下)?|修复|实现|添加|新增|删除|重构|更新|运行|执行|检查|查看|排查|调试|创建|写入|提交|推送|部署|看下|改成|修一下)/iu;
-const PLAN_ONLY_REQUEST_RE = /(?:只(?:给|要|需)(?:我)?(?:一个|个|一下)?(?:计划|方案)|先(?:给|说)(?:我)?(?:一个|个|一下)?(?:计划|方案)|暂时不要(?:调用|使用)工具|不要调用工具|不用执行|只回复(?:计划|方案)|\b(?:just give|provide)\s+(?:me\s+)?(?:a\s+)?plan\b|\b(?:do not|don't)\s+(?:use|call)\s+tools?\b)/iu;
+const PLAN_ONLY_REQUEST_RE = /(?:暂时不要(?:调用|使用)工具|不要调用工具|不用执行|只回复(?:计划|方案)|(?:只|先|给|说|写|出|来)(?:我)?(?:一个|个|一下|份)?[^。！？\n]{0,8}?(?:计划|方案|草案|提案|思路)|(?:计划|方案|草案|提案|思路)(?:就(?:行|好|可以)|即可)|\b(?:just give|provide)\s+(?:me\s+)?(?:a\s+)?plan\b|\b(?:do not|don't)\s+(?:use|call)\s+tools?\b|\b(?:write|draft|outline|propose|give|provide|create|make|share|suggest|sketch)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+|your\s+)?(?:(?:brief|concise|short|detailed|high[-\s]?level|rough|quick|step[-\s]?by[-\s]?step|implementation|migration|refactor(?:ing)?|design|technical)\s+)*(?:plan|proposal|draft|outline|approach|strategy|design\s+doc)\b)/iu;
 const PLAN_INTENT_RE = /(?:\b(?:i(?:'|’)m going to|i will|i(?:'|’)ll|let me|next i)\b|我(?:先|会|将|接下来)|下一步)/iu;
 const PLAN_OR_COMPLETION_RE = /(?:\b(?:i(?:'|’)m going to|i will|i(?:'|’)ll|let me|next i|i(?:'|’)ve (?:already )?(?:added|applied|changed|completed|fixed|implemented|modified|updated))\b|\b(?:done|completed|fixed|implemented|updated|applied)\b|我(?:先|会|将|接下来)|下一步|已(?:经)?(?:修改|修复|完成|应用|更新|实现|处理)|完成了|已经好了)/iu;
 const WAITING_FOR_USER_RE = /(?:[?？]\s*$|需要我|请(?:确认|选择|提供)|是否|要不要|可以吗|\b(?:do you want|should i|which file|please confirm|please provide)\b)/iu;
