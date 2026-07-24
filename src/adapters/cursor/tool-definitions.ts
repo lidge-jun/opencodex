@@ -66,6 +66,25 @@ export function isCodexShellBridgeToolName(name: string): boolean {
   return (CODEX_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+/**
+ * Direct key lookup, then shell_command/exec_command sibling aliases when the key is a bridge name.
+ * Used for catalog admission, schema normalize maps, and Responses name maps (#399).
+ */
+export function resolveShellBridgeAliasKey<T>(
+  key: string,
+  lookup: (name: string) => T | undefined,
+): T | undefined {
+  const direct = lookup(key);
+  if (direct !== undefined) return direct;
+  if (!isCodexShellBridgeToolName(key)) return undefined;
+  for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) {
+    if (alias === key) continue;
+    const hit = lookup(alias);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
 export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
   return !tool.namespace && isCodexShellBridgeToolName(tool.name);
 }
@@ -105,15 +124,8 @@ export function normalizeCursorWireName(name: string): string {
 
 export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?: ReadonlyMap<string, string>): string {
   const normalized = normalizeCursorWireName(name);
-  const direct = cursorToolNameMap?.get(normalized);
-  if (direct) return direct;
-  if (cursorToolNameMap && isCodexShellBridgeToolName(normalized)) {
-    for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) {
-      const mapped = cursorToolNameMap.get(alias);
-      if (mapped) return mapped;
-    }
-  }
-  return normalized;
+  if (!cursorToolNameMap) return normalized;
+  return resolveShellBridgeAliasKey(normalized, alias => cursorToolNameMap.get(alias)) ?? normalized;
 }
 
 /** Schema advertised to Cursor for this tool (may use Cursor-preferred field names like `cmd`). */

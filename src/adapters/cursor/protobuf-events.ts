@@ -3,10 +3,9 @@ import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
 import {
-  CODEX_SHELL_BRIDGE_TOOL_NAMES,
-  isCodexShellBridgeToolName,
   normalizeCursorWireName,
   OCX_RESPONSES_TOOL_PROVIDER,
+  resolveShellBridgeAliasKey,
   responsesToolNameFromCursorWire,
 } from "./tool-definitions";
 import type { CursorServerMessage } from "./types";
@@ -225,24 +224,12 @@ function resolveAdvertisedClientToolName(
 ): string | undefined {
   const normalized = normalizeCursorWireName(cursorWireName);
   if (!state.clientToolNames) return normalized;
-  if (state.clientToolNames.has(normalized)) return normalized;
-  if (isCodexShellBridgeToolName(normalized)) {
-    for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) {
-      if (state.clientToolNames.has(alias)) return alias;
-    }
-  }
-  return undefined;
+  return resolveShellBridgeAliasKey(normalized, alias => (state.clientToolNames!.has(alias) ? alias : undefined));
 }
 
 function toolSchemaForWireName(state: CursorProtobufEventState, toolName: string | undefined): unknown | undefined {
   if (!toolName || !state.toolSchemas) return undefined;
-  if (state.toolSchemas.has(toolName)) return state.toolSchemas.get(toolName);
-  if (isCodexShellBridgeToolName(toolName)) {
-    for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) {
-      if (state.toolSchemas.has(alias)) return state.toolSchemas.get(alias);
-    }
-  }
-  return undefined;
+  return resolveShellBridgeAliasKey(toolName, alias => state.toolSchemas!.get(alias));
 }
 
 function decodeMcpArgsNormalized(args: McpArgs | undefined, state: CursorProtobufEventState): string {

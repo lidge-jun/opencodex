@@ -90,9 +90,11 @@ export function applyCursorToolBudget(
     tryKeep(candidate.tool);
   }
 
-  // If a shell bridge tool is still omitted, evict lower-priority non-pinned tools to make room.
+  // If a pinned tool is still omitted, evict lower-priority non-pinned tools to make room (#399).
+  // Shell is priority 1 and apply_patch is priority 2, so shell is forced first and cannot be
+  // evicted later to make room for apply_patch (eviction only removes non-pinned tools).
   for (const candidate of candidates) {
-    if (!isBareCodexShellBridgeTool(candidate.tool) || keptSet.has(candidate.tool)) continue;
+    if (!isPinnedCursorTool(candidate.tool, selectedNames) || keptSet.has(candidate.tool)) continue;
     const need = cursorMcpToolEncodedSize(candidate.tool, toolChoice);
     if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
     while (
