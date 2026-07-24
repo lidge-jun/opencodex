@@ -12,7 +12,7 @@ import type { OcxParsedRequest, OcxConfig } from "../types";
 import { slugsEquivalent } from "../providers/slug-codec";
 import { CODEX_HOME, getCodexHome } from "./paths";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
-import { computeCodexUsageScore } from "./routing";
+import { computeCodexUsageScore, getPoolAccountPlan } from "./routing";
 import { nativeOpenAiSlugs } from "./catalog";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
@@ -28,17 +28,16 @@ const quotaPrimedAt = new Map<string, number>();
 const nativeSlugSet = () => new Set(nativeOpenAiSlugs().map(slug => slug.toLowerCase()));
 
 function healthKey(model: string, accountId: string | null): string {
-  return `${accountId ?? "none"}::${model.toLowerCase()}`;
-}
-
-function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
-  return (config.codexAccounts ?? []).find(account => account.id === accountId)?.plan;
+  const scopedAccountId = nativeSlugSet().has(model.toLowerCase()) ? accountId : null;
+  return `${scopedAccountId ?? "none"}::${model.toLowerCase()}`;
 }
 
 function isDisabledFallbackModel(model: string, config: OcxConfig): boolean {
   const disabled = config.disabledModels ?? [];
   if (disabled.length === 0) return false;
-  if (!model.includes("/")) return disabled.some(stored => slugEquals(stored, "openai", model));
+  if (!model.includes("/")) {
+    return disabled.some(stored => stored === model || slugEquals(stored, "openai", model));
+  }
   const slash = model.indexOf("/");
   const provider = model.slice(0, slash);
   const modelId = model.slice(slash + 1);
@@ -99,7 +98,7 @@ function isRoutableFallbackModel(model: string, config: OcxConfig): boolean {
   const slash = model.indexOf("/");
   if (slash > 0) {
     const providerName = model.slice(0, slash);
-    if (!hasOwnProvider(config.providers, providerName)) return false;
+    if (!hasOwnProvider(config.providers, providerName)) return true;
     const provider = config.providers[providerName];
     if (provider?.disabled === true) return false;
   }
@@ -322,7 +321,7 @@ function parseTomlStringArray(raw: string): string[] {
 }
 
 function parseTomlModelFallback(content: string): string[] | null {
-  const match = content.match(/^\s*model_fallback\s*=\s*\[(.*)\]\s*$/ms);
+  const match = content.match(/^\s*model_fallback\s*=\s*\[(.*?)\]\s*$/ms);
   if (!match) return null;
   return parseTomlStringArray(match[1] ?? "");
 }

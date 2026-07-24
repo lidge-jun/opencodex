@@ -13,7 +13,7 @@ import {
   selectAvailableSubagentModel,
   subagentFallbackGuidanceText,
 } from "../src/codex/subagent-model-fallback";
-import { updateAccountQuota } from "../src/codex/quota";
+import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
 import type { OcxConfig } from "../src/types";
 
 const savedCodexHome = process.env.CODEX_HOME;
@@ -48,6 +48,7 @@ function codexHomeFixture(): string {
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
+  clearAccountQuota();
   resetSubagentModelFallbackStateForTests();
 });
 
@@ -185,6 +186,62 @@ describe("subagent model fallback chain", () => {
       "alibaba-token-plan/qwen3.8-max-preview",
       "kimi/k3",
     ]);
+  });
+
+  test("readCodexAgentModelFallback stops at the model_fallback array terminator", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "executor.toml"), [
+      "name = \"executor\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [",
+      "  \"alibaba-token-plan/qwen3.8-max-preview\",",
+      "]",
+      "tools = [\"search\", \"edit\"]",
+      "",
+    ].join("\n"), "utf8");
+    expect(readCodexAgentModelFallback("executor", dir)).toEqual([
+      "alibaba-token-plan/qwen3.8-max-preview",
+    ]);
+  });
+
+  test("selectAvailableSubagentModel skips disabled bare native fallback entries", () => {
+    resetSubagentModelFallbackStateForTests();
+    const selected = selectAvailableSubagentModel(
+      "gpt-5.6-sol",
+      cfg({
+        disabledModels: ["gpt-5.6-sol"],
+        subagentModelFallback: ["kimi/k3"],
+      }),
+    );
+    expect(selected).toEqual({
+      model: "kimi/k3",
+      rewritten: true,
+      skipped: ["gpt-5.6-sol"],
+    });
+  });
+
+  test("selectAvailableSubagentModel allows raw slash model ids without provider namespaces", () => {
+    resetSubagentModelFallbackStateForTests();
+    const selected = selectAvailableSubagentModel(
+      "gpt-5.6-sol",
+      cfg({
+        subagentModelFallback: [
+          "anthropic/claude-sonnet-4-6",
+          "kimi/k3",
+        ],
+      }),
+    );
+    expect(selected).toEqual({
+      model: "anthropic/claude-sonnet-4-6",
+      rewritten: true,
+      skipped: ["gpt-5.6-sol"],
+    });
+  });
+
+  test("noteSubagentModelFailure scopes routed-provider health globally", () => {
+    resetSubagentModelFallbackStateForTests();
+    noteSubagentModelFailure("alibaba-token-plan/qwen3.8-max-preview", "quota exhausted", cfg(), "account-a");
+    expect(isSubagentModelUnavailable("alibaba-token-plan/qwen3.8-max-preview", cfg(), "account-b")).toBe(true);
   });
 
   test("applySubagentModelFallback rewrites parsed request model", () => {
