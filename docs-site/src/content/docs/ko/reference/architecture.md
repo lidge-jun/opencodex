@@ -100,7 +100,7 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
 
 브리지는 **하트비트 킵얼라이브**(RC3)도 실행합니다. 업스트림에서 데이터가 오지 않을 때 2초마다
 파서가 무시하는 `response.heartbeat` SSE 이벤트를 보내 Codex의 유휴 타이머를 다시 시작합니다.
-기본 **stall deadline**은 300초(`stallTimeoutSec`)입니다. 이 시간을 넘기면 업스트림을 중단하고
+기본 **stall deadline**은 600초(`stallTimeoutSec`)입니다. 이 시간을 넘기면 업스트림을 중단하고
 이유가 `upstream_stall_timeout`인 `response.incomplete`를 내보내 연결이 끝없이 매달리지 않게 합니다.
 
 툴 호출은 파서가 캡처한 네임스페이스 맵, freeform 집합, tool-search 집합을 사용하여 세 가지

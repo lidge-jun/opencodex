@@ -100,7 +100,7 @@ src/
 | `error` | `response.failed`（带 `last_error`） |
 
 桥接器还会运行**心跳保活**（RC3）：上游没有数据时，每 2 秒发送一次解析器会忽略的
-`response.heartbeat` SSE event，以重新启动 Codex 的空闲计时器。默认**停滞截止时间**为 300 秒
+`response.heartbeat` SSE event，以重新启动 Codex 的空闲计时器。默认**停滞截止时间**为 600 秒
 （`stallTimeoutSec`）；达到该时限后会中止上游，并发出 reason 为
 `upstream_stall_timeout` 的 `response.incomplete`，避免挂起的连接无限期阻塞 Codex。
 

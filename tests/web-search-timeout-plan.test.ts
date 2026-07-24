@@ -88,8 +88,8 @@ describe("routed-model web-search inactivity timeout", () => {
   });
 
   test("bridge budget covers every timeout plus a thirty-second margin", () => {
-    expect(webSearchStallTimeoutSec(undefined, 200_000, 200_000, 200_000)).toBe(330);
-    expect(webSearchStallTimeoutSec(undefined, 200_000, 240_000, 200_000)).toBe(330);
+    expect(webSearchStallTimeoutSec(undefined, 200_000, 200_000, 200_000)).toBe(630);
+    expect(webSearchStallTimeoutSec(undefined, 200_000, 240_000, 200_000)).toBe(630);
     expect(webSearchStallTimeoutSec(600, 200_000, 240_000, 200_000)).toBe(630);
 
     const maximum = webSearchStallTimeoutSec(undefined, 200_000, 2_147_483_647, 200_000);
@@ -103,7 +103,7 @@ describe("routed-model web-search inactivity timeout", () => {
       webSearchSidecar: { routedModelStallTimeoutMs: 240_000 },
     }))).toMatchObject({
       routedModelStallTimeoutMs: 240_000,
-      stallTimeoutSec: 330,
+      stallTimeoutSec: 630,
     });
   });
 });

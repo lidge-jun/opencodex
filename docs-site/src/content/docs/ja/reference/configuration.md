@@ -41,7 +41,7 @@ namespaced selected id を bare id に変えます。
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 3 段階 multi-agent surface override。`"v1"` は上流 pin より優先してすべてのモデルを v1 に、`"default"` は上流 model pin（sol/terra=v2、luna=v1）に従い、`"v2"` はすべてを v2 に強制します。ダッシュボードの Models ページまたは `ocx v2 mode` で設定します。 |
 | `providerContextCaps?` | `Record<string,number>` | `{}` | プロバイダー別の Codex 表示 context cap。既知の context window を下げるだけです。 |
 | `contextCapValue?` | `number` | `350000` | ダッシュボード context-cap control で使う値。変えると `providerContextCaps` で有効化されたすべての項目を更新します。 |
-| `stallTimeoutSec?` | `number` | `300` | 上流データが来ないとき bridge が中断し `response.incomplete` を送るまでの秒数。最小 1。 |
+| `stallTimeoutSec?` | `number` | `600` | 上流データが来ないとき bridge が中断し `response.incomplete` を送るまでの秒数。最小 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | DNS/TCP/TLS と最終レスポンスヘッダーだけを待つ試行ごとの deadline。レスポンス body 生成前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 進行中のターンを中断する前の graceful drain deadline。 |
 | `websockets?` | `boolean` | `false` | `supports_websockets` を知らせ Codex が Responses WebSocket 経路を使うようにします。省略または `false` なら HTTP/SSE を維持します。 |

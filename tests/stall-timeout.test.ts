@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutSec } from "../src/stall-timeout";
 
 describe("resolveStallTimeoutSec", () => {
-  test("defaults to 300 seconds when unset", () => {
-    expect(DEFAULT_STALL_TIMEOUT_SEC).toBe(300);
-    expect(resolveStallTimeoutSec(undefined)).toBe(300);
+  test("defaults to 600 seconds when unset", () => {
+    expect(DEFAULT_STALL_TIMEOUT_SEC).toBe(600);
+    expect(resolveStallTimeoutSec(undefined)).toBe(600);
   });
 
   test("honors finite configured values with a minimum of 1", () => {
@@ -15,8 +15,8 @@ describe("resolveStallTimeoutSec", () => {
   });
 
   test("rejects non-finite values back to the default", () => {
-    expect(resolveStallTimeoutSec(Number.NaN)).toBe(300);
-    expect(resolveStallTimeoutSec(Number.POSITIVE_INFINITY)).toBe(300);
-    expect(resolveStallTimeoutSec(Number.NEGATIVE_INFINITY)).toBe(300);
+    expect(resolveStallTimeoutSec(Number.NaN)).toBe(600);
+    expect(resolveStallTimeoutSec(Number.POSITIVE_INFINITY)).toBe(600);
+    expect(resolveStallTimeoutSec(Number.NEGATIVE_INFINITY)).toBe(600);
   });
 });
