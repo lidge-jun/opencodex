@@ -186,14 +186,8 @@ func countRowsReadonly(path, table string) *int64 {
 	if !allowed[table] {
 		return nil
 	}
-	u := url.URL{Scheme: "file", Path: path}
-	query := u.Query()
-	query.Set("mode", "ro")
-	query.Set("immutable", "1")
-	query.Set("_pragma", "query_only(1)")
-	query.Add("_pragma", "busy_timeout(50)")
-	u.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", u.String())
+	u := readonlySQLiteURL(path)
+	db, err := sql.Open("sqlite", u)
 	if err != nil {
 		return nil
 	}
@@ -206,4 +200,19 @@ func countRowsReadonly(path, table string) *int64 {
 		return nil
 	}
 	return &count
+}
+
+func readonlySQLiteURL(path string) string {
+	normalized := strings.ReplaceAll(path, `\`, "/")
+	if len(normalized) >= 2 && normalized[1] == ':' {
+		normalized = "/" + normalized
+	}
+	u := url.URL{Scheme: "file", Path: normalized}
+	query := u.Query()
+	query.Set("mode", "ro")
+	query.Set("immutable", "1")
+	query.Set("_pragma", "query_only(1)")
+	query.Add("_pragma", "busy_timeout(50)")
+	u.RawQuery = query.Encode()
+	return u.String()
 }

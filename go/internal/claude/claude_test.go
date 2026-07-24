@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -169,9 +170,11 @@ func TestContinuationExpansionProviderStateAndPersistence(t *testing.T) {
 	if err := store.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("mode = %o", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		info, _ := os.Stat(path)
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("mode = %o", info.Mode().Perm())
+		}
 	}
 	loaded := NewResponseStateStore()
 	if err := loaded.Load(path); err != nil {
