@@ -723,36 +723,6 @@ export async function handleResponses(
     return unreadableEncryptedAgentTaskResponse();
   }
 
-  if (isThreadSpawnRequest(req.headers) && !options.comboAttempt) {
-    const fallback = applySubagentModelFallback(parsed, req.headers, config);
-    if (fallback) {
-      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
-      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
-      if (isInjectionDebugEnabled()) {
-        injectionDebugLog(`[opencodex] subagent model fallback ${fallback.from} -> ${fallback.to}`);
-      }
-    }
-    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
-      try {
-        route = routeModel(config, fallback.to);
-      } catch (err) {
-        if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailableResponse(err.message);
-        }
-        return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
-      }
-      if (route.modelId !== parsed.modelId) {
-        if (parsed._rawBody && typeof parsed._rawBody === "object") {
-          (parsed._rawBody as { model?: string }).model = route.modelId;
-        }
-        parsed.modelId = route.modelId;
-      }
-      logCtx.model = route.modelId;
-      logCtx.provider = route.providerName;
-      logCtx.providerAdapter = route.provider.adapter;
-    }
-  }
-
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace
   // (e.g. "opencode-go/deepseek-v4-pro" → "deepseek-v4-pro"). Adapters read parsed.modelId,
   // and the passthrough adapter serializes _rawBody, so rewrite both.
@@ -902,6 +872,45 @@ export async function handleResponses(
   // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
   const identityScope = codexLogAccountId(authCtx);
   if (identityScope) parsed._cursorIdentityScope = identityScope;
+
+  const subagentFallbackAccountId = authCtx.kind === "pool" || authCtx.kind === "main-pool"
+    ? authCtx.accountId
+    : config.activeCodexAccountId ?? null;
+
+  if (isThreadSpawnRequest(req.headers) && !options.comboAttempt) {
+    const fallback = applySubagentModelFallback(
+      parsed,
+      req.headers,
+      config,
+      subagentFallbackAccountId,
+    );
+    if (fallback) {
+      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
+      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
+      if (isInjectionDebugEnabled()) {
+        injectionDebugLog(`[opencodex] subagent model fallback ${fallback.from} -> ${fallback.to}`);
+      }
+    }
+    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+      try {
+        route = routeModel(config, fallback.to);
+      } catch (err) {
+        if (err instanceof NoAvailableComboTargetsError) {
+          return comboUnavailableResponse(err.message);
+        }
+        return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+      }
+      if (route.modelId !== parsed.modelId) {
+        if (parsed._rawBody && typeof parsed._rawBody === "object") {
+          (parsed._rawBody as { model?: string }).model = route.modelId;
+        }
+        parsed.modelId = route.modelId;
+      }
+      logCtx.model = route.modelId;
+      logCtx.provider = route.providerName;
+      logCtx.providerAdapter = route.provider.adapter;
+    }
+  }
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.

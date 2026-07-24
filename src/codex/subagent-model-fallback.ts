@@ -7,6 +7,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { hasOwnProvider } from "../config";
 import type { OcxParsedRequest, OcxConfig } from "../types";
 import { slugsEquivalent } from "../providers/slug-codec";
 import { CODEX_HOME, getCodexHome } from "./paths";
@@ -15,7 +16,6 @@ import { computeCodexUsageScore } from "./routing";
 import { nativeOpenAiSlugs } from "./catalog";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
-
 export const DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS = 60_000;
 
 type ModelHealth = {
@@ -91,25 +91,56 @@ function activeCodexAccountId(config: OcxConfig): string | null {
   return config.activeCodexAccountId ?? null;
 }
 
-export function isNativeModelQuotaExhausted(model: string, config: OcxConfig, now = Date.now()): boolean {
+function resolveFallbackAccountId(config: OcxConfig, accountId?: string | null): string | null {
+  return accountId ?? activeCodexAccountId(config);
+}
+
+function isRoutableFallbackModel(model: string, config: OcxConfig): boolean {
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const providerName = model.slice(0, slash);
+    if (!hasOwnProvider(config.providers, providerName)) return false;
+    const provider = config.providers[providerName];
+    if (provider?.disabled === true) return false;
+  }
+  return true;
+}
+
+export function isNativeModelQuotaExhausted(
+  model: string,
+  config: OcxConfig,
+  accountId?: string | null,
+  now = Date.now(),
+): boolean {
   if (!isNativeOpenAiSlug(model)) return false;
-  const accountId = activeCodexAccountId(config);
-  if (!accountId) return false;
-  const quota = getAccountQuota(accountId);
-  const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, accountId));
+  const resolvedAccountId = resolveFallbackAccountId(config, accountId);
+  if (!resolvedAccountId) return false;
+  const quota = getAccountQuota(resolvedAccountId);
+  const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, resolvedAccountId));
   if (usage >= CODEX_UNKNOWN_USAGE_SCORE) return false;
   return usage >= quotaThreshold(config);
 }
 
-export function isModelHealthBlocked(model: string, config: OcxConfig, now = Date.now()): boolean {
-  const health = modelHealth.get(healthKey(model, activeCodexAccountId(config)));
+export function isModelHealthBlocked(
+  model: string,
+  config: OcxConfig,
+  accountId?: string | null,
+  now = Date.now(),
+): boolean {
+  const health = modelHealth.get(healthKey(model, resolveFallbackAccountId(config, accountId)));
   return !!health && health.unavailableUntil > now;
 }
 
-export function isSubagentModelUnavailable(model: string, config: OcxConfig, now = Date.now()): boolean {
+export function isSubagentModelUnavailable(
+  model: string,
+  config: OcxConfig,
+  accountId?: string | null,
+  now = Date.now(),
+): boolean {
   if (isDisabledFallbackModel(model, config)) return true;
-  if (isModelHealthBlocked(model, config, now)) return true;
-  if (isNativeOpenAiSlug(model)) return isNativeModelQuotaExhausted(model, config, now);
+  if (!isRoutableFallbackModel(model, config)) return true;
+  if (isModelHealthBlocked(model, config, accountId, now)) return true;
+  if (isNativeOpenAiSlug(model)) return isNativeModelQuotaExhausted(model, config, accountId, now);
   return false;
 }
 
@@ -117,12 +148,13 @@ export function selectAvailableSubagentModel(
   primary: string,
   config: OcxConfig,
   extraFallback: readonly string[] = [],
+  accountId?: string | null,
   now = Date.now(),
 ): { model: string; rewritten: boolean; skipped: string[] } {
   const chain = normalizedChain(primary, config, extraFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
-    if (isSubagentModelUnavailable(candidate, config, now)) {
+    if (isSubagentModelUnavailable(candidate, config, accountId, now)) {
       skipped.push(candidate);
       continue;
     }
@@ -135,6 +167,7 @@ export function noteSubagentModelFailure(
   model: string,
   message: string,
   config: OcxConfig,
+  accountId?: string | null,
   now = Date.now(),
   ttlMs?: number,
 ): void {
@@ -150,7 +183,7 @@ export function noteSubagentModelFailure(
     || numericStatus === 429
     || numericStatus === 402;
   if (!quotaLike) return;
-  modelHealth.set(healthKey(model, activeCodexAccountId(config)), {
+  modelHealth.set(healthKey(model, resolveFallbackAccountId(config, accountId)), {
     unavailableUntil: now + interval,
     reason: "quota_exhausted",
   });
@@ -234,23 +267,25 @@ export function recordSubagentQuotaFailureForThreadSpawn(
   model: string,
   message: string | number,
   config: OcxConfig,
+  accountId?: string | null,
   now = Date.now(),
 ): void {
   if (!isThreadSpawnRequest(headers)) return;
-  noteSubagentModelFailure(model, String(message), config, now, pollIntervalMs(config));
+  noteSubagentModelFailure(model, String(message), config, accountId, now, pollIntervalMs(config));
 }
 
 export function applySubagentModelFallback(
   parsed: OcxParsedRequest,
   headers: Headers,
   config: OcxConfig,
+  accountId?: string | null,
   now = Date.now(),
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
   const roleFallback = resolveAgentModelFallbackForPrimary(parsed.modelId, getCodexHome());
   const globalFallback = config.subagentModelFallback ?? [];
   if (globalFallback.length === 0 && roleFallback.length === 0) return null;
-  const selection = selectAvailableSubagentModel(parsed.modelId, config, roleFallback, now);
+  const selection = selectAvailableSubagentModel(parsed.modelId, config, roleFallback, accountId, now);
   if (!selection.rewritten) return selection.skipped.length > 0
     ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }
     : null;

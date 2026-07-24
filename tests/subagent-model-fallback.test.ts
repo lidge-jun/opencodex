@@ -21,7 +21,11 @@ const savedCodexHome = process.env.CODEX_HOME;
 function cfg(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return {
     port: 10100,
-    providers: { openai: { adapter: "openai-responses" } },
+    providers: {
+      openai: { adapter: "openai-responses" },
+      "alibaba-token-plan": { adapter: "openai-chat", apiKey: "test", baseUrl: "https://example.invalid" },
+      kimi: { adapter: "openai-chat", apiKey: "test", baseUrl: "https://example.invalid" },
+    },
     defaultProvider: "openai",
     activeCodexAccountId: "main",
     autoSwitchThreshold: 80,
@@ -72,12 +76,42 @@ describe("subagent model fallback chain", () => {
     });
   });
 
+  test("selectAvailableSubagentModel scopes quota exhaustion to the selected account", () => {
+    resetSubagentModelFallbackStateForTests();
+    updateAccountQuota("account-a", 95, undefined, 20);
+    updateAccountQuota("account-b", 10, undefined, 20);
+    const selected = selectAvailableSubagentModel("gpt-5.6-sol", cfg(), [], "account-b");
+    expect(selected).toEqual({
+      model: "gpt-5.6-sol",
+      rewritten: false,
+      skipped: [],
+    });
+  });
+
   test("selectAvailableSubagentModel skips cached routed failures", () => {
     resetSubagentModelFallbackStateForTests();
     noteSubagentModelFailure("alibaba-token-plan/qwen3.8-max-preview", "quota exhausted", cfg());
     const selected = selectAvailableSubagentModel("gpt-5.6-sol", cfg());
     expect(selected.model).toBe("kimi/k3");
     expect(isSubagentModelUnavailable("alibaba-token-plan/qwen3.8-max-preview", cfg())).toBe(true);
+  });
+
+  test("selectAvailableSubagentModel skips stale fallback entries that cannot route", () => {
+    resetSubagentModelFallbackStateForTests();
+    const selected = selectAvailableSubagentModel(
+      "gpt-5.6-sol",
+      cfg({
+        subagentModelFallback: [
+          "missing-provider/does-not-exist",
+          "kimi/k3",
+        ],
+      }),
+    );
+    expect(selected).toEqual({
+      model: "kimi/k3",
+      rewritten: true,
+      skipped: ["gpt-5.6-sol", "missing-provider/does-not-exist"],
+    });
   });
 
   test("noteSubagentModelFailure treats numeric 429 as quota-like", () => {
