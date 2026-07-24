@@ -59,6 +59,31 @@ describe("Cursor tool definitions", () => {
     expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
   });
 
+  test("advertises bare shell_command with the same compact native exec schema", () => {
+    const tool: OcxTool = {
+      name: "shell_command",
+      description: "Run a command",
+      parameters: {
+        type: "object",
+        properties: {
+          cmd: { type: "string" },
+          yield_time_ms: { type: "number" },
+          max_output_chars: { type: "number" },
+        },
+        required: ["cmd", "yield_time_ms"],
+        additionalProperties: true,
+      },
+    };
+
+    expect(cursorToolWireName(tool)).toBe("shell_command");
+    const defs = buildCursorToolDefinitions([tool]);
+
+    expect(defs).toHaveLength(1);
+    expect(defs[0]?.name).toBe("shell_command");
+    expect(defs[0]?.toolName).toBe("shell_command");
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
+  });
+
   test("does not alias namespaced exec_command tools", () => {
     const tool: OcxTool = {
       name: "exec_command",
@@ -103,11 +128,11 @@ describe("Cursor tool definitions", () => {
 
     expect(hinted).toContain(prompt);
     expect(hinted).toContain("This turn requests 10 tool uses");
-    expect(hinted).toContain("exactly 10 separate `exec_command` function calls/results");
-    expect(hinted).toContain("One `exec_command` containing chained commands counts as 1 tool call, not 10");
+    expect(hinted).toContain("exactly 10 separate Codex shell bridge function calls/results (`shell_command` or `exec_command`)");
+    expect(hinted).toContain("One shell-bridge call containing chained commands counts as 1 tool call, not 10");
     expect(hinted).toContain("one parallel tool-call batch containing all 10");
-    expect(hinted).toContain("repeated `exec_command` calls");
-    expect(hinted).toContain("Codex Responses bridge exec tool");
+    expect(hinted).toContain("repeated Codex shell bridge calls (`shell_command` or `exec_command`)");
+    expect(hinted).toContain("Codex Responses shell bridge");
     expect(hinted).toContain("external MCP server tool");
     expect(hinted).toContain("bridge may suspend");
     expect(hinted).toContain("Do not use `tool_search`, external MCP, or resource discovery");
@@ -136,6 +161,15 @@ describe("Cursor tool definitions", () => {
       "tool_search",
       "list_mcp_resources",
     ]);
+  });
+
+  test("filters generic tool-count demos when only shell_command is available", () => {
+    const tools: OcxTool[] = [
+      { name: "shell_command", description: "Run", parameters: {} },
+      { name: "tool_search", description: "Search tools", parameters: {} },
+    ];
+
+    expect(cursorToolsForActivePrompt(tools, "Use any 10 tools")?.map(tool => cursorToolWireName(tool))).toEqual(["shell_command"]);
   });
 
   test("does not erase explicit non-exec tool_choice for generic tool-count prompts", () => {
@@ -185,10 +219,22 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("current tool catalog as ground truth");
     expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Glob`, `Bash`, `LS`");
     expect(note).toContain("not an external MCP server tool");
+    expect(note).toContain("Never tell the user that shell or read access is blocked");
     expect(note).toContain("prefer one response containing multiple tool calls");
     expect(note).toContain("Use MCP only for explicit discovery/resource tasks");
     expect(note).toContain("not generic tool-count demos");
     expect(note).toContain("Do not count or report a tool call unless a tool result was actually returned.");
+  });
+
+  test("builds shell_command guidance with alias and anti-false-block wording", () => {
+    const note = buildCursorToolGuidanceSystemNote([{ name: "shell_command", description: "Run", parameters: {} }]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("`shell_command`");
+    expect(note).toContain("`shell_command` and `exec_command` are aliases of the same bridge");
+    expect(note).toContain("mcp_opencodex-responses_shell_command");
+    expect(note).toContain("Never tell the user that shell or read access is blocked");
   });
 
   test("adds codex-native edit guidance only when apply_patch is advertised", () => {

@@ -104,7 +104,8 @@ describe("Cursor native exec bridge", () => {
     expect(deniedRead.message.case).toBe("readResult");
     expect(deniedRead.message.value.result.case).toBe("error");
     if (deniedRead.message.value.result.case === "error") {
-      expect(deniedRead.message.value.result.value.error).toContain("not available for this request");
+      expect(deniedRead.message.value.result.value.error).toContain("disabled by OpenCodex policy");
+      expect(deniedRead.message.value.result.value.error).toContain("not a Codex sandbox denial");
     }
 
     const deniedShell = decode((await handleCursorNativeExec(execMessage({
@@ -114,7 +115,8 @@ describe("Cursor native exec bridge", () => {
     expect(deniedShell.message.case).toBe("shellResult");
     expect(deniedShell.message.value.result.case).toBe("failure");
     if (deniedShell.message.value.result.case === "failure") {
-      expect(deniedShell.message.value.result.value.stderr).toContain("exec_command");
+      expect(deniedShell.message.value.result.value.stderr).toContain("shell_command");
+      expect(deniedShell.message.value.result.value.stderr).toContain("not a Codex sandbox denial");
     }
 
     const deniedStream = await handleCursorNativeExec(execMessage({
@@ -126,7 +128,8 @@ describe("Cursor native exec bridge", () => {
       .flatMap(msg => (msg.message.case === "execClientMessage" ? [msg.message.value] : []))
       .flatMap(frame => (frame.message.case === "shellStream" && frame.message.value.event.case === "stderr" ? [frame.message.value.event.value.data] : []))
       .join("\n");
-    expect(streamText).toContain("exec_command");
+    expect(streamText).toContain("shell_command");
+    expect(streamText).toContain("not a Codex sandbox denial");
 
     const deniedBackground = decode((await handleCursorNativeExec(execMessage({
       case: "backgroundShellSpawnArgs",
@@ -135,7 +138,7 @@ describe("Cursor native exec bridge", () => {
     expect(deniedBackground.message.case).toBe("backgroundShellSpawnResult");
     expect(deniedBackground.message.value.result.case).toBe("error");
     if (deniedBackground.message.value.result.case === "error") {
-      expect(deniedBackground.message.value.result.value.error).toContain("exec_command");
+      expect(deniedBackground.message.value.result.value.error).toContain("shell_command");
     }
 
     const deniedStdin = decode((await handleCursorNativeExec(execMessage({
@@ -145,7 +148,7 @@ describe("Cursor native exec bridge", () => {
     expect(deniedStdin.message.case).toBe("writeShellStdinResult");
     expect(deniedStdin.message.value.result.case).toBe("error");
     if (deniedStdin.message.value.result.case === "error") {
-      expect(deniedStdin.message.value.result.value.error).toContain("exec_command");
+      expect(deniedStdin.message.value.result.value.error).toContain("shell_command");
     }
 
     const deniedFetch = decode((await handleCursorNativeExec(execMessage({
@@ -155,7 +158,7 @@ describe("Cursor native exec bridge", () => {
     expect(deniedFetch.message.case).toBe("fetchResult");
     expect(deniedFetch.message.value.result.case).toBe("error");
     if (deniedFetch.message.value.result.case === "error") {
-      expect(deniedFetch.message.value.result.value.error).toContain("not available for this request");
+      expect(deniedFetch.message.value.result.value.error).toContain("disabled by OpenCodex policy");
     }
   });
 
@@ -193,7 +196,7 @@ describe("Cursor native exec bridge", () => {
     expect(shell.message.value.result.case).toBe("failure");
     if (shell.message.value.result.case === "failure") {
       expect(shell.message.value.result.value.stdout).toBe("");
-      expect(shell.message.value.result.value.stderr).toContain("exec_command");
+      expect(shell.message.value.result.value.stderr).toContain("shell_command");
     }
   });
 

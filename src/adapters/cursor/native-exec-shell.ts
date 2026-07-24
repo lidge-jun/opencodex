@@ -24,7 +24,7 @@ const backgroundShells = new Map<number, { child: ChildProcessWithoutNullStreams
 let nextShellId = 1;
 
 const NATIVE_SHELL_DISABLED =
-  "Cursor native shell execution is not available for this request. Use the exec_command tool to run shell commands instead.";
+  "Cursor-native Shell is disabled by OpenCodex policy for this request (not a Codex sandbox denial). Use the Codex bridge shell tool from the current catalog — usually `shell_command` or `exec_command`, including the long MCP display name if that is what the list shows.";
 
 function rejectedShellResult(command: string, cwd: string, started: number) {
   return create(ShellResultSchema, {

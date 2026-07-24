@@ -312,6 +312,23 @@ describe("Cursor request builder", () => {
     expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 
+  test("pins the Codex shell bridge and apply_patch through truncation", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const patch = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    const budget = applyCursorToolBudget([...regular, shell, patch], "auto");
+
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
   test("adds an honest recovery note only when tool_search survives", () => {
     const tools = [
       { name: "tool_search", description: "Discover", parameters: {}, toolSearch: true },

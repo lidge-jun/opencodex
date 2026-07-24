@@ -44,7 +44,7 @@ function codexNativeMutationRefusal(operation: "write" | "delete"): string {
 }
 
 const NATIVE_LOCAL_EXEC_DISABLED =
-  "Cursor native local filesystem execution is not available for this request. Use the exec_command tool with equivalent shell commands (cat, head, ls, rg, grep) for file reads and searches, or apply_patch for file edits.";
+  "Cursor-native local filesystem execution is disabled by OpenCodex policy for this request. This is not a Codex sandbox denial. Use the Codex Responses bridge shell tool (`shell_command` / `exec_command`, or the listed `mcp_opencodex-responses_*` display alias) with equivalent shell commands (cat, head, ls, rg, grep) for file reads and searches, or `apply_patch` for file edits. Never tell the user that shell or read access is blocked unless that bridge tool also fails.";
 
 export function rejectReadExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
   if (execMsg.message.case !== "readArgs") throw new Error("invalid read exec");

@@ -6,22 +6,27 @@ import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from 
 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
+export const CODEX_SHELL_COMMAND_TOOL = "shell_command";
 export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
 export const CURSOR_EXEC_COMMAND_TOOL = CODEX_EXEC_COMMAND_TOOL;
-export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE = 'Shell commands use the `exec_command` tool with JSON arguments like {"cmd":"..."}.';
-export const CURSOR_SHELL_ALIAS_USER_HINT = "Use exec_command for this shell command.";
+export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL] as const;
+export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
+  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. This is not a sandbox denial.';
+export const CURSOR_SHELL_ALIAS_USER_HINT =
+  "Use the Codex shell bridge tool listed this turn (`shell_command` or `exec_command`, including the long `mcp_opencodex-responses_*` name). Do not tell the user shell access is blocked unless that bridge tool also fails.";
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS"] as const;
 
 export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
-  "For generic tool-use/count demos, satisfy the request with repeated `exec_command` calls for harmless commands.",
-  "`exec_command` is the Codex Responses bridge exec tool exposed through Cursor's tool protocol; do not describe it as an external MCP server tool.",
+  "For generic tool-use/count demos, satisfy the request with repeated Codex shell bridge calls (`shell_command` or `exec_command`) for harmless commands.",
+  "`shell_command` / `exec_command` are the Codex Responses shell bridge exposed through Cursor's tool protocol; do not describe them as an external MCP server tool.",
   "Do not use `run_shell` unless this turn's tool catalog lists it.",
-  "A request for N tools means N separate `exec_command` invocations/results; never satisfy it with one chained shell command such as `cmd1 && cmd2`.",
-  "For independent read-only or output-only commands, emit all requested `exec_command` calls in the same response before waiting when the runtime supports parallel tool calls.",
+  "A request for N tools means N separate shell-bridge invocations/results; never satisfy it with one chained shell command such as `cmd1 && cmd2`.",
+  "For independent read-only or output-only commands, emit all requested shell-bridge calls in the same response before waiting when the runtime supports parallel tool calls.",
   "The Cursor bridge may suspend after the first returned bridge tool call, so emit sibling calls together before any result is needed.",
-  "If parallel emission is unavailable, continue with separate `exec_command` calls until the requested count has returned.",
+  "If parallel emission is unavailable, continue with separate shell-bridge calls until the requested count has returned.",
   "Do not use `tool_search`, external MCP, or resource discovery just to pad the count unless explicitly asked.",
   "Do not suggest or switch to neighboring-agent tools such as `Grep`, `Read`, `Glob`, `Bash`, or `LS` unless this turn's catalog lists those exact names.",
+  "Never tell the user that shell or read access is blocked unless the Codex shell bridge tool itself fails.",
 ].join(" ");
 
 export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
@@ -38,8 +43,17 @@ export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+export function isCodexShellBridgeToolName(name: string): boolean {
+  return (CODEX_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+  return !tool.namespace && isCodexShellBridgeToolName(tool.name);
+}
+
+/** @deprecated Prefer isBareCodexShellBridgeTool; kept for older call sites/tests. */
 function isBareCodexExecCommandTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
-  return !tool.namespace && tool.name === CODEX_EXEC_COMMAND_TOOL;
+  return isBareCodexShellBridgeTool(tool);
 }
 
 export function cursorRequestHasShellAlias(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined): boolean {
@@ -60,8 +74,9 @@ export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): s
 /**
  * Cursor's harness shows MCP tools to the model as `mcp_<providerIdentifier>_<toolName>`; models
  * sometimes call that display name verbatim instead of the advertised short name (live 20:41/21:00
- * sessions: `mcp_opencodex-responses_exec_command`). Fold the display prefix back to the advertised
- * wire name so both spellings resolve to the same client tool instead of "unknown Responses tool".
+ * sessions: `mcp_opencodex-responses_exec_command` / `mcp_opencodex-responses_shell_command`).
+ * Fold the display prefix back to the advertised wire name, and treat `shell_command` /
+ * `exec_command` as the same Codex shell bridge, so alias thrash does not become "tool not found".
  */
 const CURSOR_MCP_DISPLAY_PREFIX = `mcp_${OCX_RESPONSES_TOOL_PROVIDER}_`;
 
@@ -71,7 +86,15 @@ export function normalizeCursorWireName(name: string): string {
 
 export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?: ReadonlyMap<string, string>): string {
   const normalized = normalizeCursorWireName(name);
-  return cursorToolNameMap?.get(normalized) ?? normalized;
+  const direct = cursorToolNameMap?.get(normalized);
+  if (direct) return direct;
+  if (cursorToolNameMap && isCodexShellBridgeToolName(normalized)) {
+    for (const alias of CODEX_SHELL_BRIDGE_TOOL_NAMES) {
+      const mapped = cursorToolNameMap.get(alias);
+      if (mapped) return mapped;
+    }
+  }
+  return normalized;
 }
 
 export function cursorToolInputSchema(tool: OcxTool): unknown {
@@ -79,7 +102,7 @@ export function cursorToolInputSchema(tool: OcxTool): unknown {
 }
 
 function activeTextMentionsExecCommand(text: string): boolean {
-  return /\bexec_command\b/i.test(text);
+  return /\b(?:exec_command|shell_command)\b/i.test(text);
 }
 
 function looksLikeShellCommandRequest(text: string): boolean {
@@ -127,9 +150,9 @@ function cursorGenericToolUseHint(text: string): string {
   const count = requestedCursorToolUseCount(text);
   if (!count) return CURSOR_GENERIC_TOOL_USE_USER_HINT;
   return [
-    `This turn requests ${count} tool uses: emit exactly ${count} separate \`exec_command\` function calls/results.`,
-    `One \`exec_command\` containing chained commands counts as 1 tool call, not ${count}.`,
-    `Prefer one parallel tool-call batch containing all ${count} independent \`exec_command\` calls before waiting for results.`,
+    `This turn requests ${count} tool uses: emit exactly ${count} separate Codex shell bridge function calls/results (\`shell_command\` or \`exec_command\`).`,
+    `One shell-bridge call containing chained commands counts as 1 tool call, not ${count}.`,
+    `Prefer one parallel tool-call batch containing all ${count} independent shell-bridge calls before waiting for results.`,
     CURSOR_GENERIC_TOOL_USE_USER_HINT,
   ].join(" ");
 }
@@ -238,7 +261,9 @@ export function buildCursorToolGuidanceSystemNote(
   if (wireNames.length === 0) return undefined;
 
   const listedNames = quotedNames(wireNames);
-  const hasBareExec = wireNames.includes(CODEX_EXEC_COMMAND_TOOL);
+  const shellBridgeNames = wireNames.filter(isCodexShellBridgeToolName);
+  const hasBareExec = shellBridgeNames.length > 0;
+  const shellBridgeLabel = quotedNames(shellBridgeNames.length > 0 ? shellBridgeNames : [...CODEX_SHELL_BRIDGE_TOOL_NAMES]);
   const hasApplyPatch = cursorRequestAdvertisesApplyPatch(tools, toolChoice);
   const discoveryTools = discoveryToolLabel(wireNames);
   const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
@@ -249,31 +274,34 @@ export function buildCursorToolGuidanceSystemNote(
       ? `This turn does not expose neighboring-agent tool names ${quotedNames(unavailableNeighborNames)}; do not call or suggest them unless the catalog lists them.`
       : undefined,
     hasBareExec
-      ? "`exec_command` is the Codex Responses bridge exec tool for this turn, exposed through Cursor's tool protocol; it is not an external MCP server tool."
+      ? `${shellBridgeLabel} is the Codex Responses shell bridge for this turn, exposed through Cursor's tool protocol; it is not an external MCP server tool. \`shell_command\` and \`exec_command\` are aliases of the same bridge.`
       : undefined,
     hasBareExec
-      ? "Your tool list may display it under the longer name `mcp_opencodex-responses_exec_command`; both names are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
+      ? "Your tool list may display it under a longer `mcp_opencodex-responses_shell_command` / `mcp_opencodex-responses_exec_command` name; those are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
+      : undefined,
+    hasBareExec
+      ? "Never tell the user that shell or read access is blocked unless the Codex shell bridge tool itself fails. Cursor-native Shell/Read being unavailable is policy routing, not a sandbox denial."
       : undefined,
     "Cursor product features (Chronicle, screen recording, Notes, Plans, background agents) are available only if this turn's catalog lists a matching tool; do not offer or promise them otherwise.",
     hasBareExec
-      ? "For file read/search/listing, use `exec_command` when no more specific listed tool is available."
+      ? `For file read/search/listing, use ${shellBridgeLabel} when no more specific listed tool is available.`
       : undefined,
     hasApplyPatch
       ? "For file edits, use the `apply_patch` tool, not built-in file write/delete tools."
       : undefined,
     hasBareExec
-      ? "For tool-count demos, each counted tool must be a separate `exec_command` invocation/result; do not collapse several requested tools into one chained shell command."
+      ? "For tool-count demos, each counted tool must be a separate Codex shell-bridge invocation/result; do not collapse several requested tools into one chained shell command."
       : undefined,
     "For independent read-only tool-count or batch requests, prefer one response containing multiple tool calls before waiting for results when the runtime supports parallel tool calls.",
     hasBareExec
-      ? "For bridge tool-count batches, emit sibling `exec_command` calls together before any result is needed because the bridge may suspend after a returned tool call."
+      ? "For bridge tool-count batches, emit sibling shell-bridge calls together before any result is needed because the bridge may suspend after a returned tool call."
       : undefined,
     discoveryTools
       ? `Use ${discoveryTools} only for explicit discovery/resource tasks, not generic tool-count demos.`
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
     hasBareExec
-      ? "If a built-in file read, directory listing, grep, or shell operation is rejected by the runtime, use \`exec_command\` with the equivalent shell command instead (e.g. \`cat\`, \`ls\`, \`rg\`, \`grep\`). For file edits, use \`apply_patch\` when available."
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, use ${shellBridgeLabel} with the equivalent shell command instead (e.g. \`cat\`, \`ls\`, \`rg\`, \`grep\`). That rejection is not a sandbox denial. For file edits, use \`apply_patch\` when available.`
       : undefined,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");

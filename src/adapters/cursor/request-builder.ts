@@ -17,6 +17,7 @@ import {
   cursorToolAllowedByChoice,
   cursorToolWireName,
   cursorToolsForActivePrompt,
+  isBareCodexShellBridgeTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
 
@@ -36,9 +37,12 @@ function explicitlySelectedNames(choice: OcxToolChoice | undefined): Set<string>
 
 function toolPriority(tool: OcxTool, selectedNames: ReadonlySet<string>): number {
   if (toolChoiceAliases(tool).some(name => selectedNames.has(name))) return 0;
-  if (tool.loadedFromToolSearch) return 1;
-  if (!tool.namespace) return 2;
-  return 3;
+  // Keep the shell bridge and apply_patch through truncation so models always have a working
+  // Codex-local execution path even when niche MCP tools are dropped (#399).
+  if (isBareCodexShellBridgeTool(tool) || (!tool.namespace && tool.name === "apply_patch")) return 1;
+  if (tool.loadedFromToolSearch) return 2;
+  if (!tool.namespace) return 3;
+  return 4;
 }
 
 /**

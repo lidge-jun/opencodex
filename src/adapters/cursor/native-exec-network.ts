@@ -7,7 +7,7 @@ export interface CursorNativeNetworkDeps {
 }
 
 const NATIVE_FETCH_DISABLED =
-  "Cursor native fetch execution is not available for this request. Use the exec_command tool with curl or wget to make network requests instead.";
+  "Cursor-native fetch is disabled by OpenCodex policy for this request (not a Codex sandbox denial). Use the Codex shell bridge tool `shell_command` (aliases: `exec_command`, `mcp_opencodex-responses_shell_command`, `mcp_opencodex-responses_exec_command`) with curl or wget instead.";
 
 export function rejectFetchExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
   if (execMsg.message.case !== "fetchArgs") throw new Error("invalid fetch exec");
