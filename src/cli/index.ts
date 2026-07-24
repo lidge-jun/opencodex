@@ -36,6 +36,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
+import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { maybeShowStarPrompt } from "./star-prompt";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
@@ -49,8 +50,9 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(0);
 }
 
-if (command === "help" && args[1]) {
-  printSubcommandUsage(args[1]);
+if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+  if (command === "help" && args[1]) printSubcommandUsage(args[1]);
+  else printUsage();
   process.exit(0);
 }
 
@@ -58,6 +60,8 @@ if (command !== undefined && command !== "help" && hasHelpFlag(args.slice(1))) {
   printSubcommandUsage(command);
   process.exit(0);
 }
+
+maybeAutoRestoreCodexShim(command, args);
 
 function parsePortOption(): number | undefined {
   if (args.length === 1) return undefined;

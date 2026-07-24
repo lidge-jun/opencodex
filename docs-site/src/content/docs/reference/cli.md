@@ -372,8 +372,11 @@ ocx service uninstall
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
 
-If Codex is updated and overwrites the wrapper, the shim auto-repairs on the next `install` call —
-the new binary is backed up and a fresh wrapper is written.
+If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
+backs up the stable new launcher and restores the shim before dispatch. A launcher that is still
+changing is left untouched and retried later. Repair failures warn without failing the requested
+command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
+`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
 
 | Subcommand | Action |
 | --- | --- |

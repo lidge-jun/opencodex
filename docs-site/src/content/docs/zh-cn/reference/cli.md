@@ -360,8 +360,11 @@ ocx service uninstall
 把 PATH 上基于脚本的 `codex` launcher 包装成轻量自动启动脚本。真实 `codex.exe` 目标保持不变，
 避免破坏精确的可执行文件调用。
 
-如果 Codex 更新覆盖了 wrapper，下一次调用 `install` 时 shim 会自动修复：先备份新 binary，再写入
-新的 wrapper。
+如果已完成的外部 Codex 更新覆盖了已安装的 shim，下一条普通 `ocx` 命令会在执行前备份已稳定的
+新启动器并恢复 shim。仍在变化的启动器不会被改动，而会稍后重试。修复失败只会警告，不会让请求的
+命令失败；手动备用命令为 `ocx codex-shim install`。若要关闭自动恢复，请将
+`codexShimAutoRestore` 设为 `false`，或为进程设置
+`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。
 
 | Subcommand | Action |
 | --- | --- |

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,41 @@ describe("CLI subcommand help", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: ocx start [--port <port>]");
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
+  });
+
+  test("top-level help forms exit before Codex shim auto-restore can mutate launchers", () => {
+    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-help-shim-home-"));
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-help-shim-bin-"));
+    try {
+      const wrapper = join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+      const backup = join(binDir, process.platform === "win32" ? "codex.opencodex-real.cmd" : "codex.opencodex-real");
+      const statePath = join(opencodexHome, "codex-shim.json");
+      const replacement = "replacement that help must not promote\n";
+      writeFileSync(wrapper, replacement, "utf8");
+      writeFileSync(backup, "known-good prior launcher\n", "utf8");
+      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
+      writeFileSync(statePath, `${JSON.stringify({
+        platform: process.platform,
+        wrapperPath: wrapper,
+        originalPath: wrapper,
+        backupPath: backup,
+      }, null, 2)}\n`, "utf8");
+      const stateBefore = readFileSync(statePath);
+      const backupBefore = readFileSync(backup);
+      Bun.sleepSync(120);
+
+      for (const args of [[], ["help"], ["--help"], ["-h"]]) {
+        const result = runCli(args, { OPENCODEX_HOME: opencodexHome, PATH: binDir });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("opencodex (ocx)");
+        expect(readFileSync(wrapper, "utf8")).toBe(replacement);
+        expect(readFileSync(backup)).toEqual(backupBefore);
+        expect(readFileSync(statePath)).toEqual(stateBefore);
+      }
+    } finally {
+      rmSync(opencodexHome, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
   });
 
   test("tray help documents the install-only no-start flag", () => {
