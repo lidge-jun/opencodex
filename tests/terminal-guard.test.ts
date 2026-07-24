@@ -84,6 +84,24 @@ describe("terminal guard", () => {
     expect(analysis.decision).toBe("continue");
   });
 
+  test("continues a Chinese progress plan after earlier tools when the user says continue", () => {
+    const request = parsed("继续");
+    request.context.messages = [
+      { role: "user", content: "请查清账户信息表的真实来源", timestamp: 1 },
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "exec_command", arguments: {} }], timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_1", toolName: "exec_command", content: "凭据已读出", isError: false, timestamp: 3 },
+      { role: "assistant", content: [{ type: "text", text: "直连预发账库时，我得用刚从 AppConfigStore 读出的凭据。" }], timestamp: 4 },
+      { role: "user", content: "继续", timestamp: 5 },
+    ];
+
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "让我用 AppConfigStore 读出完整服务凭据并直接给 pymysql，查那张账户信息表。" },
+      { type: "done" },
+    ]);
+
+    expect(analysis.decision).toBe("continue");
+  });
+
   test("does not continue a normal explanatory answer", () => {
     const analysis = analyzeTerminalTurn(parsed("为什么会出现这个错误？", false), [
       { type: "text_delta", text: "这是因为请求在上游被限流。" },
