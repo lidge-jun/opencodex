@@ -2,6 +2,7 @@ import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
+import { FREE_PROVIDER_DIRECTORY, type ProviderAccessGroup } from "./free-directory";
 import {
   QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
   ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
@@ -83,6 +84,15 @@ export interface ProviderRegistryEntry {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   project?: string;
   location?: string;
+  accessGroups?: readonly ProviderAccessGroup[];
+  supportLevel?: "supported" | "experimental" | "reference";
+  verification?: "official" | "primary" | "unverified";
+  documentationUrl?: string;
+  modelsUrl?: string;
+  discovery?: "live" | "static" | "hybrid" | "unsupported";
+  lastVerified?: string;
+  /** Catalog-only row; excluded from legacy CLI login/init projections. */
+  directoryOnly?: boolean;
 }
 
 export type ProviderConfigSeed = Pick<
@@ -333,7 +343,7 @@ const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntrie
   UMANS_MODELS.map(id => [id, UMANS_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
 
-export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+const BASE_PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "openai",
     label: "OpenAI (Codex login)",
@@ -763,6 +773,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://cloud.siliconflow.cn/account/ak",
+    baseUrlChoices: [
+      { id: "china-mainland", label: "China mainland", baseUrl: "https://api.siliconflow.cn/v1" },
+      { id: "international", label: "International", baseUrl: "https://api.siliconflow.com/v1" },
+    ],
     liveModels: true,
     note: "OpenAI-compatible live model catalog; reasoning controls vary by model.",
   },
@@ -1008,6 +1022,31 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
+];
+
+const BASE_PROVIDER_IDS = new Set(BASE_PROVIDER_REGISTRY.map(entry => entry.id));
+const FREE_DIRECTORY_BY_ID = new Map(FREE_PROVIDER_DIRECTORY.map(entry => [entry.id, entry]));
+
+export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+  ...BASE_PROVIDER_REGISTRY.map(entry => {
+    const directory = FREE_DIRECTORY_BY_ID.get(entry.id);
+    if (!directory) return entry;
+    return {
+      ...entry,
+      accessGroups: directory.accessGroups,
+      supportLevel: directory.supportLevel,
+      verification: directory.verification,
+      ...(directory.documentationUrl ? { documentationUrl: directory.documentationUrl } : {}),
+      ...(directory.modelsUrl ? { modelsUrl: directory.modelsUrl } : {}),
+      discovery: directory.discovery,
+      lastVerified: directory.lastVerified,
+    };
+  }),
+  ...FREE_PROVIDER_DIRECTORY.filter(entry => !BASE_PROVIDER_IDS.has(entry.id)).map(entry => ({
+    ...entry,
+    dashboardPreset: true,
+    directoryOnly: true,
+  })),
 ];
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
