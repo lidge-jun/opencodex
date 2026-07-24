@@ -82,6 +82,7 @@ public final class OcxClient {
     }
 
     private static let commandTimeout: TimeInterval = 15
+    private static let forceKillGrace: TimeInterval = 2
 
     private func run(_ executable: URL, arguments: [String]) throws -> String {
         let process = configuredProcess(executable, arguments: arguments)
@@ -93,30 +94,32 @@ public final class OcxClient {
 
         let stdoutBox = DataBox()
         let stderrBox = DataBox()
-        let group = DispatchGroup()
-
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stdoutBox.data = output.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stderrBox.data = errors.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+        let exitGroup = DispatchGroup()
+        exitGroup.enter()
+        process.terminationHandler = { _ in
+            exitGroup.leave()
         }
 
         try process.run()
 
+        DispatchQueue.global(qos: .utility).async {
+            stdoutBox.data = output.fileHandleForReading.readDataToEndOfFile()
+        }
+        DispatchQueue.global(qos: .utility).async {
+            stderrBox.data = errors.fileHandleForReading.readDataToEndOfFile()
+        }
+
         let deadline = DispatchTime.now() + Self.commandTimeout
-        let waitResult = group.wait(timeout: deadline)
-        if waitResult == .timedOut || process.isRunning {
+        if exitGroup.wait(timeout: deadline) == .timedOut {
             process.terminate()
-            _ = group.wait(timeout: .now() + 1)
+            if exitGroup.wait(timeout: .now() + Self.forceKillGrace) == .timedOut {
+                process.interrupt()
+                kill(process.processIdentifier, SIGKILL)
+                _ = exitGroup.wait(timeout: .now() + Self.forceKillGrace)
+            }
             throw OcxClientError.commandFailed("ocx timed out after \(Int(Self.commandTimeout))s.")
         }
 
-        process.waitUntilExit()
         let stdout = stdoutBox.data
         let stderr = stderrBox.data
         guard process.terminationStatus == 0 else {
