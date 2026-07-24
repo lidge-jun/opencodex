@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { IconPlus, IconX, IconCheck } from "../icons";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { IconCheck, IconPlus, IconX } from "../icons";
 import { useI18n, LOCALES } from "../i18n/shared";
 
 interface ApiKeyEntry {
@@ -7,6 +7,56 @@ interface ApiKeyEntry {
   name: string;
   prefix: string;
   createdAt: string;
+}
+
+interface ApiEndpointInfo {
+  baseUrl: string;
+  responses: string;
+  chatCompletions: string;
+  messages: string;
+  models: string;
+}
+
+interface ExternalModelRow {
+  id: string;
+  displayName: string;
+  provider: string;
+  disabled?: boolean;
+  native?: boolean;
+  custom?: boolean;
+}
+
+type ModelTestState = "idle" | "testing" | "ok" | "error";
+
+const DEFAULT_ENDPOINTS: ApiEndpointInfo = {
+  baseUrl: "http://127.0.0.1:10100/v1",
+  responses: "http://127.0.0.1:10100/v1/responses",
+  chatCompletions: "http://127.0.0.1:10100/v1/chat/completions",
+  messages: "http://127.0.0.1:10100/v1/messages",
+  models: "http://127.0.0.1:10100/v1/models",
+};
+
+function deriveApiEndpoints(endpoint: string): ApiEndpointInfo {
+  const responses = endpoint || DEFAULT_ENDPOINTS.responses;
+  const match = responses.match(/^(.*)\/v1\/responses\/?$/);
+  const baseUrl = match ? `${match[1]}/v1` : responses.replace(/\/responses\/?$/, "");
+  return {
+    baseUrl,
+    responses,
+    chatCompletions: `${baseUrl}/chat/completions`,
+    messages: `${baseUrl}/messages`,
+    models: `${baseUrl}/models`,
+  };
+}
+
+function externalModelId(model: ExternalModelRow): string {
+  return model.id;
+}
+
+function modelProtocols(model: ExternalModelRow): string[] {
+  if (model.provider === "anthropic") return ["messages", "chat"];
+  if (model.provider === "openai" || model.native) return ["responses", "chat"];
+  return ["chat"];
 }
 
 function formatCreatedDate(iso: string, localeTag?: string): string {
@@ -17,7 +67,14 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
-  const [endpoint, setEndpoint] = useState("");
+  const [endpoints, setEndpoints] = useState<ApiEndpointInfo>(DEFAULT_ENDPOINTS);
+  const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(true);
+  const [models, setModels] = useState<ExternalModelRow[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
+  const [modelTests, setModelTests] = useState<Record<string, { state: ModelTestState; detail?: string }>>({});
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -30,19 +87,85 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       if (res.ok) {
         const data = await res.json();
         setKeys(data.keys ?? []);
-        setEndpoint(data.endpoint ?? "");
+        setEndpoints({
+          baseUrl: data.baseUrl ?? deriveApiEndpoints(data.endpoint ?? "").baseUrl,
+          responses: data.responsesEndpoint ?? data.endpoint ?? DEFAULT_ENDPOINTS.responses,
+          chatCompletions: data.chatCompletionsEndpoint ?? deriveApiEndpoints(data.endpoint ?? "").chatCompletions,
+          messages: data.messagesEndpoint ?? deriveApiEndpoints(data.endpoint ?? "").messages,
+          models: data.modelsEndpoint ?? deriveApiEndpoints(data.endpoint ?? "").models,
+        });
+        setClaudeCodeEnabled(data.claudeCodeEnabled !== false);
       }
     } catch { /* proxy down */ }
+  }, [apiBase]);
+
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsLoadFailed(false);
+    try {
+      const res = await fetch(`${apiBase}/v1/models`);
+      if (!res.ok) {
+        setModels([]);
+        setModelsLoadFailed(true);
+        return;
+      }
+      const data = await res.json() as unknown;
+      const rawRows = Array.isArray(data)
+        ? data
+        : (typeof data === "object" && data !== null && Array.isArray((data as { data?: unknown }).data)
+          ? (data as { data: unknown[] }).data
+          : null);
+      if (!rawRows) {
+        setModels([]);
+        setModelsLoadFailed(true);
+        return;
+      }
+      const rows = rawRows
+        .filter((row): row is { id: string; owned_by?: string } => (
+          typeof row === "object"
+          && row !== null
+          && typeof (row as { id?: unknown }).id === "string"
+        ))
+        .map(row => {
+          const slashIndex = row.id.indexOf("/");
+          const provider = slashIndex > 0 ? row.id.slice(0, slashIndex) : (row.owned_by ?? "openai");
+          const native = slashIndex < 0;
+          return {
+            id: row.id,
+            displayName: row.id,
+            provider,
+            native,
+            custom: provider !== "openai" && provider !== "combo" && !native,
+          } satisfies ExternalModelRow;
+        })
+        .sort((a, b) => externalModelId(a).localeCompare(externalModelId(b)));
+      setModels(rows);
+    } catch {
+      setModels([]);
+      setModelsLoadFailed(true);
+    } finally {
+      setModelsLoading(false);
+    }
   }, [apiBase]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void fetchKeys();
+      void fetchModels();
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [fetchKeys]);
+  }, [fetchKeys, fetchModels]);
 
-  const responseEndpoint = endpoint || "http://127.0.0.1:10100/v1/responses";
+  const filteredModels = useMemo(() => {
+    const query = modelQuery.trim().toLowerCase();
+    if (!query) return models;
+    return models.filter(model => {
+      const id = externalModelId(model).toLowerCase();
+      return id.includes(query)
+        || model.displayName.toLowerCase().includes(query)
+        || model.provider.toLowerCase().includes(query);
+    });
+  }, [modelQuery, models]);
 
   const handleCreate = async () => {
     setCreating(true);
@@ -81,6 +204,56 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const copyModelId = async (modelId: string) => {
+    await navigator.clipboard.writeText(modelId);
+    setCopiedModelId(modelId);
+    window.setTimeout(() => setCopiedModelId(current => (current === modelId ? null : current)), 2000);
+  };
+
+  const sourceLabel = (model: ExternalModelRow): string => {
+    if (model.native) return t("api.sourceNative");
+    if (model.provider === "combo") return t("api.sourceCombo");
+    if (model.custom) return t("api.sourceCustom");
+    return model.provider;
+  };
+
+  const protocolLabel = (protocol: string): string => {
+    if (protocol === "responses") return t("api.protocolResponses");
+    if (protocol === "messages") return t("api.protocolMessages");
+    return t("api.protocolChatCompletions");
+  };
+
+  const testModel = async (model: ExternalModelRow) => {
+    const modelId = externalModelId(model);
+    setModelTests(current => ({ ...current, [modelId]: { state: "testing" } }));
+    try {
+      const res = await fetch(endpoints.chatCompletions, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        setModelTests(current => ({
+          ...current,
+          [modelId]: { state: "error", detail: detail.slice(0, 160) || String(res.status) },
+        }));
+        return;
+      }
+      setModelTests(current => ({ ...current, [modelId]: { state: "ok" } }));
+    } catch (error) {
+      setModelTests(current => ({
+        ...current,
+        [modelId]: { state: "error", detail: error instanceof Error ? error.message : t("api.testFailed") },
+      }));
+    }
+  };
+
   // Subtitle carries two inline <code> chips; split the localized string on both tokens.
   const subtitleParts = t("api.subtitle").split(/\{authHeader\}|\{altHeader\}/);
 
@@ -98,9 +271,43 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       </p>
 
       <div className="panel api-panel">
-        <h3 className="panel-title">{t("api.endpoint")}</h3>
-        <code className="api-code api-code-inline">{responseEndpoint}</code>
+        <h3 className="panel-title">{t("api.endpointsTitle")}</h3>
+        <div className="api-endpoints">
+          <div>
+            <span className="muted small">{t("api.baseUrl")}</span>
+            <code className="api-code api-code-inline">{endpoints.baseUrl}</code>
+          </div>
+          <div>
+            <span className="muted small">{t("api.responsesEndpoint")}</span>
+            <code className="api-code api-code-inline">{endpoints.responses}</code>
+          </div>
+          <div>
+            <span className="muted small">{t("api.chatCompletionsEndpoint")}</span>
+            <code className="api-code api-code-inline">{endpoints.chatCompletions}</code>
+          </div>
+          {claudeCodeEnabled && (
+            <div>
+              <span className="muted small">{t("api.messagesEndpoint")}</span>
+              <code className="api-code api-code-inline">{endpoints.messages}</code>
+            </div>
+          )}
+          <div>
+            <span className="muted small">{t("api.modelsEndpoint")}</span>
+            <code className="api-code api-code-inline">{endpoints.models}</code>
+          </div>
+        </div>
         <p className="muted small">{t("api.endpointNote")}</p>
+      </div>
+
+      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+        <h3 className="panel-title">{t("api.authTitle")}</h3>
+        <ul className="api-auth-list muted small">
+          <li>{t("api.authChatCompletions")}</li>
+          <li>{t("api.authResponses")}</li>
+          {claudeCodeEnabled && <li>{t("api.authMessages")}</li>}
+          <li>{t("api.authLoopback")}</li>
+        </ul>
+        <p className="muted small">{t("api.authBaseUrlNote")}</p>
       </div>
 
       {newKey && (
@@ -172,15 +379,122 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       </div>
 
       <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-        <h3 className="panel-title">{t("api.usageTitle")}</h3>
-        <pre className="api-code">{`curl ${responseEndpoint} \\
-  -H "Authorization: Bearer ocx_YOUR_KEY_HERE" \\
+        <div className="api-panel-head">
+          <h3 className="panel-title">{t("api.modelsTitle")}</h3>
+          <span className="muted mono text-label">{t("api.modelsCount", { count: filteredModels.length })}</span>
+        </div>
+        <p className="muted small">{t("api.modelsSubtitle")}</p>
+        <input
+          type="search"
+          className="input"
+          value={modelQuery}
+          onChange={event => setModelQuery(event.target.value)}
+          placeholder={t("api.modelsSearch")}
+          aria-label={t("api.modelsSearch")}
+        />
+        {modelsLoading ? (
+          <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsLoading")}</p>
+        ) : modelsLoadFailed ? (
+          <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsLoadFailed")}</p>
+        ) : filteredModels.length === 0 ? (
+          <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsEmpty")}</p>
+        ) : (
+          <div className="tbl-wrap" style={{ marginTop: "0.75rem" }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>{t("api.colModel")}</th>
+                  <th>{t("api.colSource")}</th>
+                  <th>{t("api.colProtocols")}</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredModels.map(model => {
+                  const modelId = externalModelId(model);
+                  const testState = modelTests[modelId]?.state ?? "idle";
+                  return (
+                    <tr key={modelId}>
+                      <td>
+                        <div className="api-model-cell">
+                          <code>{modelId}</code>
+                          {model.displayName !== model.id && <span className="muted small">{model.displayName}</span>}
+                        </div>
+                      </td>
+                      <td>{sourceLabel(model)}</td>
+                      <td>{modelProtocols(model).map(protocolLabel).join(", ")}</td>
+                      <td>
+                        <div className="api-model-actions">
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { void copyModelId(modelId); }}>
+                            {copiedModelId === modelId ? t("api.copied") : t("api.copyModelId")}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            disabled={testState === "testing"}
+                            onClick={() => { void testModel(model); }}
+                          >
+                            {testState === "testing" ? t("api.testingModel") : t("api.testModel")}
+                          </button>
+                        </div>
+                            {testState === "ok" && <p className="muted small api-test-note">{t("api.testSucceeded")}</p>}
+                        {testState === "error" && <p className="muted small api-test-note api-test-note--error">{modelTests[modelId]?.detail ?? t("api.testFailed")}</p>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+        <h3 className="panel-title">{t("api.usageChatTitle")}</h3>
+        <pre className="api-code">{`curl ${endpoints.chatCompletions} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-5.4",
+    "messages": [{"role": "user", "content": "Hello, world!"}]
+  }'`}</pre>
+      </div>
+
+      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+        <h3 className="panel-title">{t("api.usageResponsesTitle")}</h3>
+        <pre className="api-code">{`curl ${endpoints.responses} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
     "input": "Hello, world!"
   }'`}</pre>
       </div>
+
+      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+        <h3 className="panel-title">{t("api.usageMessagesTitle")}</h3>
+        <pre className="api-code">{`curl ${endpoints.messages} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "Hello, world!"}]
+  }'`}</pre>
+      </div>
+      {claudeCodeEnabled && (
+        <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+          <h3 className="panel-title">{t("api.usageMessagesTitle")}</h3>
+          <pre className="api-code">{`curl ${endpoints.messages} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "Hello, world!"}]
+  }'`}</pre>
+        </div>
+      )}
     </section>
   );
 }
