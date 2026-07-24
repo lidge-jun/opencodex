@@ -19,6 +19,7 @@ import {
   finalizeTurnEvents,
   mapCursorProtobufServerMessage,
 } from "../src/adapters/cursor/protobuf-events";
+import { estimateCursorInputTokens } from "../src/adapters/cursor/protobuf-request";
 
 const encoder = new TextEncoder();
 
@@ -414,11 +415,17 @@ describe("Cursor protobuf tool-call events", () => {
   });
 
   test("uses a request-local input estimate when no checkpoint or carry-forward context exists", () => {
-    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_200 });
+    const estimatedInputTokens = estimateCursorInputTokens({
+      modelId: "grok-4.5",
+      conversationId: "restart-without-checkpoint",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "Explain this JSON: {\\\"path\\\":\\\"src/app.ts\\\"}" }],
+    });
+    const state = createCursorProtobufEventState({ estimatedInputTokens });
     state.usage.outputTokens = 7;
 
     expect(finalizeTurnEvents(state)).toEqual([
-      { type: "done", usage: { inputTokens: 1_200, outputTokens: 7, totalTokens: 1_207, estimated: true } },
+      { type: "done", usage: { inputTokens: estimatedInputTokens, outputTokens: 7, totalTokens: estimatedInputTokens + 7, estimated: true } },
     ]);
   });
 

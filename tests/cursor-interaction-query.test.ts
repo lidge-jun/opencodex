@@ -171,12 +171,19 @@ describe("partialUsageFromEventState", () => {
   test("uses the request-local estimate after output when no checkpoint or carry exists", async () => {
     const { partialUsageFromEventState } = await import("../src/adapters/cursor/live-transport");
     const { createCursorProtobufEventState } = await import("../src/adapters/cursor/protobuf-events");
-    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_200 });
+    const { estimateCursorInputTokens } = await import("../src/adapters/cursor/protobuf-request");
+    const estimatedInputTokens = estimateCursorInputTokens({
+      modelId: "grok-4.5",
+      conversationId: "partial-without-checkpoint",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "Read this JSON: {\\\"path\\\":\\\"src/app.ts\\\"}" }],
+    });
+    const state = createCursorProtobufEventState({ estimatedInputTokens });
     state.usage.outputTokens = 7;
     expect(partialUsageFromEventState(state)).toEqual({
-      inputTokens: 1_200,
+      inputTokens: estimatedInputTokens,
       outputTokens: 7,
-      totalTokens: 1_207,
+      totalTokens: estimatedInputTokens + 7,
       estimated: true,
     });
   });

@@ -21,7 +21,7 @@ const DEFAULT_CHARS_PER_TOKEN = 4;
  */
 const KIRO_CHARS_PER_TOKEN = 3.5;
 
-const KIRO_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen"];
+const KIRO_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen", "grok", "xai/"];
 
 /** Model-aware chars-per-token ratio. Unknown models fall back to the generic English ratio. */
 export function charsPerToken(modelId?: string): number {

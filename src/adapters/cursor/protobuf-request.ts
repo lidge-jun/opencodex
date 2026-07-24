@@ -77,13 +77,10 @@ function buildRequestContext() {
   });
 }
 
-function jsonBlob(value: unknown): Uint8Array {
-  return encoder.encode(JSON.stringify(value));
-}
-
 type StoredRootBlob = {
   id: Uint8Array;
   byteLength: number;
+  serialized: string;
   role: "system" | "user" | "assistant" | "toolResult";
   messageIndex?: number;
   /** Original JSON text payload used when an active tool result must be truncated to fit. */
@@ -95,10 +92,12 @@ function storedRootBlob(
   role: StoredRootBlob["role"],
   opts?: { messageIndex?: number; text?: string },
 ): StoredRootBlob {
-  const data = jsonBlob(value);
+  const serialized = JSON.stringify(value);
+  const data = encoder.encode(serialized);
   return {
     id: storeCursorBlob(data),
     byteLength: data.byteLength,
+    serialized,
     role,
     ...(opts?.messageIndex !== undefined ? { messageIndex: opts.messageIndex } : {}),
     ...(opts?.text !== undefined ? { text: opts.text } : {}),
@@ -165,6 +164,7 @@ function rootPromptMessages(request: CursorRunRequest): {
   ids: Uint8Array[];
   byteLength: number;
   historyMessageStart: number;
+  serialized: string[];
 } {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
@@ -174,6 +174,7 @@ function rootPromptMessages(request: CursorRunRequest): {
       ids: entries.map(entry => entry.id),
       byteLength: entries.reduce((sum, entry) => sum + entry.byteLength, 0),
       historyMessageStart: 0,
+      serialized: entries.map(entry => entry.serialized),
     };
   }
 
@@ -290,6 +291,7 @@ function rootPromptMessages(request: CursorRunRequest): {
     ids: selected.map(entry => entry.id),
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
     historyMessageStart,
+    serialized: selected.map(entry => entry.serialized),
   };
 }
 
@@ -504,25 +506,37 @@ export function activePromptText(request: CursorRunRequest): string {
   return last?.role === "tool" ? last.content : "";
 }
 
+function modelVisibleRequestPayload(request: CursorRunRequest) {
+  const rawText = activePromptText(request);
+  const lastRole = request.messages.at(-1)?.role;
+  const text = lastRole === "user" || lastRole === "developer"
+    ? appendCursorShellAliasHint(request.tools, appendCursorGenericToolUseHint(request.tools, rawText))
+    : rawText;
+  return {
+    text,
+    roots: rootPromptMessages(request),
+    mcpToolDefs: buildCursorToolDefinitions(
+      cursorToolsForActivePrompt(request.tools, rawText, request.toolChoice),
+      request.toolChoice,
+    ),
+  };
+}
+
 /**
  * Conservative request-local fallback when Cursor emits neither a checkpoint nor a previously
  * observed context total. This is deliberately not persisted: a later authoritative checkpoint
  * remains the only source carried across turns.
  */
 export function estimateCursorInputTokens(request: CursorRunRequest): number {
-  return estimateTokens(JSON.stringify({
-    system: request.system,
-    messages: request.rawMessages ?? request.messages,
-    tools: request.tools,
-  }), request.modelId);
+  const payload = modelVisibleRequestPayload(request);
+  const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
+  const action = !lastRawIsToolResult && payload.text.trim().length > 0 ? payload.text : "";
+  return estimateTokens(JSON.stringify({ roots: payload.roots.serialized, action, tools: payload.mcpToolDefs }), request.modelId);
 }
 
 export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
-  const rawText = activePromptText(request);
-  const lastRole = request.messages.at(-1)?.role;
-  const text = lastRole === "user" || lastRole === "developer"
-    ? appendCursorShellAliasHint(request.tools, appendCursorGenericToolUseHint(request.tools, rawText))
-    : rawText;
+  const payload = modelVisibleRequestPayload(request);
+  const text = payload.text;
   // Tool-result-only turns resume the remembered Cursor conversation with results in history.
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
   const actionCase = !lastRawIsToolResult && text.trim().length > 0
@@ -547,7 +561,7 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
           }),
         },
   });
-  const rootPromptMessagesState = rootPromptMessages(request);
+  const rootPromptMessagesState = payload.roots;
   const rootPromptMessageIds = rootPromptMessagesState.ids;
   const turnIds = conversationTurns(request, rootPromptMessagesState.historyMessageStart);
   debugProviderDiagnostic("cursor", "run-request", {
@@ -612,11 +626,7 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
     // the event-state `clientToolNames` use (live-transport.ts). Advertising the raw `request.tools`
     // here would let mcp_tools expose a tool that the event state does not recognize for a generic
     // tool-count prompt, so a call to it would be rejected as an unknown Responses tool.
-    ...(() => {
-      const visibleTools = cursorToolsForActivePrompt(request.tools, activePromptText(request), request.toolChoice);
-      const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice);
-      return mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }) } : {};
-    })(),
+    ...(payload.mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: payload.mcpToolDefs }) } : {}),
   });
 
   const message = create(AgentClientMessageSchema, {

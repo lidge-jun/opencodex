@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { create, fromBinary } from "@bufbuild/protobuf";
+import { estimateTokens } from "../src/lib/token-estimate";
 import { handleCursorNativeKv, storeCursorBlob } from "../src/adapters/cursor/native-exec";
 import {
   CURSOR_EXTERNAL_ROOT_BYTE_LIMIT,
   CURSOR_EXTERNAL_ROOT_BLOB_LIMIT,
   CURSOR_ROUTING_LEVEL_PARAMETER_ID,
   encodeCursorRunRequest,
+  estimateCursorInputTokens,
 } from "../src/adapters/cursor/protobuf-request";
 import {
   AgentClientMessageSchema,
@@ -144,6 +146,47 @@ describe("Cursor blob handshake", () => {
     expect(rootBytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
     expect(roots.length).toBeLessThan(rawMessages.length);
     expect(rootRoles.find(role => role !== "system")).toBe("user");
+  });
+
+  test("estimates only the externally replayed root history and filtered tool catalog", () => {
+    const current = { role: "user" as const, content: "Use any 10 tools", timestamp: 10_000 };
+    const retained = [
+      { role: "user" as const, content: "newest retained user", timestamp: 9_998 },
+      { role: "assistant" as const, model: "cursor/grok-4.5", content: [{ type: "text" as const, text: "newest retained assistant" }], timestamp: 9_999 },
+      current,
+    ];
+    const dropped = Array.from({ length: 200 }, (_, index) => ({
+      role: "user" as const,
+      content: `old-${index}:${"x".repeat(4_000)}`,
+      timestamp: index,
+    }));
+    const exec = { name: "exec_command", description: "Run a command", parameters: {} };
+    const filtered = { name: "filtered", description: "z".repeat(50_000), parameters: {} };
+    const common = {
+      modelId: "grok-4.5",
+      conversationId: "c-estimate",
+      system: ["system"],
+      messages: [{ role: "user" as const, content: current.content }],
+      tools: [exec, filtered],
+    };
+
+    const request = { ...common, rawMessages: [...dropped, ...retained] };
+    const bytes = encodeCursorRunRequest(request);
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const payload = JSON.stringify({
+      roots: (run?.conversationState?.rootPromptMessagesJson ?? [])
+        .map(blobId => new TextDecoder().decode(blobData(blobId))),
+      action: actionText(bytes),
+      tools: run?.mcpTools?.mcpTools ?? [],
+    });
+
+    expect(estimateCursorInputTokens(request)).toBe(estimateTokens(payload, request.modelId));
+    expect(estimateCursorInputTokens(request)).toBeLessThan(estimateTokens(JSON.stringify({
+      roots: [...dropped, ...retained],
+      action: current.content,
+      tools: [exec, filtered],
+    }), request.modelId));
   });
 
   test("preserves oversized active tool result under external byte budget", () => {
