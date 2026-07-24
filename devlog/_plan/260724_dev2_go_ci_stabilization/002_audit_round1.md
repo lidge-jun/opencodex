@@ -33,6 +33,8 @@ The first exact-SHA run passed but GitHub annotated the audited v4/v5 pins as No
 
 An independent C-phase re-audit returned `VERDICT: GO` with no Critical, High, or Medium findings. It verified that both official tags resolve to the pinned signed commits, both action manifests declare Node 24, the hosted runner versions exceed the actions' minimum requirements, and existing workflow inputs remain supported. Its one Low finding corrected the intermediate run's annotation count from four to five in the evidence documents.
 
+The subsequent hosted run found a compatibility residual the static re-audit missed: setup-go v7's local-toolchain behavior no longer masks the workflow's stale Go 1.24 pin against the module's Go 1.26.4 declaration. The hosted failure is the authoritative C gate. The repair keeps setup-go v7 and changes only its supported input from a duplicated literal to `go-version-file: go/go.mod`.
+
 ## Main-agent judgment
 
 Near-pass. There are no Critical or High findings and no blocking issue. Both residual suggestions are concrete, in scope, and folded into `000_plan.md` and `010_implementation.md` before B.

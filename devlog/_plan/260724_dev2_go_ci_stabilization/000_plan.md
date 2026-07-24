@@ -87,3 +87,9 @@ The repair remains within the audited trust boundary and keeps immutable refs:
 - `actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0`
 
 Both releases declare `node24`. The branch replacement sequence remains unchanged: validate locally, push, require a fresh exact-SHA green run without the deprecation annotation, then close PR #368 and delete the old remote branch.
+
+### C-phase repair 2: Go toolchain source of truth
+
+Run `30065013478` showed that setup-go v7 correctly sets `GOTOOLCHAIN=local`, exposing a pre-existing contradiction: the workflow requested Go 1.24 while `go/go.mod` requires Go 1.26.4. The old setup-go v5 run had set `GOTOOLCHAIN=auto`, so every job silently downloaded Go 1.26.4 after first installing 1.24.
+
+Replace the duplicated `go-version: "1.24"` inputs with `go-version-file: go/go.mod`. This makes the module declaration the single toolchain source of truth, avoids hidden second-stage downloads, and keeps all jobs aligned when the module version changes.

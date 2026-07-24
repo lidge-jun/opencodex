@@ -11,6 +11,8 @@ Status: implemented; local checks passed; remote proof pending
 - After: manual dispatch and pushes to `dev2-go` trigger Go CI; superseded runs on the same ref are cancelled.
 - Before: `actions/checkout@v4` and `actions/setup-go@v5` are mutable.
 - After: every use is pinned to the exact official Node 24-based v7 commit with the release version retained as a comment.
+- Before: each job requests Go 1.24 even though `go/go.mod` requires Go 1.26.4; setup-go v5 masks this by enabling automatic toolchain downloads.
+- After: each job uses `go-version-file: go/go.mod`, and setup-go v7 installs the declared toolchain directly with local-toolchain enforcement.
 
 ### `go/internal/oauth/store_test.go`
 
@@ -35,6 +37,7 @@ Status: implemented; local checks passed; remote proof pending
 - Repository gates after `bun install --frozen-lockfile` in root and `gui/`: `bun run typecheck` -> exit 0; `bun run privacy:scan` -> exit 0; `bun run test` -> 3,841 pass, 0 fail across 313 files.
 - Environment note: the first Bun gate attempt ran before this worktree had dependencies and failed on missing `bun-types`, `zod/v4`, `@bufbuild/protobuf`, and React runtime modules. No lockfile changed. Frozen installs restored the declared environment and the fresh rerun passed.
 - Intermediate GitHub exact-SHA Go CI: run `30064436430` at `05006fdd2bfb540810c517daf61ac00d86d7bd79` passed every job, but emitted five Node 20 action-runtime deprecation annotations. The C repair upgrades the immutable action pins to checkout v7.0.1 and setup-go v7.0.0 before final proof.
+- Node 24 action repair run: `30065013478` at `c7384bef8fac0008391989087ae6245f1cce48b9` removed the deprecation warnings but failed every Go command because setup-go v7 enforced the requested Go 1.24 locally while the module requires 1.26.4. Prior-run logs confirm v5 had silently downloaded 1.26.4 in every job. The second C repair makes `go/go.mod` the setup-go version source.
 - Final GitHub exact-SHA Go CI run: pending C repair.
 - Remote branch/PR postconditions: pending C.
 

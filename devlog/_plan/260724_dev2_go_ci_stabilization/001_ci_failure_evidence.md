@@ -50,3 +50,12 @@ The current official Node 24-based releases resolved on 2026-07-24 to immutable 
 - `actions/setup-go` v7.0.0: `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`
 
 This run proves the Go matrix is functionally green, but it is intermediate evidence rather than the final stability gate.
+
+## Node 24 action repair run
+
+- Run: `30065013478`
+- Head SHA: `c7384bef8fac0008391989087ae6245f1cce48b9`
+- Result: checkout/setup actions initialized without Node 20 deprecation annotations; every Go command failed before compilation.
+- Exact error: `go.mod requires go >= 1.26.4 (running go 1.24.13; GOTOOLCHAIN=local)`.
+
+The earlier successful run's logs prove the stale workflow pin was already ineffective: setup-go v5 installed Go 1.24 with `GOTOOLCHAIN=auto`, then each job logged `go: downloading go1.26.4`. The repair is to read the required version from `go/go.mod`, not to restore automatic undeclared toolchain substitution.
