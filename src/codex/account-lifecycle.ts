@@ -5,15 +5,17 @@ import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
 import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
+import { clearMainAccountInfoCache } from "./main-account-cache";
 import type { OcxConfig } from "../types";
 
-let observedMainChatgptAccountId: string | null | undefined;
+let observedMainChatgptAccountId: string | undefined;
 
 export function purgeCodexAccountRuntimeState(accountId: string): void {
   clearAccountNeedsReauth(accountId);
   clearAccountQuota(accountId);
   clearThreadAccountMapForAccount(accountId);
   clearCodexUpstreamHealthForAccount(accountId);
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) clearMainAccountInfoCache();
 }
 
 /**
@@ -24,6 +26,9 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
   const currentAccountId = getMainChatgptAccountId();
+  // A missing/malformed auth.json is an unknown identity, not a confirmed account switch. Keep the
+  // prior observation and its safety state until a real account id can be read again.
+  if (currentAccountId === null) return false;
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = currentAccountId;
   if (previousAccountId === undefined || previousAccountId === currentAccountId) return false;

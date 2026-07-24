@@ -17,15 +17,21 @@ import {
   resolveCodexAuthContext,
 } from "../src/codex/auth-context";
 import { isCodexAccountUsable } from "../src/codex/account-usability";
-import { resetMainCodexAccountIdentityTrackingForTests } from "../src/codex/account-lifecycle";
+import {
+  reconcileMainCodexAccountRuntimeState,
+  resetMainCodexAccountIdentityTrackingForTests,
+} from "../src/codex/account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
+  clearMainAccountInfoCache,
+  fetchMainAccountInfo,
   getAccountQuota,
   isAccountNeedsReauth,
   markAccountNeedsReauth,
+  primeCodexPoolQuotas,
   updateAccountQuota,
 } from "../src/codex/auth-api";
 import type { OcxConfig } from "../src/types";
@@ -77,6 +83,7 @@ describe("main account rotation (Option A)", () => {
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
+    clearMainAccountInfoCache();
     resetMainCodexAccountIdentityTrackingForTests();
     setMainAccountPlan(null);
     for (const id of ["a", "b", MAIN_CODEX_ACCOUNT_ID]) clearAccountNeedsReauth(id);
@@ -89,6 +96,7 @@ describe("main account rotation (Option A)", () => {
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
+    clearMainAccountInfoCache();
     resetMainCodexAccountIdentityTrackingForTests();
     setMainAccountPlan(null);
     for (const id of ["a", "b", MAIN_CODEX_ACCOUNT_ID]) clearAccountNeedsReauth(id);
@@ -176,6 +184,83 @@ describe("main account rotation (Option A)", () => {
     expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+  });
+
+  test("startup quota priming observes the main identity before the first account switch", async () => {
+    const config = makeConfig({
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      autoSwitchThreshold: 0,
+      codexAccounts: [],
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      if (String(input).includes("/backend-api/wham/usage")) {
+        return new Response(JSON.stringify({ email: "a@example.test", plan_type: "plus" }), { status: 200 });
+      }
+      return originalFetch(input);
+    };
+    try {
+      await primeCodexPoolQuotas(config, "startup");
+      recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "3600" });
+      markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+      updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 100, 0);
+      writeFileSync(
+        join(CODEX_DIR, "auth.json"),
+        JSON.stringify({ tokens: { access_token: "replacement_access", account_id: "replacement_acct" } }),
+      );
+
+      expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+      expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+      expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("does not treat a transient missing auth file as an account switch", () => {
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+    recordCodexUpstreamOutcome(makeConfig(), MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "3600" });
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 100, 0);
+    rmSync(join(CODEX_DIR, "auth.json"));
+
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+    expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+    expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).not.toBeNull();
+  });
+
+  test("invalidates cached main account info when the auth identity changes", async () => {
+    const originalFetch = globalThis.fetch;
+    let email = "a@example.test";
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      if (String(input).includes("/backend-api/wham/usage")) {
+        return new Response(JSON.stringify({ email, plan_type: "plus" }), { status: 200 });
+      }
+      return originalFetch(input);
+    };
+    try {
+      expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+      expect((await fetchMainAccountInfo(false)).email).toBe("a@example.test");
+      email = "b@example.test";
+      writeFileSync(
+        join(CODEX_DIR, "auth.json"),
+        JSON.stringify({ tokens: { access_token: "replacement_access", account_id: "replacement_acct" } }),
+      );
+      expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+      expect((await fetchMainAccountInfo(false)).email).toBe("b@example.test");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("no active id selects from main plus added accounts and binds main affinity", async () => {
