@@ -2,7 +2,7 @@ import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
 import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
-import { activePromptText, encodeCursorRunRequest } from "./protobuf-request";
+import { activePromptText, encodeCursorRunRequest, estimateCursorInputTokens } from "./protobuf-request";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -514,6 +514,7 @@ class LiveCursorTransport implements CursorTransport {
       parallelToolCalls: request.parallelToolCalls,
       toolSchemas,
       cursorToolNameMap,
+      estimatedInputTokens: estimateCursorInputTokens(request),
       contextUsage: cursorContextUsageTracker.controlsForConversation(request.conversationId, {
         clearPrior: request.contextUsageReset === true,
         storeCheckpoints: request.contextUsageStoreCheckpoints !== false,
@@ -888,7 +889,14 @@ export function partialUsageFromEventState(state: ReturnType<typeof createCursor
   const ctx = reportableContextTokens(state);
   return ctx !== undefined
     ? { ...usageFromContextTokens(state, ctx), estimated: true }
-    : { ...state.usage, estimated: true };
+    : state.estimatedInputTokens
+      ? {
+          ...state.usage,
+          inputTokens: state.estimatedInputTokens,
+          totalTokens: state.estimatedInputTokens + out,
+          estimated: true,
+        }
+      : { ...state.usage, estimated: true };
 }
 
 /**
