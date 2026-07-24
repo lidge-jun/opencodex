@@ -13,10 +13,6 @@ on:
         required: true
         type: number
 
-permissions:
-  contents: read
-  issues: write
-
 concurrency:
   group: issue-quality-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: true
@@ -24,6 +20,10 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for issue closure, reopen, and bot comments.
+      issues: write
 
     steps:
       - name: Checkout trusted workflow code
@@ -45,9 +45,23 @@ jobs:
             } = require(path.join(process.cwd(), ".github", "scripts", "issue-quality.cjs"));
 
             const { owner, repo } = context.repo;
-            const issue_number = context.eventName === "workflow_dispatch"
-              ? Number(context.payload.inputs.issue_number)
-              : context.payload.issue.number;
+            let issue_number;
+            if (context.eventName === "workflow_dispatch") {
+              const rawIssueNumber = context.payload.inputs.issue_number;
+              const parsedIssueNumber = Number(rawIssueNumber);
+              if (
+                !Number.isSafeInteger(parsedIssueNumber) ||
+                parsedIssueNumber <= 0
+              ) {
+                core.setFailed(
+                  `Invalid workflow_dispatch issue_number: ${rawIssueNumber}. Expected a positive integer.`,
+                );
+                return;
+              }
+              issue_number = parsedIssueNumber;
+            } else {
+              issue_number = context.payload.issue.number;
+            }
             const actor = context.actor;
             const eventType = context.eventName === "issues"
               ? context.payload.action

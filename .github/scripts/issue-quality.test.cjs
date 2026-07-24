@@ -201,6 +201,23 @@ describe("validateIssue - feature", () => {
     assert.ok(result.reasons.some((r) => r.includes("placeholder")));
   });
 
+  it("reports blank example usage as missing, not placeholder", () => {
+    const body = [
+      "### What are you trying to accomplish?",
+      "Route voice requests to a configured fallback provider when the primary quota is exhausted.",
+      "### What prevents this today?",
+      "Voice mode is hard-wired to the primary Codex quota and cannot switch providers.",
+      "### What should OpenCodex do?",
+      "Expose a setting to choose the fallback voice model and provider.",
+      "### Example usage or interface",
+      "",
+    ].join("\n");
+    const result = validateIssue({ title: "Voice fallback routing", body, labels: ["enhancement"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("example usage")));
+    assert.ok(!result.reasons.some((r) => r.includes("placeholder")));
+  });
+
   it("accepts a valid legacy feature request without blocker/example headings", () => {
     const body = [
       "### Problem to solve",

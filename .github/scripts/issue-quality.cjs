@@ -174,10 +174,11 @@ function allRepeatTitle(sections, title) {
 }
 
 function isPlaceholder(text) {
-  const c = clean(text);
-  if (!c) return true;
-  const lower = c.toLowerCase();
-  return (
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (
     lower === "no response" ||
     lower === "na" ||
     lower === "n/a" ||
@@ -186,8 +187,14 @@ function isPlaceholder(text) {
     lower === "none" ||
     lower === "todo" ||
     lower === "tbd" ||
-    /^_no response_$/i.test(c)
-  );
+    /^_no response_$/i.test(trimmed)
+  ) {
+    return true;
+  }
+  const c = clean(text);
+  if (!c) return false;
+  const cleanedLower = c.toLowerCase();
+  return cleanedLower === "none" || cleanedLower === "todo" || cleanedLower === "tbd";
 }
 
 function countWords(text) {
