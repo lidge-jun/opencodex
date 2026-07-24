@@ -288,6 +288,64 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({ ok: true, applied: chosen });
   }
 
+  // Priority-ordered subagent model fallback chain for quota-aware spawn routing.
+  if (url.pathname === "/api/subagent-model-fallback" && req.method === "GET") {
+    const models = await fetchAllModels(config);
+    const disabled = new Set(config.disabledModels ?? []);
+    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+    const visibleRouted = [...new Set(models
+      .filter(m => ![...disabled].some(stored =>
+        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
+      ))
+      .map(catalogModelSlug))];
+    const available = [
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      ...visibleRouted,
+    ];
+    return jsonResponse({
+      models: config.subagentModelFallback ?? [],
+      pollMs: config.subagentModelFallbackPollMs ?? 60_000,
+      available,
+    });
+  }
+  if (url.pathname === "/api/subagent-model-fallback" && req.method === "PUT") {
+    let body: { models?: unknown; pollMs?: unknown };
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    let nextModels = config.subagentModelFallback;
+    let nextPollMs = config.subagentModelFallbackPollMs;
+    if ("models" in body) {
+      if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
+      const models = body.models.filter((m): m is string => typeof m === "string" && m.trim().length > 0);
+      nextModels = models.length > 0 ? models : undefined;
+    }
+    if ("pollMs" in body) {
+      const pollMs = body.pollMs;
+      if (pollMs === null || pollMs === "") nextPollMs = undefined;
+      else if (typeof pollMs === "number" && Number.isInteger(pollMs) && pollMs >= 5_000 && pollMs <= 600_000) {
+        nextPollMs = pollMs;
+      } else {
+        return jsonResponse({ error: "pollMs must be an integer between 5000 and 600000" }, 400);
+      }
+    }
+    if (nextModels !== undefined) config.subagentModelFallback = nextModels;
+    else delete config.subagentModelFallback;
+    if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
+    else delete config.subagentModelFallbackPollMs;
+    saveConfig(config);
+    return jsonResponse({
+      ok: true,
+      models: config.subagentModelFallback ?? [],
+      pollMs: config.subagentModelFallbackPollMs ?? 60_000,
+    });
+  }
+
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);

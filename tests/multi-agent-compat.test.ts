@@ -382,6 +382,19 @@ describe("multiAgentGuidanceText", () => {
     expect(text).not.toContain("gpt-5.6-luna");
   });
 
+  test("injectionPrompt substitutes fallback guidance via {{fallback}}", async () => {
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionPrompt: "FALLBACK={{fallback}}",
+        subagentModelFallback: ["alibaba-token-plan/qwen3.8-max-preview", "kimi/k3"],
+      },
+    );
+    expect(text).toContain("FALLBACK=");
+    expect(text).toContain("alibaba-token-plan/qwen3.8-max-preview");
+    expect(text).toContain("kimi/k3");
+  });
+
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {
     codexHomeFixture(V2_ON);
     const custom = "CUSTOM RULES model={{model}} effort={{effort}}{{roster}}";

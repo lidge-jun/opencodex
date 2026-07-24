@@ -448,6 +448,16 @@ export interface OcxConfig {
    * Codex's spawn_agent only advertises the first 5 routed models, so this picks which 5 appear.
    */
   subagentModels?: string[];
+  /**
+   * Priority-ordered fallback models for spawned sub-agents. When the requested
+   * model is quota-exhausted or recently failed, opencodex rewrites the child
+   * turn to the next available entry before routing.
+   */
+  subagentModelFallback?: string[];
+  /**
+   * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
+   */
+  subagentModelFallbackPollMs?: number;
   injectionModel?: string;
   /**
    * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls
@@ -475,7 +485,8 @@ export interface OcxConfig {
    * <multi_agent_mode> tags). When set, it replaces the built-in prompt on whichever
    * collab surface would have fired; firing gates are unchanged. Placeholders:
    * `{{model}}` -> injectionModel, `{{effort}}` -> injectionEffort, `{{roster}}` ->
-   * the resolved sub-agent roster block ("" when nothing resolves).
+   * the resolved sub-agent roster block ("" when nothing resolves), `{{fallback}}` ->
+   * the configured subagent model fallback guidance block ("" when unset).
    */
   injectionPrompt?: string;
   /**

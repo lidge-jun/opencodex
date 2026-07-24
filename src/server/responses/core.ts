@@ -74,6 +74,12 @@ import { registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle"
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { supportedLadderFor } from "../effort-policy";
+import { isThreadSpawnRequest } from "../effort-policy";
+import {
+  applySubagentModelFallback,
+  maybePrimeSubagentQuota,
+  recordSubagentQuotaFailureForThreadSpawn,
+} from "../../codex/subagent-model-fallback";
 import {
   beginRequestAttempt,
   catalogModelSupportsServiceTier,
@@ -695,6 +701,10 @@ export async function handleResponses(
   }
   if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
 
+  if (isThreadSpawnRequest(req.headers)) {
+    await maybePrimeSubagentQuota(config);
+  }
+
   let route;
   try {
     route = routeModel(config, parsed.modelId);
@@ -753,6 +763,7 @@ export async function handleResponses(
       injectionModel: config.injectionModel,
       injectionEffort: config.injectionEffort,
       subagentModels: config.subagentModels,
+      subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
     });
     if (guidance) {
@@ -860,6 +871,103 @@ export async function handleResponses(
   // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
   const identityScope = codexLogAccountId(authCtx);
   if (identityScope) parsed._cursorIdentityScope = identityScope;
+
+  let subagentFallbackAccountId = authCtx.kind === "pool" || authCtx.kind === "main-pool"
+    ? authCtx.accountId
+    : config.activeCodexAccountId ?? null;
+  let subagentQuotaFailureModel = parsed.modelId;
+
+  if (isThreadSpawnRequest(req.headers) && !options.comboAttempt) {
+    const routeBeforeFallback = {
+      providerName: route.providerName,
+      modelId: route.modelId,
+      codexAccountMode: route.codexAccountMode,
+    };
+    const fallback = applySubagentModelFallback(
+      parsed,
+      req.headers,
+      config,
+      subagentFallbackAccountId,
+      Date.now(),
+      unreadableEncryptedAgentTask,
+    );
+    if (fallback) {
+      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
+      (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
+      if (isInjectionDebugEnabled()) {
+        injectionDebugLog(`[opencodex] subagent model fallback ${fallback.from} -> ${fallback.to}`);
+      }
+    }
+    subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
+    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+      try {
+        route = routeModel(config, fallback.to);
+      } catch (err) {
+        if (err instanceof NoAvailableComboTargetsError) {
+          return comboUnavailableResponse(err.message);
+        }
+        return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+      }
+      if (route.modelId !== parsed.modelId) {
+        if (parsed._rawBody && typeof parsed._rawBody === "object") {
+          (parsed._rawBody as { model?: string }).model = route.modelId;
+        }
+        parsed.modelId = route.modelId;
+      }
+      logCtx.model = route.modelId;
+      logCtx.provider = route.providerName;
+      logCtx.providerAdapter = route.provider.adapter;
+    }
+    if (
+      route.providerName !== routeBeforeFallback.providerName
+      || route.modelId !== routeBeforeFallback.modelId
+      || route.codexAccountMode !== routeBeforeFallback.codexAccountMode
+    ) {
+      try {
+        if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
+        if (route.codexAccountMode) {
+          authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+          options.onCodexAuthContextResolved?.(authCtx);
+        } else {
+          authCtx = { kind: "main", accountId: null };
+          options.onCodexAuthContextResolved?.(undefined);
+        }
+        selectedForwardHeaders = headersForCodexAuthContext(req.headers, authCtx);
+      } catch (err) {
+        if (err instanceof CodexAccountCooldownError) {
+          return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
+        }
+        if (err instanceof CodexThreadAffinityExpiredError) {
+          return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
+        }
+        if (err instanceof CodexAuthContextError) {
+          const safeAccountLabel = formatCodexProviderForLog(route.providerName, err.accountId, config);
+          console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
+          return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+        }
+        if (err instanceof CodexPoolAuthenticationError) {
+          return formatErrorResponse(401, "authentication_error", err.message);
+        }
+        if (err instanceof CodexDirectAuthenticationError) {
+          return formatErrorResponse(401, "authentication_error", err.message);
+        }
+        if (err instanceof ForwardAdmissionCredentialError) {
+          return formatErrorResponse(401, "authentication_error", err.message);
+        }
+        throw err;
+      }
+      if (!isCodexAuthContextUsable(authCtx, config)) {
+        return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+      }
+      route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+      logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+      const fallbackIdentityScope = codexLogAccountId(authCtx);
+      if (fallbackIdentityScope) parsed._cursorIdentityScope = fallbackIdentityScope;
+      subagentFallbackAccountId = authCtx.kind === "pool" || authCtx.kind === "main-pool"
+        ? authCtx.accountId
+        : config.activeCodexAccountId ?? null;
+    }
+  }
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
@@ -1154,6 +1262,21 @@ export async function handleResponses(
       if (terminalBodyWillRecord) {
         options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
           terminalRecorder(status, httpStatusOverride);
+          if (status === "failed") {
+            const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
+              || logCtx.terminalHttpStatus === 429
+              || logCtx.terminalHttpStatus === 402
+              ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
+              : undefined;
+            if (quotaFailureMessage === undefined) return;
+            recordSubagentQuotaFailureForThreadSpawn(
+              req.headers,
+              subagentQuotaFailureModel,
+              quotaFailureMessage,
+              config,
+              subagentFallbackAccountId,
+            );
+          }
           options.onNativePassthroughTerminal?.(status);
         });
       } else {
@@ -1190,6 +1313,21 @@ export async function handleResponses(
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
             terminalRecorder?.(status, httpStatusOverride);
+            if (status === "failed") {
+              const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
+                || logCtx.terminalHttpStatus === 429
+                || logCtx.terminalHttpStatus === 402
+                ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
+                : undefined;
+              if (quotaFailureMessage === undefined) return;
+              recordSubagentQuotaFailureForThreadSpawn(
+                req.headers,
+                subagentQuotaFailureModel,
+                quotaFailureMessage,
+                config,
+                subagentFallbackAccountId,
+              );
+            }
             options.onNativePassthroughTerminal?.(status);
           }
           : undefined;
@@ -1615,6 +1753,15 @@ export async function handleResponses(
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       cleanupUpstreamAbort();
+      recordSubagentQuotaFailureForThreadSpawn(
+        req.headers,
+        subagentQuotaFailureModel,
+        upstreamResponse.status === 429 || upstreamResponse.status === 402
+          ? upstreamResponse.status
+          : `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+        config,
+        subagentFallbackAccountId,
+      );
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       return formatErrorResponse(upstreamResponse.status, "upstream_error", `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`);
