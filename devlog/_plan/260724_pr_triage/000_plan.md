@@ -26,6 +26,13 @@ Decision log:
 | #369 | kiro progress text nonterminal | MERGE_AS_IS (McClintock): CI green, real terminals preserved, compatible with bridge terminal exactly-once, regression tests RED-valid | MERGE_AS_IS | MERGED 2704747d 2026-07-24 |
 | #366 | Cursor store:false continuity | REBUILD_ON_DEV (Hypatia r1) -> author rebuilt: isolation-first + UTF-8 byte budget + credential-derived scope; Hypatia r2 BLOCKERS-CLOSED, CI green, clean | MERGE_AS_IS after rebuild (user-approved) | MERGED c1b0b1cf 2026-07-24 |
 | #368 | Go port (39k LOC draft, author lidge-jun) | CLOSE recommended by reviewer (Archimedes): parallel unverified runtime, no packaging/release linkage, CI flake | DEFER — owner's own draft experiment; close/keep decision reserved for user | open draft, reported |
+| #356 | Codex shim auto-restore (user branch) | REBUILD_ON_DEV (Hume) -> fixed on branch (lock ownership + owner liveness + bounded read + help early-exit); Erdos r1 found stale-lock reclaim High -> repaired; Erdos r2 BLOCKERS-CLOSED | MERGE_AND_IMPROVE executed | MERGED 4f662ef0 2026-07-24 |
+| #358 | provider discovery badge + Claude copy (user branch, GUI) | NEEDS-FIXES (Kepler: badge hidden w/ fallback rows, tier-haiku-blind warning, stale discovery state) -> fixed on branch; Faraday BLOCKERS-CLOSED; user approved GUI merge | MERGE_AND_IMPROVE executed | MERGED 4b98cac6 2026-07-24 |
+| #377 | apply_patch envelope guidance | MERGE_AND_IMPROVE (Feynman): begin-marker correct; end-marker + assertion strengthening deferred as follow-up | MERGE_AS_IS now | MERGED 6b66ef14 2026-07-24 |
+| #378 | stall timeout 600s | CLOSE (Bohr): WP4 heartbeat-aware activity clock already protects heartbeat-only progress; global 600s masks real hangs | CLOSE with rationale + repro invitation | CLOSED |
+| #370 | reset main runtime state on switch | REBUILD_ON_DEV (Parfit): startup-prime missed, null-read as switch, mainAccountCache not invalidated | DEFER — review comment posted | comment posted |
+| #376 | Cursor context estimate after restart | REBUILD_ON_DEV (Galileo): estimator ignores wire pruning, tests bypass real function | DEFER — review comment posted | comment posted |
+| #379 | voice relay /v1/live | REBUILD_ON_DEV (Arendt): sideband WebSocket + backend query contract missing, buffering defeats size cap | DEFER — review comment posted | comment posted |
 
 Non-dev-target PRs noted during triage (outside loop scope): #365 (draft,
 main-target, already marked WRONG BRANCH), #339 (main-target, needs
