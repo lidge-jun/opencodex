@@ -142,6 +142,13 @@ messages until the round completes, reattaching real results to their original c
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
 (Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_plan/260718_dangling_toolcall_hardening`).
 
+Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
+API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
+so each oversized id and all matching call/output items receive the same deterministic,
+request-local alias. Raw API-key continuations deliberately preserve ids because an output-only
+continuation may reference a call stored upstream under its original id; proxy-expanded API-key
+replays are explicit and receive the same repair.
+
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
