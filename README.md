@@ -73,12 +73,12 @@ PID, port, Bun runtime source, and launchd state. It can open the dashboard and 
 gracefully stop the proxy without keeping a terminal open.
 
 ```bash
-bun run build:macos
+bun run build:macos-app
 open "dist/macos/OpenCodex.app"
 ```
 
 Non-dry-run GitHub releases include a Universal macOS archive named
-`OpenCodex-<version>-macOS-universal.zip` plus its SHA-256 checksum. The archive is ad-hoc signed
+`OpenCodex-<version>-macos-universal.zip` plus its SHA-256 checksum. The archive is ad-hoc signed
 and not notarized, so macOS may require manual approval on first launch.
 
 The companion uses the installed `ocx` CLI as its control boundary and never edits PID files or

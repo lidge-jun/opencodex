@@ -11,18 +11,18 @@ launchd 状态，并可在不打开终端的情况下启动、重启或停止代
 先安装并初始化 `ocx` CLI，然后在仓库中运行：
 
 ```bash
-bun run build:macos
+bun run build:macos-app
 open "dist/macos/OpenCodex.app"
 ```
 
-选择完整 Xcode 工具链后，使用 `UNIVERSAL=1 bun run build:macos` 可同时构建 arm64 和 x86_64；
+选择完整 Xcode 工具链后，使用 `UNIVERSAL=1 bun run build:macos-app` 可同时构建 arm64 和 x86_64；
 只有 Command Line Tools 时只能构建当前架构。产物会进行本地使用的 ad-hoc 签名；正式分发仍需要
 Developer ID 签名和 notarization。
 
 ## 发布打包
 
 Release 工作流会同时构建 arm64 和 x86_64，将 `OpenCodex.app` 打包为
-`OpenCodex-<version>-macOS-universal.zip`，并生成对应的 `.sha256` 文件。Dry run 也会把两个文件
+`OpenCodex-<version>-macos-universal.zip`，并生成对应的 `.sha256` 文件。Dry run 也会把两个文件
 作为工作流 artifact 传递并验证；正式发布时，则会在 npm 发布成功后将其附加到 GitHub Release。
 自动生成的压缩包使用 ad-hoc 签名且未 notarization，因此首次启动时 macOS 可能要求手动批准。
 

@@ -12,7 +12,7 @@ without a terminal.
 Install and initialize the `ocx` CLI first, then build the app from the repository:
 
 ```bash
-bun run build:macos
+bun run build:macos-app
 open "dist/macos/OpenCodex.app"
 ```
 
@@ -20,7 +20,7 @@ The default build targets the current Mac. With the full Xcode toolchain selecte
 to build arm64 and x86_64 together (Command Line Tools alone only supports the current architecture):
 
 ```bash
-UNIVERSAL=1 bun run build:macos
+UNIVERSAL=1 bun run build:macos-app
 ```
 
 The output is ad-hoc signed for local use. A warning-free public distribution still requires the
@@ -29,7 +29,7 @@ maintainer's Developer ID signing and notarization flow.
 ## Release packaging
 
 The Release workflow builds both arm64 and x86_64, packages `OpenCodex.app` as
-`OpenCodex-<version>-macOS-universal.zip`, and generates a matching `.sha256` file. Dry runs build,
+`OpenCodex-<version>-macos-universal.zip`, and generates a matching `.sha256` file. Dry runs build,
 transfer, and verify both files as workflow artifacts. Non-dry-run releases attach them to the
 GitHub Release after npm publishing succeeds.
 
