@@ -109,7 +109,7 @@ ocx status --json
 }
 ```
 
-代理健康时，`version` 和 `uptimeSeconds` 会包含 `/healthz` 返回的结构化值。实际对象还包含
+代理健康时，`version` 和 `uptimeSeconds` 会包含 `/healthz` 提供的结构化值；如果端点省略，任一字段都可能为 `null`。实际对象还包含
 `listen`（端口、hostname、运行时/配置来源）、配置加载诊断和内置 Codex plugin
 诊断。JSON schema 只允许增加字段：后续版本可能添加字段，但现有字段应保持稳定。它会有意排除
 API key、OAuth token、authorization header、请求内容、电子邮件和账号身份信息。
