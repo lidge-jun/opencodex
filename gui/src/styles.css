@@ -379,6 +379,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border-radius: var(--radius-xs);
   padding: 1px 4px;
 }
+.api-endpoints { display: grid; gap: 10px; margin-top: 8px; }
+.api-endpoints > div { display: grid; gap: 4px; }
+.api-auth-notes { display: grid; gap: 8px; margin: 0; padding-left: 1.1rem; }
+.api-auth-notes li { color: var(--muted); font-size: var(--text-label); }
+.api-model-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.api-model-status { font-size: var(--text-label); }
+.api-model-status--ok { color: var(--green, #22c55e); }
+.api-model-status--err { color: var(--red); }
 
 /* ---- buttons ---- */
 .btn {

@@ -55,6 +55,7 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import { buildApiAccessEndpoints } from "./api-access";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -272,7 +273,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // ---------------------------------------------------------------------------
   if (url.pathname === "/api/keys" && req.method === "GET") {
     const keys = config.apiKeys ?? [];
-    return jsonResponse({ keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })), endpoint: `http://${config.hostname ?? "127.0.0.1"}:${config.port ?? 10100}/v1/responses` }, 200, req, config);
+    const endpoints = buildApiAccessEndpoints(config);
+    return jsonResponse({
+      keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })),
+      endpoint: endpoints.responsesEndpoint,
+      ...endpoints,
+    }, 200, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "POST") {
