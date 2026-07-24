@@ -349,7 +349,7 @@ describe("Cursor request builder", () => {
     expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 
-  test("keeps apply_patch by evicting filler when the byte budget is tight", () => {
+  test("admits shell_command and apply_patch before filler when the byte budget is tight", () => {
     const patch = {
       name: "apply_patch",
       description: "p".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.45)),
@@ -364,12 +364,13 @@ describe("Cursor request builder", () => {
     const filler = Array.from({ length: 30 }, (_, index) => ({
       name: `filler_${index}`,
       namespace: "mcp__filler",
-      description: "f".repeat(3_000),
+      description: "f".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.2)),
       parameters: { type: "object", properties: {} },
     }));
-    const budget = applyCursorToolBudget([shell, patch, ...filler], "auto");
+    const budget = applyCursorToolBudget([...filler, shell, patch], "auto");
     expect(budget.tools).toContain(shell);
     expect(budget.tools).toContain(patch);
+    expect(budget.omitted.some(tool => tool.namespace === "mcp__filler")).toBe(true);
     expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 

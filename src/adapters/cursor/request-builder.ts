@@ -85,34 +85,9 @@ export function applyCursorToolBudget(
   };
 
   // Phase 1: selected tools + shell bridge + apply_patch (priority <= 2).
+  // Pins are admitted before filler so a crowded catalog cannot drop the Codex execution path (#399).
   for (const candidate of candidates) {
     if (!isPinnedCursorTool(candidate.tool, selectedNames)) continue;
-    tryKeep(candidate.tool);
-  }
-
-  // If a pinned tool is still omitted, evict lower-priority non-pinned tools to make room (#399).
-  // Shell is priority 1 and apply_patch is priority 2, so shell is forced first and cannot be
-  // evicted later to make room for apply_patch (eviction only removes non-pinned tools).
-  for (const candidate of candidates) {
-    if (!isPinnedCursorTool(candidate.tool, selectedNames) || keptSet.has(candidate.tool)) continue;
-    const need = cursorMcpToolEncodedSize(candidate.tool, toolChoice);
-    if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
-    while (
-      (!keptSet.has(candidate.tool))
-      && (kept.length >= CURSOR_TOOL_COUNT_LIMIT || keptBytes + need > CURSOR_TOOL_BYTES_LIMIT)
-    ) {
-      let evictAt = -1;
-      for (let i = kept.length - 1; i >= 0; i--) {
-        if (!isPinnedCursorTool(kept[i]!, selectedNames)) {
-          evictAt = i;
-          break;
-        }
-      }
-      if (evictAt < 0) break;
-      const evicted = kept.splice(evictAt, 1)[0]!;
-      keptSet.delete(evicted);
-      keptBytes -= cursorMcpToolEncodedSize(evicted, toolChoice);
-    }
     tryKeep(candidate.tool);
   }
 
