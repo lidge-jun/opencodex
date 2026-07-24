@@ -66,3 +66,20 @@ cd go
 go test ./internal/server -count=1
 go test ./... -count=1 -timeout 120s
 ```
+
+## Decision: Option B — dependency deferral
+
+Gate 4 FAILS: Go server has zero live/realtime routes (`rg "live|realtime"
+internal/server/server.go` → only `/health`). TS `src/server/live.ts` is a
+491-line feature with POST call-create, WS upgrade, AVAS query, sideband
+relay, and protocol header forwarding — none of which exist in Go. This is a
+new feature, not a port of existing code.
+
+## Residual: GPT-Live
+
+Blocked by: gate 4 (no Go live/realtime routes or WS sideband upgrade path)
+TS anchors: `src/server/live.ts` (491 lines, header contract, AVAS query)
+Go missing routes: `internal/server/server.go` mux — no `/v1/live`, no
+`/v1/realtime` entries
+Unblock when: Go server gains a live/realtime route owner + WS sideband
+upgrade path
