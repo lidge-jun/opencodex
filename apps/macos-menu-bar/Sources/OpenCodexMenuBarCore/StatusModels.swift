@@ -56,9 +56,9 @@ public struct OcxStatus: Decodable, Equatable {
     }
 
     public var phase: ProxyPhase {
-        if proxy.running { return .running }
         if serviceStale { return .failed }
-        if proxy.pid != nil || proxy.health.ok { return .degraded }
+        if proxy.running && proxy.health.ok { return .running }
+        if proxy.running || proxy.pid != nil || proxy.health.ok { return .degraded }
         return .stopped
     }
 }
