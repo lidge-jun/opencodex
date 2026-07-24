@@ -1003,6 +1003,48 @@ describe("Codex catalog routed normalization", () => {
     expect(native?.service_tiers).toEqual([{ id: "priority" }]);
   });
 
+  test("buildCatalogEntries exposes account-qualified clones with native metadata", () => {
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.5"],
+      [],
+      undefined,
+      false,
+      "default",
+      new Set(),
+      { personal: "main", work: "opaque-account-id" },
+    );
+    const native = entries.find(entry => entry.slug === "gpt-5.5");
+    const personal = entries.find(entry => entry.slug === "personal/gpt-5.5");
+    const work = entries.find(entry => entry.slug === "work/gpt-5.5");
+
+    expect(personal).toBeDefined();
+    expect(work).toBeDefined();
+    expect(personal?.description).toBe("OpenAI native model bound to a Codex account namespace.");
+    expect(personal?.model_messages).toEqual(native?.model_messages);
+    expect(personal?.supported_reasoning_levels).toEqual(native?.supported_reasoning_levels);
+    expect(personal?.input_modalities).toEqual(native?.input_modalities);
+    expect(personal?.service_tiers).toEqual(native?.service_tiers);
+    expect(personal?.priority).toBeGreaterThan(100);
+    expect(JSON.stringify(entries)).not.toContain("opaque-account-id");
+  });
+
+  test("account-qualified clones enter the subagent priority window only when featured", () => {
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.5"],
+      [],
+      ["work/gpt-5.5"],
+      false,
+      "default",
+      new Set(),
+      { personal: "main", work: "work-account-id" },
+    );
+    expect(entries.find(entry => entry.slug === "work/gpt-5.5")?.priority).toBe(0);
+    expect(entries.find(entry => entry.slug === "personal/gpt-5.5")?.priority).toBeGreaterThan(100);
+    expect(entries.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(9);
+  });
+
   test("catalog sync keeps native OpenAI rows when adopted providers expose matching ids", () => {
     const native = nativeTemplate();
     const nativeMini = {

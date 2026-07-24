@@ -24,6 +24,20 @@ gpt-5.6-sol                         # openai (Pool or Direct option)
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
+For intentional per-thread account selection, configure `codexAccountNamespaces` and run
+`ocx sync`. The picker then also shows entries such as:
+
+```text
+personal/gpt-5.6-sol                # exact main/Desktop account
+work/gpt-5.6-sol                    # exact added work account
+```
+
+An account-qualified model never switches accounts. Missing credentials, cooldown, or
+reauthentication fail the request. Bare models retain normal Pool/Direct behavior, and future native
+models added to opencodex's supported catalog automatically receive the configured prefixes on the
+next sync. See the
+[configuration reference](/reference/configuration/#account-qualified-native-models).
+
 Fresh installs and configs with no saved mode default to Pool. Current configs use marker 2 and
 retain the shipped v1 source at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with:
 

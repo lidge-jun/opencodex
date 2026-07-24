@@ -704,6 +704,59 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("constructor")).toBe(false);
   });
 
+  test("Codex account namespaces persist when valid", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAccountNamespaces: { personal: "main", work: "work-account-id" },
+    });
+
+    expect(loadConfig().codexAccountNamespaces).toEqual({ personal: "main", work: "work-account-id" });
+  });
+
+  test("Codex account namespaces cannot collide with provider routing", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        work: { adapter: "openai-chat", baseUrl: "https://work.example.test/v1" },
+      },
+      defaultProvider: "work",
+      codexAccountNamespaces: { work: "work-account-id" },
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toEqual(getDefaultConfig());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("must not collide"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("Codex account namespaces cannot claim combo routing", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+      defaultProvider: "openai",
+      codexAccountNamespaces: { combo: "work-account-id" },
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toEqual(getDefaultConfig());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("combo namespaces"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("backs up config when defaultProvider only exists on Object prototype", () => {
     writeConfig({
       port: 10100,

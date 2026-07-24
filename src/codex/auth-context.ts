@@ -24,6 +24,7 @@ export type CodexAuthContext =
       generation: number;
       accessToken: string;
       chatgptAccountId: string;
+      fixedAccount?: boolean;
     }
   | {
       // Main Codex account participating in rotation: token injected from ~/.codex/auth.json
@@ -32,6 +33,7 @@ export type CodexAuthContext =
       accountId: string;
       accessToken: string;
       chatgptAccountId: string;
+      fixedAccount?: boolean;
     };
 
 export type OcxRuntimeProviderConfig = OcxProviderConfig & {
@@ -95,6 +97,8 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 
 export interface ResolveCodexAuthContextOptions {
   excludeAccountId?: string;
+  /** Resolve exactly this account without consulting or mutating pool selection/affinity. */
+  accountId?: string;
 }
 
 export async function resolveCodexAuthContext(
@@ -107,8 +111,13 @@ export async function resolveCodexAuthContext(
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     return { kind: "main", accountId: null };
   }
+  if (options.accountId && options.excludeAccountId) {
+    throw new Error("Codex auth context cannot select and exclude an account simultaneously");
+  }
   const threadId = headers.get("x-codex-parent-thread-id");
-  const resolution = options.excludeAccountId
+  const resolution = options.accountId
+    ? { status: "selected" as const, accountId: options.accountId }
+    : options.excludeAccountId
     ? (() => {
         const accountId = pickLowestUsageCodexAccount(config, options.excludeAccountId);
         return accountId
@@ -119,12 +128,15 @@ export async function resolveCodexAuthContext(
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   const accountId = resolution.status === "selected" ? resolution.accountId : null;
   if (!accountId) throw new CodexPoolAuthenticationError();
+  if (options.accountId && !isCodexAccountUsable(config, accountId)) {
+    throw new CodexPoolAuthenticationError();
+  }
   // Lazy prime: if the selected account has no quota yet, the pool is likely
   // unprimed (dashboard never opened, or startup prime was blocked). Kick a
   // best-effort prime so the NEXT routing decision has real scores. This never
   // blocks the current request, and the helper's single-flight guard collapses
   // repeated triggers into one pass.
-  if (!getAccountQuota(accountId)) {
+  if (!options.accountId && !getAccountQuota(accountId)) {
     import("./auth-api")
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "pre-route"))
       .catch(() => {});
@@ -136,7 +148,13 @@ export async function resolveCodexAuthContext(
     // Main account in rotation: inject the read-only auth.json token and fail closed if it vanished.
     const token = getMainAccountToken();
     if (!token) throw new CodexPoolAuthenticationError();
-    return { kind: "main-pool", accountId, accessToken: token.accessToken, chatgptAccountId: token.chatgptAccountId };
+    return {
+      kind: "main-pool",
+      accountId,
+      accessToken: token.accessToken,
+      chatgptAccountId: token.chatgptAccountId,
+      ...(options.accountId ? { fixedAccount: true } : {}),
+    };
   }
 
   try {
@@ -147,6 +165,7 @@ export async function resolveCodexAuthContext(
       generation: token.generation,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
+      ...(options.accountId ? { fixedAccount: true } : {}),
     };
   } catch (cause) {
     if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {

@@ -881,6 +881,7 @@ describe("codex-auth API", () => {
     const config = makeConfig({
       activeCodexAccountId: "pool-delete",
       codexAccounts: [{ id: "pool-delete", email: "pool-delete@example.test", isMain: false }],
+      codexAccountNamespaces: { work: "pool-delete", personal: "main" },
     });
     saveCodexAccountCredential("pool-delete", {
       accessToken: "access-delete",
@@ -921,6 +922,7 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(200);
     expect(config.codexAccounts).toEqual([]);
     expect(config.activeCodexAccountId).toBeUndefined();
+    expect(config.codexAccountNamespaces).toEqual({ personal: "main" });
     expect(getCodexAccountCredential("pool-delete")).toBeNull();
     expect(getAccountQuota("pool-delete")).toBeNull();
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);

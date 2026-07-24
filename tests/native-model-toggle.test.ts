@@ -108,6 +108,18 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(entries[1].visibility).toBe("list");
   });
 
+  test("applyNativeVisibility mirrors disabled native state onto account-qualified clones", () => {
+    const entries = [
+      {
+        slug: "work/gpt-5.6-sol",
+        description: "OpenAI native model bound to a Codex account namespace.",
+        visibility: "list",
+      },
+    ];
+    applyNativeVisibility(entries, new Set(["gpt-5.6-sol"]));
+    expect(entries[0].visibility).toBe("hide");
+  });
+
   test("management API surfaces: /api/models leads with native rows; subagent available drops disabled bare slugs", async () => {
     const config = makeConfig({ disabledModels: ["gpt-5.6-sol"] });
 

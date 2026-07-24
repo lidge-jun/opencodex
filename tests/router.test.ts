@@ -67,6 +67,54 @@ describe("routeModel registry effort defaults", () => {
     });
   });
 
+  test("routes account-qualified native models to one exact Codex account", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
+      codexAccountNamespaces: { personal: "main", work: "work-account-id" },
+    };
+
+    expect(routeModel(config, "personal/gpt-5.6-sol")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-sol",
+      codexAccountMode: "pool",
+      codexAccountId: "__main__",
+      codexAccountNamespace: "personal",
+    });
+    expect(routeModel(config, "work/gpt-5.5")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.5",
+      codexAccountMode: "pool",
+      codexAccountId: "work-account-id",
+      codexAccountNamespace: "work",
+    });
+    expect(routeModel(config, "gpt-5.5")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.5",
+      codexAccountMode: "direct",
+    });
+  });
+
+  test("account namespaces reject non-native selectors instead of falling through", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+      codexAccountNamespaces: { work: "work-account-id" },
+    };
+    expect(() => routeModel(config, "work/claude-opus-4-6")).toThrow("only supports native OpenAI");
+  });
+
   test("routes a self-namespaced native id whole instead of stripping to the remainder", () => {
     const config: OcxConfig = {
       port: 10100,

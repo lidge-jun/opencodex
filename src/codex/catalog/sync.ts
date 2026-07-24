@@ -29,6 +29,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION, codexAccountNamespaceEntries } from "../account-namespaces";
 
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogModelSlug, ensureCatalogBackup, ensureStrictCatalogFields, findNativeTemplate, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
@@ -233,6 +234,7 @@ export function buildCatalogEntries(
   wsEnabled = false,
   multiAgentMode: MultiAgentMode = "default",
   exactComboSlugs: ReadonlySet<string> = new Set(),
+  accountNamespaces: Readonly<Record<string, string>> = {},
 ): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -240,6 +242,7 @@ export function buildCatalogEntries(
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
   const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const out: RawEntry[] = [];
+  const nativeEntries: RawEntry[] = [];
   const collisionSkipped = resolveSlugAliasCollisions(goModels);
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
@@ -248,6 +251,19 @@ export function buildCatalogEntries(
     const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
     if (rank.has(slug)) e.priority = rank.get(slug)!;
     out.push(e);
+    nativeEntries.push(e);
+  }
+  for (const namespace of Object.keys(accountNamespaces)) {
+    for (const native of nativeEntries) {
+      const slug = `${namespace}/${String(native.slug)}`;
+      const e = JSON.parse(JSON.stringify(native)) as RawEntry;
+      e.slug = slug;
+      e.display_name = slug;
+      e.description = CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION;
+      e.priority = rank.get(slug)
+        ?? (100 + (typeof native.priority === "number" ? native.priority : 9));
+      out.push(e);
+    }
   }
   for (const m of goModels) {
     if (collisionSkipped.has(m)) continue;
@@ -392,6 +408,7 @@ export function mergeCatalogEntriesForSync(
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
       if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
+      if (m.description === CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION) return false;
       const provider = m.slug.slice(0, m.slug.indexOf("/"));
       return !gatheredProviderNames.has(provider) && !freshSlugs.has(m.slug);
     });
@@ -474,7 +491,16 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
-  const goEntries = buildCatalogEntries(template ? JSON.parse(JSON.stringify(template)) : null, [], orderedGoModels, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs);
+  const goEntries = buildCatalogEntries(
+    template ? JSON.parse(JSON.stringify(template)) : null,
+    nativeOpenAiSlugs(),
+    orderedGoModels,
+    featured,
+    websocketsEnabled(config),
+    multiAgentMode,
+    exactComboSlugs,
+    config.codexAccountNamespaces,
+  ).filter(entry => typeof entry.slug === "string" && entry.slug.includes("/"));
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
@@ -485,6 +511,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
       .filter(([, prov]) => prov.disabled !== true)
       .map(([name]) => name),
   );
+  for (const [namespace] of codexAccountNamespaceEntries(config)) gatheredProviderNames.add(namespace);
   // Central WS capability override on the FINAL on-disk catalog (the file Codex reads). Applies to
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.

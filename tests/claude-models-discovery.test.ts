@@ -155,3 +155,37 @@ test("OpenAI list shape and Codex catalog shape stay unchanged", async () => {
     server.stop(true);
   }
 });
+
+test("account-qualified native models appear in both OpenAI and Codex discovery", async () => {
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    codexAccountNamespaces: { personal: "main", work: "opaque-work-account-id" },
+  });
+  const server = startServer(0);
+  try {
+    const plain = await fetch(new URL("/v1/models", server.url)).then(response => response.json()) as {
+      data: Array<{ id: string }>;
+    };
+    expect(plain.data.some(model => model.id.startsWith("personal/gpt-"))).toBe(true);
+    expect(plain.data.some(model => model.id.startsWith("work/gpt-"))).toBe(true);
+
+    const codex = await fetch(new URL("/v1/models?client_version=1.0.0", server.url)).then(response => response.json()) as {
+      models: Array<{ slug?: string; description?: string }>;
+    };
+    const bound = codex.models.filter(model => model.description === "OpenAI native model bound to a Codex account namespace.");
+    expect(bound.some(model => model.slug?.startsWith("personal/gpt-"))).toBe(true);
+    expect(bound.some(model => model.slug?.startsWith("work/gpt-"))).toBe(true);
+    expect(JSON.stringify(codex)).not.toContain("opaque-work-account-id");
+  } finally {
+    server.stop(true);
+  }
+});

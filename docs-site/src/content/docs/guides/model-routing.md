@@ -11,9 +11,18 @@ Pool(default, main plus added accounts) or Direct(current caller/main bearer) wi
 model id. `openai-apikey/<model>` explicitly selects API-key transport. The two credential routes
 do not fall through to one another.
 
+Configured `codexAccountNamespaces` are checked first. A selector such as `work/gpt-5.6-sol`
+resolves to the canonical `openai` provider plus one immutable account id. It bypasses pool
+selection and fails closed instead of changing accounts. Account namespace keys cannot collide with
+configured provider names.
+
 ## Precedence
 
-1. **Explicit `provider/model`** — if the id contains `/` and the part before it is the name of a
+1. **Account-qualified native model** — if the prefix is configured in
+   `codexAccountNamespaces`, the remainder must be a bare native OpenAI model id and the exact
+   configured account is used.
+
+2. **Explicit `provider/model`** — if the id contains `/` and the part before it is the name of a
    configured provider, that provider is used and the id is stripped to the part after the slash.
 
    ```text
@@ -25,10 +34,10 @@ do not fall through to one another.
    This is the unambiguous form, and the one Codex's model picker uses for routed models.
    If the named provider is disabled, this explicit form throws instead of routing.
 
-2. **A provider's `defaultModel`** — if any provider's `defaultModel` equals the id, that provider
+3. **A provider's `defaultModel`** — if any provider's `defaultModel` equals the id, that provider
    is used (id passed through unchanged).
 
-3. **Built-in prefix patterns** — the id is matched against known model-family prefixes, then routed
+4. **Built-in prefix patterns** — the id is matched against known model-family prefixes, then routed
    to a configured provider of that name (or name-prefix):
 
    | Prefixes | Provider |
@@ -40,11 +49,11 @@ do not fall through to one another.
    This matcher is name-based and, unlike the `defaultModel` / `models[]` scans, currently does not
    filter a matching provider whose `disabled` flag is true.
 
-4. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
+5. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
    `models[]`, that provider is used. This order matters: with an OpenAI-named provider configured,
    a bare `gpt-*` id reaches it before another provider's `models[]` claim.
 
-5. **Default provider** — if nothing matched, the id is sent to `config.defaultProvider` unchanged.
+6. **Default provider** — if nothing matched, the id is sent to `config.defaultProvider` unchanged.
    (If no default provider is configured, or it is disabled, routing throws.)
 
 ## API keys and environment variables

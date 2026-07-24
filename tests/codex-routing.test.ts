@@ -112,6 +112,14 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
   });
 
+  test("fixed-account failures record health without changing pool selection", () => {
+    const config = makeConfig({ upstreamFailoverThreshold: 1, activeCodexAccountId: "a" });
+    recordCodexUpstreamOutcome(config, "a", 503, { fixedAccount: true });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1 });
+    expect(config.activeCodexAccountId).toBe("a");
+  });
+
   test("go and free plans use only the 30d quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12 }, "go")).toBe(12);
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 13 }, "free")).toBe(13);

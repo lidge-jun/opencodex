@@ -347,6 +347,7 @@ export function startServer(port?: number) {
         }
         const goModels = await fetchAllModels(config);
         const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, orderForSubagents, filterCatalogVisibleModels, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeModelSlugs } = await import("../codex/account-namespaces");
         const nativeSlugs = nativeOpenAiSlugs();
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
@@ -389,13 +390,14 @@ export function startServer(port?: number) {
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
           // on-disk sync; codex-rs keeps them out of the picker itself).
           const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config));
+          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), config.codexAccountNamespaces);
           return jsonResponse({ models: applyNativeVisibility(entries, disabledNativeSlugs(config)) }, 200, req, config);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
         const data = [
           ...visibleNativeSlugs(config).map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
+          ...accountBoundNativeModelSlugs(config, visibleNativeSlugs(config)).map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
           ...uniqueCatalogModelsForRawPublicList(goOrdered).map(m => ({ id: m.alias ?? `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, config);

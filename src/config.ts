@@ -448,6 +448,40 @@ const configSchema = z.object({
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
 }).passthrough().superRefine((config, ctx) => {
+  const accountNamespaces = (config as { codexAccountNamespaces?: unknown }).codexAccountNamespaces;
+  if (accountNamespaces !== undefined) {
+    if (!accountNamespaces || typeof accountNamespaces !== "object" || Array.isArray(accountNamespaces)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["codexAccountNamespaces"],
+        message: "codexAccountNamespaces must be an object mapping model namespaces to Codex account ids",
+      });
+    } else {
+      for (const [namespace, accountId] of Object.entries(accountNamespaces as Record<string, unknown>)) {
+        if (!isValidProviderName(namespace)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["codexAccountNamespaces", namespace],
+            message: "account namespaces must use letters, numbers, dot, underscore, or hyphen and cannot be reserved JavaScript object keys",
+          });
+        }
+        if (namespace === "combo" || hasOwnProvider(config.providers, namespace)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["codexAccountNamespaces", namespace],
+            message: "account namespaces must not collide with configured provider or combo namespaces",
+          });
+        }
+        if (typeof accountId !== "string" || accountId.trim() !== accountId || accountId.length === 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["codexAccountNamespaces", namespace],
+            message: "account namespace targets must be nonblank Codex account ids",
+          });
+        }
+      }
+    }
+  }
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {
       ctx.addIssue({
@@ -585,6 +619,20 @@ const configSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["combos"], message: "combos must be an object" });
     } else {
       for (const [id, raw] of Object.entries(combos as Record<string, unknown>)) {
+        const alias = raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as { alias?: unknown }).alias
+          : undefined;
+        if (typeof alias === "string") {
+          const aliasNamespace = alias.slice(0, alias.indexOf("/"));
+          if (alias.includes("/") && accountNamespaces && typeof accountNamespaces === "object"
+            && !Array.isArray(accountNamespaces) && Object.hasOwn(accountNamespaces, aliasNamespace)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["combos", id, "alias"],
+              message: "combo aliases must not use a configured Codex account namespace",
+            });
+          }
+        }
         // Pass the full map so cross-combo rules (alias uniqueness) apply at load time
         // too, not just via the management API; each combo is excluded from its own check.
         for (const issue of comboConfigIssues(id, raw, config.providers, {

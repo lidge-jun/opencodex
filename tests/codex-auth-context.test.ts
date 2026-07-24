@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -161,6 +161,78 @@ describe("Codex auth context", () => {
       "pool",
       { excludeAccountId: "pool-a" },
     )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+  });
+
+  test("fixed account resolution bypasses active selection and returns an immutable binding", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = "pool-b";
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "fixed_pool_token",
+      refreshToken: "fixed_pool_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "fixed_pool_acc",
+    });
+
+    await expect(resolveCodexAuthContext(new Headers({
+      "x-codex-parent-thread-id": "fixed-thread",
+    }), cfg, "pool", { accountId: "pool-a" })).resolves.toMatchObject({
+      kind: "pool",
+      accountId: "pool-a",
+      accessToken: "fixed_pool_token",
+      chatgptAccountId: "fixed_pool_acc",
+      fixedAccount: true,
+    });
+    expect(cfg.activeCodexAccountId).toBe("pool-b");
+  });
+
+  test("fixed main resolution reads the Codex Desktop login without consulting the active pool", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = "pool-a";
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: "opaque-live-main-token", account_id: "main-chatgpt-account" },
+    }));
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: "__main__" }))
+      .resolves.toMatchObject({
+        kind: "main-pool",
+        accountId: "__main__",
+        accessToken: "opaque-live-main-token",
+        chatgptAccountId: "main-chatgpt-account",
+        fixedAccount: true,
+      });
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
+  });
+
+  test("fixed account auth failure never falls back to another usable account", async () => {
+    const cfg = config();
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: "pool-a" }))
+      .rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
+  });
+
+  test("fixed cooled account fails closed without changing the active account", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = "pool-a";
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, { retryAfter: "60", fixedAccount: true });
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: "pool-a" }))
+      .rejects.toBeInstanceOf(CodexAccountCooldownError);
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
   });
 
   test("selected pool headers replace inbound main auth", () => {

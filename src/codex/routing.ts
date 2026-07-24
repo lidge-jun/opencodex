@@ -66,6 +66,8 @@ export type CodexUpstreamOutcomeMeta = {
   now?: number;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
+  /** Fixed account-qualified models record health without mutating pool selection or affinity. */
+  fixedAccount?: boolean;
 };
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
@@ -487,7 +489,7 @@ export function recordCodexUpstreamOutcome(
       lastFailureAt: now,
     });
     markAccountNeedsReauth(accountId);
-    clearThreadAccountMapForAccount(accountId);
+    if (!meta.fixedAccount) clearThreadAccountMapForAccount(accountId);
     return;
   }
 
@@ -498,8 +500,8 @@ export function recordCodexUpstreamOutcome(
       lastFailureAt: now,
       cooldownUntil: computeQuotaCooldownUntil(meta),
     });
-    clearThreadAccountMapForAccount(accountId);
-    if (config.activeCodexAccountId === accountId) {
+    if (!meta.fixedAccount) clearThreadAccountMapForAccount(accountId);
+    if (!meta.fixedAccount && config.activeCodexAccountId === accountId) {
       const fallback = pickLowestUsageCodexAccount(config, accountId, now);
       if (fallback) setActiveCodexAccount(config, fallback);
     }
@@ -535,16 +537,16 @@ export function recordCodexUpstreamOutcome(
   // thread is still pinned to the FAILING account — a late failure from account A
   // must not delete a newer healthy binding to account B (race: T→A, A fails,
   // T→B, late A failure must not delete B's mapping).
-  if (failoverEnabled && meta.threadId) {
+  if (!meta.fixedAccount && failoverEnabled && meta.threadId) {
     const bound = threadAccountMap.get(meta.threadId);
     if (bound?.accountId === accountId) threadAccountMap.delete(meta.threadId);
   }
   // Once the account is past the failover streak, clear every thread still pinned
   // to it — matching 429 affinity behavior so "continue" cannot stay on a bad peer.
-  if (shouldFailover(config, accountId, now)) {
+  if (!meta.fixedAccount && shouldFailover(config, accountId, now)) {
     clearThreadAccountMapForAccount(accountId);
   }
-  if (config.activeCodexAccountId === accountId) applyFailureFailover(config, accountId, now);
+  if (!meta.fixedAccount && config.activeCodexAccountId === accountId) applyFailureFailover(config, accountId, now);
 }
 
 export function formatCodexProviderForLog(providerName: string, accountId: string | null, config: OcxConfig): string {

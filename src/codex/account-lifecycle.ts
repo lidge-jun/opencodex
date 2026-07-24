@@ -15,6 +15,12 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
 export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): void {
   removeCodexAccountCredential(accountId);
   runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? []).filter(account => account.id !== accountId);
+  if (runtimeConfig.codexAccountNamespaces) {
+    runtimeConfig.codexAccountNamespaces = Object.fromEntries(
+      Object.entries(runtimeConfig.codexAccountNamespaces)
+        .filter(([, boundAccountId]) => boundAccountId !== accountId),
+    );
+  }
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);

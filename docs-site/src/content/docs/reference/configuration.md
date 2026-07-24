@@ -52,6 +52,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
+| `codexAccountNamespaces?` | `Record<string,string>` | `{}` | Optional picker namespace to exact Codex account id map. Use `"main"` for the current Codex Desktop/main login. Account-qualified native models fail closed and never pool-fail over. Namespace keys cannot collide with provider ids. |
 | `activeCodexAccountId?` | `string` | — | Pool account used for the next new Codex thread. Existing thread affinities keep their original account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
@@ -76,6 +77,35 @@ non-secret account metadata only; access and refresh tokens are kept in the hard
 credential store. Existing thread ids keep account affinity, while new sessions can auto-route based
 on quota, cooldown, and health.
 :::
+
+### Account-qualified native models
+
+Use `codexAccountNamespaces` when account choice must be visible and intentional in the model picker:
+
+```json
+{
+  "codexAccountNamespaces": {
+    "personal": "main",
+    "work": "work-account-id"
+  }
+}
+```
+
+The added account id is the `ID` shown by `ocx account list openai`; the namespace is a user-owned
+label. After `ocx sync`, Codex exposes `personal/gpt-*` and `work/gpt-*` copies of every available
+supported native model. When a later opencodex update adds support for another native model, the next
+catalog sync gives it the same prefixes without adding the model separately to this map.
+
+These selectors do not change `activeCodexAccountId`. They bypass quota auto-switch, transient-
+failure failover, affinity rebinding, and unsupported-model retry. If the exact account is missing,
+cooling down, or needs reauthentication, the request fails instead of using another account. Bare
+`gpt-*` models keep the configured Pool/Direct behavior.
+
+Account binding follows the model selector. Use qualified values in `subagentModels`,
+`injectionModel`, and `shadowCallIntercept.model` when those calls must use the same account. A
+child explicitly launched with a bare model uses ordinary Pool/Direct routing. Standalone client-
+side image and alpha-search relays do not reliably carry the selected chat model, so they continue
+to use the provider's global Pool/Direct account behavior.
 
 ### claudeCode (OcxClaudeCodeConfig)
 

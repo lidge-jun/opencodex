@@ -29,6 +29,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION } from "../account-namespaces";
 
 
 import { filterSupportedNativeSlugs } from "./parsing";
@@ -134,8 +135,10 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels">): Arra
 export function applyNativeVisibility(entries: RawEntry[], disabledNative: Set<string>): RawEntry[] {
   for (const entry of entries) {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
-    if (!slug || slug.includes("/") || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) continue;
-    entry.visibility = disabledNative.has(slug) ? "hide" : "list";
+    const accountBound = entry.description === CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION && slug.includes("/");
+    const nativeSlug = accountBound ? slug.slice(slug.indexOf("/") + 1) : slug;
+    if (!nativeSlug || (!accountBound && slug.includes("/")) || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)) continue;
+    entry.visibility = disabledNative.has(nativeSlug) ? "hide" : "list";
   }
   return entries;
 }

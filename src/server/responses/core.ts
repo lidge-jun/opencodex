@@ -120,7 +120,10 @@ export function sidecarOutcomeRecorder(
   threadId?: string | null,
 ): ((outcome: CodexUpstreamOutcome) => void) | undefined {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
-    ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, { threadId })
+    ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+        threadId,
+        fixedAccount: authCtx.fixedAccount,
+      })
     : undefined;
 }
 
@@ -207,7 +210,10 @@ export function codexForwardTerminalOutcomeRecorder(
       // Normal limit/content-filter/stall terminal — the account served the
       // request. Don't penalize account health; record success to clear any
       // prior soft-avoid so a healthy account isn't stuck avoided.
-      recordCodexUpstreamOutcome(config, authCtx.accountId, 200, { threadId });
+      recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
+        threadId,
+        fixedAccount: authCtx.fixedAccount,
+      });
       return;
     }
     // status === "completed" or "failed": use the semantic HTTP status derived
@@ -222,7 +228,10 @@ export function codexForwardTerminalOutcomeRecorder(
     const outcome = status === "completed"
       ? 200
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
-    recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, { threadId });
+    recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+      threadId,
+      fixedAccount: authCtx.fixedAccount,
+    });
   };
 }
 
@@ -822,7 +831,9 @@ export async function handleResponses(
   try {
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+        accountId: route.codexAccountId,
+      });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       options.onCodexAuthContextResolved?.(undefined);
@@ -836,7 +847,9 @@ export async function handleResponses(
       return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
     }
     if (err instanceof CodexAuthContextError) {
-      const safeAccountLabel = formatCodexProviderForLog(route.providerName, err.accountId, config);
+      const safeAccountLabel = route.codexAccountNamespace
+        ? `${route.providerName}-${route.codexAccountNamespace}`
+        : formatCodexProviderForLog(route.providerName, err.accountId, config);
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
     }
@@ -855,7 +868,9 @@ export async function handleResponses(
     return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
-  logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+  logCtx.provider = route.codexAccountNamespace
+    ? `${route.providerName}-${route.codexAccountNamespace}`
+    : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   // Prefer Codex pool account as the Cursor thread namespace when present. Cursor routes without
   // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
   const identityScope = codexLogAccountId(authCtx);
@@ -1026,6 +1041,7 @@ export async function handleResponses(
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          fixedAccount: authCtx.fixedAccount,
         });
       }
       const msg = outcome === "timeout"
@@ -1054,6 +1070,7 @@ export async function handleResponses(
 
     if (
       usesCodexForwardPoolAuth(authCtx, route.provider)
+      && route.codexAccountId === undefined
       && await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
         route.modelId,
@@ -1165,6 +1182,7 @@ export async function handleResponses(
            upstreamResponse.headers.get("x-codex-tertiary-reset-at"),
          ].filter(Boolean),
          threadId: req.headers.get("x-codex-parent-thread-id"),
+         fixedAccount: authCtx.fixedAccount,
         });
       }
     }

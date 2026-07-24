@@ -183,7 +183,9 @@ export async function handleResponsesCompact(
   const selectedModelId = route.modelId;
   logCtx.requestedModel = raw.model;
   logCtx.model = selectedModelId;
-  logCtx.provider = route.providerName;
+  logCtx.provider = route.codexAccountNamespace
+    ? `${route.providerName}-${route.codexAccountNamespace}`
+    : route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
   const virtual = resolveOpenAiCompactModel(route.providerName, selectedModelId);
   if (virtual) {
@@ -212,7 +214,9 @@ export async function handleResponsesCompact(
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+          accountId: route.codexAccountId,
+        });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
@@ -255,6 +259,7 @@ export async function handleResponsesCompact(
       recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
         ...meta,
         threadId: compactThreadId,
+        fixedAccount: authCtx.fixedAccount,
       });
     };
     let upstream: Response;
@@ -338,5 +343,3 @@ export async function handleResponsesCompact(
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }
-
-

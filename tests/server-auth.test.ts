@@ -123,14 +123,20 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
 type PoolRetryHarness = {
   config: OcxConfig;
   dispatches: string[];
-  request: (init?: { stream?: boolean; signal?: AbortSignal }) => Promise<Response>;
+  request: (init?: { stream?: boolean; signal?: AbortSignal; model?: string }) => Promise<Response>;
   server: ReturnType<typeof startServer>;
   upstream: ReturnType<typeof Bun.serve>;
 };
 
 async function startPoolRetryHarness(
   reply: (accountId: string, request: Request) => Response | Promise<Response>,
-  options: { secondAccount?: boolean; streamMode?: "legacy-tee" | "eager-relay" } = {},
+  options: {
+    secondAccount?: boolean;
+    streamMode?: "legacy-tee" | "eager-relay";
+    accountNamespaces?: Record<string, string>;
+    activeAccountId?: string;
+    accountMode?: "pool" | "direct";
+  } = {},
 ): Promise<PoolRetryHarness> {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
@@ -153,11 +159,13 @@ async function startPoolRetryHarness(
   redirectCanonicalCodexTo(upstream.url.toString());
 
   const secondAccount = options.secondAccount ?? true;
+  const providers = poolProviders();
+  if (options.accountMode) providers.openai.codexAccountMode = options.accountMode;
   const config = {
     port: 0,
     defaultProvider: "openai",
     openaiProviderTierVersion: 2,
-    providers: poolProviders(),
+    providers,
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
       { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
@@ -165,7 +173,8 @@ async function startPoolRetryHarness(
         ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
         : []),
     ],
-    activeCodexAccountId: "pool-a",
+    activeCodexAccountId: options.activeAccountId ?? "pool-a",
+    ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
   } as OcxConfig;
   saveConfig(config);
@@ -192,12 +201,12 @@ async function startPoolRetryHarness(
     dispatches,
     server,
     upstream,
-    request: ({ stream = false, signal } = {}) => originalGlobalFetch(
+    request: ({ stream = false, signal, model = POOL_RETRY_MODEL } = {}) => originalGlobalFetch(
       new URL("/v1/responses", server.url),
       {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-        body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream }),
+        body: JSON.stringify({ model, input: "hello", stream }),
         signal,
       },
     ),
@@ -1673,6 +1682,41 @@ describe("server local API auth", () => {
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("account-qualified model preserves the selected account on an allow-listed 400", async () => {
+    const body = unsupportedModelBody();
+    const harness = await startPoolRetryHarness(
+      () => rejectionResponse(body),
+      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+    );
+    try {
+      await expectOriginal400(await harness.request({ model: `work/${POOL_RETRY_MODEL}` }), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-b");
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("account-qualified compact request uses the same exact account", async () => {
+    const harness = await startPoolRetryHarness(
+      () => Response.json({ output: [] }),
+      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+    );
+    try {
+      const response = await originalGlobalFetch(new URL("/v1/responses/compact", harness.server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+        body: JSON.stringify({ model: `work/${POOL_RETRY_MODEL}`, input: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-b");
     } finally {
       await stopPoolRetryHarness(harness);
     }

@@ -18,8 +18,17 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+An optional `codexAccountNamespaces` map adds account-qualified copies of every native model. The
+map key is the public picker prefix and the value is an added Codex account id; `main` is shorthand
+for the read-only Codex Desktop/main login. These routes use the canonical `openai` provider but
+bypass Pool/Direct selection, quota balancing, failure failover, thread affinity, and unsupported-
+model account retry. Cooldown, missing credentials, and reauthentication fail closed on the bound
+account and do not mutate the active pool selection.
+
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
+personal/gpt-5.6-sol                # exact main/Desktop Codex account
+work/gpt-5.6-sol                    # exact added Codex account
 openai-apikey/gpt-5.6-sol           # OpenAI API key
 openai-apikey/gpt-5.6-sol-pro       # API Pro virtual model
 ```
@@ -51,6 +60,14 @@ v2 backup blocks migration before save.
 
 - `openai` exposes one group of bare native Codex ids in Pool and Direct. Changing mode does not
   change catalog, selected, requested, or wire model identity.
+- Each configured account namespace clones every currently supported native catalog row. When
+  opencodex adds a native model to its supported catalog, the next sync creates its qualified copies
+  without another per-namespace model list. Account ids never appear in the catalog or request logs;
+  only the user-owned namespace is displayed.
+- Binding follows each request's selected model. Qualified subagent, injection, and shadow-helper
+  model settings stay exact; explicit bare child/helper models retain Pool/Direct behavior.
+- Standalone client-side images and alpha-search relays do not reliably carry the selected chat
+  model and therefore retain the canonical provider's global Pool/Direct behavior.
 - `openai-apikey` exposes namespaced API rows. Its trusted catalog contains `gpt-5.5`, `gpt-5.6`,
   Sol/Terra/Luna, and the three corresponding Pro variants. No generic `gpt-5.6-pro` alias exists.
 - API GPT-5.6 rows use 1,050,000 context tokens and 922,000 max input tokens. Codex-login rows keep
