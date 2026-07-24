@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
@@ -50,6 +51,7 @@ export type RuntimeExecFile = (
     windowsHide: boolean;
     shell?: boolean;
     windowsVerbatimArguments?: boolean;
+    env?: NodeJS.ProcessEnv;
   },
 ) => string;
 
@@ -239,7 +241,14 @@ function probeVersion(
     }
   }
   const execFile = deps.execFileSync ?? (execFileSync as unknown as RuntimeExecFile);
+  // Sandbox the probe's CODEX_HOME: a real Codex CLI creates state (tmp/, logs) under
+  // CODEX_HOME even for `--version`, and the probe inherits the caller's env — so a
+  // read-only `ocx status` would dirty the user's CODEX_HOME. Redirect it to a
+  // throwaway dir; if the sandbox cannot be created, skip the probe rather than
+  // probe with the inherited env (keeps probeVersion total: it never throws).
+  let probeHome: string | undefined;
   try {
+    probeHome = mkdtempSync(join(tmpdir(), "ocx-codex-probe-"));
     const invocation = codexExecInvocation(command, ["--version"], platform, {
       env: deps.env,
       exists: deps.existsSync,
@@ -249,6 +258,7 @@ function probeVersion(
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 8_000,
       windowsHide: true,
+      env: { ...(deps.env ?? process.env), CODEX_HOME: probeHome },
       ...invocation.options,
     });
     const version = parseCodexVersionOutput(output);
@@ -257,9 +267,15 @@ function probeVersion(
     }
     return { ok: true, version };
   } catch (error) {
+    if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
     return { ok: false, reason: `failed --version (${redacted})` };
+  } finally {
+    if (probeHome) {
+      // Nested catch: a transient Windows EBUSY must never mask the probe result.
+      try { rmSync(probeHome, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
   }
 }
 
