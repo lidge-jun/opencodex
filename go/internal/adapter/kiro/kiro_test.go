@@ -163,6 +163,38 @@ func TestParseStreamToolUsageAndTerminalError(t *testing.T) {
 	}
 }
 
+func TestParseAttemptProgressTextWithoutCompletionIsNonterminal(t *testing.T) {
+	stream := smithyStream(t, eventFrame(t, "assistantResponseEvent", map[string]any{"content": "Checking the result."}))
+	result := parseAttempt(context.Background(), io.NopCloser(bytes.NewReader(stream)), CompletionRequired, 0, nil, "")
+
+	if !result.needsFallback {
+		t.Fatal("progress-only response did not request completion fallback")
+	}
+	if len(result.events) != 1 || result.events[0].Type != types.EventTextDelta || result.events[0].Text != "Checking the result." || result.events[0].Phase != "commentary" {
+		t.Fatalf("events=%#v", result.events)
+	}
+	for _, event := range result.events {
+		if event.Type == types.EventDone {
+			t.Fatalf("progress-only response emitted done: %#v", result.events)
+		}
+	}
+}
+
+func TestParseAttemptCompletionToolEmitsDone(t *testing.T) {
+	stream := smithyStream(t,
+		eventFrame(t, "toolUseEvent", map[string]any{"name": CompletionToolName, "toolUseId": "final_1", "input": `{"answer":`}),
+		eventFrame(t, "toolUseEvent", map[string]any{"input": `"Task complete."}`, "stop": true}),
+	)
+	result := parseAttempt(context.Background(), io.NopCloser(bytes.NewReader(stream)), CompletionRequired, 0, nil, "")
+
+	if result.needsFallback {
+		t.Fatal("completed response requested fallback")
+	}
+	if len(result.events) != 2 || result.events[0].Type != types.EventTextDelta || result.events[0].Text != "Task complete." || result.events[0].Phase != "final_answer" || result.events[1].Type != types.EventDone {
+		t.Fatalf("events=%#v", result.events)
+	}
+}
+
 func TestBoundedCompletionRetryRunsOnce(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

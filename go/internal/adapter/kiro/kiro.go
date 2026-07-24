@@ -675,7 +675,7 @@ func parseAttempt(ctx context.Context, body io.ReadCloser, mode CompletionMode, 
 		}
 		result.events = filtered
 	}
-	if mode == CompletionRequired && result.sawReasoning && !result.sawText && !sawRealTool {
+	if mode == CompletionRequired && completionAnswer == "" && (result.sawText || result.sawReasoning) && !sawRealTool {
 		result.needsFallback = true
 		return result
 	}
