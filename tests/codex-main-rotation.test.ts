@@ -17,11 +17,14 @@ import {
   resolveCodexAuthContext,
 } from "../src/codex/auth-context";
 import { isCodexAccountUsable } from "../src/codex/account-usability";
+import { resetMainCodexAccountIdentityTrackingForTests } from "../src/codex/account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
+  getAccountQuota,
+  isAccountNeedsReauth,
   markAccountNeedsReauth,
   updateAccountQuota,
 } from "../src/codex/auth-api";
@@ -74,6 +77,7 @@ describe("main account rotation (Option A)", () => {
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
+    resetMainCodexAccountIdentityTrackingForTests();
     setMainAccountPlan(null);
     for (const id of ["a", "b", MAIN_CODEX_ACCOUNT_ID]) clearAccountNeedsReauth(id);
     saveCred("a");
@@ -85,6 +89,7 @@ describe("main account rotation (Option A)", () => {
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
+    resetMainCodexAccountIdentityTrackingForTests();
     setMainAccountPlan(null);
     for (const id of ["a", "b", MAIN_CODEX_ACCOUNT_ID]) clearAccountNeedsReauth(id);
     for (const d of [STORE_DIR, CODEX_DIR]) if (existsSync(d)) rmSync(d, { recursive: true });
@@ -145,6 +150,32 @@ describe("main account rotation (Option A)", () => {
     const headers = headersForCodexAuthContext(new Headers(), ctx);
     expect(headers.get("authorization")).toBe("Bearer main_access");
     expect(headers.get("chatgpt-account-id")).toBe("main_acct");
+  });
+
+  test("switching the main auth identity discards runtime state from the previous account", async () => {
+    const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID, autoSwitchThreshold: 0, codexAccounts: [] });
+    await expect(resolveCodexAuthContext(new Headers(), config, "pool")).resolves.toMatchObject({
+      kind: "main-pool",
+      chatgptAccountId: "main_acct",
+    });
+
+    recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "3600" });
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 100, 0);
+    writeFileSync(
+      join(CODEX_DIR, "auth.json"),
+      JSON.stringify({ tokens: { access_token: "replacement_access", account_id: "replacement_acct" } }),
+    );
+
+    await expect(resolveCodexAuthContext(new Headers(), config, "pool")).resolves.toEqual({
+      kind: "main-pool",
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      accessToken: "replacement_access",
+      chatgptAccountId: "replacement_acct",
+    });
+    expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+    expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
   });
 
   test("no active id selects from main plus added accounts and binds main affinity", async () => {
