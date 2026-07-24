@@ -14,6 +14,11 @@ import (
 
 type handlerAdapter struct{ endpoint string }
 
+type incompleteHandlerAdapter struct {
+	handlerAdapter
+	events []types.AdapterEvent
+}
+
 type handlerAuth struct{ context *types.AuthContext }
 
 func (a handlerAuth) ResolveAuth(context.Context, string, string) (*types.AuthContext, error) {
@@ -33,6 +38,19 @@ func (handlerAdapter) ParseStream(context.Context, io.ReadCloser) <-chan types.A
 }
 func (handlerAdapter) ParseUnary(context.Context, []byte) ([]types.AdapterEvent, error) {
 	return []types.AdapterEvent{{Type: types.EventTextDelta, Text: "unary"}, {Type: types.EventDone, Usage: &types.Usage{InputTokens: 2, OutputTokens: 1}}}, nil
+}
+
+func (a incompleteHandlerAdapter) ParseStream(context.Context, io.ReadCloser) <-chan types.AdapterEvent {
+	events := make(chan types.AdapterEvent, len(a.events))
+	for _, event := range a.events {
+		events <- event
+	}
+	close(events)
+	return events
+}
+
+func (a incompleteHandlerAdapter) ParseUnary(context.Context, []byte) ([]types.AdapterEvent, error) {
+	return a.events, nil
 }
 
 func TestHandlerRoutesUnaryChatCompletion(t *testing.T) {
@@ -88,6 +106,24 @@ func TestMessagesHandlerNativeAnthropicPassthrough(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.Handle(response, request)
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"native"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestMessagesHandlerReturns529ForIncompleteUnaryResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
+	defer upstream.Close()
+	reg := registry.New(registry.Provider{ID: "acme", BaseURL: upstream.URL, DefaultModel: "claude-wire", Models: []registry.ModelDefinition{{ID: "claude-wire"}}})
+	handler := NewMessagesHandler(HandlerConfig{Registry: reg, ResolveAdapter: func(*types.ResolvedModel, *types.Transport, *types.AuthContext, http.Header) (types.Adapter, error) {
+		return incompleteHandlerAdapter{
+			handlerAdapter: handlerAdapter{endpoint: upstream.URL},
+			events:         []types.AdapterEvent{{Type: types.EventIncomplete, Reason: "adapter_eof"}},
+		}, nil
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"acme/claude-wire","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
+	response := httptest.NewRecorder()
+	handler.Handle(response, request)
+	if response.Code != 529 || !strings.Contains(response.Body.String(), `"type":"overloaded_error"`) || !strings.Contains(response.Body.String(), `upstream response was incomplete (adapter_eof)`) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }

@@ -142,6 +142,8 @@ func WriteChatStream(ctx context.Context, w http.ResponseWriter, model string, e
 				}
 			case types.EventUsage:
 				usage = event.Usage
+			case types.EventHeartbeat:
+				continue
 			case types.EventError:
 				terminal = true
 				message := event.Error
@@ -158,6 +160,30 @@ func WriteChatStream(ctx context.Context, w http.ResponseWriter, model string, e
 					return err
 				}
 				finish := chatFinishReason(event.StopReason, sawTool)
+				if err := writeChatData(w, chatChunk(id, model, created, map[string]any{}, &finish, usage), flusher); err != nil {
+					return err
+				}
+				if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+					return err
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case types.EventIncomplete:
+				terminal = true
+				if event.Usage != nil {
+					usage = event.Usage
+				}
+				if event.Reason != "max_output_tokens" && event.Reason != "content_filter" {
+					if err := writeChatStreamError(w, fmt.Sprintf("upstream stream ended early (%s)", event.Reason), flusher); err != nil {
+						return err
+					}
+					return nil
+				}
+				if err := ensureRole(); err != nil {
+					return err
+				}
+				finish := chatFinishReason(event.Reason, false)
 				if err := writeChatData(w, chatChunk(id, model, created, map[string]any{}, &finish, usage), flusher); err != nil {
 					return err
 				}
@@ -194,6 +220,8 @@ func foldChatEvents(events []types.AdapterEvent) (string, string, []types.ToolCa
 			}
 		case types.EventUsage:
 			usage = event.Usage
+		case types.EventHeartbeat:
+			continue
 		case types.EventError:
 			message := event.Error
 			if message == "" {
@@ -206,6 +234,12 @@ func foldChatEvents(events []types.AdapterEvent) (string, string, []types.ToolCa
 				usage = event.Usage
 			}
 			finish = chatFinishReason(event.StopReason, len(calls) > 0)
+		case types.EventIncomplete:
+			done = true
+			if event.Usage != nil {
+				usage = event.Usage
+			}
+			finish = chatFinishReason(event.Reason, false)
 		}
 	}
 	if !done {

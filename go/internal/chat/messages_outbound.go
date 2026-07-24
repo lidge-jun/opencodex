@@ -11,6 +11,13 @@ import (
 	"github.com/lidge-jun/opencodex-go/internal/types"
 )
 
+type incompleteError struct {
+	status  int
+	message string
+}
+
+func (e incompleteError) Error() string { return e.message }
+
 func buildAnthropicMessage(events []types.AdapterEvent, model string) (map[string]any, error) {
 	content := make([]any, 0)
 	var usage *types.Usage
@@ -40,8 +47,10 @@ func buildAnthropicMessage(events []types.AdapterEvent, model string) (map[strin
 			}
 		case types.EventUsage:
 			usage = event.Usage
+		case types.EventHeartbeat:
+			continue
 		case types.EventError:
-			return nil, fmt.Errorf("%s", firstNonEmpty(event.Error, "upstream request failed"))
+			return nil, statusError{status: http.StatusBadGateway, message: firstNonEmpty(event.Error, "upstream request failed")}
 		case types.EventDone:
 			done = true
 			if event.Usage != nil {
@@ -50,10 +59,23 @@ func buildAnthropicMessage(events []types.AdapterEvent, model string) (map[strin
 			if stop != "tool_use" {
 				stop = anthropicStopReason(event.StopReason)
 			}
+		case types.EventIncomplete:
+			if event.Usage != nil {
+				usage = event.Usage
+			}
+			switch event.Reason {
+			case "max_output_tokens":
+				stop, done = "max_tokens", true
+			case "content_filter":
+				stop, done = "refusal", true
+			default:
+				message := firstNonEmpty(event.Message, fmt.Sprintf("upstream response was incomplete (%s)", event.Reason))
+				return nil, incompleteError{status: 529, message: message}
+			}
 		}
 	}
 	if !done {
-		return nil, fmt.Errorf("adapter stream ended without a terminal event")
+		return nil, statusError{status: http.StatusBadGateway, message: "adapter stream ended without a terminal event"}
 	}
 	return map[string]any{"id": "msg_" + randomHex(12), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stop, "stop_sequence": nil, "usage": anthropicUsage(usage)}, nil
 }
@@ -179,6 +201,8 @@ func writeAnthropicStream(ctx context.Context, w http.ResponseWriter, model stri
 				index++
 			case types.EventUsage:
 				usage = event.Usage
+			case types.EventHeartbeat:
+				continue
 			case types.EventError:
 				terminal = true
 				_ = closeBlock()
@@ -203,6 +227,28 @@ func writeAnthropicStream(ctx context.Context, w http.ResponseWriter, model stri
 					return err
 				}
 				return emit("message_stop", map[string]any{"type": "message_stop"})
+			case types.EventIncomplete:
+				terminal = true
+				if event.Usage != nil {
+					usage = event.Usage
+				}
+				if err := closeBlock(); err != nil {
+					return err
+				}
+				switch event.Reason {
+				case "max_output_tokens", "content_filter":
+					stop := "max_tokens"
+					if event.Reason == "content_filter" {
+						stop = "refusal"
+					}
+					if err := emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": anthropicUsage(usage)}); err != nil {
+						return err
+					}
+					return emit("message_stop", map[string]any{"type": "message_stop"})
+				default:
+					message := firstNonEmpty(event.Message, fmt.Sprintf("upstream response was incomplete (%s)", event.Reason))
+					return emit("error", anthropicErrorBody(529, message, "overloaded_error"))
+				}
 			}
 		}
 	}
@@ -268,6 +314,11 @@ func writeAnthropicError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, anthropicErrorBody(status, message, ""))
 }
 func writeAnthropicErrorFor(w http.ResponseWriter, err error) {
+	var incomplete incompleteError
+	if errors.As(err, &incomplete) {
+		writeJSON(w, incomplete.status, anthropicErrorBody(incomplete.status, incomplete.message, "overloaded_error"))
+		return
+	}
 	var typed statusError
 	if errors.As(err, &typed) {
 		writeAnthropicError(w, typed.status, typed.message)

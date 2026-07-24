@@ -68,7 +68,7 @@ func (h *MessagesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	message, err := buildAnthropicMessage(events, requestedModel)
 	if err != nil {
-		writeAnthropicError(w, 502, err.Error())
+		writeAnthropicErrorFor(w, err)
 		return
 	}
 	writeJSON(w, 200, message)
