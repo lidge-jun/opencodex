@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/lidge-jun/opencodex-go/internal/bridge"
+	"github.com/lidge-jun/opencodex-go/internal/chat"
 	"github.com/lidge-jun/opencodex-go/internal/combos"
+	appconfig "github.com/lidge-jun/opencodex-go/internal/config"
+	"github.com/lidge-jun/opencodex-go/internal/management"
 	"github.com/lidge-jun/opencodex-go/internal/types"
+	"github.com/lidge-jun/opencodex-go/internal/usage"
 )
 
 type AdapterResolver func(model *types.ResolvedModel, transport *types.Transport, auth *types.AuthContext, incoming http.Header) (types.Adapter, error)
@@ -30,6 +36,15 @@ type Config struct {
 	Management        types.ManagementRouter
 	ChatHandler       types.RouteHandler
 	MessagesHandler   types.RouteHandler
+	CompactHandler    types.RouteHandler
+	UsageRecorder     types.UsageRecorder
+	RequestLogs       *management.RequestLog
+	ManagementConfig  *appconfig.Config
+	ConfigPath        string
+	DebugLog          *usage.DebugLog
+	OAuthManagement   management.OAuthBackend
+	StorageHome       string
+	Stop              func()
 	Version           string
 	EffortCap         string
 	SubagentEffortCap string
@@ -39,6 +54,8 @@ type Server struct {
 	config    Config
 	lifecycle *Lifecycle
 	handler   http.Handler
+	recorder  types.UsageRecorder
+	sequence  atomic.Uint64
 }
 
 func New(config Config) *Server {
@@ -48,22 +65,68 @@ func New(config Config) *Server {
 	if config.Lifecycle == nil {
 		config.Lifecycle = NewLifecycle()
 	}
-	s := &Server{config: config, lifecycle: config.Lifecycle}
+	handlerConfig := chat.HandlerConfig{Registry: config.Registry, Auth: config.Auth, ResolveAdapter: chat.AdapterResolver(config.ResolveAdapter), Client: config.Client}
+	if config.ChatHandler == nil {
+		config.ChatHandler = chat.NewHandler(handlerConfig)
+	}
+	if config.MessagesHandler == nil {
+		config.MessagesHandler = chat.NewMessagesHandler(handlerConfig)
+	}
+	if config.CompactHandler == nil {
+		config.CompactHandler = chat.NewCompactHandler(handlerConfig)
+	}
+	requestLogs := config.RequestLogs
+	if requestLogs == nil {
+		requestLogs = management.NewRequestLog(200)
+	}
+	recorder := config.UsageRecorder
+	if log, ok := recorder.(*usage.Log); ok {
+		requestLogs.SetUsageLog(log)
+		recorder = requestLogs
+	} else if recorder == nil {
+		recorder = requestLogs
+	} else {
+		recorder = fanoutRecorder{requestLog: requestLogs, recorder: recorder}
+	}
+	s := &Server{config: config, lifecycle: config.Lifecycle, recorder: recorder}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
+	mux.HandleFunc("POST /v1/responses/compact", s.delegate(config.CompactHandler))
 	mux.HandleFunc("POST /v1/chat/completions", s.delegate(config.ChatHandler))
 	mux.HandleFunc("POST /v1/messages", s.delegate(config.MessagesHandler))
 	liveness := NewLiveness(config.Version)
 	mux.Handle("GET /health", liveness)
 	mux.Handle("GET /healthz", liveness)
 	mux.Handle("GET /v1/responses/ws", WebSocketBridge(http.HandlerFunc(s.handleResponses)))
-	if config.Management != nil {
-		config.Management.Register(mux)
+	managementRouter := config.Management
+	if managementRouter == nil {
+		usageLog, _ := config.UsageRecorder.(*usage.Log)
+		api, err := management.NewAPI(management.Options{Config: config.ManagementConfig, ConfigPath: config.ConfigPath, Registry: config.Registry, UsageLog: usageLog, DebugLog: config.DebugLog, RequestLogs: requestLogs, OAuth: config.OAuthManagement, StorageHome: config.StorageHome, Version: config.Version, Stop: config.Stop})
+		if err == nil {
+			managementRouter = api
+		} else if config.Logger != nil {
+			config.Logger.Error("management_api", "error", err)
+		}
+	}
+	if managementRouter != nil {
+		managementRouter.Register(mux)
 	}
 	mux.HandleFunc("/api/", managementStub)
 	mux.Handle("/", StaticHandler())
 	s.handler = Middleware(decompressionMiddleware(mux), MiddlewareConfig{Token: config.Token, AllowedOrigins: config.AllowedOrigins, Logger: config.Logger})
 	return s
+}
+
+type fanoutRecorder struct {
+	requestLog *management.RequestLog
+	recorder   types.UsageRecorder
+}
+
+func (r fanoutRecorder) Record(ctx context.Context, record *types.UsageRecord) error {
+	if err := r.requestLog.Record(ctx, record); err != nil {
+		return err
+	}
+	return r.recorder.Record(ctx, record)
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }
@@ -144,10 +207,12 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	normalized.RawBody = raw
 	normalized.Options.Reasoning = body.Reasoning.Effort
+	requestStarted := time.Now()
 	streamCtx, done := s.lifecycle.Track(r.Context())
 	defer done()
 	var adapter types.Adapter
 	var response *http.Response
+	var resolvedAuth *types.AuthContext
 	for {
 		var auth *types.AuthContext
 		if s.config.Auth != nil {
@@ -197,6 +262,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			resolvedAuth = auth
 			if comboPick != nil {
 				s.config.Combos.NoteSuccess(comboPick)
 			}
@@ -215,11 +281,15 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, "provider_error", message)
 		return
 	}
+	usageRecord := &types.UsageRecord{RequestID: s.nextRequestID(), ThreadID: r.Header.Get("thread-id"), Provider: resolved.Provider, Model: resolved.Model, StartedAt: requestStarted}
+	if resolvedAuth != nil {
+		usageRecord.AccountID = resolvedAuth.AccountID
+	}
 	if body.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		if err := bridge.Stream(streamCtx, w, requestedModel, adapter.ParseStream(streamCtx, response.Body)); err != nil && !errors.Is(err, context.Canceled) {
+		if err := bridge.StreamWithOptions(streamCtx, w, requestedModel, adapter.ParseStream(streamCtx, response.Body), bridge.StreamOptions{Recorder: s.recorder, Record: usageRecord}); err != nil && !errors.Is(err, context.Canceled) {
 			if s.config.Logger != nil {
 				s.config.Logger.Error("responses_stream", "error", err)
 			}
@@ -238,8 +308,29 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, buffered := bridge.Convert(requestedModel, events)
+	if terminal := terminalUsage(events); terminal != nil {
+		usageRecord.Usage = *terminal
+		usageRecord.Status = types.OutcomeSuccess
+		usageRecord.Duration = time.Since(usageRecord.StartedAt)
+		_ = s.recorder.Record(context.WithoutCancel(streamCtx), usageRecord)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(buffered)
+}
+
+func (s *Server) nextRequestID() string {
+	return fmt.Sprintf("ocx-%x-%x", time.Now().UnixMilli(), s.sequence.Add(1))
+}
+
+func terminalUsage(events []types.AdapterEvent) *types.Usage {
+	var found *types.Usage
+	for _, event := range events {
+		if event.Usage != nil {
+			value := *event.Usage
+			found = &value
+		}
+	}
+	return found
 }
 
 func managementStub(w http.ResponseWriter, _ *http.Request) {

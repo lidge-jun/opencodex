@@ -36,12 +36,20 @@ type machine struct {
 	sequence int
 	current  *openItem
 	terminal bool
+	usage    *types.Usage
 }
 
 type openItem struct {
 	kind, id, callID, name string
 	index                  int
 	text                   strings.Builder
+}
+
+// StreamOptions supplies terminal usage recording metadata without coupling the
+// bridge to a concrete persistence implementation.
+type StreamOptions struct {
+	Recorder types.UsageRecorder
+	Record   *types.UsageRecord
 }
 
 // Convert consumes adapter events and returns ordered Responses events and the final response.
@@ -59,6 +67,12 @@ func Convert(model string, events []types.AdapterEvent) ([]Event, Response) {
 
 // Stream converts an adapter channel to SSE. It always emits one protocol terminal and [DONE].
 func Stream(ctx context.Context, w io.Writer, model string, events <-chan types.AdapterEvent) error {
+	return StreamWithOptions(ctx, w, model, events, StreamOptions{})
+}
+
+// StreamWithOptions converts an adapter channel to SSE and records provider
+// usage after the protocol terminal has been emitted.
+func StreamWithOptions(ctx context.Context, w io.Writer, model string, events <-chan types.AdapterEvent, options StreamOptions) error {
 	m := newMachine(model)
 	if err := writeSSE(w, m.emit("response.created", map[string]any{"response": m.snapshot("in_progress")})); err != nil {
 		return err
@@ -88,7 +102,28 @@ func Stream(ctx context.Context, w io.Writer, model string, events <-chan types.
 		}
 	}
 	_, err := io.WriteString(w, "data: [DONE]\n\n")
+	if err == nil {
+		recordStreamUsage(ctx, m, options)
+	}
 	return err
+}
+
+func recordStreamUsage(ctx context.Context, m *machine, options StreamOptions) {
+	if options.Recorder == nil || options.Record == nil || m.usage == nil {
+		return
+	}
+	record := *options.Record
+	record.Usage = *m.usage
+	record.Duration = time.Since(record.StartedAt)
+	switch {
+	case ctx.Err() != nil:
+		record.Status = types.OutcomeCancelled
+	case m.response.Status == "completed":
+		record.Status = types.OutcomeSuccess
+	default:
+		record.Status = types.OutcomeProviderError
+	}
+	_ = options.Recorder.Record(context.WithoutCancel(ctx), &record)
 }
 
 // Buffered consumes an adapter channel and returns the JSON response representation.
@@ -154,9 +189,11 @@ func (m *machine) accept(event types.AdapterEvent) []Event {
 		m.current.text.WriteString(chunk)
 		out = append(out, m.emit("response.function_call_arguments.delta", map[string]any{"item_id": m.current.id, "output_index": m.current.index, "delta": chunk}))
 	case types.EventUsage:
+		m.usage = cloneUsage(event.Usage)
 		m.response.Usage = usage(event.Usage)
 	case types.EventDone:
 		if event.Usage != nil {
+			m.usage = cloneUsage(event.Usage)
 			m.response.Usage = usage(event.Usage)
 		}
 		out = append(out, m.finish("completed", "")...)
@@ -168,6 +205,14 @@ func (m *machine) accept(event types.AdapterEvent) []Event {
 		out = append(out, m.finish("failed", message)...)
 	}
 	return out
+}
+
+func cloneUsage(value *types.Usage) *types.Usage {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (m *machine) ensureItem(kind, prefix string) []Event {
