@@ -51,6 +51,7 @@ afterEach(() => {
 
 interface CapturedRequest {
   path: string;
+  url: string;
   headers: Headers;
   bodyText: string;
 }
@@ -59,8 +60,10 @@ function fakeLiveUpstream(captured: CapturedRequest[], status = 201, location = 
   const upstream = Bun.serve({
     port: 0,
     async fetch(req) {
+      const reqUrl = new URL(req.url);
       captured.push({
-        path: new URL(req.url).pathname,
+        path: reqUrl.pathname,
+        url: `${reqUrl.pathname}${reqUrl.search}`,
         headers: req.headers,
         bodyText: await req.text(),
       });
@@ -157,6 +160,8 @@ test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON"
 
     expect(captured).toHaveLength(1);
     expect(captured[0].path).toBe("/realtime/calls");
+    expect(captured[0].url).toContain("intent=quicksilver");
+    expect(captured[0].url).toContain("architecture=avas");
     expect(captured[0].headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
     expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-123");
     expect(captured[0].headers.get("content-type")).toContain("application/json");
@@ -199,6 +204,8 @@ test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls",
 
     expect(captured).toHaveLength(1);
     expect(captured[0].path).toBe("/v1/realtime/calls");
+    expect(captured[0].url).toContain("intent=quicksilver");
+    expect(captured[0].url).toContain("architecture=avas");
     expect(captured[0].headers.get("authorization")).toBe("Bearer sk-test-live");
     expect(captured[0].headers.get("content-type")).toContain("multipart/form-data");
     expect(captured[0].bodyText).toContain('name="sdp"');
@@ -375,4 +382,120 @@ test("a routed pool account's token overrides the caller bearer on the live rela
     await server.stop(true);
     await upstream.stop(true);
   }
+});
+
+test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to ChatGPT backend", async () => {
+  const seenPaths: string[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        seenPaths.push(url.pathname);
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      message(ws, message) {
+        ws.send(`echo:${typeof message === "string" ? message : message.toString()}`);
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  // Redirect ChatGPT sideband WebSocket targets to the local mock (config stays canonical).
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "chatgpt.com" && parsed.pathname.startsWith("/backend-api/codex/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 5_000);
+      client.addEventListener("open", () => {
+        client.send("ping-sideband");
+      });
+      client.addEventListener("message", (event) => {
+        try {
+          expect(String(event.data)).toBe("echo:ping-sideband");
+          expect(seenPaths).toContain("/backend-api/codex/rtc_sideband");
+          clearTimeout(timer);
+          resolve();
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", async () => {
+  const { buildLiveSidebandUpstreamWsUrl, forwardLiveUrl, keyedLiveUrl, parseLiveSidebandTarget } =
+    await import("../src/server/live");
+
+  expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex", true)).toBe(
+    "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+  expect(keyedLiveUrl("https://api.openai.com/v1")).toBe(
+    "https://api.openai.com/v1/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+
+  expect(parseLiveSidebandTarget("/v1/live/rtc_1", new URLSearchParams())).toEqual({
+    style: "frameless-path",
+    callId: "rtc_1",
+  });
+  expect(parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id=rtc_2"))).toEqual({
+    style: "realtime-query",
+    callId: "rtc_2",
+  });
+
+  expect(
+    buildLiveSidebandUpstreamWsUrl("https://chatgpt.com/backend-api/codex", true, {
+      style: "frameless-path",
+      callId: "rtc_1",
+    }),
+  ).toBe("wss://chatgpt.com/backend-api/codex/rtc_1");
+  expect(
+    buildLiveSidebandUpstreamWsUrl("https://api.openai.com/v1", false, {
+      style: "frameless-path",
+      callId: "rtc_1",
+    }),
+  ).toBe("wss://api.openai.com/v1/live/rtc_1");
+  expect(
+    buildLiveSidebandUpstreamWsUrl("https://api.openai.com/v1", false, {
+      style: "realtime-query",
+      callId: "rtc_2",
+    }),
+  ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
 });
