@@ -406,7 +406,12 @@ export default function AddProviderModal({
   const isLocal = form?.authMode === "local";
   const isReservedForward = preset ? isReservedCodexForwardPreset(preset) : false;
   const isReference = preset ? !isPresetActionable(preset) : false;
-  const selectedIcon = preset ? providerIconSrc(preset.id, { adapter: preset.adapter, baseUrl: preset.baseUrl }) : undefined;
+  const selectedIcon = preset ? providerIconSrc(preset.id, {
+    adapter: preset.adapter,
+    baseUrl: preset.baseUrl,
+    defaultModel: preset.defaultModel,
+    models: preset.models,
+  }) : undefined;
   const setupUrl = preset?.dashboardUrl ?? preset?.documentationUrl;
 
   return (

@@ -186,7 +186,7 @@ export default function ProviderCatalog({
           <div className="provider-catalog-rows">
             {presetsLoading && rows.length === 0 && <div className="provider-catalog-empty muted text-control">{t("modal.catalogLoading")}</div>}
             {tier !== "accounts" && rows.map(p => {
-              const icon = providerIconSrc(p.id, { adapter: p.adapter, baseUrl: p.baseUrl });
+              const icon = providerIconSrc(p.id, { adapter: p.adapter, baseUrl: p.baseUrl, defaultModel: p.defaultModel, models: p.models });
               return (
                 <button key={p.id} className={`provider-catalog-row${selectedPreset?.id === p.id ? " active" : ""}`} aria-pressed={selectedPreset?.id === p.id} onClick={() => onSelectPreset(p)}>
                   <span className="provider-catalog-icon">{icon ? <img src={icon} alt="" aria-hidden="true" /> : p.label.slice(0, 1)}</span>
