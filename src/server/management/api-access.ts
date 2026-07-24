@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../../types";
+import { probeHostname } from "../proxy-liveness";
 
 export interface ApiAccessEndpoints {
   baseUrl: string;
@@ -6,14 +7,14 @@ export interface ApiAccessEndpoints {
   chatCompletionsEndpoint: string;
   messagesEndpoint: string;
   modelsEndpoint: string;
+  claudeCodeEnabled: boolean;
   /** Back-compat alias for older GUI clients. */
   endpoint: string;
 }
 
 export function buildApiAccessEndpoints(config: OcxConfig): ApiAccessEndpoints {
-  const host = config.hostname ?? "127.0.0.1";
   const port = config.port ?? 10100;
-  const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const displayHost = probeHostname(config.hostname);
   const baseUrl = `http://${displayHost}:${port}/v1`;
   const responsesEndpoint = `${baseUrl}/responses`;
   return {
@@ -22,7 +23,7 @@ export function buildApiAccessEndpoints(config: OcxConfig): ApiAccessEndpoints {
     chatCompletionsEndpoint: `${baseUrl}/chat/completions`,
     messagesEndpoint: `${baseUrl}/messages`,
     modelsEndpoint: `${baseUrl}/models`,
+    claudeCodeEnabled: config.claudeCode?.enabled !== false,
     endpoint: responsesEndpoint,
   };
 }
-

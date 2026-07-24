@@ -21,7 +21,6 @@ interface ExternalModelRow {
   id: string;
   displayName: string;
   provider: string;
-  namespaced?: string;
   disabled?: boolean;
   native?: boolean;
   custom?: boolean;
@@ -51,7 +50,7 @@ function deriveApiEndpoints(endpoint: string): ApiEndpointInfo {
 }
 
 function externalModelId(model: ExternalModelRow): string {
-  return model.namespaced ?? `${model.provider}/${model.id}`;
+  return model.id;
 }
 
 function modelProtocols(model: ExternalModelRow): string[] {
@@ -69,6 +68,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
   const [endpoints, setEndpoints] = useState<ApiEndpointInfo>(DEFAULT_ENDPOINTS);
+  const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(true);
   const [models, setModels] = useState<ExternalModelRow[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
@@ -94,6 +94,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
           messages: data.messagesEndpoint ?? deriveApiEndpoints(data.endpoint ?? "").messages,
           models: data.modelsEndpoint ?? deriveApiEndpoints(data.endpoint ?? "").models,
         });
+        setClaudeCodeEnabled(data.claudeCodeEnabled !== false);
       }
     } catch { /* proxy down */ }
   }, [apiBase]);
@@ -128,13 +129,11 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         .map(row => {
           const slashIndex = row.id.indexOf("/");
           const provider = slashIndex > 0 ? row.id.slice(0, slashIndex) : (row.owned_by ?? "openai");
-          const modelId = slashIndex > 0 ? row.id.slice(slashIndex + 1) : row.id;
           const native = slashIndex < 0;
           return {
-            id: modelId,
+            id: row.id,
             displayName: row.id,
             provider,
-            namespaced: slashIndex > 0 ? row.id : undefined,
             native,
             custom: provider !== "openai" && provider !== "combo" && !native,
           } satisfies ExternalModelRow;
@@ -286,10 +285,12 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
             <span className="muted small">{t("api.chatCompletionsEndpoint")}</span>
             <code className="api-code api-code-inline">{endpoints.chatCompletions}</code>
           </div>
-          <div>
-            <span className="muted small">{t("api.messagesEndpoint")}</span>
-            <code className="api-code api-code-inline">{endpoints.messages}</code>
-          </div>
+          {claudeCodeEnabled && (
+            <div>
+              <span className="muted small">{t("api.messagesEndpoint")}</span>
+              <code className="api-code api-code-inline">{endpoints.messages}</code>
+            </div>
+          )}
           <div>
             <span className="muted small">{t("api.modelsEndpoint")}</span>
             <code className="api-code api-code-inline">{endpoints.models}</code>
@@ -303,7 +304,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         <ul className="api-auth-list muted small">
           <li>{t("api.authChatCompletions")}</li>
           <li>{t("api.authResponses")}</li>
-          <li>{t("api.authMessages")}</li>
+          {claudeCodeEnabled && <li>{t("api.authMessages")}</li>}
           <li>{t("api.authLoopback")}</li>
         </ul>
         <p className="muted small">{t("api.authBaseUrlNote")}</p>
@@ -481,6 +482,19 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     "messages": [{"role": "user", "content": "Hello, world!"}]
   }'`}</pre>
       </div>
+      {claudeCodeEnabled && (
+        <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+          <h3 className="panel-title">{t("api.usageMessagesTitle")}</h3>
+          <pre className="api-code">{`curl ${endpoints.messages} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "Hello, world!"}]
+  }'`}</pre>
+        </div>
+      )}
     </section>
   );
 }
