@@ -1,8 +1,0 @@
-{"ts":"2026-07-20T10:37:55.261Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"created","detail":"init objective=\"PR #182+#176 sol 리뷰 → approve된 것 dev squash → push → CI → PR 정리 → main 준비\" criteria=0"}
-{"ts":"2026-07-20T10:48:02.658Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_done","detail":"closed wp1-review"}
-{"ts":"2026-07-20T10:48:02.658Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_started","detail":"started wp2-squash-push"}
-{"ts":"2026-07-20T10:50:39.679Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_done","detail":"closed wp2-squash-push"}
-{"ts":"2026-07-20T10:50:39.679Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_started","detail":"started wp3-ci-pr"}
-{"ts":"2026-07-20T10:56:53.494Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_done","detail":"closed wp3-ci-pr"}
-{"ts":"2026-07-20T10:56:53.494Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_started","detail":"started wp4-main"}
-{"ts":"2026-07-20T10:57:23.878Z","slug":"pr-182-176-sol-approve-dev-squash-push-ci-pr-mai","event":"workphase_done","detail":"closed wp4-main"}

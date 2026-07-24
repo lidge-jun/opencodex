@@ -1,3 +1,0 @@
-{"ts":"2026-07-20T11:07:57.427Z","slug":"pr-185-176-173-171-dev-squash-push-ci-main","event":"created","detail":"init objective=\"PR #185/#176/#173/#171 블로커 수정 → dev squash → push → CI → main 준비\" criteria=0"}
-{"ts":"2026-07-20T11:17:58.456Z","slug":"pr-185-176-173-171-dev-squash-push-ci-main","event":"workphase_done","detail":"closed wp1-185"}
-{"ts":"2026-07-20T11:17:58.456Z","slug":"pr-185-176-173-171-dev-squash-push-ci-main","event":"workphase_started","detail":"started wp2-176"}

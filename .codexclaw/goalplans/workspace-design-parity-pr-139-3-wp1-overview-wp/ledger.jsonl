@@ -1,6 +1,0 @@
-{"ts":"2026-07-17T17:18:07.166Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"created","detail":"init objective=\"Workspace Design Parity — PR #139 디자인 누락분 3가지 복원. WP1: 집계 Overview 대시보드, WP2: 디테일 헤더 액션, WP3: Overview 2-column + Notes. GUI-only, 백엔드 변경 없음.\" criteria=0"}
-{"ts":"2026-07-17T17:27:38.864Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"workphase_done","detail":"closed wp1-aggregate-dashboard"}
-{"ts":"2026-07-17T17:27:38.864Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"workphase_started","detail":"started wp2-detail-header-actions"}
-{"ts":"2026-07-17T17:34:10.078Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"workphase_done","detail":"closed wp2-detail-header-actions"}
-{"ts":"2026-07-17T17:34:10.078Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"workphase_started","detail":"started wp3-overview-two-column"}
-{"ts":"2026-07-17T17:40:48.060Z","slug":"workspace-design-parity-pr-139-3-wp1-overview-wp","event":"workphase_done","detail":"closed wp3-overview-two-column"}

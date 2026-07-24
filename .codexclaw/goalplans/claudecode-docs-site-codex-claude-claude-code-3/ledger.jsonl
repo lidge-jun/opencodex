@@ -1,6 +1,0 @@
-{"ts":"2026-07-12T10:17:34.498Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"created","detail":"init objective=\"claudecode 프로덕션 하드닝 + docs-site 히어로 Codex↔Claude 원통 회전 + claude-code 기술문서 3로케일 상세화. wp1 히어로(디자인리드+회전+스크린샷 검증), wp2 문서(코드 그라운딩), wp3 하드닝(sol 갭 감사 기반 수리+테스트). 최종 푸시+CI 그린.\" criteria=0"}
-{"ts":"2026-07-12T10:28:42.398Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-12T10:28:42.398Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-12T10:49:28.790Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-12T10:49:28.790Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-12T11:10:20.213Z","slug":"claudecode-docs-site-codex-claude-claude-code-3","event":"workphase_done","detail":"closed wp3"}

@@ -1,2 +1,0 @@
-{"ts":"2026-07-14T07:09:36.209Z","slug":"fix-ctc-input-id-variant-on-dev-fc-ids-rejected","event":"created","detail":"init objective=\"Fix ctc_ input-id variant on dev: fc_ ids rejected where ctc_ expected. Comprehensive id-sanitization for all item types in OpenAI passthrough adapter.\" criteria=0"}
-{"ts":"2026-07-14T07:31:38.288Z","slug":"fix-ctc-input-id-variant-on-dev-fc-ids-rejected","event":"workphase_done","detail":"closed wp1"}

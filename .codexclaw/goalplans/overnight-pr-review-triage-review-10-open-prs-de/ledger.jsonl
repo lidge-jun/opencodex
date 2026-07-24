@@ -1,7 +1,0 @@
-{"ts":"2026-07-22T23:13:29.401Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"created","detail":"init objective=\"Overnight PR Review & Triage: review 10 open PRs, devlog unit, merge/comment/close on dev\" criteria=0"}
-{"ts":"2026-07-22T23:28:01.899Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_done","detail":"closed wp0"}
-{"ts":"2026-07-22T23:28:01.900Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_started","detail":"started wp1"}
-{"ts":"2026-07-22T23:43:59.001Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-22T23:43:59.002Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-23T00:07:58.350Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-23T00:21:08.602Z","slug":"overnight-pr-review-triage-review-10-open-prs-de","event":"workphase_done","detail":"closed wp3"}

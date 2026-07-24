@@ -1,2 +1,0 @@
-{"ts":"2026-07-12T09:37:36.228Z","slug":"claudecode-53-dev-origin-dev-pr96-103-merge-2-de","event":"created","detail":"init objective=\"claudecode(53커밋)를 dev에 통합: origin/dev(PR96-103 배치)와 갈라진 상태를 merge 전략으로 해소. 충돌 2파일(Debug.tsx, management-api.ts) 수동 해소 + 테스트/빌드 검증 + sol 리뷰 + origin/dev 푸시. devlog/_plan/260712_claudecode_dev_merge/ 기록.\" criteria=0"}
-{"ts":"2026-07-12T10:02:51.251Z","slug":"claudecode-53-dev-origin-dev-pr96-103-merge-2-de","event":"workphase_done","detail":"closed wp2"}

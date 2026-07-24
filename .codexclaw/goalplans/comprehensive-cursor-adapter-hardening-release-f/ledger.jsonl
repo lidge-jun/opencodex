@@ -1,4 +1,0 @@
-{"ts":"2026-07-13T07:15:36.213Z","slug":"comprehensive-cursor-adapter-hardening-release-f","event":"created","detail":"init objective=\"Comprehensive Cursor adapter hardening + release for opencodex. Harden all unknown-case throws, commit, test, bump version, merge dev to main, push, npm publish.\" criteria=0"}
-{"ts":"2026-07-13T07:20:14.229Z","slug":"comprehensive-cursor-adapter-hardening-release-f","event":"workphase_done","detail":"closed wp-1"}
-{"ts":"2026-07-13T07:20:14.229Z","slug":"comprehensive-cursor-adapter-hardening-release-f","event":"workphase_started","detail":"started wp-2"}
-{"ts":"2026-07-13T07:24:43.347Z","slug":"comprehensive-cursor-adapter-hardening-release-f","event":"workphase_done","detail":"closed wp-2"}

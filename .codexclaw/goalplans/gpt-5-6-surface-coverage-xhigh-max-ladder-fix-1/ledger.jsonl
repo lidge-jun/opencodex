@@ -1,5 +1,0 @@
-{"ts":"2026-07-09T03:31:32.145Z","slug":"gpt-5-6-surface-coverage-xhigh-max-ladder-fix-1","event":"created","detail":"init objective=\"GPT-5.6 surface coverage + xhigh->max ladder fix: (1) add gpt-5.6-sol/terra/luna to every GPT model-choice surface (SIDECAR_MODELS in gui/src/pages/Dashboard.tsx, DEFAULT_SUBAGENT_MODELS in src/config.ts, plus rg audit); (2) add max to DEEPSEEK_THINKING_EFFORTS so xhigh->max routed models show max in the picker. Verify with bun test on touched suites.\" criteria=0"}
-{"ts":"2026-07-09T03:38:01.661Z","slug":"gpt-5-6-surface-coverage-xhigh-max-ladder-fix-1","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-09T03:38:01.661Z","slug":"gpt-5-6-surface-coverage-xhigh-max-ladder-fix-1","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-09T03:40:08.425Z","slug":"gpt-5-6-surface-coverage-xhigh-max-ladder-fix-1","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-09T03:59:20.761Z","slug":"gpt-5-6-surface-coverage-xhigh-max-ladder-fix-1","event":"workphase_done","detail":"closed wp3"}

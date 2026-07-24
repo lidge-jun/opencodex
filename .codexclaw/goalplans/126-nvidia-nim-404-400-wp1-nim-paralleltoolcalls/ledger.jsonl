@@ -1,4 +1,0 @@
-{"ts":"2026-07-14T18:03:10.791Z","slug":"126-nvidia-nim-404-400-wp1-nim-paralleltoolcalls","event":"created","detail":"init objective=\"이슈 #126 NVIDIA NIM 404/400/무응답 대응: WP1 NIM 프로바이더 하드닝(parallelToolCalls:false, kimi reasoning_effort 차단, openai-chat formatErrorBody) + kimi 크로스 프로바이더 플래그 패치, WP2 devlog 기록 + 이슈 답변 코멘트 + dev 푸시. 릴리스 금지, 타 에이전트 더티 파일 보존.\" criteria=0"}
-{"ts":"2026-07-14T18:17:37.764Z","slug":"126-nvidia-nim-404-400-wp1-nim-paralleltoolcalls","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-14T18:17:37.764Z","slug":"126-nvidia-nim-404-400-wp1-nim-paralleltoolcalls","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-14T18:22:41.410Z","slug":"126-nvidia-nim-404-400-wp1-nim-paralleltoolcalls","event":"workphase_done","detail":"closed wp2"}

@@ -1,3 +1,0 @@
-{"ts":"2026-07-13T15:28:19.206Z","slug":"pr-121-dev-push-preview-devlog","event":"created","detail":"init objective=\"PR #121 리뷰 + 머지 + dev push + preview 머지 + 릴리즈 + devlog + 하드닝\" criteria=0"}
-{"ts":"2026-07-13T15:39:31.172Z","slug":"pr-121-dev-push-preview-devlog","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-13T15:39:31.172Z","slug":"pr-121-dev-push-preview-devlog","event":"workphase_started","detail":"started wp2"}

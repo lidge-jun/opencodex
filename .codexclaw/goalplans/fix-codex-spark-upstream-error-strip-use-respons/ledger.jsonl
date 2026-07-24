@@ -1,1 +1,0 @@
-{"ts":"2026-07-14T09:12:16.295Z","slug":"fix-codex-spark-upstream-error-strip-use-respons","event":"created","detail":"init objective=\"Fix Codex Spark upstream error: strip use_responses_lite from non-5.6 natives in deriveEntry + add reasoning.context guard in openai-responses adapter\" criteria=0"}

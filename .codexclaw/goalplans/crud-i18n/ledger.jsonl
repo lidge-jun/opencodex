@@ -1,6 +1,0 @@
-{"ts":"2026-07-21T23:44:45.094Z","slug":"crud-i18n","event":"created","detail":"init objective=\"커스텀 모델 칩 기능 전체 구현 — 백엔드 CRUD + 프론트엔드 모달/행/호버팝업 + i18n\" criteria=0"}
-{"ts":"2026-07-22T00:18:10.884Z","slug":"crud-i18n","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-22T00:18:10.884Z","slug":"crud-i18n","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-22T02:39:39.526Z","slug":"crud-i18n","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-22T02:39:39.528Z","slug":"crud-i18n","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-22T02:47:24.017Z","slug":"crud-i18n","event":"workphase_done","detail":"closed wp3"}

@@ -1,6 +1,0 @@
-{"ts":"2026-07-20T09:26:07.016Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"created","detail":"init objective=\"승인된 PR #172+#170을 dev에 squash-merge → push → CI green → PR 정리 → main/preview 머지 준비\" criteria=0"}
-{"ts":"2026-07-20T09:29:37.738Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"workphase_done","detail":"closed wp1-squash-push"}
-{"ts":"2026-07-20T09:29:37.738Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"workphase_started","detail":"started wp2-ci-pr"}
-{"ts":"2026-07-20T09:35:36.727Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"workphase_done","detail":"closed wp2-ci-pr"}
-{"ts":"2026-07-20T09:35:36.727Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"workphase_started","detail":"started wp3-main-prep"}
-{"ts":"2026-07-20T09:36:14.217Z","slug":"pr-172-170-dev-squash-merge-push-ci-green-pr-mai","event":"workphase_done","detail":"closed wp3-main-prep"}

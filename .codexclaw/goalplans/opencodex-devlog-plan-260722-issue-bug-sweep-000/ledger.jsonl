@@ -1,5 +1,0 @@
-{"ts":"2026-07-21T15:14:32.545Z","slug":"opencodex-devlog-plan-260722-issue-bug-sweep-000","event":"created","detail":"init objective=\"OpenCodex 오픈 이슈 중 버그성 이슈 전수 수집·조사 → devlog/_plan/260722_issue_bug_sweep/ 유닛으로 000-009 조사 문서화 + 010/020/030 diff-level 패치 계획 작성 (docs-only, 코드 패치·push 범위 밖, sol 서브에이전트 적극 활용, cxc-search 소스프루프 준수)\" criteria=0"}
-{"ts":"2026-07-21T15:24:30.489Z","slug":"opencodex-devlog-plan-260722-issue-bug-sweep-000","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-21T15:24:30.489Z","slug":"opencodex-devlog-plan-260722-issue-bug-sweep-000","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-21T15:38:34.638Z","slug":"opencodex-devlog-plan-260722-issue-bug-sweep-000","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-21T15:38:34.638Z","slug":"opencodex-devlog-plan-260722-issue-bug-sweep-000","event":"workphase_started","detail":"started wp3"}

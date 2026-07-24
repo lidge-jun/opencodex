@@ -1,2 +1,0 @@
-{"ts":"2026-07-21T07:21:01.722Z","slug":"opencodex-dev-main-merge-npm-publish-release-ver","event":"created","detail":"init objective=\"OpenCodex dev→main merge + npm publish release verification (PABCD 1 cycle). WP1: merge dev into main, build, test, release via scripts/release.ts, verify npm dist-tags.\" criteria=0"}
-{"ts":"2026-07-21T07:37:40.430Z","slug":"opencodex-dev-main-merge-npm-publish-release-ver","event":"workphase_done","detail":"closed wp1"}

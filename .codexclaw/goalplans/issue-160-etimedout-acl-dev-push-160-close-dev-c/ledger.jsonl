@@ -1,4 +1,0 @@
-{"ts":"2026-07-19T10:43:58.060Z","slug":"issue-160-etimedout-acl-dev-push-160-close-dev-c","event":"created","detail":"init objective=\"Issue #160 완결(ETIMEDOUT 진단 문구 분리, 타임아웃 후 재시도+ACL 검증, 데드라인 설정화) 후 릴리스 트레인: dev push, #160 close, dev CI, preview/main ff-merge+push, npm 배포(preview+latest). Sol A-gate 리뷰. 사용자 승인: push/close/release dispatch.\" criteria=0"}
-{"ts":"2026-07-19T10:50:24.317Z","slug":"issue-160-etimedout-acl-dev-push-160-close-dev-c","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-19T10:50:24.317Z","slug":"issue-160-etimedout-acl-dev-push-160-close-dev-c","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-19T11:50:43.612Z","slug":"issue-160-etimedout-acl-dev-push-160-close-dev-c","event":"workphase_done","detail":"closed wp2"}

@@ -1,4 +1,0 @@
-{"ts":"2026-07-19T16:17:01.039Z","slug":"opencodex-windows-work-phase-1-docs-only-devlog","event":"created","detail":"init objective=\"OpenCodex Windows 서비스 콘솔 창 문제 문서화 루프: work-phase 1 = docs-only 사이클(devlog/_plan/260720_windows_service/ 유닛에 000 연구 + 010 버그 이슈 초안 + 020 개선 이슈 초안, sol 리뷰어 감사), work-phase 2 = gh 이슈 2건 등록(버그+개선, lidge-jun/opencodex) + URL 기록 + 로컬 커밋. 코드 수정과 git push는 범위 밖.\" criteria=0"}
-{"ts":"2026-07-19T16:32:17.169Z","slug":"opencodex-windows-work-phase-1-docs-only-devlog","event":"workphase_done","detail":"closed wp1-docs"}
-{"ts":"2026-07-19T16:32:17.169Z","slug":"opencodex-windows-work-phase-1-docs-only-devlog","event":"workphase_started","detail":"started wp2-issues"}
-{"ts":"2026-07-19T16:36:44.058Z","slug":"opencodex-windows-work-phase-1-docs-only-devlog","event":"workphase_done","detail":"closed wp2-issues"}

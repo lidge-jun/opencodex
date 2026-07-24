@@ -1,4 +1,0 @@
-{"ts":"2026-07-09T11:55:50.097Z","slug":"opencodex-v2-3-state-toggle-v1-default-v2-wp1-im","event":"created","detail":"init objective=\"opencodex v2 3-state toggle: v1/default/v2. WP1: implement + test + push. WP2: hardening review + CI + final push.\" criteria=0"}
-{"ts":"2026-07-09T12:05:03.963Z","slug":"opencodex-v2-3-state-toggle-v1-default-v2-wp1-im","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-09T12:05:03.963Z","slug":"opencodex-v2-3-state-toggle-v1-default-v2-wp1-im","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-09T12:13:52.450Z","slug":"opencodex-v2-3-state-toggle-v1-default-v2-wp1-im","event":"workphase_done","detail":"closed wp2"}

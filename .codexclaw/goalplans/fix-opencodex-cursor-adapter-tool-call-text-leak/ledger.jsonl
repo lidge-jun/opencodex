@@ -1,2 +1,0 @@
-{"ts":"2026-07-14T10:52:26.712Z","slug":"fix-opencodex-cursor-adapter-tool-call-text-leak","event":"created","detail":"init objective=\"Fix opencodex Cursor adapter [Tool Call] text leak into rootPromptMessagesJson (protobuf-request.ts): remove assistant tool-call text injection mirroring request-builder.ts, keep tool-result replay, add regression test, verify cursor tests + typecheck.\" criteria=0"}
-{"ts":"2026-07-14T11:00:06.726Z","slug":"fix-opencodex-cursor-adapter-tool-call-text-leak","event":"workphase_done","detail":"closed wp1"}

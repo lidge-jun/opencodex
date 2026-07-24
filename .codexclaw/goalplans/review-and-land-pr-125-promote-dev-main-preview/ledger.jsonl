@@ -1,3 +1,0 @@
-{"ts":"2026-07-14T06:58:04.694Z","slug":"review-and-land-pr-125-promote-dev-main-preview","event":"created","detail":"init objective=\"Review and land PR #125, promote dev->main->preview with CI verification. Sol reviews #125, merge into main if approved, sync main into dev, push dev CI green, FF main from dev, FF preview from main, push all. PR #123 stays draft.\" criteria=0"}
-{"ts":"2026-07-14T07:05:35.417Z","slug":"review-and-land-pr-125-promote-dev-main-preview","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-14T07:05:35.417Z","slug":"review-and-land-pr-125-promote-dev-main-preview","event":"workphase_started","detail":"started wp2"}

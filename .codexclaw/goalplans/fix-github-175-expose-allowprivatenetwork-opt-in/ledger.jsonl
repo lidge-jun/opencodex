@@ -1,2 +1,0 @@
-{"ts":"2026-07-20T08:38:58.801Z","slug":"fix-github-175-expose-allowprivatenetwork-opt-in","event":"created","detail":"init objective=\"Fix GitHub #175: expose allowPrivateNetwork opt-in across GUI/API/CLI — single PABCD cycle\" criteria=0"}
-{"ts":"2026-07-20T08:51:46.745Z","slug":"fix-github-175-expose-allowprivatenetwork-opt-in","event":"workphase_done","detail":"closed wp1"}

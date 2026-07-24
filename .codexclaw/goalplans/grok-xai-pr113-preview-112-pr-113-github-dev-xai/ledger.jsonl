@@ -1,3 +1,0 @@
-{"ts":"2026-07-12T16:04:09.262Z","slug":"grok-xai-pr113-preview-112-pr-113-github-dev-xai","event":"created","detail":"init objective=\"grok-xai PR113 통합 + 캐싱 조사수정 + preview 머지: 이슈 #112/PR #113 검증 후 GitHub 머지 및 dev 통합, xAI prompt caching 부재 원인 조사(sol 병렬 cxc-search Tier2 증빙) 및 필요한 코드 수정+테스트, dev 푸시와 dev→preview 머지, 소크 테스트 시도. 검증: bun run typecheck + bun test 그린, gh pr/issue state, git log origin/dev.\" criteria=0"}
-{"ts":"2026-07-12T16:31:31.277Z","slug":"grok-xai-pr113-preview-112-pr-113-github-dev-xai","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-12T16:31:31.278Z","slug":"grok-xai-pr113-preview-112-pr-113-github-dev-xai","event":"workphase_started","detail":"started wp2"}

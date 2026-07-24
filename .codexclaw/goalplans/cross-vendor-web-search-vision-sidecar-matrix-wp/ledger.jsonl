@@ -1,9 +1,0 @@
-{"ts":"2026-07-12T13:38:33.328Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"created","detail":"init objective=\"Cross-vendor web-search + vision sidecar matrix: WP1 claude outbound web_search translation, WP2 anthropic search executor (OAuth-only, backend-pluggable SidecarPlan), WP3 claude-inbound sidecar auth reachability, WP4 claude vision executor + cap/cache guards, WP5 config+GUI two-sidecar surface with Claude tab override, WP6 docs+closeout. Full CI gate + sol audits per phase.\" criteria=0"}
-{"ts":"2026-07-12T13:53:50.554Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-12T13:53:50.555Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-12T15:01:09.293Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-12T15:01:09.293Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-12T15:28:46.544Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_done","detail":"closed wp3"}
-{"ts":"2026-07-12T15:28:46.544Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_started","detail":"started wp4"}
-{"ts":"2026-07-12T15:44:15.906Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_done","detail":"closed wp5"}
-{"ts":"2026-07-12T15:44:15.907Z","slug":"cross-vendor-web-search-vision-sidecar-matrix-wp","event":"workphase_started","detail":"started wp6"}

@@ -1,8 +1,0 @@
-{"ts":"2026-07-10T00:44:04.607Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"created","detail":"init objective=\"Integrate PRs 80/79/77 with per-PR PABCD + gpt-5.6-sol A-gate review, triage issue 78, then push main and ff preview/dev\" criteria=0"}
-{"ts":"2026-07-10T01:17:16.313Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-10T01:17:16.314Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-10T01:42:30.788Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_done","detail":"closed wp3"}
-{"ts":"2026-07-10T01:42:30.788Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_started","detail":"started wp4"}
-{"ts":"2026-07-10T01:43:23.678Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_done","detail":"closed wp4"}
-{"ts":"2026-07-10T01:43:23.678Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_started","detail":"started wp5"}
-{"ts":"2026-07-10T01:44:40.678Z","slug":"integrate-prs-80-79-77-with-per-pr-pabcd-gpt-5-6","event":"workphase_done","detail":"closed wp5"}

@@ -1,6 +1,0 @@
-{"ts":"2026-07-21T12:09:50.649Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"created","detail":"init objective=\"OpenCodex GUI 사이드바 다이어트: 12개→10개. (1) 콤보를 사이드바에서 제거하고 모델 페이지 최상단에 콤보 섹션(0개: 한 줄+설정하기 버튼→#combos, 1개+: 접이식 드롭다운+콤보 목록+하단 '+ 추가하기'→#combos)을 추가. #combos 라우트/페이지 유지. (2) 디버그를 사이드바에서 제거하고 로그를 '로그&디버그'로 개칭, 로그 페이지 내 탭으로 디버그 전환, #debug 라우트 하위호환. 스코프: gui/src + i18n 5로케일. 스코프 밖: 서버 코드, push. 검증: 빌드/tsc/테스트 + localhost:10100 실브라우저 스크린샷. 첫 work-phase는 docs-only 로드맵(000+010+020 difflevel), 이후 010 콤보 통합, 020 로그&디버그 통합 구현 사이클.\" criteria=0"}
-{"ts":"2026-07-21T12:21:28.524Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"workphase_done","detail":"closed wp0-roadmap"}
-{"ts":"2026-07-21T12:21:28.525Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"workphase_started","detail":"started wp1-combo"}
-{"ts":"2026-07-21T12:29:10.328Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"workphase_done","detail":"closed wp1-combo"}
-{"ts":"2026-07-21T12:29:10.328Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"workphase_started","detail":"started wp2-logsdebug"}
-{"ts":"2026-07-21T12:38:08.385Z","slug":"opencodex-gui-12-10-1-0-combos-1-combos-combos-2","event":"workphase_done","detail":"closed wp2-logsdebug"}

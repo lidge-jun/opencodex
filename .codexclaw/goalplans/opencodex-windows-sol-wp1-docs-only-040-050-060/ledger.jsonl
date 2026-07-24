@@ -1,7 +1,0 @@
-{"ts":"2026-07-19T16:57:23.792Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"created","detail":"init objective=\"OpenCodex Windows 서비스 구현 루프(sol 확정 방향): WP1 docs-only 로드맵(040/050/060/070 decade docs), WP2 hidden 런처로 기본 Task Scheduler 경로 창 제거, WP3 WinSW --native 옵트인(사용자 계정, 토큰파일 앱 로딩, SHA-256), WP4 backend state v2 + update 보존 + SoT/README + #166 댓글. push/릴리스/기본값 승격은 범위 밖.\" criteria=0"}
-{"ts":"2026-07-19T17:21:33.892Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_done","detail":"closed wp1-roadmap"}
-{"ts":"2026-07-19T17:21:33.892Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_started","detail":"started wp2-hidden-launcher"}
-{"ts":"2026-07-19T17:32:35.172Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_done","detail":"closed wp2-hidden-launcher"}
-{"ts":"2026-07-19T17:32:35.172Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_started","detail":"started wp3-winsw-native"}
-{"ts":"2026-07-19T17:48:32.406Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_done","detail":"closed wp3-winsw-native"}
-{"ts":"2026-07-19T17:48:32.406Z","slug":"opencodex-windows-sol-wp1-docs-only-040-050-060","event":"workphase_started","detail":"started wp4-state-v2"}

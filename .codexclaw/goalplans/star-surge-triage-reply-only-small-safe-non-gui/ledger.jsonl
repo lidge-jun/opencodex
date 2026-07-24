@@ -1,9 +1,0 @@
-{"ts":"2026-07-22T06:10:12.888Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"created","detail":"init objective=\"Star-surge triage 실행: REPLY-ONLY 영어 코멘트/클로즈, SMALL-SAFE non-GUI PR dev 흡수, REVIEW-THEN-ABSORB sol 리뷰 후 병합, GUI-변경 PR은 절대 병합 금지(허락 필요) 문서화만, 장기 항목 영어 트리아지 코멘트. 판별은 gh pr diff 파일 실측. devlog/_plan/260722_star_surge_triage/ WP별 기록.\" criteria=0"}
-{"ts":"2026-07-22T06:15:55.935Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_done","detail":"closed wp0"}
-{"ts":"2026-07-22T06:15:55.935Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_started","detail":"started wp1"}
-{"ts":"2026-07-22T06:19:01.936Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-22T06:19:01.936Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-22T06:29:12.477Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-22T06:29:12.477Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-22T06:35:33.211Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_done","detail":"closed wp3"}
-{"ts":"2026-07-22T06:35:33.211Z","slug":"star-surge-triage-reply-only-small-safe-non-gui","event":"workphase_started","detail":"started wp4"}

@@ -1,4 +1,0 @@
-{"ts":"2026-07-13T15:47:36.852Z","slug":"cursor-tool-calling-hardening-nativelocalexec-de","event":"created","detail":"init objective=\"Cursor tool calling hardening: nativeLocalExec default upgrade + rejection fallback guidance + tool guidance enhancement\" criteria=0"}
-{"ts":"2026-07-13T15:52:37.399Z","slug":"cursor-tool-calling-hardening-nativelocalexec-de","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-13T15:52:37.399Z","slug":"cursor-tool-calling-hardening-nativelocalexec-de","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-13T15:54:17.774Z","slug":"cursor-tool-calling-hardening-nativelocalexec-de","event":"workphase_done","detail":"closed wp2"}

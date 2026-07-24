@@ -1,6 +1,0 @@
-{"ts":"2026-07-21T17:19:22.998Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"created","detail":"init objective=\"OpenCodex dev 머지-레디 블로커 2건 수정: #202 Vertex defaultModel 카탈로그 fallback, #209 Anthropic stale-lock no-blind-replay. sol 병렬 패치, dev 커밋+push+CI 확인, main/preview 머지 전 보고. push는 origin dev 승인.\" criteria=0"}
-{"ts":"2026-07-21T17:30:02.301Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"workphase_done","detail":"closed wpf1"}
-{"ts":"2026-07-21T17:30:02.301Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"workphase_started","detail":"started wpf2"}
-{"ts":"2026-07-21T17:31:44.973Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"workphase_done","detail":"closed wpf2"}
-{"ts":"2026-07-21T17:31:44.973Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"workphase_started","detail":"started wpf3"}
-{"ts":"2026-07-21T18:03:30.432Z","slug":"opencodex-dev-2-202-vertex-defaultmodel-fallback","event":"workphase_done","detail":"closed wpf3"}

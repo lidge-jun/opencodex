@@ -1,2 +1,0 @@
-{"ts":"2026-07-11T12:13:28.805Z","slug":"final-cursor-hardening-loop-harden-the-cursor-cl","event":"created","detail":"init objective=\"FINAL CURSOR HARDENING LOOP: harden the cursor client-tool fix (80b510f5, mcp_tools channel) - no regressions, edge-case coverage (dual-channel no double-exec, toolChoice filtering, empty-tools guard), sol-reviewed, regression tests added. tsc + cursor tests clean, committed.\" criteria=0"}
-{"ts":"2026-07-11T12:19:19.828Z","slug":"final-cursor-hardening-loop-harden-the-cursor-cl","event":"workphase_done","detail":"closed wp1"}

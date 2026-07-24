@@ -1,1 +1,0 @@
-{"ts":"2026-07-09T18:18:50.552Z","slug":"add-reasoning-effort-selector-to-sub-agent-deleg","event":"created","detail":"init objective=\"Add reasoning-effort selector to sub-agent delegation (injectionEffort config + /api/injection-model effort + delegation prompt effort instruction + Dashboard effort Select + i18n en/ko/zh + tests + devlog/260710_injection_effort)\" criteria=0"}

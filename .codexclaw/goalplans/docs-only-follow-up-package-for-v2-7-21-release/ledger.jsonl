@@ -1,9 +1,0 @@
-{"ts":"2026-07-16T00:22:33.504Z","slug":"docs-only-follow-up-package-for-v2-7-21-release","event":"created","detail":"init objective=\"Docs-only follow-up package for v2.7.21 release train: new devlog unit 260716_passthrough_followups (000 MOC + 010 body-occupancy idle-based design + 020 workflow path sync + 030 timeout fallback unification, all diff-level with path:line anchors), sol explorer research + sol A-gate audit, archive 260716_release_2721 to _fin, commit+push dev preserving a6db6cc4.\" criteria=0"}
-{"ts":"2026-07-16T00:33:22.409Z","slug":"docs-only-follow-up-package-for-v2-7-21-release","event":"workphase_done","detail":"closed wp1-followup-docs"}
-{"ts":"2026-07-16T00:33:22.409Z","slug":"docs-only-follow-up-package-for-v2-7-21-release","event":"workphase_started","detail":"started wp2-hygiene-push"}
-{"event": "workphase_done", "workPhaseId": "wp1-followup-docs", "at": "2026-07-16T00:33:22.437658+00:00", "evidence": "a0ebbc65"}
-{"event": "criterion_met", "criterionId": "c-docs-unit", "at": "2026-07-16T00:33:22.437658+00:00"}
-{"event": "workphase_started", "workPhaseId": "wp2-hygiene-push", "at": "2026-07-16T00:33:22.437658+00:00"}
-{"ts":"2026-07-16T00:36:34.998Z","slug":"docs-only-follow-up-package-for-v2-7-21-release","event":"workphase_done","detail":"closed wp2-hygiene-push"}
-{"event": "criterion_met", "criterionId": "c-hygiene", "at": "2026-07-16T00:36:35.030879+00:00"}
-{"event": "workphase_done", "workPhaseId": "wp2-hygiene-push", "at": "2026-07-16T00:36:35.030879+00:00", "evidence": "02db3b28 pushed"}

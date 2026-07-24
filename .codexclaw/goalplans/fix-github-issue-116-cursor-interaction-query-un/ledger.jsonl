@@ -1,1 +1,0 @@
-{"ts":"2026-07-13T05:44:13.692Z","slug":"fix-github-issue-116-cursor-interaction-query-un","event":"created","detail":"init objective=\"Fix GitHub issue #116: Cursor interaction query unknown case causes HTTP 400 and stream disconnection. Handle unknown query cases gracefully instead of throwing, update tests, verify, record devlog.\" criteria=0"}

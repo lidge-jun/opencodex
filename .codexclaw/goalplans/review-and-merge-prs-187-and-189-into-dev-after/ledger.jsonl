@@ -1,3 +1,0 @@
-{"ts":"2026-07-20T17:34:56.011Z","slug":"review-and-merge-prs-187-and-189-into-dev-after","event":"created","detail":"init objective=\"Review and merge PRs #187 and #189 into dev after adversarial sol subagent review. Work-phases: (1) adversarial review, (2) local verification, (3) merge execution.\" criteria=0"}
-{"ts":"2026-07-20T17:52:15.442Z","slug":"review-and-merge-prs-187-and-189-into-dev-after","event":"workphase_done","detail":"closed wp1-review"}
-{"ts":"2026-07-20T17:52:15.442Z","slug":"review-and-merge-prs-187-and-189-into-dev-after","event":"workphase_started","detail":"started wp2-verify"}

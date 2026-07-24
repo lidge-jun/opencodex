@@ -1,2 +1,0 @@
-{"ts":"2026-07-23T16:37:14.729Z","slug":"opencodex-openai-service-tier-priority-fast-usag","event":"created","detail":"init objective=\"opencodex 가상 비용 산정에 OpenAI service_tier priority (Fast) 가격 배수 반영. usage 로그의 requestedServiceTier를 비용 계산에 전달하고 모델별 배수(2x/2.5x) 적용. typecheck+test green, priority 배수 회귀 테스트 추가.\" criteria=0"}
-{"ts":"2026-07-23T16:54:43.849Z","slug":"opencodex-openai-service-tier-priority-fast-usag","event":"workphase_done","detail":"closed wp1"}

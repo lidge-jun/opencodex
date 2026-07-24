@@ -1,6 +1,0 @@
-{"ts":"2026-07-17T11:17:30.547Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"created","detail":"init objective=\"Finish and archive devlog/_plan/260717_openai_hardening via the consolidated 3-cycle roadmap in 190_consolidated_finish_plan.md: Cycle A close 070/090/160 gaps + consolidated 060-180 sweep; Cycle B execute Cycle 050 integration/runtime/GUI proofs incl. tests/openai-three-tier-e2e.test.ts; Cycle C SoT docs sweep, status flips, archive unit to _fin. Sol subagents (high, priority) for audit/build. No push/release.\" criteria=0"}
-{"ts":"2026-07-17T11:31:08.160Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"workphase_done","detail":"closed wp-A"}
-{"ts":"2026-07-17T11:31:08.162Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"workphase_started","detail":"started wp-B"}
-{"ts":"2026-07-17T12:07:46.034Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"workphase_done","detail":"closed wp-B"}
-{"ts":"2026-07-17T12:07:46.034Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"workphase_started","detail":"started wp-C"}
-{"ts":"2026-07-17T12:32:49.774Z","slug":"finish-and-archive-devlog-plan-260717-openai-har","event":"workphase_done","detail":"closed wp-C"}

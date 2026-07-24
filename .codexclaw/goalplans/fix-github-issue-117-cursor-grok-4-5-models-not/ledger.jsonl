@@ -1,2 +1,0 @@
-{"ts":"2026-07-13T09:46:24.343Z","slug":"fix-github-issue-117-cursor-grok-4-5-models-not","event":"created","detail":"init objective=\"Fix GitHub issue #117: Cursor grok-4.5 models not visible due to cursor- prefix mismatch in live model discovery. Strip cursor- prefix from live GetUsableModels IDs before matching in isCursorModelAvailableForAccount. Add test coverage. Commit and open PR.\" criteria=0"}
-{"ts":"2026-07-13T09:52:53.760Z","slug":"fix-github-issue-117-cursor-grok-4-5-models-not","event":"workphase_done","detail":"closed wp1"}

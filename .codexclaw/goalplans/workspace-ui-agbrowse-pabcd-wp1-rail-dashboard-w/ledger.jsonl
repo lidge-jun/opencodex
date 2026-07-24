@@ -1,4 +1,0 @@
-{"ts":"2026-07-17T17:57:18.779Z","slug":"workspace-ui-agbrowse-pabcd-wp1-rail-dashboard-w","event":"created","detail":"init objective=\"Workspace UI 전반 개선 — agbrowse 시각 검증 기반 반복 PABCD 루프. WP1: Rail + Dashboard 간격/밀도, WP2: 디테일 뷰 + 타이포그래피 폴리시\" criteria=0"}
-{"ts":"2026-07-17T18:02:21.275Z","slug":"workspace-ui-agbrowse-pabcd-wp1-rail-dashboard-w","event":"workphase_done","detail":"closed wp1-rail-dashboard"}
-{"ts":"2026-07-17T18:02:21.275Z","slug":"workspace-ui-agbrowse-pabcd-wp1-rail-dashboard-w","event":"workphase_started","detail":"started wp2-detail-polish"}
-{"ts":"2026-07-17T18:06:23.668Z","slug":"workspace-ui-agbrowse-pabcd-wp1-rail-dashboard-w","event":"workphase_done","detail":"closed wp2-detail-polish"}

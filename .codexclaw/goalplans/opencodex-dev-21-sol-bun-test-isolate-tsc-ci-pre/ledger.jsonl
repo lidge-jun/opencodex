@@ -1,6 +1,0 @@
-{"ts":"2026-07-22T07:45:21.772Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"created","detail":"init objective=\"OpenCodex dev 원격 동기화 + 메인테이너 대량머지 21커밋 sol 적대리뷰 검증 + 안정화(bun test isolate/tsc/CI 그린) + preview/main 배포 readiness 판정. 실행 머지/배포는 범위 외, push는 dev 안정화 커밋에 한해 허용.\" criteria=0"}
-{"ts":"2026-07-22T08:03:43.018Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"workphase_done","detail":"closed wp1"}
-{"ts":"2026-07-22T08:03:43.018Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"workphase_started","detail":"started wp2"}
-{"ts":"2026-07-22T08:04:38.343Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"workphase_done","detail":"closed wp2"}
-{"ts":"2026-07-22T08:04:38.343Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"workphase_started","detail":"started wp3"}
-{"ts":"2026-07-22T08:09:53.141Z","slug":"opencodex-dev-21-sol-bun-test-isolate-tsc-ci-pre","event":"workphase_done","detail":"closed wp3"}

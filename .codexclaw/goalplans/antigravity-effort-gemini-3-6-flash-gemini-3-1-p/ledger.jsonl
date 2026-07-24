@@ -1,8 +1,0 @@
-{"ts":"2026-07-21T23:24:45.472Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"created","detail":"init objective=\"Antigravity 모델 목록 통합: effort 기반 서버 사이드 라우팅 구현. gemini-3.6-flash/gemini-3.1-pro를 effort 변형 없이 하나로 표시하고 서버에서 CCA 와이어 ID로 라우팅. Claude/gpt-oss는 단일 모델 유지. devlog 문서화 + cxc-search 외부 검증 + 구현 + 테스트.\" criteria=0"}
-{"ts":"2026-07-21T23:37:55.939Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_done","detail":"closed wp0-docs"}
-{"ts":"2026-07-21T23:37:55.939Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_started","detail":"started wp1-models"}
-{"ts":"2026-07-21T23:43:42.438Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_done","detail":"closed wp1-models"}
-{"ts":"2026-07-21T23:43:42.438Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_started","detail":"started wp2-adapter"}
-{"ts":"2026-07-21T23:46:28.403Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_done","detail":"closed wp2-adapter"}
-{"ts":"2026-07-21T23:46:28.403Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_started","detail":"started wp3-tests"}
-{"ts":"2026-07-21T23:51:00.508Z","slug":"antigravity-effort-gemini-3-6-flash-gemini-3-1-p","event":"workphase_done","detail":"closed wp3-tests"}

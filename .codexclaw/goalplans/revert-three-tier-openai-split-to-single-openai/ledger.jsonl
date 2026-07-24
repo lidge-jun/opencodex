@@ -1,8 +1,0 @@
-{"ts":"2026-07-17T12:54:08.597Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"created","detail":"init objective=\"Revert three-tier OpenAI split to single openai provider with codexAccountMode option (pool default / direct pin), remove openai-multi, keep openai-apikey, forward migration, GUI toggle + banner rework, tests rewritten to new contract, SoT docs sync, new devlog unit 260717_openai_single_provider_option. No live-proxy restart. Sol subagents (high, priority).\" criteria=0"}
-{"ts":"2026-07-17T13:23:47.328Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_done","detail":"closed wp-0"}
-{"ts":"2026-07-17T13:23:47.328Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_started","detail":"started wp-1"}
-{"ts":"2026-07-17T14:11:29.002Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_done","detail":"closed wp-1"}
-{"ts":"2026-07-17T14:11:29.003Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_started","detail":"started wp-2"}
-{"ts":"2026-07-17T14:54:34.709Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_done","detail":"closed wp-2"}
-{"ts":"2026-07-17T14:54:34.711Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_started","detail":"started wp-3"}
-{"ts":"2026-07-17T15:21:21.147Z","slug":"revert-three-tier-openai-split-to-single-openai","event":"workphase_done","detail":"closed wp-3"}

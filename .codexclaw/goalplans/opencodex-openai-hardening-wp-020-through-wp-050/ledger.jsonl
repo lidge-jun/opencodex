@@ -1,8 +1,0 @@
-{"ts":"2026-07-17T08:46:14.688Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"created","detail":"init objective=\"OpenCodex OpenAI hardening wp-020 through wp-050. wp-020: atomic three-tier activation. wp-030: API metadata + Pro aliases. wp-040: GUI/i18n. wp-050: integration verification.\" criteria=0"}
-{"ts":"2026-07-17T09:04:54.662Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_done","detail":"closed wp-020"}
-{"ts":"2026-07-17T09:04:54.663Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_started","detail":"started wp-030"}
-{"ts":"2026-07-17T09:17:12.986Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_done","detail":"closed wp-030"}
-{"ts":"2026-07-17T09:17:12.986Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_started","detail":"started wp-040"}
-{"ts":"2026-07-17T09:19:29.719Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_done","detail":"closed wp-040"}
-{"ts":"2026-07-17T09:19:29.719Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_started","detail":"started wp-050"}
-{"ts":"2026-07-17T09:23:04.286Z","slug":"opencodex-openai-hardening-wp-020-through-wp-050","event":"workphase_done","detail":"closed wp-050"}
