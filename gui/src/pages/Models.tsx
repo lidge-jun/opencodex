@@ -10,6 +10,15 @@ import {
   type ConfiguredProviderSummary,
   type ProviderDiscoverySummary,
 } from "../models-groups";
+import {
+  fetchSelectedModels,
+  modelVisible,
+  putModelVisibility,
+  shouldApplyLoadGeneration,
+  type ProviderModelMap,
+  type ModelVisibilityScope,
+  type ModelVisibilityTarget,
+} from "../model-visibility";
 
 interface ModelRow {
   provider: string;
@@ -65,10 +74,15 @@ function collectDisabledNamespaced(rows: ModelRow[]): Set<string> {
   return next;
 }
 
-function activeModelOptions(models: ModelRow[], disabled: Set<string>): { value: string; label: string }[] {
+function activeModelOptions(
+  models: ModelRow[],
+  disabled: Set<string>,
+  selected: ProviderModelMap,
+): { value: string; label: string }[] {
   const options: { value: string; label: string }[] = [];
   for (const m of models) {
-    if (!disabled.has(m.id) && !disabled.has(m.namespaced)) {
+    const blocked = disabled.has(m.id) || disabled.has(m.namespaced);
+    if (modelVisible(selected, m.provider, m.id, m.native === true, blocked)) {
       options.push({ value: m.namespaced, label: m.namespaced });
     }
   }
@@ -80,6 +94,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [models, setModels] = useState<ModelRow[]>([]);
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>([]);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(null);
   const [search, setSearch] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>({});
@@ -97,6 +112,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const loadGenerationRef = useRef(0);
+  const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
   const [v2Busy, setV2Busy] = useState(false);
@@ -150,8 +167,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   }, []);
 
   const shadowModelOptions = useMemo(
-    () => activeModelOptions(models, disabled),
-    [models, disabled],
+    () => activeModelOptions(models, disabled, selectedModels ?? {}),
+    [models, disabled, selectedModels],
   );
 
   const loadShadowCall = useCallback(async () => {
@@ -181,28 +198,42 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false): Promise<boolean> => {
+    if (loadPendingRef.current && !force) return false;
+    loadPendingRef.current = true;
+    const generation = ++loadGenerationRef.current;
     try {
       const [data, capsData] = await Promise.all([
-        fetch(`${apiBase}/api/models`).then(r => r.json()) as Promise<ModelRow[]>,
-        fetch(`${apiBase}/api/provider-context-caps`).then(r => r.json()) as Promise<ProviderContextCapsResponse>,
+        fetch(`${apiBase}/api/models`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ModelRow[]>,
+        fetch(`${apiBase}/api/provider-context-caps`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ProviderContextCapsResponse>,
       ]);
-      const providerData = await fetch(`${apiBase}/api/providers`)
-        .then(r => r.json()) as ConfiguredProviderSummary[];
+      const [providerData, selectionData] = await Promise.all([
+        fetch(`${apiBase}/api/providers`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ConfiguredProviderSummary[]>,
+        fetchSelectedModels(apiBase),
+      ]);
+      if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
       void loadV2(); // best-effort, independent of the models fetch
       void loadShadowCall();
       setModels(data);
       setProviders(providerData);
       setDisabled(collectDisabledNamespaced(data));
+      setSelectedModels(selectionData);
       const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
         ? capsData.value
         : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
       if (value !== undefined) setContextCapValue(value);
       setContextCaps(capsData.caps ?? {});
+      return true;
     } catch {
-      setOk(false); setStatus(t("models.loadFail"));
+      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
+        setOk(false); setStatus(t("models.loadFail"));
+      }
+      return false;
     } finally {
-      setLoading(false);
+      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
+        loadPendingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [apiBase, loadShadowCall, loadV2, t]);
   useEffect(() => {
@@ -228,30 +259,45 @@ export default function Models({ apiBase }: { apiBase: string }) {
     [models, providers],
   );
 
-  const apply = async (next: Set<string>) => {
+  const effectiveVisibleCount = useMemo(() => {
+    if (!selectedModels) return 0;
+    return models.filter(model => modelVisible(
+      selectedModels,
+      model.provider,
+      model.id,
+      model.native === true,
+      disabled.has(model.namespaced),
+    )).length;
+  }, [disabled, models, selectedModels]);
+
+  const applyVisibility = async (
+    scope: ModelVisibilityScope,
+    provider: string,
+    targets: ModelVisibilityTarget[],
+    enabled: boolean,
+  ) => {
+    ++loadGenerationRef.current;
     setBusy(true);
     busyRef.current = true;
     setStatus("");
+    let errorKey: "models.saveFailed" | "models.networkError" | null = null;
     try {
-      const r = await fetch(`${apiBase}/api/disabled-models`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models: [...next] }),
-      });
-      if (r.ok) { setDisabled(next); setOk(true); setStatus(t("models.applied")); }
-      else { setOk(false); setStatus(t("models.saveFailed")); }
+      const response = await putModelVisibility(apiBase, scope, provider, targets, enabled);
+      if (!response.ok) errorKey = "models.saveFailed";
     } catch {
-      setOk(false); setStatus(t("models.networkError"));
+      errorKey = "models.networkError";
     } finally {
+      const refreshed = await load(true);
+      if (errorKey) {
+        setOk(false);
+        setStatus(t(errorKey));
+      } else if (refreshed) {
+        setOk(true);
+        setStatus(t("models.applied"));
+      }
       setBusy(false);
       busyRef.current = false;
     }
-  };
-
-  const toggle = (ns: string) => {
-    const next = new Set(disabled);
-    if (next.has(ns)) next.delete(ns); else next.add(ns);
-    apply(next);
   };
 
   const toggleProviderCap = async (provider: string) => {
@@ -270,7 +316,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setContextCaps(data.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.capSaveFailed"));
@@ -307,7 +353,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setContextCaps(data.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.capSaveFailed"));
@@ -481,7 +527,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setCustomModalOpen(false);
         setOk(true);
         setStatus(t("models.customAdded"));
-        await load();
+        await load(true);
       } else {
         const data = await r.json().catch(() => null) as { error?: string } | null;
         setCustomError(data?.error ?? t("models.customSaveFailed"));
@@ -506,7 +552,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setCustomModalOpen(false);
         setOk(true);
         setStatus(t("models.customUpdated"));
-        await load();
+        await load(true);
       } else {
         const data = await r.json().catch(() => null) as { error?: string } | null;
         setCustomError(data?.error ?? t("models.customSaveFailed"));
@@ -524,7 +570,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       if (r.ok) {
         setOk(true);
         setStatus(t("models.customDeleted"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.customSaveFailed"));
@@ -536,13 +582,16 @@ export default function Models({ apiBase }: { apiBase: string }) {
   };
 
   if (loading) return <div className="row muted"><span className="spin" /> {t("models.loading")}</div>;
+  if (!selectedModels) {
+    return <Notice tone="err">{t("models.loadFail")}</Notice>;
+  }
 
 
   return (
     <>
       <div className="page-head">
         <h2>{t("nav.models")}</h2>
-        <span className="muted mono text-label">{t("models.active", { active: models.length - disabled.size, total: models.length })}</span>
+        <span className="muted mono text-label">{t("models.active", { active: effectiveVisibleCount, total: models.length })}</span>
       </div>
       <p className="page-sub">{t("models.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
@@ -733,26 +782,30 @@ export default function Models({ apiBase }: { apiBase: string }) {
        // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
        groups.map(({ provider, rows, native: isNative, liveModels, discovery }) => {
        const isCollapsed = collapsed.has(provider);
-       const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
+       const isVisible = (model: ModelRow) => modelVisible(
+         selectedModels,
+         provider,
+         model.id,
+         model.native === true,
+         disabled.has(model.namespaced),
+       );
+       const activeCount = rows.filter(isVisible).length;
        const capOn = contextCaps[provider] === contextCapValue;
        const q = (search[provider] ?? "").trim().toLowerCase();
-       const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
-       // Display-only: enabled models float to the top of each provider group so they
-       // stay findable in long lists. The sort is stable, so the server order is kept
-       // inside each partition, and this does not affect the picker order above
-       // (visibility toggles still only filter).
-       const sorted = [...filtered].sort((a, b) => Number(disabled.has(a.namespaced)) - Number(disabled.has(b.namespaced)));
+       const filtered = q ? rows.filter(model => model.id.toLowerCase().includes(q)) : rows;
+       // Display-only: models visible to Codex float to the top. The stable sort does not
+       // change catalog or picker ordering.
+       const sorted = [...filtered].sort((a, b) => Number(!isVisible(a)) - Number(!isVisible(b)));
        const shown = limit[provider] ?? PAGE;
        const visible = sorted.slice(0, shown);
        const remaining = filtered.length - visible.length;
-        const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
-        const allOn = rows.length > 0 && rows.every(m => !disabled.has(m.namespaced));
-        const allOff = rows.length > 0 && rows.every(m => disabled.has(m.namespaced));
-        const bulkToggle = (enable: boolean) => {
-          const next = new Set(disabled);
-          for (const m of rows) { if (enable) next.delete(m.namespaced); else next.add(m.namespaced); }
-          apply(next);
-        };
+       const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
+       const allOn = rows.length > 0 && rows.every(isVisible);
+       const allOff = rows.length > 0 && rows.every(model => !isVisible(model));
+       const targets = rows.map(model => ({ id: model.id, ...(model.native ? { native: true } : {}) }));
+       const bulkToggle = (enable: boolean) => {
+         void applyVisibility("provider", provider, targets, enable);
+       };
        return (
          <div key={provider} className="card" style={{ marginBottom: 8, overflow: "hidden" }}>
           <div onClick={() => toggleCollapse(provider)}
@@ -819,9 +872,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
                    onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
                    aria-label={t("models.search")}
                  />
-               )}
+                )}
                 {visible.map(m => {
-                  const off = disabled.has(m.namespaced);
+                  const on = isVisible(m);
                   return (
                     <div
                       key={m.namespaced}
@@ -834,8 +887,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
                       }}
                     >
                       <div className="row" style={{ padding: "5px 0" }}>
-                        <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
-                        <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                        <Switch
+                          on={on}
+                          onClick={() => void applyVisibility("models", provider, [{ id: m.id, ...(m.native ? { native: true } : {}) }], !on)}
+                          disabled={busy}
+                          label={m.native ? m.id : m.namespaced}
+                        />
+                        <code className="mono text-control" style={{ color: on ? "var(--text)" : "var(--faint)", textDecoration: on ? "none" : "line-through" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
                         {m.custom && (
                           <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
                             {t("models.customBadge")}
@@ -884,7 +942,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                                 </>
                               )}
                               <span className="model-tip-key">{t("models.tipStatus")}</span>
-                              <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
+                              <span className="model-tip-val">{on ? t("models.tipActive") : t("models.tipDisabled")}</span>
                             </div>
                             {m.custom && m.customId && (
                               <div className="model-tip-actions">

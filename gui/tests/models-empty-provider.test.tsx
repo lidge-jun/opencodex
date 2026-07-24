@@ -68,7 +68,7 @@ async function providerDto(
   return providers[0] ?? {};
 }
 
-test("Models page keeps the discovery-failure badge visible with fallback rows", async () => {
+test("Models page combines final visibility, atomic actions, discovery status, and serialized polling", async () => {
   const domGlobals = ["document", "window", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previousDescriptors = Object.fromEntries(
     domGlobals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
@@ -77,6 +77,11 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
   const container = testWindow.document.createElement("div");
   testWindow.document.body.append(container);
   let root: Root | undefined;
+  let poll: (() => void) | undefined;
+  Object.defineProperty(testWindow, "setInterval", {
+    configurable: true,
+    value: (handler: () => void) => { poll = handler; return 1; },
+  });
 
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -84,26 +89,47 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
     localStorage: { configurable: true, value: testWindow.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
-  globalThis.fetch = (async (input) => {
+  const provider = "fallback-provider";
+  const ids = ["claude-opus", "claude-sonnet", "gemini-pro", "gemini-flash", "gpt-oss"];
+  let selected = ["gemini-pro", "gemini-flash"];
+  const disabled = new Set(["gpt-oss"]);
+  const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  let failNext = false;
+  let modelFetches = 0;
+  let resolveModels!: (response: Response) => void;
+  const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
+  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: disabled.has(id) }));
+  globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.endsWith("/api/models")) {
-      return Response.json([{
-        provider: "fallback-provider",
-        id: "configured-fallback",
-        namespaced: "fallback-provider/configured-fallback",
-        disabled: false,
-      }]);
+      modelFetches += 1;
+      return modelFetches === 1 ? firstModels : Response.json(rows());
     }
     if (url.endsWith("/api/providers")) {
       return Response.json([{
-        name: "fallback-provider",
+        name: provider,
         liveModels: true,
-        models: ["configured-fallback"],
+        models: ids,
         discovery: { status: "failed", reason: "http", httpStatus: 401 },
       }]);
     }
+    if (url.endsWith("/api/selected-models")) return Response.json({ selected: { [provider]: selected }, available: { [provider]: ids } });
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
-    if (url.endsWith("/api/combos")) return Response.json([]);
+    if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
+    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: true, model: `${provider}/gemini-pro` });
+    if (url.endsWith("/api/model-visibility") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as (typeof visibilityBodies)[number];
+      visibilityBodies.push(body);
+      if (failNext) { failNext = false; return Response.json({ error: "failed" }, { status: 500 }); }
+      if (body.scope === "provider") {
+        if (body.enabled) { selected = []; disabled.clear(); }
+        else for (const target of body.targets) disabled.add(target.id);
+      } else for (const target of body.targets) {
+        if (body.enabled) { if (selected.length > 0 && !selected.includes(target.id)) selected.push(target.id); disabled.delete(target.id); }
+        else disabled.add(target.id);
+      }
+      return Response.json({ ok: true });
+    }
     return new Response(null, { status: 404 });
   }) as typeof fetch;
 
@@ -121,10 +147,42 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
       await Promise.resolve();
     });
+    poll?.();
+    expect(modelFetches).toBe(1);
+    await act(async () => {
+      resolveModels(Response.json(rows()));
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
 
-    expect(container.textContent).toContain("fallback-provider/configured-fallback");
+    const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/${id}"]`)!;
+    const buttonText = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
+    expect(container.textContent).toContain("2/5 active");
+    expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
+    expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
-    expect(container.textContent).not.toContain("No models were discovered");
+    expect(container.textContent).not.toContain("Not selected");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
+    const shadowOptions = [...container.querySelectorAll('[role="option"]')].map(option => option.textContent);
+    expect(shadowOptions).toContain(`${provider}/gemini-pro`);
+    expect(shadowOptions).not.toContain(`${provider}/claude-opus`);
+
+    await act(async () => { switchFor("claude-sonnet").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "models", targets: [{ id: "claude-sonnet" }], enabled: true });
+    expect(container.textContent).toContain("3/5 active");
+
+    failNext = true;
+    await act(async () => { switchFor("claude-opus").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(switchFor("claude-opus").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).toContain("Save failed");
+
+    await act(async () => { buttonText("All on").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: true });
+    expect(container.textContent).toContain("5/5 active");
+    await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
+    expect(container.textContent).toContain("0/5 active");
   } finally {
     if (root) {
       await act(async () => root?.unmount());

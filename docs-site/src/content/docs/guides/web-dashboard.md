@@ -45,6 +45,10 @@ Cost values in **Logs** and **Usage** are API list-price equivalents calculated 
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
 
+## Model visibility
+
+The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
+
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
@@ -98,6 +102,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, or remove providers. |
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
+| `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | Read the API-key and OAuth provider catalogs. |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | Start a provider OAuth flow and poll for completion. |
 | `GET /api/codex-auth/accounts?refresh=1` | List main and pool accounts, force quota refresh, and report main-account `hasCredential` / terminal `needsReauth` state. |
