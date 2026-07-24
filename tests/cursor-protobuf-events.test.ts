@@ -19,6 +19,7 @@ import {
   finalizeTurnEvents,
   mapCursorProtobufServerMessage,
 } from "../src/adapters/cursor/protobuf-events";
+import { estimateCursorInputTokens } from "../src/adapters/cursor/protobuf-request";
 
 const encoder = new TextEncoder();
 
@@ -413,6 +414,21 @@ describe("Cursor protobuf tool-call events", () => {
     expect(events).toEqual([{ type: "done", usage: { inputTokens: 0, outputTokens: 0, estimated: true } }]);
   });
 
+  test("uses a request-local input estimate when no checkpoint or carry-forward context exists", () => {
+    const estimatedInputTokens = estimateCursorInputTokens({
+      modelId: "grok-4.5",
+      conversationId: "restart-without-checkpoint",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "Explain this JSON: {\\\"path\\\":\\\"src/app.ts\\\"}" }],
+    });
+    const state = createCursorProtobufEventState({ estimatedInputTokens });
+    state.usage.outputTokens = 7;
+
+    expect(finalizeTurnEvents(state)).toEqual([
+      { type: "done", usage: { inputTokens: estimatedInputTokens, outputTokens: 7, totalTokens: estimatedInputTokens + 7, estimated: true } },
+    ]);
+  });
+
   test("normalizes a mis-keyed completed tool-call arg against the advertised schema", () => {
     // The model called the right tool but used `filepath` instead of the schema's `path`.
     const toolSchemas = new Map<string, unknown>([
@@ -456,7 +472,7 @@ describe("Cursor protobuf tool-call events", () => {
     // Regression for the 10000-then-10300-shows-as-20300 bug. Cursor's checkpoint usedTokens is the
     // ABSOLUTE conversation context size; tokenDelta is additive per-turn output. They must land in
     // separate fields: totalTokens (absolute) vs outputTokens (additive), mirroring the Kiro SOT fix.
-    const state = createCursorProtobufEventState();
+    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_200 });
 
     const checkpoint = (usedTokens: number) => create(AgentServerMessageSchema, {
       message: {

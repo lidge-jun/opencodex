@@ -132,6 +132,8 @@ export interface CursorProtobufEventState {
    * conversation cache before the turn.
    */
   contextCarryForwardTokens?: number;
+  /** Request-local estimate used only when Cursor supplied no checkpoint or carried total. */
+  estimatedInputTokens?: number;
   recordContextTokens?: (tokens: number) => void;
   openToolCalls: Map<string, { name: string; args: string }>;
   completedToolCalls: Set<string>;
@@ -152,6 +154,7 @@ export function createCursorProtobufEventState(options: {
   toolSchemas?: Map<string, unknown>;
   cursorToolNameMap?: Map<string, string>;
   contextUsage?: CursorContextUsageControls;
+  estimatedInputTokens?: number;
 } = {}): CursorProtobufEventState {
   return {
     // Cursor provides no authoritative usage frame; token counts are heuristic estimates from
@@ -166,6 +169,7 @@ export function createCursorProtobufEventState(options: {
     ...(options.cursorToolNameMap ? { cursorToolNameMap: options.cursorToolNameMap } : {}),
     ...(options.contextUsage?.carryForwardTokens !== undefined ? { contextCarryForwardTokens: options.contextUsage.carryForwardTokens } : {}),
     ...(options.contextUsage?.recordContextTokens ? { recordContextTokens: options.contextUsage.recordContextTokens } : {}),
+    ...(options.estimatedInputTokens && options.estimatedInputTokens > 0 ? { estimatedInputTokens: options.estimatedInputTokens } : {}),
   };
 }
 
@@ -450,6 +454,12 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
   const contextTokens = reportableContextTokens(state);
   const usage: OcxUsage = contextTokens !== undefined
     ? usageFromContextTokens(state, contextTokens)
-    : { ...state.usage };
+    : state.estimatedInputTokens
+      ? {
+          ...state.usage,
+          inputTokens: state.estimatedInputTokens,
+          totalTokens: state.estimatedInputTokens + state.usage.outputTokens,
+        }
+      : { ...state.usage };
   return [{ type: "done", usage }];
 }

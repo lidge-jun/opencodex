@@ -25,7 +25,7 @@ describe("token-estimate sidecar", () => {
   });
 
   test("kiro text models use the 3.5 ratio", () => {
-    for (const m of ["kiro-auto", "claude-opus-4.8", "claude-opus-4.5", "deepseek-3.2", "minimax-m2.5", "minimax-m2.1", "glm-5", "qwen3-coder-next"]) {
+    for (const m of ["kiro-auto", "claude-opus-4.8", "claude-opus-4.5", "deepseek-3.2", "minimax-m2.5", "minimax-m2.1", "glm-5", "qwen3-coder-next", "grok-4.5", "xai/grok-4.5"]) {
       expect(charsPerToken(m)).toBe(3.5);
     }
   });
