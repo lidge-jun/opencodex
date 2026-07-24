@@ -208,8 +208,10 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	normalized.RawBody = raw
 	normalized.Options.Reasoning = body.Reasoning.Effort
 	requestStarted := time.Now()
-	streamCtx, done := s.lifecycle.Track(r.Context())
+	trackedCtx, done := s.lifecycle.Track(r.Context())
 	defer done()
+	streamCtx, cancelStream := context.WithCancelCause(trackedCtx)
+	defer cancelStream(nil)
 	var adapter types.Adapter
 	var response *http.Response
 	var resolvedAuth *types.AuthContext
@@ -289,7 +291,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		if err := bridge.StreamWithOptions(streamCtx, w, requestedModel, adapter.ParseStream(streamCtx, response.Body), bridge.StreamOptions{Recorder: s.recorder, Record: usageRecord}); err != nil && !errors.Is(err, context.Canceled) {
+		if err := bridge.StreamWithOptions(streamCtx, w, requestedModel, adapter.ParseStream(streamCtx, response.Body), bridge.StreamOptions{StallTimeout: 300 * time.Second, OnCancel: func() { cancelStream(bridge.UpstreamStallError) }, Recorder: s.recorder, Record: usageRecord}); err != nil && !errors.Is(err, context.Canceled) {
 			if s.config.Logger != nil {
 				s.config.Logger.Error("responses_stream", "error", err)
 			}

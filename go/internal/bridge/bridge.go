@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,15 +22,21 @@ type Event struct {
 
 // Response is the buffered form of a bridged Responses stream.
 type Response struct {
-	ID        string           `json:"id"`
-	Object    string           `json:"object"`
-	CreatedAt int64            `json:"created_at"`
-	Status    string           `json:"status"`
-	Model     string           `json:"model"`
-	Output    []map[string]any `json:"output"`
-	Usage     map[string]any   `json:"usage"`
-	Error     map[string]any   `json:"error,omitempty"`
+	ID                string           `json:"id"`
+	Object            string           `json:"object"`
+	CreatedAt         int64            `json:"created_at"`
+	Status            string           `json:"status"`
+	Model             string           `json:"model"`
+	Output            []map[string]any `json:"output"`
+	Usage             map[string]any   `json:"usage"`
+	Error             map[string]any   `json:"error,omitempty"`
+	IncompleteDetails map[string]any   `json:"incomplete_details,omitempty"`
 }
+
+// UpstreamStallError distinguishes bridge-owned stall cancellation from caller cancellation.
+var UpstreamStallError = errors.New("upstream stall timeout")
+
+const defaultStallTimeout = 300 * time.Second
 
 type machine struct {
 	response Response
@@ -48,8 +55,10 @@ type openItem struct {
 // StreamOptions supplies terminal usage recording metadata without coupling the
 // bridge to a concrete persistence implementation.
 type StreamOptions struct {
-	Recorder types.UsageRecorder
-	Record   *types.UsageRecord
+	StallTimeout time.Duration
+	OnCancel     func()
+	Recorder     types.UsageRecorder
+	Record       *types.UsageRecord
 }
 
 // Convert consumes adapter events and returns ordered Responses events and the final response.
@@ -60,7 +69,7 @@ func Convert(model string, events []types.AdapterEvent) ([]Event, Response) {
 		out = append(out, m.accept(event)...)
 	}
 	if !m.terminal {
-		out = append(out, m.finish("incomplete", "adapter stream ended without terminal event")...)
+		out = append(out, m.finishIncomplete("adapter_eof", "adapter stream ended without terminal event")...)
 	}
 	return out, m.response
 }
@@ -77,6 +86,30 @@ func StreamWithOptions(ctx context.Context, w io.Writer, model string, events <-
 	if err := writeSSE(w, m.emit("response.created", map[string]any{"response": m.snapshot("in_progress")})); err != nil {
 		return err
 	}
+	stallTimeout := options.StallTimeout
+	if stallTimeout <= 0 {
+		stallTimeout = defaultStallTimeout
+	}
+	stallCh := make(chan uint64, 1)
+	var stallGeneration uint64 = 1
+	stallTimer := time.AfterFunc(stallTimeout, func() {
+		select {
+		case stallCh <- 1:
+		default:
+		}
+	})
+	defer func() { stallTimer.Stop() }()
+	resetStallTimer := func() {
+		stallTimer.Stop()
+		stallGeneration++
+		generation := stallGeneration
+		stallTimer = time.AfterFunc(stallTimeout, func() {
+			select {
+			case stallCh <- generation:
+			default:
+			}
+		})
+	}
 	for !m.terminal {
 		select {
 		case <-ctx.Done():
@@ -87,17 +120,31 @@ func StreamWithOptions(ctx context.Context, w io.Writer, model string, events <-
 			}
 		case event, ok := <-events:
 			if !ok {
-				for _, tail := range m.finish("incomplete", "adapter stream ended without terminal event") {
+				for _, tail := range m.finishIncomplete("adapter_eof", "adapter stream ended without terminal event") {
 					if err := writeSSE(w, tail); err != nil {
 						return err
 					}
 				}
 				break
 			}
+			resetStallTimer()
 			for _, bridged := range m.accept(event) {
 				if err := writeSSE(w, bridged); err != nil {
 					return err
 				}
+			}
+		case generation := <-stallCh:
+			if generation != stallGeneration {
+				resetStallTimer()
+				continue
+			}
+			for _, tail := range m.finishIncomplete("upstream_stall_timeout", UpstreamStallError.Error()) {
+				if err := writeSSE(w, tail); err != nil {
+					return err
+				}
+			}
+			if options.OnCancel != nil {
+				options.OnCancel()
 			}
 		}
 	}
@@ -116,10 +163,14 @@ func recordStreamUsage(ctx context.Context, m *machine, options StreamOptions) {
 	record.Usage = *m.usage
 	record.Duration = time.Since(record.StartedAt)
 	switch {
+	case errors.Is(context.Cause(ctx), UpstreamStallError):
+		record.Status = types.OutcomeProviderError
 	case ctx.Err() != nil:
 		record.Status = types.OutcomeCancelled
 	case m.response.Status == "completed":
 		record.Status = types.OutcomeSuccess
+	case m.response.Status == "incomplete":
+		record.Status = types.OutcomeProviderError
 	default:
 		record.Status = types.OutcomeProviderError
 	}
@@ -139,7 +190,7 @@ func Buffered(ctx context.Context, model string, events <-chan types.AdapterEven
 				return response, nil
 			}
 			collected = append(collected, event)
-			if event.Type == types.EventDone || event.Type == types.EventError {
+			if event.Type == types.EventDone || event.Type == types.EventError || event.Type == types.EventIncomplete {
 				_, response := Convert(model, collected)
 				return response, nil
 			}
@@ -191,6 +242,8 @@ func (m *machine) accept(event types.AdapterEvent) []Event {
 	case types.EventUsage:
 		m.usage = cloneUsage(event.Usage)
 		m.response.Usage = usage(event.Usage)
+	case types.EventHeartbeat:
+		return nil
 	case types.EventDone:
 		if event.Usage != nil {
 			m.usage = cloneUsage(event.Usage)
@@ -203,6 +256,12 @@ func (m *machine) accept(event types.AdapterEvent) []Event {
 			message = "provider error"
 		}
 		out = append(out, m.finish("failed", message)...)
+	case types.EventIncomplete:
+		if event.Usage != nil {
+			m.usage = cloneUsage(event.Usage)
+			m.response.Usage = usage(event.Usage)
+		}
+		out = append(out, m.finishIncomplete(event.Reason, event.Message)...)
 	}
 	return out
 }
@@ -276,10 +335,21 @@ func (m *machine) finish(status, message string) []Event {
 	return out
 }
 
+func (m *machine) finishIncomplete(reason, message string) []Event {
+	m.response.IncompleteDetails = map[string]any{"reason": reason}
+	if message != "" {
+		m.response.IncompleteDetails["message"] = message
+	}
+	return m.finish("incomplete", message)
+}
+
 func (m *machine) snapshot(status string) map[string]any {
 	result := map[string]any{"id": m.response.ID, "object": "response", "created_at": m.response.CreatedAt, "status": status, "model": m.response.Model, "output": m.response.Output, "usage": m.response.Usage}
 	if m.response.Error != nil {
 		result["error"] = m.response.Error
+	}
+	if m.response.IncompleteDetails != nil {
+		result["incomplete_details"] = m.response.IncompleteDetails
 	}
 	return result
 }
