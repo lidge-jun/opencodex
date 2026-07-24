@@ -55,6 +55,8 @@ async function providerDiscoveryDto(provider: string): Promise<Record<string, un
     new Request(requestUrl),
     requestUrl,
     {
+      port: 10100,
+      defaultProvider: provider,
       providers: {
         [provider]: {
           adapter: "openai-chat",

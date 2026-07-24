@@ -124,6 +124,8 @@ describe("provider management validation", () => {
         new Request(requestUrl),
         requestUrl,
         {
+          port: 10100,
+          defaultProvider: "auth-broken",
           providers: {
             "auth-broken": {
               adapter: "openai-chat",
