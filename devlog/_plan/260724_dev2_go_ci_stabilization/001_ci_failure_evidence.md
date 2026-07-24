@@ -35,3 +35,18 @@ The production code already exposes `RefreshAccountIfGeneration`, whose contract
 - PR #368 is the only PR to close.
 - No merge, rebase, force-push, release, package publish, or change to `dev`, `preview`, or `main` is authorized or planned.
 - The old remote branch remains until `dev2-go` has exact-SHA green proof.
+
+## First replacement-branch run
+
+- Run: `30064436430`
+- Head branch: `dev2-go`
+- Head SHA: `05006fdd2bfb540810c517daf61ac00d86d7bd79`
+- Result: all build/test, race, cross-compile, and E2E jobs passed.
+- Residual: five Node 20 action-runtime deprecation annotations, one for each matrix/cross-compile/E2E job; GitHub forced the old action bundles onto Node 24.
+
+The current official Node 24-based releases resolved on 2026-07-24 to immutable commits:
+
+- `actions/checkout` v7.0.1: `3d3c42e5aac5ba805825da76410c181273ba90b1`
+- `actions/setup-go` v7.0.0: `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`
+
+This run proves the Go matrix is functionally green, but it is intermediate evidence rather than the final stability gate.

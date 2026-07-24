@@ -46,6 +46,7 @@ Work class: C4 (GitHub Actions, branch governance, remote branch replacement, an
   - Replace PR plus broad branch triggers with `workflow_dispatch` and pushes to `dev2-go` only.
   - Add per-ref concurrency cancellation.
   - Pin `actions/checkout` v4 and `actions/setup-go` v5 to the official commits resolved on 2026-07-24.
+  - Superseded during C after the first successful `dev2-go` run emitted Node 20 deprecation annotations: pin the current Node 24-based `actions/checkout` v7.0.1 and `actions/setup-go` v7.0.0 releases instead.
 - MODIFY `go/internal/oauth/store_test.go`
   - Rename the flaky winner-adoption test and pass one pre-captured credential generation to both concurrent `RefreshAccountIfGeneration` calls.
   - Preserve the one-refresh and refreshed/superseded assertions without sleeps or retries.
@@ -64,7 +65,7 @@ Work class: C4 (GitHub Actions, branch governance, remote branch replacement, an
 1. The winner-adoption test has no wall-clock synchronization and passes under `go test -race ./internal/oauth -run '^TestCredentialStoreRefresh(Sequential|IfGenerationAdoptsWinner)$' -count=100`; the sequential case directly covers `RefreshAccount`, while the concurrent case covers stale-generation adoption.
 2. `go build ./...`, `go vet ./...`, `go test ./... -count=1`, `go test -race ./... -count=1`, and `go test ./test/e2e/... -count=1` pass from `go/`.
 3. Windows, Linux, and Darwin cross-compiles used by Go CI pass locally where Go cross-compilation permits them.
-4. Go CI runs automatically only for pushes to `dev2-go`, remains manually dispatchable, uses read-only contents permission, cancels superseded runs for the same ref, and pins third-party actions to exact SHAs.
+4. Go CI runs automatically only for pushes to `dev2-go`, remains manually dispatchable, uses read-only contents permission, cancels superseded runs for the same ref, pins third-party actions to exact SHAs, and emits no Node 20 action-runtime deprecation annotations.
 5. Governance and workflow-map docs agree that `preview` remains the TypeScript prerelease line and `dev2-go` is a separate temporary Go line with no standing PR to `dev`.
 6. `origin/dev2-go` exists at the checked commit and a fresh Go CI run for that exact SHA is successful before any old remote branch deletion.
 7. PR #368 is closed, not merged; its close comment names the replacement branch and successful run.
@@ -75,3 +76,14 @@ Work class: C4 (GitHub Actions, branch governance, remote branch replacement, an
 - Before old-branch deletion: stop and keep both remote branches if the replacement run fails.
 - After old-branch deletion: recreate `codex/260724-go-porting` from the verified `dev2-go` SHA if branch consumers require it; do not force-push or rewrite commits.
 - Reopen PR #368 only if the maintainer abandons the independent-branch strategy.
+
+## C-phase amendment: action runtime support
+
+The first replacement-branch run, `30064436430` at `05006fdd2bfb540810c517daf61ac00d86d7bd79`, passed every job but emitted five annotations saying the pinned checkout/setup actions still declared Node 20 and were being forced onto Node 24. A green result with a known action-runtime deprecation is not the requested stable endpoint.
+
+The repair remains within the audited trust boundary and keeps immutable refs:
+
+- `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`
+- `actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0`
+
+Both releases declare `node24`. The branch replacement sequence remains unchanged: validate locally, push, require a fresh exact-SHA green run without the deprecation annotation, then close PR #368 and delete the old remote branch.

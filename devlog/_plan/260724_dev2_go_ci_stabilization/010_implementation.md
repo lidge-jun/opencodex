@@ -10,7 +10,7 @@ Status: implemented; local checks passed; remote proof pending
 - Before: PRs to `main`/`dev`/`preview` and pushes to `main`/`preview`/`dev`/`codex/*go*` trigger Go CI.
 - After: manual dispatch and pushes to `dev2-go` trigger Go CI; superseded runs on the same ref are cancelled.
 - Before: `actions/checkout@v4` and `actions/setup-go@v5` are mutable.
-- After: every use is pinned to the exact official v4/v5 commit with the major version retained as a comment.
+- After: every use is pinned to the exact official Node 24-based v7 commit with the release version retained as a comment.
 
 ### `go/internal/oauth/store_test.go`
 
@@ -34,7 +34,8 @@ Status: implemented; local checks passed; remote proof pending
 - Workflow syntax/security: `actionlint .github/workflows/go-ci.yml` -> exit 0; `git diff --check` -> exit 0; official action refs are exact 40-character SHAs with version comments.
 - Repository gates after `bun install --frozen-lockfile` in root and `gui/`: `bun run typecheck` -> exit 0; `bun run privacy:scan` -> exit 0; `bun run test` -> 3,841 pass, 0 fail across 313 files.
 - Environment note: the first Bun gate attempt ran before this worktree had dependencies and failed on missing `bun-types`, `zod/v4`, `@bufbuild/protobuf`, and React runtime modules. No lockfile changed. Frozen installs restored the declared environment and the fresh rerun passed.
-- GitHub exact-SHA Go CI run: pending C.
+- Intermediate GitHub exact-SHA Go CI: run `30064436430` at `05006fdd2bfb540810c517daf61ac00d86d7bd79` passed every job, but emitted five Node 20 action-runtime deprecation annotations. The C repair upgrades the immutable action pins to checkout v7.0.1 and setup-go v7.0.0 before final proof.
+- Final GitHub exact-SHA Go CI run: pending C repair.
 - Remote branch/PR postconditions: pending C.
 
 ## D outcome
