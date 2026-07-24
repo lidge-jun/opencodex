@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -27,6 +27,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { COMBO_NAMESPACE, comboModelId, comboPublicModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -126,6 +127,105 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     save(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, disabled });
+  }
+
+  // One user-facing visibility switch spans two persisted filters: a provider allowlist and the
+  // shared blocklist. Keep the update atomic so an interrupted request cannot expose a half-applied
+  // state. Native rows only use the blocklist; routed/custom rows also join a non-empty allowlist.
+  if (url.pathname === "/api/model-visibility" && req.method === "PUT") {
+    let parsedBody: unknown;
+    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(parsedBody)) return jsonResponse({ error: "invalid model visibility request" }, 400);
+    const body = parsedBody;
+    const scope = body.scope === "models" || body.scope === "provider" ? body.scope : null;
+    const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+    if (!scope || !provider || !isValidProviderName(provider) || typeof body.enabled !== "boolean" || !Array.isArray(body.targets)) {
+      return jsonResponse({ error: "invalid model visibility request" }, 400);
+    }
+
+    const providerConfig = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
+    const isVirtualComboNamespace = provider === COMBO_NAMESPACE && !preservesPhysicalComboProvider(config);
+    if (!providerConfig && provider !== "openai" && !isVirtualComboNamespace) {
+      return jsonResponse({ error: "unknown model visibility provider" }, 400);
+    }
+    const supportedNative = new Set(nativeModelRows(config).map(row => row.slug));
+    const targets: Array<{ id: string; native: boolean }> = [];
+    const seen = new Set<string>();
+    for (const value of body.targets) {
+      if (!isPlainRecord(value) || typeof value.id !== "string" || (value.native !== undefined && typeof value.native !== "boolean")) {
+        return jsonResponse({ error: "invalid model visibility target" }, 400);
+      }
+      const id = value.id.trim();
+      const native = value.native === true;
+      if (!id || (provider === "openai") !== native || (native && !supportedNative.has(id))) {
+        return jsonResponse({ error: "invalid model visibility target" }, 400);
+      }
+      const key = `${native ? "native" : "routed"}:${id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ id, native });
+      }
+    }
+    if (targets.length === 0) return jsonResponse({ error: "model visibility targets required" }, 400);
+
+    const knownComboSelectors = new Set(
+      Object.entries(config.combos ?? {}).flatMap(([id, combo]) => [
+        comboModelId(id),
+        comboPublicModelId(id, combo),
+      ]),
+    );
+    const targetComboSelectors = new Map<string, Set<string>>();
+    if (isVirtualComboNamespace) {
+      for (const target of targets) {
+        const combo = config.combos && Object.hasOwn(config.combos, target.id) ? config.combos[target.id] : undefined;
+        if (!combo) return jsonResponse({ error: "invalid model visibility target" }, 400);
+        targetComboSelectors.set(target.id, new Set([comboModelId(target.id), comboPublicModelId(target.id, combo)]));
+      }
+    }
+    const matchesTarget = (stored: string, target: { id: string; native: boolean }) => target.native
+      ? stored === target.id
+      : isVirtualComboNamespace
+        ? targetComboSelectors.get(target.id)!.has(stored)
+        : slugEquals(stored, provider, target.id);
+
+    let disabled = [...new Set(config.disabledModels ?? [])];
+    if (body.enabled) {
+      if (scope === "provider") {
+        if (providerConfig && !isVirtualComboNamespace) delete providerConfig.selectedModels;
+        if (isVirtualComboNamespace) {
+          disabled = disabled.filter(stored => !knownComboSelectors.has(stored));
+        } else {
+          const nativeIds = provider === "openai"
+            ? disabledNativeSlugs({ disabledModels: disabled })
+            : new Set<string>();
+          disabled = disabled.filter(stored => (
+            knownComboSelectors.has(stored)
+            || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored))
+          ));
+        }
+      } else {
+        if (!isVirtualComboNamespace && providerConfig?.selectedModels && providerConfig.selectedModels.length > 0) {
+          const additions = targets.filter(target => !target.native).map(target => target.id);
+          providerConfig.selectedModels = [...new Set([...providerConfig.selectedModels, ...additions])];
+        }
+        disabled = disabled.filter(stored => !targets.some(target => matchesTarget(stored, target)));
+      }
+    } else {
+      for (const target of targets) {
+        const canonical = target.native
+          ? target.id
+          : isVirtualComboNamespace
+            ? comboModelId(target.id)
+            : routedSlug(provider, target.id);
+        const alreadyDisabled = disabled.some(stored => matchesTarget(stored, target));
+        if (!alreadyDisabled) disabled.push(canonical);
+      }
+    }
+
+    config.disabledModels = disabled;
+    saveConfig(config);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled });
   }
 
   if (url.pathname === "/api/custom-models" && req.method === "GET") {

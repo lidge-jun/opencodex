@@ -4,10 +4,19 @@ import type {
   OcxComboDefaultEffort,
   OcxComboStrategy,
   OcxComboTarget,
+  OcxConfig,
   OcxProviderConfig,
 } from "../types";
 
 export const COMBO_NAMESPACE = "combo";
+
+export function preservesPhysicalComboProvider(
+  config: Pick<OcxConfig, "providers" | "combos">,
+): boolean {
+  return Object.hasOwn(config.providers, COMBO_NAMESPACE)
+    && Object.keys(config.combos ?? {}).length === 0;
+}
+
 const COMBO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /**
  * Public alias shape: one optional "/" segment, each segment id-shaped. Bare aliases
