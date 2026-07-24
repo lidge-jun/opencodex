@@ -7,14 +7,15 @@
  * settable alone via PUT (legacy codexAutoStart-only PUTs keep working).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-settings-stream-mode-test");
 const previousHome = process.env.OPENCODEX_HOME;
+let testDir = "";
 
 function baseConfig(): OcxConfig {
   return {
@@ -46,15 +47,15 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
 }
 
 beforeEach(() => {
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-  mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  testDir = mkdtempSync(join(tmpdir(), "ocx-settings-stream-mode-"));
+  process.env.OPENCODEX_HOME = testDir;
 });
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  testDir = "";
 });
 
 describe("GET /api/settings", () => {

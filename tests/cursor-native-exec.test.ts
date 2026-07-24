@@ -287,7 +287,10 @@ describe("Cursor native exec bridge", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-shell-"));
     const shell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
-      value: create(ShellArgsSchema, { command: "printf cursor-ok", workingDirectory: dir }),
+      value: create(ShellArgsSchema, {
+        command: "node -e \"process.stdout.write('cursor-ok')\"",
+        workingDirectory: dir,
+      }),
     }), { unsafeAllowNativeLocalExec: true }))[0]);
 
     expect(shell.message.case).toBe("shellResult");
@@ -301,7 +304,10 @@ describe("Cursor native exec bridge", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-stream-"));
     const replies = await handleCursorNativeExec(execMessage({
       case: "shellStreamArgs",
-      value: create(ShellArgsSchema, { command: "printf stream-ok", workingDirectory: dir }),
+      value: create(ShellArgsSchema, {
+        command: "node -e \"process.stdout.write('stream-ok')\"",
+        workingDirectory: dir,
+      }),
     }), { unsafeAllowNativeLocalExec: true });
     const decodedAll = replies.map(reply => fromBinary(AgentClientMessageSchema, reply));
     const execFrames = decodedAll
