@@ -23,12 +23,9 @@ Decision log:
 | #336 | v2 Fernet guard hardening | MERGE_AND_IMPROVE (Huygens): security-clean (Fernet wire layout, no key handling, no secret logging); ja/ko/ru docs out of sync | MERGE_AND_IMPROVE — merged fd7e97e1 + locale sync commit d0825272 | MERGED |
 | #337 | GUI auto-switch threshold | gui-touching — boundary rule | DEFER pending explicit user GUI approval | open, reported |
 | #358 | GUI provider discovery UX | gui-touching — boundary rule | DEFER pending explicit user GUI approval | open, reported |
+| #369 | kiro progress text nonterminal | MERGE_AS_IS (McClintock): CI green, real terminals preserved, compatible with bridge terminal exactly-once, regression tests RED-valid | MERGE_AS_IS | MERGED 2704747d 2026-07-24 |
 | #366 | Cursor store:false continuity | REBUILD_ON_DEV (Hypatia): High isolation bypass, Medium UTF-16 slice vs byte cap, unproven same-id strategy, 27 commits behind | DEFER — detailed review posted as PR comment (issuecomment-5065520056) | comment posted |
 | #368 | Go port (39k LOC draft, author lidge-jun) | CLOSE recommended by reviewer (Archimedes): parallel unverified runtime, no packaging/release linkage, CI flake | DEFER — owner's own draft experiment; close/keep decision reserved for user | open draft, reported |
-| #355 | Gemini inline image output | REBUILD_ON_DEV (Hegel): conflicts with terminal-truth google.ts rewrite; modality scope too broad; 2 deterministic test breaks; memory/privacy bounds | DEFER — detailed review posted as PR comment (issuecomment-5065271325) | comment posted |
-| #336 | v2 Fernet guard hardening | MERGE_AND_IMPROVE (Huygens): explicit security review clean (structural Fernet classifier, no key handling, no ciphertext echo, management API still hasApiKey-only); residual = ja/ko/ru docs stale | MERGE_AND_IMPROVE — merged fd7e97e1, then locale docs synced to fail-fast contract | MERGED + improved |
-| #337 | GUI auto-switch threshold | not reviewed (gui/ boundary) | DEFER — gui/-touching PR requires fresh explicit user approval per loop boundary | reported to user |
-| #358 | GUI provider discovery/fallback UX | not reviewed (gui/ boundary) | DEFER — gui/-touching PR requires fresh explicit user approval per loop boundary | reported to user |
 
 Non-dev-target PRs noted during triage (outside loop scope): #365 (draft,
 main-target, already marked WRONG BRANCH), #339 (main-target, needs
