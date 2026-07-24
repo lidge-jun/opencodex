@@ -24,13 +24,14 @@ worktree `/Users/jun/Developer/new/700_projects/opencodex-dev2-go-ports`
 | `go/internal/adapter/openai/chat.go` | `!sawFinish && usage == nil`→Error, else Done (`chat.go:371`) | NO behavior change — already TS parity (`src/adapters/openai-chat.ts:724`); tests only |
 | `go/internal/adapter/google/google.go` (+`scanSSE`) | unconditional Done after scanner success (`google.go:481,520`); `scanSSE` drops non-`data:` lines and unterminated residuals silently (`google.go:633-664`) | redesign `scanSSE` to report framing state (clean EOF / `[DONE]` / residual bytes); non-`data:` non-comment residual→Error `"upstream stream ended with an incomplete SSE frame — possible truncation"` (`src/adapters/google.ts:453-460`); comment residual→heartbeat; invalid JSON in `data:` payload→Error `"malformed upstream SSE data frame"` (`src/adapters/google.ts:360`); liveness-only chunks (non-`data:` lines, no content event)→`EventHeartbeat` (`src/adapters/google.ts:447,456`); track `sawAnyFrame` + `sawTerminalSignal` (usage metadata OR non-empty finishReason); `!sawAnyFrame \|\| !sawTerminalSignal`→Error `"upstream stream ended without a terminal signal — possible truncation"` (`src/adapters/google.ts:470`); keep Vertex/CCA tool-call-only truncation + `VertexTruncationErrorMessage` (`src/adapters/google-truncation.ts:3`) |
 | `go/internal/adapter/openai/queue.go` | capacity = make hint; unbounded `Push`; `deliver()` goroutine dequeues before blocking on unbuffered `out` (`queue.go:19,38,72-75`) | redesign to the TS no-worker model: `Push` = non-blocking direct handoff to a waiting reader (not counted), else enqueue; overflow when `len(queued) >= maxBacklog` (default 1024)→`OnBacklogExceeded()` + enqueue terminal `EventError "consumer backlog exceeded — turn aborted"` + Close (`src/adapters/run-turn-queue.ts:60-67`); two senders never pair, so no-reader tests are deterministic; heartbeat skipped in `PreflightAdapterEvents` (`src/adapters/run-turn-queue.ts:42-43`) |
-| `go/internal/bridge/bridge.go` | no stall watchdog; EOF→incomplete w/o reason (`bridge.go:80,88`); `m.terminal` guard (`bridge.go:156`); `Buffered` terminal only on Done/Error (`bridge.go:129`) | add stall watchdog: `StreamOptions.StallTimeout` (default 300s, `src/stall-timeout.ts:8`) + `StreamOptions.OnCancel func()` (`src/bridge.ts:795`); timer callback only signals a buffered stall channel — ALL machine mutation/writes stay serialized in the bridge select loop; fire→close open items + `response.incomplete` w/ `incomplete_details.reason="upstream_stall_timeout"` + invoke `OnCancel` (`src/bridge.ts:794-815`); EOF incomplete gets `reason="adapter_eof"` (`src/bridge.ts:756-770`); `accept` handles adapter-emitted `EventIncomplete`→finish incomplete w/ reason passthrough (`src/bridge.ts:677-696`); `Buffered` treats `EventIncomplete` as terminal; heartbeat consumed as activity only, never emitted; keep exactly-once guard |
+| `go/internal/bridge/bridge.go` | no stall watchdog; EOF→incomplete w/o reason (`bridge.go:80,88`); `m.terminal` guard (`bridge.go:156`); `Buffered` terminal only on Done/Error (`bridge.go:129`); `recordStreamUsage` maps any ctx.Err()→`OutcomeCancelled` (`bridge.go:111`) | add stall watchdog: `StreamOptions.StallTimeout` (default 300s, `src/stall-timeout.ts:8`) + `StreamOptions.OnCancel func()` (`src/bridge.ts:795`); timer callback only signals a buffered stall channel — ALL machine mutation/writes stay serialized in the bridge select loop; fire→close open items + `response.incomplete` w/ `incomplete_details.reason="upstream_stall_timeout"` + invoke `OnCancel` (`src/bridge.ts:794-815`); EOF incomplete gets `reason="adapter_eof"` (`src/bridge.ts:756-770`); `accept` handles adapter-emitted `EventIncomplete`→finish incomplete w/ reason passthrough (`src/bridge.ts:677-696`); `Buffered` treats `EventIncomplete` as terminal; heartbeat consumed as activity only, never emitted; keep exactly-once guard; cancellation classification: server uses `context.WithCancelCause`, stall fires cancel with a sentinel `UpstreamStallError` cause, and `recordStreamUsage` classifies stall-cause (or status `incomplete`)→`OutcomeProviderError` (HTTP 502, `src/server/request-log.ts:518`) while genuine caller cancel stays `OutcomeCancelled`/499 |
 | `go/internal/server/server.go` | Responses route builds `streamCtx` then calls `ParseStream` + `bridge.StreamWithOptions` (`server.go:288`) | create the cancellable stream context in the route, share it between `ParseStream` and the bridge, and pass its cancel as `StreamOptions.OnCancel` so a stall actually kills the adapter/upstream body (`src/server/responses/core.ts:1351`) |
 | `go/internal/chat/outbound.go` | EventError→error frame, no DONE (`outbound.go:145`); no incomplete handling | add `EventIncomplete` case: `max_output_tokens`→finish `length`+[DONE]; `content_filter`→finish `content_filter`+[DONE]; else→error frame `"upstream stream ended early (<reason>)"`, NO [DONE] (`src/chat/outbound.ts:351-360`); heartbeat ignored |
-| `go/internal/chat/messages_outbound.go` | two terminal switches w/o incomplete (`messages_outbound.go:19,132`) | add `EventIncomplete` case: `max_output_tokens`→finish `max_tokens`; `content_filter`→finish `refusal`; else→error `"upstream response was incomplete (<reason>)"` (or `details.message` when present) (`src/claude/outbound.ts:408-419`); heartbeat = explicit no-op |
+| `go/internal/chat/messages_outbound.go` | two terminal switches w/o incomplete (`messages_outbound.go:19,132`); streaming errors default 502 `api_error` (`messages_outbound.go:182`) | add `EventIncomplete` case: `max_output_tokens`→finish `max_tokens`; `content_filter`→finish `refusal`; else→error status **529** type `overloaded_error` message `"upstream response was incomplete (<reason>)"` (or `details.message` when present), retryable (`src/claude/outbound.ts:408-419`); heartbeat = explicit no-op |
+| `go/internal/chat/messages.go` | non-streaming converts every builder error into 502 (`messages.go:69`) | typed incomplete error carries status 529 + `overloaded_error` through the non-streaming path (`src/claude/outbound.ts:551`); unrelated errors stay 502 |
 | `go/internal/chat/compact.go` | `compactionSummary` terminal = Done only (`compact.go:269`) | `EventIncomplete` = terminal boundary, no text contribution |
-| `go/internal/search/loop.go` | `scanSearchCalls` counts only EventDone as terminal; `terminal != 1` errors (`loop.go:200-208`) | count `EventDone` OR `EventIncomplete` as the single terminal; passthrough incomplete (`src/web-search/loop.ts:384`) |
-| Tests: `protocol/sse_test.go`, `adapter/anthropic/anthropic_test.go`, `adapter/openai/request_test.go`, `adapter/openai/queue_test.go`, `adapter/google/google_test.go`, `chat/outbound_test.go`, `bridge/bridge_test.go` | gaps per activation matrix | see matrix A1–A8 |
+| `go/internal/search/loop.go` | `scanSearchCalls` counts only EventDone as terminal; `terminal != 1` errors (`loop.go:200-208`) | count `EventDone` OR `EventIncomplete` as the single terminal AND require the terminal to be the LAST event — late events after terminal are a stream protocol violation (`src/web-search/loop.ts:383-384`); passthrough incomplete |
+| Tests: `protocol/sse_test.go`, `adapter/anthropic/anthropic_test.go`, `adapter/openai/request_test.go`, `adapter/openai/queue_test.go`, `adapter/google/google_test.go`, `chat/outbound_test.go`, `chat/compact_test.go`, `chat/handler_test.go`, `search/search_test.go`, `bridge/bridge_test.go` | gaps per activation matrix | see matrix A1–A9 |
 
 ### NEW
 
@@ -69,15 +70,15 @@ None.
 | A3b | OpenAI chat EOF, no [DONE]/finish_reason/usage | fixture | EventError, exact truncation message | `adapter/openai/request_test.go` |
 | A4a | Google usage-only final frame | fixture (TS pin `tests/google-vertex-stream.test.ts:76`) | EventDone | `adapter/google/google_test.go` |
 | A4b | Google text-only `MAX_TOKENS`, no tool calls | fixture (TS pin `tests/google-vertex-stream.test.ts:58`) | EventDone (no truncation error) | `adapter/google/google_test.go` |
-| A4c | Google unterminated non-`data:` residual | exact bytes `data: {...}\n\ngarbage-without-newline` (EOF, no trailing `\n`) | EventError `"upstream stream ended with an incomplete SSE frame — possible truncation"` | `adapter/google/google_test.go` |
+| A4c | Google unterminated non-`data:` residual | valid terminal frame then residual: `data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}]}\n\ngarbage-without-newline` (EOF, no trailing `\n`) | EventError `"upstream stream ended with an incomplete SSE frame — possible truncation"` | `adapter/google/google_test.go` |
 | A4d | Google frames w/o usage or finishReason | fixture | EventError, no-terminal message | `adapter/google/google_test.go` |
 | A4e | Google `data:` frame with invalid JSON | fixture `{invalid` payload | EventError `"malformed upstream SSE data frame"` | `adapter/google/google_test.go` |
 | A4f | Google liveness-only chunk then EOF w/ terminal | comment/liveness lines only between content | EventHeartbeat emitted; default OpenAI path unchanged | `adapter/google/google_test.go` |
 | A5 | Push beyond maxBacklog (no reader) | no-reader fill (two senders never pair → deterministic) | callback fired + terminal error event + closed; direct handoff to a waiting reader NOT counted as backlog; heartbeat skipped by preflight | `adapter/openai/queue_test.go` |
-| A6 | Bridge: adapter channel closes w/o terminal; stall timeout fires; heartbeat resets | bridge test w/ short StallTimeout | `response.incomplete` w/ reason `adapter_eof` / `upstream_stall_timeout`; exactly one terminal + one [DONE]; `OnCancel` invoked on stall | `bridge/bridge_test.go` |
+| A6 | Bridge: adapter channel closes w/o terminal; stall timeout fires; heartbeat resets | bridge test w/ short StallTimeout + recorder | `response.incomplete` w/ reason `adapter_eof` / `upstream_stall_timeout`; exactly one terminal + one [DONE]; `OnCancel` invoked on stall; stall recorded as `OutcomeProviderError` (502), caller cancel as `OutcomeCancelled` (499) | `bridge/bridge_test.go` |
 | A7 | Second terminal event after first | bridge Stream fixture | terminal frame count == 1 across `completed\|failed\|incomplete`, one [DONE] | `bridge/bridge_test.go` |
 | A8 | Chat outbound EventIncomplete per reason | handler tests | `max_output_tokens`→length+[DONE]; `content_filter`→content_filter+[DONE]; `adapter_eof`→error frame, no [DONE] | `chat/outbound_test.go` |
-| A9 | Consumer terminal contract | unit tests per consumer | `Buffered` converts on incomplete; messages_outbound `max_output_tokens`→max_tokens / `content_filter`→refusal / else error; compact boundary; search loop accepts incomplete as the one terminal | `bridge/bridge_test.go`, `chat/messages_outbound_test.go`, `chat/compact_test.go`, `search/loop_test.go` |
+| A9 | Consumer terminal contract | unit tests per consumer | `Buffered` converts on incomplete; messages stream + non-stream `max_output_tokens`→max_tokens / `content_filter`→refusal / else **529 `overloaded_error`**; compact boundary; search loop accepts incomplete as the single LAST terminal and rejects late events after terminal | `bridge/bridge_test.go`, `chat/outbound_test.go`, `chat/handler_test.go`, `chat/compact_test.go`, `search/search_test.go` |
 
 ## Verification
 
@@ -157,3 +158,40 @@ Round 2 must use the same reviewer and must pass before B.
 
 Round 3 must use the same reviewer and must pass before B. Third FAIL returns
 this work-phase to P with a changed plan (LOOP-REPAIR-01).
+
+## A-gate round 3 fold-back (LOOP-REPAIR-01 P-return)
+
+- Reviewer: Anscombe (`019f93b6-88dd-7191-b933-93e7acfdbeb3`, Sol medium)
+- Verdict: `FAIL` (2 High + 3 Medium; round-2 fixes confirmed 3 resolved /
+  3 partial)
+- P-return record: this third FAIL triggered the LOOP-REPAIR-01 P-return.
+  The plan was re-verified WHOLESALE against the TS contract surfaces the
+  three rounds touched (usage/outcome classification, Messages wire status,
+  search terminal ordering, fixture validity, test-file existence) rather
+  than patched piecemeal. No scope change resulted: every finding is a
+  narrow contract detail inside the existing design, so the "changed plan"
+  is this amended doc plus the wholesale re-verification record here.
+  Trajectory: 7 blockers → 3H/2M/1L → 2H/3M, all rounds disjoint.
+- Synthesis (REVIEW-SYNTHESIS-01): all 5 findings ACCEPTED, no rebuttals.
+- Folded fixes:
+  1. Stall misclassification → `context.WithCancelCause` + sentinel
+     `UpstreamStallError`; `recordStreamUsage` classifies stall/incomplete as
+     `OutcomeProviderError` (502, `src/server/request-log.ts:518`), genuine
+     caller cancel stays 499; A6 gains a recorder assertion.
+  2. Messages 529 contract → streaming else-branch emits 529
+     `overloaded_error`; `go/internal/chat/messages.go` added to MODIFY so
+     the non-streaming path propagates the same typed status
+     (`src/claude/outbound.ts:551`); A9 asserts status+type.
+  3. A4c fixture self-defeated → replaced with a valid terminal-bearing
+     frame followed by the unterminated garbage residual; A4e remains the
+     invalid-JSON case.
+  4. Search ordering → terminal must be exactly one AND the last event
+     (`src/web-search/loop.ts:383`); A9 adds a late-event rejection fixture.
+  5. A9 phantom test paths → repointed to existing owners
+     (`chat/outbound_test.go`, `chat/handler_test.go`, `chat/compact_test.go`,
+     `search/search_test.go`) and the test MODIFY row now lists every A9
+     surface.
+
+Round 4 uses the same reviewer. Any further FAIL returns to P for genuine
+scope reduction (candidate: split the consumer-contract rows into a separate
+work-phase) rather than another in-place fold.
