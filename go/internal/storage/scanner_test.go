@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -47,5 +48,12 @@ func TestScanCountsNewestSQLiteReadonly(t *testing.T) {
 	}
 	if state == nil || state.Rows == nil || *state.Rows != 2 {
 		t.Fatalf("state bucket = %#v, want rows=2", state)
+	}
+}
+
+func TestReadonlySQLiteURLNormalizesWindowsSeparators(t *testing.T) {
+	got := readonlySQLiteURL(`C:\Users\runner\state.sqlite`)
+	if strings.Contains(got, "%5C") || !strings.HasPrefix(got, "file:///C:/Users/runner/state.sqlite?") {
+		t.Fatalf("readonly SQLite URL = %q", got)
 	}
 }
