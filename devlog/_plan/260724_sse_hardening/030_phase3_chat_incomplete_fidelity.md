@@ -46,14 +46,17 @@ Change:
   `upstream stream ended early (<reason>)`. fail() already emits an OpenAI
   error frame and closes WITHOUT [DONE] (:179-200) — truthful abnormal end.
 
-### 2. src/chat/outbound.ts — MODIFY collectChatCompletion (~454)
+### 2. src/chat/outbound.ts — collectChatCompletion (:479): NO CODE CHANGE
+### (A-gate precision)
 
-Non-stream collectors iterate the same SSE generator; an incomplete that is
-not max_output_tokens/content_filter must surface as a thrown
-ChatCompletionsStreamError (existing type, :68) so the endpoint answers
-with an error status instead of a 200 chat.completion assembled from a
-truncated turn. max_output_tokens/content_filter keep returning the partial
-completion with the mapped finish_reason (OpenAI behavior for length).
+Once item 1 routes stall/eof incompletes to fail(), the error frame travels
+the SAME converter output stream and collectChatCompletion's existing
+error-frame branch already throws ChatCompletionsStreamError
+(outbound.ts:516-523, 559), which the endpoint maps to an error response
+(chat-completions.ts:203-206). Item 2 is therefore achieved structurally:
+B only verifies it and adds the accept-criterion-5 test. Implementation
+detail: use `details.message` only after a `typeof === "string"` check
+(same pattern as claude outbound).
 
 ### 3. Verify-only: claude/outbound.ts and ws-bridge.ts
 
