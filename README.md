@@ -255,12 +255,19 @@ next Codex session. opencodex keeps these behaviors:
 | Kimi (Moonshot) | `openai-chat` | oauth / key |
 | Google Gemini | `google` | key |
 | Azure OpenAI | `azure-openai` | key |
+| Upstage Open2 Beta (unofficial) | `open2-beta` | anonymous web session (no key while beta remains open) |
 | Cursor (experimental) | `cursor` | dashboard/local config; live transport; unsafe native local exec is opt-in |
 | Ollama Cloud + 17-provider catalog | `openai-chat` | key |
 | Ollama / vLLM / LM Studio (local) | `openai-chat` | key (usually blank) |
 | Any OpenAI-compatible endpoint | `openai-chat` | key |
 
 Plus DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Cloud, Tencent Cloud Coding Plan, SiliconFlow, and more. See the full list with `ocx init` or in the [provider docs](https://opencodex.me/reference/configuration/).
+
+The Open2 adapter bridges Upstage's private beta web protocol rather than a stable public API. It
+automatically creates and refreshes an anonymous session, and is currently free and keyless only
+while that public beta remains open. Upstage may change, restrict, authenticate, or remove the
+protocol without notice. The current bridge supports text and reasoning, but not Codex client tools
+or native vision.
 
 Cursor support is a staged experimental bridge: it appears in `ocx init` and the dashboard Add
 Provider picker as a local config with Cursor's static public model catalog. Live

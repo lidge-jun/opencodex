@@ -29,7 +29,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
+  "open2-beta", "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -416,13 +416,27 @@ describe("provider registry parity", () => {
     expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
   });
 
-  test("LiteLLM is the only registry seed with optional key authentication", () => {
+  test("key-optional registry providers do not require credentials", () => {
+    const open2 = PROVIDER_REGISTRY.find(entry => entry.id === "open2-beta");
     const litellm = PROVIDER_REGISTRY.find(entry => entry.id === "litellm");
     const optionalKeyProviders = PROVIDER_REGISTRY.filter(entry => entry.keyOptional).map(entry => entry.id);
 
+    expect(open2?.authKind).toBe("key");
+    expect(providerConfigSeed(open2!).keyOptional).toBe(true);
+    expect(open2?.freeTier).toBe(true);
+    expect(open2?.modelReasoningEfforts?.["solar-open2"]).toEqual(["medium", "high", "max"]);
+    expect(open2?.reasoningEffortMap).toEqual({
+      none: "none",
+      minimal: "medium",
+      low: "medium",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+      max: "max",
+    });
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free"]);
+    expect(optionalKeyProviders).toEqual(["open2-beta", "litellm", "opencode-free", "mimo-free"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
@@ -432,7 +446,7 @@ describe("provider registry parity", () => {
     expect(nvidia?.freeTier).toBe(true);
     expect(nvidia?.authKind).toBe("key");
     expect(nvidia?.keyOptional).toBeUndefined();
-    expect(freeTierProviders).toEqual(["nvidia", "cloudflare-workers-ai"]);
+    expect(freeTierProviders).toEqual(["open2-beta", "nvidia", "cloudflare-workers-ai"]);
   });
 
   test("freeTier propagates through config seed, enrich backfill, and presets without overwriting user config", async () => {

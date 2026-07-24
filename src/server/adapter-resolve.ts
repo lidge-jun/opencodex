@@ -5,6 +5,7 @@ import { createGoogleAdapter } from "../adapters/google";
 import { createKiroAdapter } from "../adapters/kiro";
 import { createMimoFreeAdapter } from "../adapters/mimo-free";
 import { createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { createOpen2BetaAdapter } from "../adapters/open2-beta";
 import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
 import type { OcxProviderConfig } from "../types";
 
@@ -32,6 +33,8 @@ export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention
       return createAnthropicAdapter(providerConfig, cacheRetention);
     case "openai-responses":
       return createResponsesPassthroughAdapter(providerConfig);
+    case "open2-beta":
+      return createOpen2BetaAdapter(providerConfig);
     case "google":
       return createGoogleAdapter(providerConfig);
     case "kiro":

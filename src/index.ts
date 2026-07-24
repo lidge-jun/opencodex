@@ -6,6 +6,7 @@ export { createAzureAdapter } from "./adapters/azure";
 export { createCursorAdapter } from "./adapters/cursor";
 export { createGoogleAdapter } from "./adapters/google";
 export { createOpenAIChatAdapter } from "./adapters/openai-chat";
+export { createOpen2BetaAdapter } from "./adapters/open2-beta";
 export { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 export { loadConfig, saveConfig } from "./config";
 export type { ProviderAdapter } from "./adapters/base";

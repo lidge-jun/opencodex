@@ -223,7 +223,7 @@ async function handleAdd(args: string[]): Promise<void> {
   if (registryEntry?.authKind === "oauth") {
     console.log(`   Authenticate with: ocx login ${name}`);
   }
-  if (registryEntry?.authKind === "key" && !apiKey) {
+  if (registryEntry?.authKind === "key" && !registryEntry.keyOptional && !apiKey) {
     const envKey = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
     console.log(`   Set API key with: ocx provider add ${name} --api-key <key> --force`);
     console.log(`   Or set env var: ${envKey}`);

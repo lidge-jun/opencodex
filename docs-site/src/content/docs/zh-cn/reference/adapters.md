@@ -1,6 +1,6 @@
 ---
 title: Adapters
-description: 七个 provider adapter 的目标、请求构建方式与各自特性。
+description: Provider adapter 的目标、请求构建方式与各自特性。
 ---
 
 **adapter** 负责在 opencodex 的内部请求/响应模型与某个 provider 的 wire 格式之间转换。每个

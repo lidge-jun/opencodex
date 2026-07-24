@@ -110,14 +110,15 @@ diagnostics to bug reports.
 
 ## 3. API-key catalog
 
-opencodex ships 53 built-in presets: 42 key-based, seven OAuth, three local, and the default
-ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it. Notable entries:
+opencodex ships built-in presets for key-based, OAuth, local, forwarded, and key-optional providers.
+The dashboard's **Add provider** picker opens a key provider's dashboard, validates the key, and
+stores it. Notable entries:
 
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
+| **Upstage Open2 Beta (unofficial, currently keyless)** | `https://open2-beta.upstage.ai` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
@@ -144,6 +145,15 @@ validates the key, and stores it. Notable entries:
 
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
+
+:::caution[Open2 Beta compatibility]
+The `open2-beta` preset is an unofficial bridge to Upstage's private beta web protocol, not a stable
+public API. OpenCodex creates and refreshes its anonymous session automatically, so it is currently
+free and needs no API key while the public beta remains open. Upstage may change, restrict,
+authenticate, or remove the protocol without notice, which can break the adapter. It currently
+supports text and reasoning only; Codex client tools and native vision are not exposed by the
+upstream wire.
+:::
 
 > **Tencent Cloud Coding Plan usage restriction:** Tencent documents this subscription for
 > interactive coding tools only. General API automation, custom application backends, and
@@ -183,9 +193,9 @@ the logged-in account can use.
 :::note[Gateways & subscription proxies]
 A provider is included when opencodex has a matching wire adapter, **not** based on whether it is an
 "agent" product. The current adapter ids are `openai-chat`, `openai-responses`, `anthropic`, `google`
-(AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`, and
-`cursor`. A proprietary API without one of these implementations, such as native Amazon Bedrock,
-is not supported directly.
+(AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`,
+`cursor`, and the unofficial `open2-beta` bridge. A proprietary API without one of these
+implementations, such as native Amazon Bedrock, is not supported directly.
 **GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI

@@ -1,6 +1,6 @@
 ---
 title: Adapters
-description: The seven provider adapters — what each targets, how it builds requests, and its quirks.
+description: Provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
 An **adapter** translates between opencodex's internal request/response model and one provider wire
@@ -146,6 +146,21 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+
+## `open2-beta`
+
+**Targets:** Upstage's Open2 public-beta web client over `solar-chat.v1` WebSocket frames.
+**Auth:** an anonymous `solar_session` cookie created and refreshed automatically through
+`GET /api/session`; no API key is currently required.
+
+- This is an unofficial bridge to a private beta web protocol, not a stable public API. It is
+  currently free and keyless only while the anonymous public beta remains open; Upstage may change,
+  restrict, authenticate, or remove it without notice.
+- Uses `runTurn` for the WebSocket lifecycle, checks the ready protocol and event sequence, maps text,
+  thinking, usage, completion, and errors into `AdapterEvent`s, and keeps refreshed cookies only in
+  memory.
+- Supports text and the beta UI's `none`, `medium`, `high`, and `max` reasoning choices. The upstream
+  wire does not currently expose Codex client tools or native vision.
 
 ## Image utilities (`image.ts`)
 
