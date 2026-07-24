@@ -1,9 +1,15 @@
 {
   "identifier": "default",
-  "description": "Default capability for the menubar panel",
-  "windows": ["panel"],
+  "description": "Default capabilities for the menubar app",
+  "windows": ["popover"],
   "permissions": [
     "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-position",
+    "core:window:allow-primary-monitor",
     "shell:allow-open"
   ]
 }

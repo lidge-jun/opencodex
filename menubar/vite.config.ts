@@ -5,18 +5,11 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 5199,
     strictPort: true,
   },
-  envPrefix: ["VITE_", "TAURI_"],
   build: {
-    target: "esnext",
-    minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
-    sourcemap: !!process.env.TAURI_DEBUG,
-  },
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./tests/setup.ts"],
+    outDir: "dist",
+    emptyOutDir: true,
   },
 });
