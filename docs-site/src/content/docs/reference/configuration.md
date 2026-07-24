@@ -46,6 +46,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before the bridge aborts and emits `response.incomplete`. Minimum 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt deadline for DNS/TCP/TLS and final response headers only; it ends before response-body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
+| `memoryWatchdog?` | object | warn-only | Memory-pressure observation and opt-in graceful restart (see [memoryWatchdog](#memorywatchdog) below). |
 | `websockets?` | `boolean` | `false` | Advertise `supports_websockets` so Codex uses the Responses WebSocket path. Omit or set `false` to keep HTTP/SSE. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Additional generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Managed by the dashboard; entry fields are listed below. |
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. `false` makes `ocx ensure` a no-op. |
@@ -108,6 +109,48 @@ normally dashboard-managed.
 | `codexWarmupEnabled?` | `boolean` | `false` | Opt into synthetic Codex pool-account validation. |
 | `codexWarmupMaxAgeSeconds?` | `number` | `691200` | Revalidate an account after 8 days. |
 | `codexWarmupModel?` | `string` | `gpt-5.4-mini` | Native model used for optional warmup. |
+
+### `memoryWatchdog`
+
+Observes process memory pressure as a fraction of total system RAM and warns when it crosses
+thresholds. By default it only warns. Optionally — and only when explicitly enabled — it can
+gracefully restart the proxy at the critical threshold, as a mitigation for native
+committed-memory retention that cannot be fixed in application code.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled?` | `boolean` | `true` | Master switch. The default observation mode is warn-only and cannot lose data. |
+| `intervalMs?` | `number` | `60000` | Sampling interval. Floored at 1000 ms. |
+| `warnFraction?` | `number` | `0.60` | Warn when pressure / total RAM crosses this fraction. Clamped to `[0.10, 0.99]`. |
+| `criticalFraction?` | `number` | `0.75` | Critical threshold; arms the opt-in restart. Kept above `warnFraction`. |
+| `autoRestart?` | `boolean` | `false` | Opt in to a graceful drain-then-restart at the critical threshold. |
+| `requireSupervisor?` | `boolean` | `true` | Only restart when a process supervisor is detected, so the proxy is never left dead. |
+| `restartGraceMs?` | `number` | `30000` | Quiet-window drain budget: in-flight turns get up to this long to finish before the restart proceeds; new requests receive `503` + `Retry-After` while draining. Clamped to `[1000, 600000]`. |
+| `minRestartIntervalMs?` | `number` | `600000` | Cooldown between restart requests. Raised to at least `restartGraceMs`. |
+| `maxRestarts?` | `number` | `3` | Memory-driven restarts allowed within a rolling ~6 h window before the watchdog degrades to warn-only. `0` disables auto-restart. |
+
+Environment overrides (highest precedence): `OCX_MEMORY_WATCHDOG_ENABLED` / `_DISABLED`,
+`_INTERVAL_MS`, `_WARN_FRACTION`, `_CRITICAL_FRACTION`, `_AUTO_RESTART`, `_REQUIRE_SUPERVISOR`,
+`_RESTART_GRACE_MS`, `_MIN_RESTART_INTERVAL_MS`, `_MAX_RESTARTS` (all prefixed
+`OCX_MEMORY_WATCHDOG`). All entry paths — environment, `config.json`, and the dashboard /
+management API — go through the same final validation and clamping.
+
+:::note[Supervisors and Windows]
+A memory-driven restart works by **exiting with code 75** — a request to an external supervisor
+to respawn the process, nothing more. Without a supervisor the proxy would simply stay stopped,
+which is why `requireSupervisor` defaults to `true`.
+
+- Supervisor auto-detection covers **pm2**, **systemd**, and the explicit `OCX_SUPERVISED=1`
+  flag. **NSSM, Windows services (`sc.exe`), Task Scheduler and similar Windows service
+  managers are not auto-detected** — set `OCX_SUPERVISED=1` in the service environment when the
+  service manager is configured to restart the process on exit.
+- The watchdog's cooldown and `maxRestarts` counters are seeded across restarts from a small
+  best-effort history file (timestamps only). When that file cannot be read or written, they
+  restart from zero in the new process — so they limit restart churn but are **not a permanent
+  cross-process guarantee**. Configure your supervisor's own restart limit / backoff policy
+  (e.g. pm2 `max_restarts` + `exp_backoff_restart_delay`, systemd `StartLimitIntervalSec` +
+  `StartLimitBurst`) as the outer layer of protection.
+:::
 
 ## Remote access
 

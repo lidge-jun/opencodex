@@ -32,6 +32,8 @@ interface ResolvedConfig {
   requireSupervisor: boolean;
   minRestartIntervalMs: number;
   maxRestarts: number;
+  /** Optional: servers older than the quiet-window feature do not report it. */
+  restartGraceMs?: number;
   growthWindowMs: number;
 }
 
@@ -59,7 +61,12 @@ interface SettingsPatch {
   criticalFraction?: number;
   autoRestart?: boolean;
   requireSupervisor?: boolean;
+  restartGraceMs?: number;
 }
+
+/** Mirror of the server's RESTART_GRACE_MIN_MS/MAX_MS bounds, in seconds (UI unit). */
+const GRACE_MIN_S = 1;
+const GRACE_MAX_S = 600;
 
 const LEVEL_COLOR: Record<WatchdogLevel, string> = {
   ok: "var(--green)",
@@ -91,6 +98,8 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
   // Draft threshold percents while dragging; committed on "Apply thresholds".
   const [warnDraft, setWarnDraft] = useState<number | null>(null);
   const [critDraft, setCritDraft] = useState<number | null>(null);
+  // Draft restart grace (seconds); committed on "Apply grace".
+  const [graceDraft, setGraceDraft] = useState<number | null>(null);
   const editingRef = useRef(false);
 
   useEffect(() => {
@@ -163,9 +172,24 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
   const autoRestartBlocked = !!cfg && cfg.requireSupervisor && !(sup?.supervised);
   const nf = (n: number) => n.toLocaleString(locale);
 
+  // Restart grace: the server reports ms; the UI edits whole seconds. The relation guard mirrors
+  // the runtime's cooldown >= grace normalization so the dashboard cannot save a combination the
+  // server would have to correct.
+  const graceSeconds = Math.round((cfg?.restartGraceMs ?? 30_000) / 1000);
+  const cooldownSeconds = Math.round((cfg?.minRestartIntervalMs ?? 600_000) / 1000);
+  const graceValue = graceDraft ?? graceSeconds;
+  const graceInRange = Number.isFinite(graceValue) && graceValue >= GRACE_MIN_S && graceValue <= GRACE_MAX_S;
+  const graceUnderCooldown = graceValue <= cooldownSeconds;
+  const graceValid = graceInRange && graceUnderCooldown;
+  const graceChanged = graceDraft !== null && graceDraft !== graceSeconds;
+
   const applyThresholds = () => {
     // Server clamps + keeps critical > warn; send fractions.
     void save({ warnFraction: warnPct / 100, criticalFraction: Math.max(critPct, warnPct + 1) / 100 });
+  };
+  const applyGrace = () => {
+    if (!graceValid || !graceChanged) return;
+    void save({ restartGraceMs: Math.round(graceValue) * 1000 });
   };
   const applyRecommended = () => {
     if (!rec) return;
@@ -251,7 +275,27 @@ export default function MemoryCard({ apiBase }: { apiBase: string }) {
         {autoRestartBlocked && (
           <div className="muted text-label" style={{ marginTop: -4, marginLeft: 24 }}>{t("memory.autoRestartBlocked")}</div>
         )}
-        <div className="muted text-label" style={{ marginTop: -4, marginLeft: 24 }}>{t("memory.autoRestartNote")}</div>
+        <div className="muted text-label" style={{ marginTop: -4, marginLeft: 24 }}>{t("memory.autoRestartNote", { seconds: graceSeconds })}</div>
+        <label style={{ ...rowStyle, marginLeft: 24 }}>
+          <span className="text-label muted">{t("memory.graceLabel")}</span>
+          <input
+            type="number"
+            min={GRACE_MIN_S}
+            max={GRACE_MAX_S}
+            step={1}
+            value={graceValue}
+            disabled={saving}
+            onChange={e => { editingRef.current = true; setGraceDraft(Number(e.target.value)); }}
+            style={{ width: 80 }}
+          />
+          <button type="button" className="btn btn-sm" disabled={saving || !graceChanged || !graceValid} onClick={applyGrace}>{t("memory.applyGrace")}</button>
+        </label>
+        {!graceInRange && (
+          <div className="text-label" style={{ color: "var(--red)", marginTop: -4, marginLeft: 24 }}>{t("memory.graceRangeError", { min: GRACE_MIN_S, max: GRACE_MAX_S })}</div>
+        )}
+        {graceInRange && !graceUnderCooldown && (
+          <div className="text-label" style={{ color: "var(--red)", marginTop: -4, marginLeft: 24 }}>{t("memory.graceCooldownError", { seconds: cooldownSeconds })}</div>
+        )}
         <label style={rowStyle}>
           <input type="checkbox" checked={cfg?.requireSupervisor ?? true} disabled={saving} onChange={e => void save({ requireSupervisor: e.target.checked })} />
           <span>{t("memory.requireSupervisorLabel")}</span>
