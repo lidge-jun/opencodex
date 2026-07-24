@@ -246,6 +246,8 @@ export type AdapterEvent =
   | { type: "tool_call_start"; id: string; name: string }
   | { type: "tool_call_delta"; arguments: string }
   | { type: "tool_call_end" }
+  /** Internal boundary between a guarded first pass and its one-shot continuation. */
+  | { type: "assistant_boundary" }
   // Native web-search activity surfaced by the web-search sidecar so Codex renders a "Searched the
   // web" cell. Emitted as a lifecycle PAIR at real wall-clock moments by src/web-search/loop.ts
   // (routed adapters never emit these): `begin` right before the sidecar runs so Codex shows the
