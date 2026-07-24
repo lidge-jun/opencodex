@@ -59,3 +59,24 @@ go test ./internal/protocol ./internal/bridge ./internal/chat ./internal/adapter
 go test ./... -count=1 -timeout 120s
 go test -race ./internal/protocol ./internal/adapter/openai ./internal/bridge -count=1
 ```
+
+## Resume stale-check amendment (2026-07-24, session 019f93a7 wp2 P)
+
+Re-verified every MODIFY row against the rebased tree (`dev2-go` @ `e0000045`).
+The rebase replayed zero `go/` path changes, so no row is stale:
+
+| Doc claim | Current tree | Verdict |
+|---|---|---|
+| `sse.go` comment lines return with no activity | `sse.go:115-117` `HasPrefix(":")` → bare `return` | match |
+| `stall.go` Activity only caller-invoked | only `internal/search/progress.go:67` calls `Activity()` | match |
+| `anthropic.go` EOF with usage → Done | `anthropic.go:502-507` usage != nil → EventDone | match |
+| `openai/chat.go` usage-only EOF can Done | `chat.go:373-378` `!sawFinish && usage == nil` → Error, else Done | match |
+| `google.go` always EventDone after stream | `google.go:520-524` unconditional Done unless read error / Vertex truncation w/ toolCalls | match |
+| `openai/queue.go` unbounded Push | `queue.go:35-44` append, capacity only a make hint | match |
+| `bridge.go` terminal guard | `bridge.go:159-161` `m.terminal` exactly-once guard | match |
+| `chat/outbound.go` Error → no DONE; Done → DONE | `outbound.go:147-166` as documented | match |
+| `server/relay.go` keepalive written, no read-path activity | `relay.go:73` writes `: opencodex keepalive`; no `Activity()` consumer | match |
+
+Activation matrix A1-A7 unchanged. Reference semantics for the A-gate: TS
+`src/` on this branch is the rebased `origin/dev` SSE hardening source of
+truth; the reviewer must diff each port against it, not against memory.
