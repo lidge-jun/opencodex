@@ -163,6 +163,63 @@ describe("validateIssue - feature", () => {
     assert.equal(result.valid, true);
   });
 
+  it("rejects issue #401-style low-effort feature with placeholder example", () => {
+    const body = [
+      "### Area",
+      "Proxy and routing",
+      "### What are you trying to accomplish?",
+      "Quota for Chatgpt running out that can no longer use voice mode. Would like to change other model for that",
+      "### What prevents this today?",
+      "No usage without codex quota",
+      "### What should OpenCodex do?",
+      "Change another voice model",
+      "### Example usage or interface",
+      "NA",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Change voice chat to different model",
+      body,
+      labels: ["enhancement"],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("placeholder")));
+    assert.ok(result.reasons.some((r) => r.includes("expected behaviour")));
+  });
+
+  it("rejects feature reports with placeholder example variants", () => {
+    const body = [
+      "### What are you trying to accomplish?",
+      "Route voice requests to a configured fallback provider when the primary quota is exhausted.",
+      "### What prevents this today?",
+      "Voice mode is hard-wired to the primary Codex quota and cannot switch providers.",
+      "### What should OpenCodex do?",
+      "Expose a setting to choose the fallback voice model and provider.",
+      "### Example usage or interface",
+      "N/A",
+    ].join("\n");
+    const result = validateIssue({ title: "Voice fallback routing", body, labels: ["enhancement"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("placeholder")));
+  });
+
+  it("reports blank example usage as missing, not placeholder", () => {
+    const body = [
+      "### What are you trying to accomplish?",
+      "Route voice requests to a configured fallback provider when the primary quota is exhausted.",
+      "### What prevents this today?",
+      "Voice mode is hard-wired to the primary Codex quota and cannot switch providers.",
+      "### What should OpenCodex do?",
+      "Expose a setting to choose the fallback voice model and provider.",
+      "### Example usage or interface",
+      "",
+    ].join("\n");
+    const result = validateIssue({ title: "Voice fallback routing", body, labels: ["enhancement"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => r.includes("example usage")));
+    assert.ok(!result.reasons.some((r) => r.includes("placeholder")));
+  });
+
   it("accepts a valid legacy feature request without blocker/example headings", () => {
     const body = [
       "### Problem to solve",
@@ -422,6 +479,11 @@ describe("normalisation", () => {
   it("treats 'No response' as empty", () => {
     assert.equal(clean("No response"), "");
     assert.equal(clean("_No response_"), "");
+  });
+
+  it("treats NA and not applicable as placeholders", () => {
+    assert.equal(clean("NA"), "");
+    assert.equal(clean("not applicable"), "");
   });
 
   it("strips HTML comments", () => {
