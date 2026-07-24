@@ -46,3 +46,26 @@ cd go
 go test ./internal/codex ./internal/cli ./internal/management ./internal/registry ./internal/config -count=1
 go test ./... -count=1 -timeout 120s
 ```
+
+## A-gate round 1 — dependency deferral
+
+- Reviewer: Helmholtz (Sol low)
+- Verdict: `FAIL` (4 High)
+- Synthesis: all 4 accepted. Core chain: (1) auto-restore is materially
+  under-specified — TS has two-pass probing, interprocess ownership locking,
+  transactional replacement, rollback, state commit recovery, mixed-sibling
+  handling (`src/codex/shim.ts:888,1043`); Go shim is single-wrapper with
+  basic rename/write rollback. (2) CLI scope says "mutating commands" but TS
+  runs for every command except uninstall/remove; Go CLI has no corresponding
+  dispatch branches. (3) Discovery API design invents `state/lastError/cooling`
+  instead of TS `{status,reason,httpStatus?}`; Go cache records only failure
+  timestamps, management API has no cache reference. (4) `liveModels` uses
+  built-in registry metadata, not config — S5 cannot be constructed.
+- Decision: **DEPENDENCY-DEFERRED** — plan requires a complete rewrite with
+  TS-exact contracts before implementation. Infrastructure work, not core
+  proxy adapter parity.
+- Anchors:
+  - TS auto-restore: `src/codex/shim.ts:888`, `src/cli/codex-shim-autorestore.ts:18`
+  - TS discovery: `src/codex/model-cache.ts:20`, `src/server/management/provider-routes.ts:72`
+  - Go shim gap: `go/internal/codex/shim.go:16,105`
+  - Go cache gap: `go/internal/registry/cache.go:20,59`

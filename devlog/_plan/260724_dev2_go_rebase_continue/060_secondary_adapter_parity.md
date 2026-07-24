@@ -62,3 +62,18 @@ cd go
 go test ./internal/adapter/kiro ./internal/oauth ./internal/claude ./internal/types ./internal/adapter/cursor ./internal/adapter/google ./internal/server -count=1
 go test ./... -count=1 -timeout 120s
 ```
+
+## Pre-assessment (session 019f93a7 wp6)
+
+Per-candidate feasibility assessment (Dewey, Sol low):
+
+| Candidate | Disposition | Reason |
+|---|---|---|
+| Kiro nonterminal | **implementable** | LIVE production path (`cli/serve.go:258-259`), Before matches (`kiro.go:489-492,664-690`), K1/K2 fixtures can trigger |
+| Pool retry | deferred | dead — `AuthResolver.Pool` never created in production (`cli/serve.go:204-221`) |
+| WebSearch domains | deferred | dead library path — `AnthropicToResponses` has only test callers; live `/v1/messages` uses separate parser |
+| Freeform apply_patch | deferred | dead — Cursor tool-defs are test-only; production routes through `openaiadapter.ChatAdapter` |
+| Google whitespace EOF | already covered | wp2 `scanSSE` redesign handles whitespace-only residuals (`google.go:537-553`) |
+
+**Scope for B: Kiro nonterminal only (K1/K2).** All others deferred with
+anchors or already covered.
