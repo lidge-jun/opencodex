@@ -16,6 +16,7 @@ import { compactionItemToText } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
+import { extractHostedImageGeneration } from "../images/synthetic-tool";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -583,6 +584,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   // gpt-mini sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
   // re-injects a synthetic function tool only when it will actually handle the call.
   const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
+  const imageGen = extractHostedImageGeneration(data.tools as unknown[] | undefined);
   // Detect structured-output mode (Responses `text.format`) so the web-search sidecar can render its
   // tool_result as JSON rather than prose that could corrupt the model's schema-constrained answer.
   const structuredOutput = detectStructuredOutput(data.text);
@@ -596,6 +598,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     _rawBody: body,
     ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
+    ...(imageGen ? { _imageGeneration: imageGen } : {}),
     ...(structuredOutput ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
     ...(contextCompactionBoundary ? { _contextCompactionBoundary: true } : {}),

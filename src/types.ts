@@ -31,6 +31,8 @@ export interface OcxParsedRequest {
    * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
+  /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
+  _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**
    * True when Codex requested structured output (`text.format` = json_schema/json_object). The
    * web-search tool_result is then rendered as compact JSON instead of markdown prose, so its
@@ -152,6 +154,8 @@ export interface OcxTool {
   loadedFromToolSearch?: boolean;
   /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
   webSearch?: boolean;
+  /** Synthetic image_gen tool: the model's call is executed by the xAI image bridge sidecar, not relayed to Codex. */
+  imageGeneration?: boolean;
 }
 
 /**
@@ -651,6 +655,9 @@ export interface OcxTokenGuardianConfig {
 export interface OcxImagesConfig {
   /** Upstream timeout (ms) for one /v1/images relay. Default 300000 — generation is slow. */
   timeoutMs?: number;
+  bridgeEnabled?: boolean;
+  bridgeModel?: string;
+  maxRounds?: number;
 }
 
 export interface OcxSearchConfig {
