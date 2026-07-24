@@ -30,10 +30,12 @@ interface SystemMemory {
   heapUsed: number;
   heapTotal: number;
   jscHeap: { heapSize: number; heapCapacity: number; objectCount: number } | null;
-  responseState: ResponseState;
+  /** Absent on older proxies whose /api/system/memory predates the continuation-store metrics. */
+  responseState?: ResponseState;
   watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; samples: MemorySample[] } | null;
 }
 
+/** Render a byte count with a binary-scaled unit (B..TB); non-finite/zero inputs render as "0 B". */
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -42,6 +44,7 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`;
 }
 
+/** Render a millisecond age via the locale-aware uptime formatter; non-positive ages render as "—". */
 function formatAge(ms: number, locale: Locale): string {
   if (!Number.isFinite(ms) || ms <= 0) return "—";
   return formatUptime(ms / 1000, locale);
@@ -57,6 +60,7 @@ function rssGrowthPerHour(samples: MemorySample[]): number | null {
   return ((last.rss - first.rss) / spanMs) * 3_600_000;
 }
 
+/** One labelled monospace metric cell inside a stat-row. */
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="stat">
@@ -108,6 +112,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   }
 
   const growth = data?.watchdog ? rssGrowthPerHour(data.watchdog.samples) : null;
+  // Optional on purpose: a 200 from an older proxy may lack the responseState field.
+  const responseState = data?.responseState;
 
   return (
     <div className="panel" style={{ marginBottom: 24 }}>
@@ -122,7 +128,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         <Stat label={t("dash.mem.jscHeap")} value={data?.jscHeap ? formatBytes(data.jscHeap.heapSize) : "—"} />
         <Stat
           label={t("dash.mem.growth")}
-          value={growth === null ? "—" : `${growth >= 0 ? "+" : ""}${formatBytes(Math.abs(growth))}/h`}
+          value={growth === null ? "—" : `${growth >= 0 ? "+" : "-"}${formatBytes(Math.abs(growth))}/h`}
         />
       </div>
 
@@ -134,10 +140,10 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         <div className="muted text-label" style={{ margin: "14px 0 6px" }}>{t("dash.mem.store")}</div>
         <div className="muted text-control" style={{ marginBottom: 10 }}>{t("dash.mem.storeHint")}</div>
         <div className="stat-row">
-          <Stat label={t("dash.mem.storeEntries")} value={data ? new Intl.NumberFormat(locale).format(data.responseState.count) : "—"} />
-          <Stat label={t("dash.mem.storeTotal")} value={data ? formatBytes(data.responseState.totalBytes) : "—"} />
-          <Stat label={t("dash.mem.storeLargest")} value={data ? formatBytes(data.responseState.largestBytes) : "—"} />
-          <Stat label={t("dash.mem.storeOldest")} value={data ? formatAge(data.responseState.oldestAgeMs, locale) : "—"} />
+          <Stat label={t("dash.mem.storeEntries")} value={responseState ? new Intl.NumberFormat(locale).format(responseState.count) : "—"} />
+          <Stat label={t("dash.mem.storeTotal")} value={responseState ? formatBytes(responseState.totalBytes) : "—"} />
+          <Stat label={t("dash.mem.storeLargest")} value={responseState ? formatBytes(responseState.largestBytes) : "—"} />
+          <Stat label={t("dash.mem.storeOldest")} value={responseState ? formatAge(responseState.oldestAgeMs, locale) : "—"} />
         </div>
 
         {data?.watchdog && (
