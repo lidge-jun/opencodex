@@ -1,7 +1,6 @@
 package google
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -481,11 +480,15 @@ func (a *Adapter) ParseStream(ctx context.Context, body io.ReadCloser) <-chan ty
 		var pendingUsage *types.Usage
 		toolCalls := 0
 		finishReason := ""
-		err := scanSSE(body, func(payload string) bool {
+		sawAnyFrame := false
+		sawTerminalSignal := false
+		handlePayload := func(payload string) scanSSEAction {
 			var chunk map[string]any
 			if json.Unmarshal([]byte(payload), &chunk) != nil {
-				return true
+				emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "malformed upstream SSE data frame"})
+				return scanSSETerminate
 			}
+			sawAnyFrame = true
 			if rawError := chunk["error"]; rawError != nil {
 				message := nestedString(rawError, "message")
 				if message == "" {
@@ -493,22 +496,33 @@ func (a *Adapter) ParseStream(ctx context.Context, body io.ReadCloser) <-chan ty
 				}
 				a.clearReplayOnInvalid(message)
 				emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: message})
-				return false
+				return scanSSETerminate
 			}
 			root, ok := a.unwrapRoot(chunk)
 			if !ok {
 				emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "google-antigravity response missing response wrapper"})
-				return false
+				return scanSSETerminate
 			}
 			if usage := geminiUsage(root["usageMetadata"]); usage != nil {
 				pendingUsage = usage
+				sawTerminalSignal = true
 			}
-			calls, reason := a.emitGeminiCandidates(ctx, out, root)
+			calls, reason, emittedContent := a.emitGeminiCandidates(ctx, out, root)
 			toolCalls += calls
 			if reason != "" {
 				finishReason = reason
+				sawTerminalSignal = true
 			}
-			return ctx.Err() == nil
+			if ctx.Err() != nil {
+				return scanSSETerminate
+			}
+			if emittedContent {
+				return scanSSEContent
+			}
+			return scanSSEContinue
+		}
+		framing, err := scanSSE(body, handlePayload, func() bool {
+			return emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventHeartbeat})
 		})
 		if ctx.Err() != nil {
 			return
@@ -517,11 +531,42 @@ func (a *Adapter) ParseStream(ctx context.Context, body io.ReadCloser) <-chan ty
 			emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "read Google stream: " + err.Error()})
 			return
 		}
+		if framing.End == scanSSEStopped {
+			return
+		}
+		if framing.End == scanSSEResidual {
+			residual := strings.TrimSpace(framing.Residual)
+			if residual != "" {
+				switch {
+				case strings.HasPrefix(residual, ":"):
+					emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventHeartbeat})
+				case !strings.HasPrefix(residual, "data:"):
+					emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "upstream stream ended with an incomplete SSE frame — possible truncation"})
+					return
+				default:
+					payload := strings.TrimSpace(strings.TrimPrefix(residual, "data:"))
+					if payload != "" && handlePayload(payload) == scanSSETerminate {
+						return
+					}
+				}
+			}
+		}
 		if (a.Mode == ModeVertex || a.Mode == ModeCloudCodeAssist) && toolCalls > 0 && IsVertexTruncationReason(finishReason) {
 			emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: VertexTruncationErrorMessage(finishReason)})
 			return
 		}
-		emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventDone, Usage: pendingUsage, StopReason: finishReason})
+		if !sawAnyFrame || !sawTerminalSignal {
+			emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventError, Error: "upstream stream ended without a terminal signal — possible truncation"})
+			return
+		}
+		stopReason := ""
+		switch finishReason {
+		case "MAX_TOKENS":
+			stopReason = "max_tokens"
+		case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
+			stopReason = "content_filter"
+		}
+		emitGoogleEvent(ctx, out, types.AdapterEvent{Type: types.EventDone, Usage: pendingUsage, StopReason: stopReason})
 	}()
 	return out
 }
@@ -563,7 +608,7 @@ func (a *Adapter) unwrapRoot(raw map[string]any) (map[string]any, bool) {
 	return root, ok
 }
 
-func (a *Adapter) emitGeminiCandidates(ctx context.Context, out chan<- types.AdapterEvent, root map[string]any) (int, string) {
+func (a *Adapter) emitGeminiCandidates(ctx context.Context, out chan<- types.AdapterEvent, root map[string]any) (int, string, bool) {
 	events := make([]types.AdapterEvent, 0)
 	calls, reason := a.collectGeminiCandidates(root, &events)
 	for _, event := range events {
@@ -571,7 +616,7 @@ func (a *Adapter) emitGeminiCandidates(ctx context.Context, out chan<- types.Ada
 			break
 		}
 	}
-	return calls, reason
+	return calls, reason, len(events) > 0
 }
 
 func (a *Adapter) collectGeminiCandidates(root map[string]any, events *[]types.AdapterEvent) (int, string) {
@@ -630,37 +675,80 @@ func geminiUsage(value any) *types.Usage {
 	}
 }
 
-func scanSSE(reader io.Reader, accept func(string) bool) error {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
-	data := make([]string, 0)
-	dispatch := func() bool {
-		if len(data) == 0 {
-			return true
-		}
-		payload := strings.Join(data, "\n")
-		data = data[:0]
-		if payload == "[DONE]" {
-			return false
-		}
-		return accept(payload)
-	}
-	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		if line == "" {
-			if !dispatch() {
-				return nil
+type scanSSEAction uint8
+
+const (
+	scanSSEContinue scanSSEAction = iota
+	scanSSEContent
+	scanSSETerminate
+)
+
+type scanSSEEnd uint8
+
+const (
+	scanSSECleanEOF scanSSEEnd = iota
+	scanSSEDone
+	scanSSEResidual
+	scanSSEStopped
+)
+
+type scanSSEResult struct {
+	End      scanSSEEnd
+	Residual string
+}
+
+func scanSSE(reader io.Reader, accept func(string) scanSSEAction, heartbeat func() bool) (scanSSEResult, error) {
+	const maxPendingBytes = 8 << 20
+	buffer := make([]byte, 64<<10)
+	pending := ""
+	for {
+		n, readErr := reader.Read(buffer)
+		if n > 0 {
+			pending += string(buffer[:n])
+			lines := strings.Split(pending, "\n")
+			pending = lines[len(lines)-1]
+			if len(pending) > maxPendingBytes {
+				return scanSSEResult{}, fmt.Errorf("Google SSE line exceeds %d bytes", maxPendingBytes)
 			}
-			continue
+			sawLiveness := false
+			sawContent := false
+			for _, rawLine := range lines[:len(lines)-1] {
+				if len(rawLine) > maxPendingBytes {
+					return scanSSEResult{}, fmt.Errorf("Google SSE line exceeds %d bytes", maxPendingBytes)
+				}
+				line := strings.TrimSuffix(rawLine, "\r")
+				if strings.HasPrefix(line, "data:") {
+					payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+					if payload == "" {
+						continue
+					}
+					if payload == "[DONE]" {
+						return scanSSEResult{End: scanSSEDone}, nil
+					}
+					switch accept(payload) {
+					case scanSSEContent:
+						sawContent = true
+					case scanSSETerminate:
+						return scanSSEResult{End: scanSSEStopped}, nil
+					}
+					continue
+				}
+				sawLiveness = true
+			}
+			if sawLiveness && !sawContent && !heartbeat() {
+				return scanSSEResult{End: scanSSEStopped}, nil
+			}
 		}
-		if strings.HasPrefix(line, "data:") {
-			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		if readErr != nil {
+			if readErr != io.EOF {
+				return scanSSEResult{}, readErr
+			}
+			if pending != "" {
+				return scanSSEResult{End: scanSSEResidual, Residual: pending}, nil
+			}
+			return scanSSEResult{End: scanSSECleanEOF}, nil
 		}
 	}
-	if !dispatch() {
-		return nil
-	}
-	return scanner.Err()
 }
 
 func emitGoogleEvent(ctx context.Context, out chan<- types.AdapterEvent, event types.AdapterEvent) bool {

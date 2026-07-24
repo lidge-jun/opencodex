@@ -127,6 +127,79 @@ func TestParseGeminiStreamAndUnary(t *testing.T) {
 	}
 }
 
+func TestParseGeminiStreamUsageOnlyFinalFrameDone(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	stream := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n" +
+		"data: {\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":3}}\n\n"
+	events := collectEvents(adapter.ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	done := events[len(events)-1]
+	if done.Type != types.EventDone || done.Usage == nil || done.Usage.InputTokens != 7 || done.Usage.OutputTokens != 3 {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestParseGeminiStreamTextOnlyMaxTokensDone(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	stream := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]},\"finishReason\":\"MAX_TOKENS\"}]}\n\n"
+	events := collectEvents(adapter.ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	done := events[len(events)-1]
+	if done.Type != types.EventDone || done.StopReason != "max_tokens" {
+		t.Fatalf("events = %#v", events)
+	}
+	for _, event := range events {
+		if event.Type == types.EventError {
+			t.Fatalf("unexpected truncation error: %#v", events)
+		}
+	}
+}
+
+func TestParseGeminiStreamRejectsUnterminatedNonDataResidual(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	stream := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]},\"finishReason\":\"STOP\"}]}\n\ngarbage-without-newline"
+	events := collectEvents(adapter.ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	last := events[len(events)-1]
+	if last.Type != types.EventError || last.Error != "upstream stream ended with an incomplete SSE frame — possible truncation" {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestParseGeminiStreamRequiresTerminalSignal(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	stream := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n"
+	events := collectEvents(adapter.ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	last := events[len(events)-1]
+	if last.Type != types.EventError || last.Error != "upstream stream ended without a terminal signal — possible truncation" {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestParseGeminiStreamRejectsMalformedDataFrame(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	events := collectEvents(adapter.ParseStream(context.Background(), io.NopCloser(strings.NewReader("data: {invalid\n\n"))))
+	if len(events) != 1 || events[0].Type != types.EventError || events[0].Error != "malformed upstream SSE data frame" {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestParseGeminiStreamEmitsHeartbeatForLivenessOnlyRead(t *testing.T) {
+	adapter := &Adapter{Mode: ModeVertex}
+	body := io.NopCloser(&chunkReader{chunks: []string{
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n",
+		": keepalive\n\n",
+		"data: {\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}\n\n",
+	}})
+	events := collectEvents(adapter.ParseStream(context.Background(), body))
+	sawHeartbeat := false
+	for _, event := range events {
+		if event.Type == types.EventHeartbeat {
+			sawHeartbeat = true
+		}
+	}
+	if !sawHeartbeat || events[len(events)-1].Type != types.EventDone {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
 func TestAntigravityParserRejectsMissingWrapper(t *testing.T) {
 	adapter := &Adapter{Mode: ModeCloudCodeAssist}
 	events, err := adapter.ParseUnary(context.Background(), rawJSON(map[string]any{"candidates": []any{}}))
@@ -156,4 +229,17 @@ func collectEvents(channel <-chan types.AdapterEvent) []types.AdapterEvent {
 		events = append(events, event)
 	}
 	return events
+}
+
+type chunkReader struct {
+	chunks []string
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	return copy(p, chunk), nil
 }
