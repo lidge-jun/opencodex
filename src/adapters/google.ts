@@ -1,6 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
+import { createImageBudget, materializeInlineImage } from "../images/artifacts";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -194,6 +195,17 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
   };
 }
 
+const IMAGE_CAPABLE_MODELS = new Set([
+  "gemini-3.1-flash-image",
+  "gemini-2.0-flash-preview-image-generation",
+  "imagen-4.0-generate-001",
+]);
+
+function isImageCapableModel(modelId: string): boolean {
+  if (IMAGE_CAPABLE_MODELS.has(modelId)) return true;
+  return /image/.test(modelId) && /gemini/.test(modelId);
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -233,6 +245,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
       if (directFlashThinking) generationConfig.thinkingConfig = { thinkingLevel: directFlashThinking };
+      if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
+        generationConfig.responseModalities = ["TEXT", "IMAGE"];
+      }
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
       const method = parsed.stream ? "streamGenerateContent" : "generateContent";
@@ -348,7 +363,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let sawAnyFrame = false;
       let sawTerminalSignal = false;
 
-      const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "content" | "terminate"> {
+      const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
         if (!payload) return "continue";
         let emittedContentEvent = false;
@@ -413,6 +428,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               emittedContentEvent = true;
               yield { type: "text_delta", text: part.text };
             }
+            const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
+            if (inline && typeof inline.data === "string" && inline.mimeType) {
+              const filePath = await materializeInlineImage(inline.mimeType, inline.data, imageBudget);
+              const escapedPath = filePath.replace(/([() ])/g, "\\$1");
+              emittedContentEvent = true;
+              yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
+            }
             if (part.functionCall) {
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
@@ -425,6 +447,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         return emittedContentEvent ? "content" : "continue";
       };
+      const imageBudget = createImageBudget();
 
       try {
         while (true) {
@@ -508,6 +531,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return [{ type: "error", message: "google response contained no candidates" }];
       }
       let toolCallsStarted = 0;
+      const imageBudget = createImageBudget();
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming CCA: observe thoughtSignatures for the next turn, same as the stream path.
         if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession) {
@@ -515,6 +539,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         for (const part of candidates[0].content.parts) {
           if (part.text) events.push({ type: "text_delta", text: part.text });
+          const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
+          if (inline && typeof inline.data === "string" && inline.mimeType) {
+            const filePath = await materializeInlineImage(inline.mimeType, inline.data, imageBudget);
+            const escapedPath = filePath.replace(/([() ])/g, "\\$1");
+            events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
+          }
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;

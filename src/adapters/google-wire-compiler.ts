@@ -137,6 +137,10 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
       : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
     if (thinkingLevel) out.thinkingConfig = { thinkingLevel };
   }
+  if (Array.isArray(value.responseModalities)) {
+    const valid = value.responseModalities.filter((m): m is string => typeof m === "string" && ["TEXT", "IMAGE", "AUDIO"].includes(m));
+    if (valid.length > 0) out.responseModalities = valid;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

@@ -11,6 +11,7 @@ import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-ap
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -604,5 +605,135 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
   } finally {
     await server.stop(true);
     await upstream.stop(true);
+  }
+});
+
+// ── Google Antigravity (CCA) image generation fallback ──
+
+function ccaConfig(ccaBaseUrl?: string): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "google-antigravity",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: disabledOpenAiProvider,
+      ...(ccaBaseUrl ? {
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: ccaBaseUrl,
+          googleMode: "cloud-code-assist",
+          apiKey: "cca-access-token",
+          project: "cca-project-123",
+          allowPrivateNetwork: ccaBaseUrl.includes("localhost") || ccaBaseUrl.includes("127.0.0.1"),
+        } as OcxConfig["providers"][string],
+      } : {}),
+    },
+  } as OcxConfig;
+}
+
+test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({
+        path: new URL(req.url).pathname,
+        headers: req.headers,
+        body: await req.json(),
+      });
+      return Response.json({
+        response: {
+          candidates: [{
+            content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+          }],
+        },
+      });
+    },
+  });
+
+  saveConfig(ccaConfig(upstream.url.toString().replace(/\/$/, "")));
+  await saveCredential("google-antigravity", {
+    access: "cca-access-token",
+    refresh: "cca-refresh-token",
+    expires: Date.now() + 3_600_000,
+    projectId: "cca-project-123",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a neon cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data: { b64_json: string }[] };
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toContain("generateContent");
+    const body = captured[0].body as { model?: string; request?: { generationConfig?: { responseModalities?: string[] } } };
+    expect(body.model).toBe("gemini-3.1-flash-image");
+    expect(body.request?.generationConfig?.responseModalities).toEqual(["TEXT", "IMAGE"]);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("CCA image fallback preserves upstream 429 status", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({ error: { message: "Rate limited" } }, { status: 429 });
+    },
+  });
+
+  saveConfig(ccaConfig(upstream.url.toString().replace(/\/$/, "")));
+  await saveCredential("google-antigravity", {
+    access: "cca-access-token",
+    refresh: "cca-refresh-token",
+    expires: Date.now() + 3_600_000,
+    projectId: "cca-project-123",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(429);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("CCA fallback does not serve image edits", async () => {
+  saveConfig(ccaConfig("https://daily-cloudcode-pa.googleapis.com"));
+  await saveCredential("google-antigravity", {
+    access: "cca-access-token",
+    refresh: "cca-refresh-token",
+    expires: Date.now() + 3_600_000,
+    projectId: "cca-project-123",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/edits", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "edit this", model: "gpt-image-2" }),
+    });
+    // Edits should NOT hit the CCA fallback — it's text-to-image only.
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("image generation");
+  } finally {
+    await server.stop(true);
   }
 });
