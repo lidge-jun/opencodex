@@ -121,14 +121,29 @@ describe("Cursor native exec sandbox policy", () => {
       value: create(ReadArgsSchema, { path }),
     }), { unsafeAllowNativeLocalExec }))[0]);
     const deniedText = stringify(denied);
-    expect(deniedText).toContain("Cursor native local filesystem execution is not available for this request");
+    expect(deniedText).toContain("shell_command");
+    expect(deniedText).toContain("exec_command");
+    expect(deniedText).toContain("mcp_opencodex-responses_*");
+    expect(deniedText).toContain("cat");
+    expect(deniedText).toContain("apply_patch");
+    expect(deniedText).toContain("silently call");
+    expect(deniedText).toContain("Do not tell the user");
+    expect(deniedText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedText).not.toContain("sandbox denial");
     expect(deniedText).not.toContain(content);
 
     const deniedShell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
       value: create(ShellArgsSchema, { command: "printf SHOULD_NOT_RUN", workingDirectory: dir, hardTimeout: 2000 }),
     }), { unsafeAllowNativeLocalExec }))[0]);
-    expect(stringify(deniedShell)).toContain("Cursor native shell execution is not available for this request");
+    const deniedShellText = stringify(deniedShell);
+    expect(deniedShellText).toContain("silently call");
+    expect(deniedShellText).toContain("shell_command");
+    expect(deniedShellText).toContain("exec_command");
+    expect(deniedShellText).toContain("mcp_opencodex-responses_*");
+    expect(deniedShellText).toContain("Do not tell the user");
+    expect(deniedShellText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedShellText).not.toContain("sandbox denial");
     expect(deniedShell.message.case).toBe("shellResult");
     expect(deniedShell.message.value.result.case).toBe("failure");
     if (deniedShell.message.value.result.case === "failure") {
@@ -147,8 +162,14 @@ describe("Cursor native exec sandbox policy", () => {
       },
     }))[0]);
     expect(fetchCalled).toBe(false);
-    expect(stringify(deniedFetch)).toContain("Cursor native fetch execution is not available for this request");
-    expect(stringify(deniedFetch)).not.toContain("SHOULD_NOT_FETCH");
+    const deniedFetchText = stringify(deniedFetch);
+    expect(deniedFetchText).toContain("silently call");
+    expect(deniedFetchText).toContain("shell_command");
+    expect(deniedFetchText).toContain("curl");
+    expect(deniedFetchText).toContain("wget");
+    expect(deniedFetchText).toContain("mcp_opencodex-responses_shell_command");
+    expect(deniedFetchText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedFetchText).not.toContain("SHOULD_NOT_FETCH");
   }
 
   async function assertNativeSinksAllowed(unsafeAllowNativeLocalExec: boolean) {

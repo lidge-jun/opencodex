@@ -312,6 +312,82 @@ describe("Cursor request builder", () => {
     expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 
+  test("pins the Codex shell bridge and apply_patch through truncation", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const patch = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    const budget = applyCursorToolBudget([...regular, shell, patch], "auto");
+
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("keeps the shell bridge when tool_choice names the exec_command alias", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const budget = applyCursorToolBudget([...regular, shell], { name: "exec_command" });
+
+    expect(budget.tools).toEqual([shell]);
+    expect(budget.omitted).toEqual([]);
+  });
+
+  test("keeps shell_command even when a large apply_patch would otherwise consume the byte budget first", () => {
+    const hugePatch = {
+      name: "apply_patch",
+      description: "x".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.7)),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const shell = { name: "shell_command", description: "Run", parameters: { type: "object", properties: { command: { type: "string" } } } };
+    const filler = Array.from({ length: 40 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "y".repeat(2_000),
+      parameters: { type: "object", properties: {} },
+    }));
+    const budget = applyCursorToolBudget([hugePatch, ...filler, shell], "auto");
+
+    expect(budget.tools).toContain(shell);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("admits shell_command and apply_patch before filler when the byte budget is tight", () => {
+    const patch = {
+      name: "apply_patch",
+      description: "p".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.45)),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const shell = {
+      name: "shell_command",
+      description: "s".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.45)),
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+    };
+    const filler = Array.from({ length: 30 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "f".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.2)),
+      parameters: { type: "object", properties: {} },
+    }));
+    const budget = applyCursorToolBudget([...filler, shell, patch], "auto");
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.omitted.some(tool => tool.namespace === "mcp__filler")).toBe(true);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
   test("adds an honest recovery note only when tool_search survives", () => {
     const tools = [
       { name: "tool_search", description: "Discover", parameters: {}, toolSearch: true },

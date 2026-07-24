@@ -2,7 +2,12 @@ import type { OcxUsage } from "../../types";
 import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
-import { OCX_RESPONSES_TOOL_PROVIDER, normalizeCursorWireName, responsesToolNameFromCursorWire } from "./tool-definitions";
+import {
+  normalizeCursorWireName,
+  OCX_RESPONSES_TOOL_PROVIDER,
+  resolveShellBridgeAliasKey,
+  responsesToolNameFromCursorWire,
+} from "./tool-definitions";
 import type { CursorServerMessage } from "./types";
 
 const DEFAULT_CONTEXT_USAGE_MAX_ENTRIES = 200;
@@ -212,12 +217,26 @@ function decodeMcpArgs(args: McpArgs | undefined): string {
   return JSON.stringify(decodeCursorArgsMap(args?.args));
 }
 
+/** Resolve an advertised client-tool wire name, including shell_command/exec_command aliases (#399). */
+function resolveAdvertisedClientToolName(
+  state: CursorProtobufEventState,
+  cursorWireName: string,
+): string | undefined {
+  const normalized = normalizeCursorWireName(cursorWireName);
+  if (!state.clientToolNames) return normalized;
+  return resolveShellBridgeAliasKey(normalized, alias => (state.clientToolNames!.has(alias) ? alias : undefined));
+}
+
+function toolSchemaForWireName(state: CursorProtobufEventState, toolName: string | undefined): unknown | undefined {
+  if (!toolName || !state.toolSchemas) return undefined;
+  return resolveShellBridgeAliasKey(toolName, alias => state.toolSchemas!.get(alias));
+}
+
 function decodeMcpArgsNormalized(args: McpArgs | undefined, state: CursorProtobufEventState): string {
   const decoded = decodeCursorArgsMap(args?.args);
   const toolName = mcpWireNameFromArgs(args);
-  if (toolName && state.toolSchemas?.has(toolName)) {
-    return JSON.stringify(normalizeArgKeys(decoded, state.toolSchemas.get(toolName)));
-  }
+  const schema = toolSchemaForWireName(state, toolName);
+  if (schema) return JSON.stringify(normalizeArgKeys(decoded, schema));
   return JSON.stringify(decoded);
 }
 
@@ -237,11 +256,12 @@ function isCompleteJson(text: string): boolean {
 
 /** Schema-normalize a JSON-text argument blob for a named tool, if a schema is known. */
 function normalizeJsonText(text: string, toolName: string | undefined, state: CursorProtobufEventState): string {
-  if (!toolName || !state.toolSchemas?.has(toolName)) return text;
+  const schema = toolSchemaForWireName(state, toolName);
+  if (!schema) return text;
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return JSON.stringify(normalizeArgKeys(parsed as Record<string, unknown>, state.toolSchemas.get(toolName)));
+      return JSON.stringify(normalizeArgKeys(parsed as Record<string, unknown>, schema));
     }
   } catch {
     // Not parseable as an object: leave as-is.
@@ -305,10 +325,14 @@ export function mapSyntheticMcpExecToToolEvents(
 function recordToolCall(state: CursorProtobufEventState, callId: string, cursorWireName: string): CursorServerMessage[] {
   if (state.completedToolCalls.has(callId)) return [];
   if (state.openToolCalls.has(callId)) return [];
-  if (state.clientToolNames && !state.clientToolNames.has(cursorWireName)) {
+  const advertisedName = resolveAdvertisedClientToolName(state, cursorWireName);
+  if (state.clientToolNames && !advertisedName) {
     return [{ type: "error", message: `Cursor requested unknown Responses tool: ${cursorWireName}` }];
   }
-  state.openToolCalls.set(callId, { name: responsesToolNameFromCursorWire(cursorWireName, state.cursorToolNameMap), args: "" });
+  // Prefer the advertised catalog name for Responses mapping so shell_command/exec_command aliases
+  // land on the tool Codex actually exposed this turn (#399).
+  const mapKey = advertisedName ?? normalizeCursorWireName(cursorWireName);
+  state.openToolCalls.set(callId, { name: responsesToolNameFromCursorWire(mapKey, state.cursorToolNameMap), args: "" });
   state.startedClientToolCalls++;
   return [];
 }
