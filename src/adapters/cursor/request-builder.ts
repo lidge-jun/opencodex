@@ -9,7 +9,7 @@ import type {
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
-import { cursorWireModelSelection, isCursorNativeWireModel, type CursorRoutingLevel } from "./discovery";
+import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorEffortSuffix } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
@@ -18,6 +18,7 @@ import {
   cursorToolWireName,
   cursorToolsForActivePrompt,
 } from "./tool-definitions";
+import { lookupCursorThreadConversation } from "./thread-continuity";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -161,9 +162,11 @@ export function generatedCursorConversationId(): string {
 }
 
 /** Derive an opaque provider-scoped Cursor id from the upstream client's conversation identity. */
-export function cursorConversationIdFromClientThread(threadId: string): string {
+export function cursorConversationIdFromClientThread(threadId: string, identityScope?: string): string {
   const digest = createHash("sha256")
     .update("ocx:cursor:thread:")
+    .update(identityScope?.trim() || "local")
+    .update("\0")
     .update(threadId)
     .digest("hex")
     .slice(0, 32);
@@ -171,37 +174,25 @@ export function cursorConversationIdFromClientThread(threadId: string): string {
 }
 
 /**
- * Stable Cursor conversation id derived from Codex's prompt_cache_key.
- * Native Composer only: used when previous_response_id state and thread headers are missing but
- * the client still replays full history under store:false.
- */
-export function stableCursorConversationIdFromPromptCacheKey(promptCacheKey: string): string {
-  const digest = createHash("sha256")
-    .update("ocx-cursor-conv:")
-    .update(promptCacheKey)
-    .digest("hex")
-    .slice(0, 32);
-  return `cursor_${digest}`;
-}
-
-/**
  * Resolve the Cursor conversation id for this turn.
- * Priority: force-fresh → remembered → client thread → native+prompt_cache_key → random.
- * Never use OpenAI Responses `previous_response_id` (resp_*) — different namespace.
+ * Priority: force-fresh → remembered → thread override → client thread → random.
+ * Never use OpenAI Responses `previous_response_id` (resp_*) or shared `prompt_cache_key`
+ * (cache-cohort fingerprint, not conversation ownership).
  */
 export function resolveCursorConversationId(
   parsed: OcxParsedRequest,
-  wireModelId: string,
+  _wireModelId: string,
   options: CreateCursorRequestOptions = {},
 ): string {
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
   if (parsed._cursorConversationId) return parsed._cursorConversationId;
-  if (parsed._clientThreadId) return cursorConversationIdFromClientThread(parsed._clientThreadId);
-  // Native composer/auto only: pin to prompt_cache_key so store:false full-history turns still
-  // share one Cursor conversation. External models skip this to avoid cross-thread collisions.
-  if (isCursorNativeWireModel(wireModelId)) {
-    const key = parsed.options.promptCacheKey?.trim();
-    if (key) return stableCursorConversationIdFromPromptCacheKey(key);
+  // Helper/shadow/compaction turns must not append into the parent's Cursor conversation.
+  if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
+  const threadId = parsed._clientThreadId?.trim();
+  if (threadId) {
+    const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
+    if (recovered) return recovered;
+    return cursorConversationIdFromClientThread(threadId, parsed._cursorIdentityScope);
   }
   return generatedCursorConversationId();
 }

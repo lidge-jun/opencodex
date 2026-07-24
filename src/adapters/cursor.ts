@@ -11,6 +11,7 @@ import {
   CursorMissingCredentialError,
   rekeyCursorContextUsage,
 } from "./cursor/live-transport";
+import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import {
   createDisabledCursorTransport,
@@ -123,8 +124,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           await runOnce(request);
         } catch (err) {
           // One-shot fallback for external-model Connect invalid_argument before any
-          // non-heartbeat output. Covers plain-user continuations as well as tool-result
-          // resumes (PR #318); replaying after text/tool events would duplicate output.
+          // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
+          // resumes, local exec/MCP side effects, and already-emitted output fail closed.
           if (
             !isCursorInvalidArgumentError(err)
             || !isCursorExternalWireModel(request.modelId)
@@ -140,6 +141,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           request = createCursorRequest(_parsed, { forceFreshConversation: true });
           rekeyContextUsage(failedConversationId, request.conversationId);
           _parsed._cursorConversationId = request.conversationId;
+          // Persist recovery for store:false clients that only send a parent thread id, so the
+          // next turn does not recompute the stale deterministic thread hash.
+          if (_parsed._clientThreadId) {
+            rememberCursorThreadConversation(
+              _parsed._clientThreadId,
+              request.conversationId,
+              _parsed._cursorIdentityScope,
+            );
+          }
           await runOnce(request);
         }
       } catch (err) {

@@ -1583,32 +1583,32 @@ describe("cursor conversation continuity across store:false chains", () => {
     expect(seen[1]).toBe(seen[0]);
   });
 
-  test("native composer reuses conversationId across store:false turns via prompt_cache_key alone", async () => {
+  test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-native",
+      },
+      body: JSON.stringify({
+        model: "cursortest/composer-2.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
 
-    const first = await postCursor(config, {
-      model: "cursortest/composer-2.5",
-      input: "hello",
-      prompt_cache_key: "desktop-thread-1",
-    });
-    expect(first.status).toBe(200);
-    await first.json();
-    expect(seen).toHaveLength(1);
+    expect((await postThreadTurn("hello")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "cursor ok" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
 
-    // No previous_response_id — Codex Desktop often replays full history under store:false.
-    const second = await postCursor(config, {
-      model: "cursortest/composer-2.5",
-      input: [
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "cursor ok" },
-        { role: "user", content: "continue" },
-      ],
-      prompt_cache_key: "desktop-thread-1",
-    });
-    expect(second.status).toBe(200);
-    await second.json();
     expect(seen).toHaveLength(2);
     expect(seen[1]).toBe(seen[0]);
   });

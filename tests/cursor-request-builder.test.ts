@@ -81,67 +81,61 @@ describe("Cursor request builder", () => {
     expect(second.conversationId).not.toBe(first.conversationId);
   });
 
-  test("native composer pins conversation id to prompt_cache_key when none remembered", () => {
-    const a = createCursorRequest({
-      modelId: "cursor/composer-2.5",
-      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
-      stream: false,
-      options: { promptCacheKey: "thread-abc" },
-    });
-    const b = createCursorRequest({
-      modelId: "composer-2.5",
-      context: {
-        messages: [
-          { role: "user", content: "hi", timestamp: 1 },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "shell",
-            content: "ok",
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      },
-      stream: false,
-      options: { promptCacheKey: "thread-abc" },
-    });
-    expect(a.conversationId).toBe(b.conversationId);
-    expect(a.conversationId.startsWith("cursor_")).toBe(true);
-    expect(a.conversationId).toHaveLength("cursor_".length + 32);
-  });
-
-  test("client thread wins over native prompt_cache_key pin", () => {
-    const fromThread = createCursorRequest({
-      modelId: "cursor/composer-2.5",
-      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
-      stream: false,
-      _clientThreadId: "thread-a",
-      options: { promptCacheKey: "shared-cache-key" },
-    });
-    const fromCacheOnly = createCursorRequest({
+  test("native and external models do not pin conversation id from prompt_cache_key alone", () => {
+    const nativeA = createCursorRequest({
       modelId: "cursor/composer-2.5",
       context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
       stream: false,
       options: { promptCacheKey: "shared-cache-key" },
     });
-    expect(fromThread.conversationId).not.toBe(fromCacheOnly.conversationId);
-  });
+    const nativeB = createCursorRequest({
+      modelId: "cursor/composer-2.5",
+      context: { messages: [{ role: "user", content: "hi again", timestamp: 2 }] },
+      stream: false,
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    expect(nativeA.conversationId).not.toBe(nativeB.conversationId);
 
-  test("external models do not pin conversation id from prompt_cache_key alone", () => {
-    const first = createCursorRequest({
+    const externalA = createCursorRequest({
       modelId: "cursor/gpt-5.6-sol",
       context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
       stream: false,
-      options: { promptCacheKey: "thread-xyz" },
+      options: { promptCacheKey: "shared-cache-key" },
     });
-    const second = createCursorRequest({
+    const externalB = createCursorRequest({
       modelId: "cursor/gpt-5.6-sol",
       context: { messages: [{ role: "user", content: "hi again", timestamp: 2 }] },
       stream: false,
-      options: { promptCacheKey: "thread-xyz" },
+      options: { promptCacheKey: "shared-cache-key" },
     });
-    expect(first.conversationId).not.toBe(second.conversationId);
+    expect(externalA.conversationId).not.toBe(externalB.conversationId);
+  });
+
+  test("identity scope namespaces client thread conversation ids", () => {
+    const a = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIdentityScope: "account-1",
+    });
+    const b = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIdentityScope: "account-2",
+    });
+    expect(a.conversationId).not.toBe(b.conversationId);
+  });
+
+  test("isolated helper turns mint a fresh conversation id", () => {
+    const main = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+    });
+    const helper = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIsolateConversation: true,
+    });
+    expect(helper.conversationId).not.toBe(main.conversationId);
   });
 
   test("marks Cursor context-usage boundaries for compaction epochs", () => {

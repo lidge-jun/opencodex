@@ -688,7 +688,10 @@ export async function handleResponses(
       (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
     }
     (logCtx as unknown as Record<string, unknown>).shadowCallRewrittenFrom = _sciOriginal;
+    // Helpers must not resume/append into the parent thread's Cursor conversation.
+    parsed._cursorIsolateConversation = true;
   }
+  if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
 
   let route;
   try {
@@ -851,6 +854,10 @@ export async function handleResponses(
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+  // Namespace Cursor thread→conversation derivation by authenticated pool account when present
+  // so shared-proxy tenants cannot collide on a client-supplied parent thread id.
+  const identityScope = codexLogAccountId(authCtx);
+  if (identityScope) parsed._cursorIdentityScope = identityScope;
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.

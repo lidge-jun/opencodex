@@ -146,6 +146,43 @@ describe("Cursor blob handshake", () => {
     expect(rootRoles.find(role => role !== "system")).toBe("user");
   });
 
+  test("preserves oversized active tool result under external byte budget", () => {
+    const huge = "y".repeat(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    const bytes = encodeCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-tool-cap",
+      system: ["system"],
+      messages: [{ role: "tool", content: "ignored" }],
+      rawMessages: [
+        { role: "user", content: "read it", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/gpt-5.6-sol",
+          content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read_file",
+          content: huge,
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; content?: unknown }>;
+    const rootBytes = (run?.conversationState?.rootPromptMessagesJson ?? [])
+      .reduce((sum, id) => sum + blobData(id).byteLength, 0);
+
+    expect(run?.action?.action.case).toBe("resumeAction");
+    expect(rootBytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    expect(JSON.stringify(roots)).toContain("[Tool Result]");
+    expect(JSON.stringify(roots)).toContain("truncated for Cursor external replay budget");
+  });
+
   test("encodes Cursor Router levels through requested_model parameters", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "default",

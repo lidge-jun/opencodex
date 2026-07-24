@@ -82,12 +82,36 @@ function jsonBlob(value: unknown): Uint8Array {
 type StoredRootBlob = {
   id: Uint8Array;
   byteLength: number;
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "toolResult";
+  messageIndex?: number;
+  /** Original JSON text payload used when an active tool result must be truncated to fit. */
+  text?: string;
 };
 
-function storedRootBlob(value: unknown, role: StoredRootBlob["role"]): StoredRootBlob {
+function storedRootBlob(
+  value: unknown,
+  role: StoredRootBlob["role"],
+  opts?: { messageIndex?: number; text?: string },
+): StoredRootBlob {
   const data = jsonBlob(value);
-  return { id: storeCursorBlob(data), byteLength: data.byteLength, role };
+  return {
+    id: storeCursorBlob(data),
+    byteLength: data.byteLength,
+    role,
+    ...(opts?.messageIndex !== undefined ? { messageIndex: opts.messageIndex } : {}),
+    ...(opts?.text !== undefined ? { text: opts.text } : {}),
+  };
+}
+
+function truncateToolResultBlob(entry: StoredRootBlob, maxBytes: number): StoredRootBlob {
+  if (entry.byteLength <= maxBytes || entry.role !== "toolResult" || entry.text === undefined) return entry;
+  const keep = Math.max(0, maxBytes - 128);
+  const truncated = `${entry.text.slice(0, keep)}\n…[truncated for Cursor external replay budget]`;
+  return storedRootBlob(
+    { role: "user", content: [{ type: "text", text: truncated }] },
+    "toolResult",
+    { messageIndex: entry.messageIndex, text: truncated },
+  );
 }
 
 function systemPromptBlobs(request: CursorRunRequest): StoredRootBlob[] {
@@ -118,7 +142,11 @@ function assistantRootText(
 // because it travels in the action. Tool results are rendered as user-role text with a marker, and
 // each entry is a SHA-256 blob ID (Cursor fetches the bytes back via getBlobArgs). Mirrors the
 // danger-pi reference buildRootPromptMessagesJson.
-function rootPromptMessages(request: CursorRunRequest): { ids: Uint8Array[]; byteLength: number } {
+function rootPromptMessages(request: CursorRunRequest): {
+  ids: Uint8Array[];
+  byteLength: number;
+  historyMessageStart: number;
+} {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
   const messages = request.rawMessages;
@@ -126,6 +154,7 @@ function rootPromptMessages(request: CursorRunRequest): { ids: Uint8Array[]; byt
     return {
       ids: entries.map(entry => entry.id),
       byteLength: entries.reduce((sum, entry) => sum + entry.byteLength, 0),
+      historyMessageStart: 0,
     };
   }
 
@@ -146,50 +175,91 @@ function rootPromptMessages(request: CursorRunRequest): { ids: Uint8Array[]; byt
         entries.push(storedRootBlob({
           role: "user",
           content: [{ type: "text", text }],
-        }, "user"));
+        }, "user", { messageIndex: i }));
       }
     } else if (message.role === "assistant") {
       // External Cursor clients do not replay hidden reasoning as assistant-visible prompt text.
       // Native Composer state can preserve it through ThinkingMessage/history structures.
       const text = assistantRootText(message, !externalModel).trim();
       if (text.length > 0) {
-        entries.push(storedRootBlob({ role: "assistant", content: [{ type: "text", text }] }, "assistant"));
+        entries.push(storedRootBlob(
+          { role: "assistant", content: [{ type: "text", text }] },
+          "assistant",
+          { messageIndex: i },
+        ));
       }
       // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
-      // rootPromptMessagesJson is the model-visible prompt, so a synthetic "[Tool Call]" marker in an
-      // assistant turn gets few-shot-mimicked: the model then emits later (esp. parallel/mixed) tool
-      // calls as inert text instead of real tool frames, halting multi-tool continuations. The paired
-      // tool result below ([Tool Result]/[Tool Error]) carries the call id/name/output Cursor needs to
-      // continue, and conversationTurns replays the native mcpToolCall step. Mirrors request-builder.ts
-      // contentPartToText() which returns undefined for toolCall for the same reason.
     } else if (message.role === "toolResult") {
       const prefix = message.isError ? "[Tool Error]" : "[Tool Result]";
       const text = `${prefix}\n${toolResultToText(message)}`;
-      entries.push(storedRootBlob({ role: "user", content: [{ type: "text", text }] }, "user"));
+      entries.push(storedRootBlob(
+        { role: "user", content: [{ type: "text", text }] },
+        "toolResult",
+        { messageIndex: i, text },
+      ));
     }
   }
+
   let selected = entries;
+  let historyMessageStart = 0;
   if (externalModel) {
     const systemEntries = entries.slice(0, systemEntryCount);
+    const history = entries.slice(systemEntryCount);
     const systemBytes = systemEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
     const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - systemEntryCount);
     const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes);
-    const historyEntries: StoredRootBlob[] = [];
-    let historyBytes = 0;
-    for (let i = entries.length - 1; i >= systemEntryCount && historyEntries.length < historyLimit; i--) {
-      const entry = entries[i];
-      if (!entry || historyBytes + entry.byteLength > historyBudget) break;
-      historyEntries.unshift(entry);
-      historyBytes += entry.byteLength;
+
+    // Always retain the active trailing tool-result block (may truncate text to fit).
+    let activeStart = history.length;
+    while (activeStart > 0 && history[activeStart - 1]?.role === "toolResult") activeStart -= 1;
+    const active = history.slice(activeStart).map(entry => truncateToolResultBlob(entry, historyBudget));
+    let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    while (active.length > 1 && activeBytes > historyBudget) {
+      const dropped = active.shift();
+      activeBytes -= dropped?.byteLength ?? 0;
     }
-    // A bounded suffix can otherwise begin with an orphan assistant response. External workers
-    // validate replay ordering before tokenization and reject that shape with usedTokens=0.
-    while (historyEntries[0]?.role === "assistant") historyEntries.shift();
+    if (active.length === 1 && active[0] && activeBytes > historyBudget) {
+      active[0] = truncateToolResultBlob(active[0], historyBudget);
+      activeBytes = active[0].byteLength;
+    }
+
+    const prior = history.slice(0, activeStart);
+    const keptPrior: StoredRootBlob[] = [];
+    let priorBytes = 0;
+    // Take complete turns from the end: a turn starts at a user/developer root entry.
+    let i = prior.length - 1;
+    while (i >= 0 && keptPrior.length + active.length < historyLimit) {
+      let turnStart = i;
+      while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
+      const turn = prior.slice(turnStart, i + 1);
+      const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
+      if (
+        keptPrior.length + active.length + turn.length > historyLimit
+        || priorBytes + activeBytes + turnBytes > historyBudget
+      ) {
+        break;
+      }
+      keptPrior.unshift(...turn);
+      priorBytes += turnBytes;
+      i = turnStart - 1;
+    }
+
+    const historyEntries = [...keptPrior, ...active];
+    // Guard against orphan assistant / toolResult at the start of the retained suffix.
+    while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
+      // Never drop the sole active tool-result block.
+      if (historyEntries.length <= active.length) break;
+      historyEntries.shift();
+    }
     selected = [...systemEntries, ...historyEntries];
+    const firstKept = historyEntries.find(entry => entry.messageIndex !== undefined);
+    historyMessageStart = firstKept?.messageIndex ?? (messages.length);
   }
+
   return {
     ids: selected.map(entry => entry.id),
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
+    historyMessageStart,
   };
 }
 
@@ -302,12 +372,13 @@ function lastActionIndex(messages: readonly OcxMessage[] | undefined): number {
   return -1;
 }
 
-function conversationTurns(request: CursorRunRequest): Uint8Array[] {
+function conversationTurns(request: CursorRunRequest, historyMessageStart = 0): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
   const end = lastActionIndex(messages);
   const externalModel = isCursorExternalWireModel(request.modelId);
   const historyEnd = messages.at(-1)?.role === "toolResult" ? messages.length : Math.max(0, end);
+  const start = externalModel ? Math.max(0, historyMessageStart) : 0;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
@@ -324,7 +395,7 @@ function conversationTurns(request: CursorRunRequest): Uint8Array[] {
     pendingToolCalls.clear();
   };
 
-  for (const message of messages.slice(0, historyEnd)) {
+  for (const message of messages.slice(start, historyEnd)) {
     if (message.role === "assistant") {
       if (!current) continue;
       for (const part of message.content) {
@@ -435,7 +506,7 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
   });
   const rootPromptMessagesState = rootPromptMessages(request);
   const rootPromptMessageIds = rootPromptMessagesState.ids;
-  const turnIds = conversationTurns(request);
+  const turnIds = conversationTurns(request, rootPromptMessagesState.historyMessageStart);
   debugProviderDiagnostic("cursor", "run-request", {
     wireModel: request.modelId,
     action: actionCase,
