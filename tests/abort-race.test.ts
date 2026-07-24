@@ -113,4 +113,81 @@ describe("Responses abort guards", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
+  test("terminal-guard continuation body is cancelled on a late client abort (#394 review)", async () => {
+    // The terminal guard opens a SECOND upstream response (the continuation). Its body must be
+    // bound to the abort signal exactly like the initial response, or the fetch-to-reader race
+    // (#390/366e3053) reopens on the continuation path. First turn: an anthropic end_turn with no
+    // tool call (triggers exactly one continuation). Continuation: a body whose reader attaches
+    // only after the client has aborted; cancelBodyOnAbort must cancel it.
+    const clientAbort = new AbortController();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => { unhandledRejections.push(reason); };
+    let continuationBodyCancelled = false;
+    let fetches = 0;
+
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      adapterFactory = provider => ({
+        name: "anthropic",
+        buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
+        async fetchResponse() {
+          fetches += 1;
+          if (fetches === 1) {
+            // First turn: a complete anthropic-style stream that ends without a tool call.
+            return new Response(new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(
+                  'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\n' +
+                  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n' +
+                  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我接下来会修改相关文件。"}}\n\n' +
+                  'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n' +
+                  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n' +
+                  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ));
+                controller.close();
+              },
+            }), { status: 200, headers: { "content-type": "text/event-stream" } });
+          }
+          // Continuation turn: reader attaches only after the client aborts.
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) { controller.enqueue(new Uint8Array([1])); },
+            cancel() { continuationBodyCancelled = true; },
+          }), { status: 200, headers: { "content-type": "text/event-stream" } });
+        },
+        async *parseStream(response): AsyncGenerator<AdapterEvent> {
+          if (fetches >= 2) {
+            // We are now parsing the continuation stream — abort before attaching the reader.
+            clientAbort.abort(new DOMException("client disconnected", "AbortError"));
+            await Promise.resolve();
+            const reader = response.body!.getReader();
+            try { await reader.read(); } finally { reader.releaseLock(); }
+            return;
+          }
+          // First turn: emit an end_turn with no tool call so the guard opens a continuation.
+          yield { type: "text_delta", text: "我接下来会修改相关文件。" };
+          yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } };
+        },
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "请检查这个问题并修复代码",
+          stream: true,
+          tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+        }),
+      }), config("anthropic"), { model: "", provider: "" }, { abortSignal: clientAbort.signal });
+      await response.text().catch(() => {});
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(fetches).toBe(2);
+      expect(continuationBodyCancelled).toBe(true);
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
 });
