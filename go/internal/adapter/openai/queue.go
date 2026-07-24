@@ -9,20 +9,26 @@ import (
 
 type TurnQueue struct {
 	mu     sync.Mutex
-	cond   *sync.Cond
 	queued []types.AdapterEvent
 	out    chan types.AdapterEvent
+	wake   chan struct{}
 	closed bool
-	once   sync.Once
+	stream sync.Once
+
+	MaxBacklog        int
+	OnBacklogExceeded func()
 }
 
 func NewTurnQueue(capacity int) *TurnQueue {
 	if capacity < 0 {
 		capacity = 0
 	}
-	q := &TurnQueue{queued: make([]types.AdapterEvent, 0, capacity), out: make(chan types.AdapterEvent)}
-	q.cond = sync.NewCond(&q.mu)
-	go q.deliver()
+	q := &TurnQueue{
+		queued:     make([]types.AdapterEvent, 0, capacity),
+		out:        make(chan types.AdapterEvent),
+		wake:       make(chan struct{}, 1),
+		MaxBacklog: 1024,
+	}
 	return q
 }
 
@@ -31,12 +37,35 @@ func NewAdapterEventQueue() *TurnQueue { return NewTurnQueue(16) }
 // Push queues an event in call order. It returns false after Close.
 func (q *TurnQueue) Push(event types.AdapterEvent) bool {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.closed {
+		q.mu.Unlock()
 		return false
 	}
+	if len(q.queued) == 0 {
+		select {
+		case q.out <- event:
+			q.mu.Unlock()
+			return true
+		default:
+		}
+	}
+	if len(q.queued) >= q.MaxBacklog {
+		callback := q.OnBacklogExceeded
+		q.queued = append(q.queued, types.AdapterEvent{
+			Type:  types.EventError,
+			Error: "consumer backlog exceeded — turn aborted",
+		})
+		q.closed = true
+		q.mu.Unlock()
+		if callback != nil {
+			callback()
+		}
+		q.notify()
+		return true
+	}
 	q.queued = append(q.queued, event)
-	q.cond.Signal()
+	q.mu.Unlock()
+	q.notify()
 	return true
 }
 
@@ -48,31 +77,51 @@ func (q *TurnQueue) Send(ctx context.Context, event types.AdapterEvent) bool {
 }
 
 func (q *TurnQueue) Close() {
-	q.once.Do(func() {
-		q.mu.Lock()
-		q.closed = true
-		q.cond.Broadcast()
+	q.mu.Lock()
+	if q.closed {
 		q.mu.Unlock()
-	})
+		return
+	}
+	q.closed = true
+	q.mu.Unlock()
+	q.notify()
 }
 
-func (q *TurnQueue) Stream() <-chan types.AdapterEvent { return q.out }
+func (q *TurnQueue) Stream() <-chan types.AdapterEvent {
+	q.stream.Do(func() { go q.pump() })
+	return q.out
+}
 
-func (q *TurnQueue) deliver() {
+func (q *TurnQueue) notify() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *TurnQueue) pump() {
 	defer close(q.out)
 	for {
 		q.mu.Lock()
-		for len(q.queued) == 0 && !q.closed {
-			q.cond.Wait()
-		}
-		if len(q.queued) == 0 && q.closed {
+		if len(q.queued) == 0 {
+			closed := q.closed
 			q.mu.Unlock()
-			return
+			if closed {
+				return
+			}
+			<-q.wake
+			continue
 		}
 		event := q.queued[0]
-		q.queued = q.queued[1:]
 		q.mu.Unlock()
-		q.out <- event
+
+		select {
+		case q.out <- event:
+			q.mu.Lock()
+			q.queued = q.queued[1:]
+			q.mu.Unlock()
+		case <-q.wake:
+		}
 	}
 }
 
@@ -80,7 +129,7 @@ func (q *TurnQueue) Collect(ctx context.Context) ([]types.AdapterEvent, error) {
 	events := make([]types.AdapterEvent, 0)
 	for {
 		select {
-		case event, ok := <-q.out:
+		case event, ok := <-q.Stream():
 			if !ok {
 				return events, nil
 			}
@@ -98,31 +147,48 @@ type EventPreflight struct {
 }
 
 func PreflightAdapterEvents(ctx context.Context, source <-chan types.AdapterEvent) EventPreflight {
-	replay := make(chan types.AdapterEvent, 1)
-	select {
-	case event, ok := <-source:
-		if !ok {
-			close(replay)
-			return EventPreflight{Stream: replay, Empty: true}
-		}
-		replay <- event
-		if event.Type == types.EventError {
-			close(replay)
-			return EventPreflight{Stream: replay, Error: &event}
-		}
-		go func() {
-			defer close(replay)
-			for event := range source {
-				select {
-				case replay <- event:
-				case <-ctx.Done():
-					return
-				}
+	buffered := make([]types.AdapterEvent, 0, 1)
+	for {
+		select {
+		case event, ok := <-source:
+			if !ok {
+				return EventPreflight{Stream: replayAdapterEvents(ctx, buffered, nil), Empty: true}
 			}
-		}()
-		return EventPreflight{Stream: replay}
-	case <-ctx.Done():
-		close(replay)
-		return EventPreflight{Stream: replay, Empty: true}
+			buffered = append(buffered, event)
+			if event.Type == types.EventHeartbeat {
+				continue
+			}
+			if event.Type == types.EventError {
+				return EventPreflight{Stream: replayAdapterEvents(ctx, buffered, nil), Error: &event}
+			}
+			return EventPreflight{Stream: replayAdapterEvents(ctx, buffered, source)}
+		case <-ctx.Done():
+			return EventPreflight{Stream: replayAdapterEvents(ctx, buffered, nil), Empty: true}
+		}
 	}
+}
+
+func replayAdapterEvents(ctx context.Context, buffered []types.AdapterEvent, source <-chan types.AdapterEvent) <-chan types.AdapterEvent {
+	replay := make(chan types.AdapterEvent, len(buffered))
+	go func() {
+		defer close(replay)
+		for _, event := range buffered {
+			select {
+			case replay <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if source == nil {
+			return
+		}
+		for event := range source {
+			select {
+			case replay <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return replay
 }

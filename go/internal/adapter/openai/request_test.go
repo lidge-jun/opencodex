@@ -105,6 +105,29 @@ func TestChatParseStreamAssemblesToolCall(t *testing.T) {
 	}
 }
 
+func TestChatParseStreamUsageOnlyEOFIsDone(t *testing.T) {
+	stream := `data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}` + "\n\n"
+	events := collectEvents((&ChatAdapter{}).ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	if len(events) != 1 || events[0].Type != types.EventDone {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+	if events[0].Usage == nil || events[0].Usage.InputTokens != 2 || events[0].Usage.OutputTokens != 1 {
+		t.Fatalf("unexpected usage: %#v", events[0].Usage)
+	}
+}
+
+func TestChatParseStreamEOFWithoutTerminalSignalIsError(t *testing.T) {
+	stream := `data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"
+	events := collectEvents((&ChatAdapter{}).ParseStream(context.Background(), io.NopCloser(strings.NewReader(stream))))
+	if len(events) != 2 || events[0].Type != types.EventTextDelta || events[1].Type != types.EventError {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+	const want = "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation"
+	if events[1].Error != want {
+		t.Fatalf("error = %q, want %q", events[1].Error, want)
+	}
+}
+
 func TestResponsesParseStream(t *testing.T) {
 	stream := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n" +
 		"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
