@@ -34,7 +34,8 @@ transfer, and verify both files as workflow artifacts. Non-dry-run releases atta
 GitHub Release after npm publishing succeeds.
 
 The automated archive is ad-hoc signed and not notarized, so macOS may require manual approval on
-first launch.
+first launch. If Gatekeeper blocks it, Control-click `OpenCodex.app` and choose **Open**, or go to
+**System Settings → Privacy & Security** and click **Open Anyway**.
 
 ## Menu actions
 
