@@ -28,6 +28,7 @@ import {
   formatProviderDisplayName,
   isCatalogProviderId,
   providerBrandColor,
+  providerIconSrc,
 } from "../gui/src/provider-icons";
 import {
   bucketPresets,
@@ -37,6 +38,7 @@ import {
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
+import { FREE_PROVIDER_DIRECTORY } from "../src/providers/free-directory";
 
 /** Base defaults matching a minimal, unconfigured provider value. */
 function prov(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvider {
@@ -468,6 +470,20 @@ describe("provider-icons", () => {
     expect(providerBrandColor("unknown")).toBeUndefined();
     expect(isCatalogProviderId("openai-multi")).toBe(false);
     expect(isCatalogProviderId("my-proxy")).toBe(false);
+  });
+
+  test("provider icons prefer provider brands and fall back to model families", () => {
+    expect(providerIconSrc("together", { models: ["openai/gpt-4.1"] })).toBe("/provider-icons/together-color.svg");
+    expect(providerIconSrc("litellm")).toBe("/provider-icons/litellm.png");
+    expect(providerIconSrc("model-gateway", { defaultModel: "anthropic/claude-sonnet-5" })).toBe("/provider-icons/claude-color.svg");
+    expect(providerIconSrc("model-gateway", { models: ["unknown/model", "Qwen/Qwen3-Coder"] })).toBe("/provider-icons/qwen-portal-color.svg");
+    expect(providerIconSrc("unknown", { models: ["unknown/model"] })).toBeUndefined();
+  });
+
+  test("every free provider catalog entry has a local icon", () => {
+    for (const provider of FREE_PROVIDER_DIRECTORY) {
+      expect(providerIconSrc(provider.id, { models: provider.models })).toMatch(/^\/provider-icons\//);
+    }
   });
 });
 
