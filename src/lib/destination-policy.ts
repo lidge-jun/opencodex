@@ -19,7 +19,7 @@ const BLOCKED_METADATA_IPV6 = new Set([
   "fd00:ec2::254",
 ]);
 
-type DestinationKind =
+export type DestinationKind =
   | "public"
   | "hostname"
   | "localhost"
@@ -177,4 +177,53 @@ export async function providerDestinationResolvedError(
     return `baseUrl hostname ${hostname} resolves to a ${assessment.detail} (${address}); set allowPrivateNetwork:true only for intentionally local/self-hosted providers`;
   }
   return null;
+}
+
+export interface UrlDestinationAssessment {
+  kind: DestinationKind;
+  detail: string;
+}
+
+/**
+ * Synchronous literal URL destination assessment — classifies the hostname
+ * without DNS resolution. Returns null for unparseable URLs.
+ */
+export function assessUrlDestination(url: string): UrlDestinationAssessment | null {
+  return assessDestination(url);
+}
+
+/**
+ * Async DNS-resolved URL safety check. Resolves A/AAAA records and rejects
+ * if any address is loopback, private, link-local, unspecified, or metadata.
+ * Throws on unsafe destination; returns void on safe/public destination.
+ * DNS resolution failures are treated as unsafe (fail-closed).
+ */
+export async function assertUrlResolvesPublic(url: string): Promise<void> {
+  let hostname: string;
+  try {
+    hostname = normalizeHostname(new URL(url.trim()).hostname);
+  } catch {
+    throw new Error("image URL is not a valid URL");
+  }
+  if (!hostname) throw new Error("image URL has no hostname");
+  const literalAssessment = assessDestination(url);
+  if (literalAssessment && literalAssessment.kind !== "public" && literalAssessment.kind !== "hostname") {
+    throw new Error(`image URL targets ${literalAssessment.detail}`);
+  }
+  // For literal IPs and localhost, the sync path already classified them.
+  if (isIP(hostname) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost")) return;
+  let addresses: { address: string }[];
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    // If DNS fails, we can't verify — fail-closed (unlike provider config-time validation,
+    // this is a runtime fetch to an untrusted URL, so be conservative).
+    throw new Error(`image URL hostname ${hostname} could not be resolved`);
+  }
+  for (const { address } of addresses) {
+    const ipKind = isIP(address);
+    const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
+    if (!assessment || assessment.kind === "public") continue;
+    throw new Error(`image URL hostname ${hostname} resolves to ${assessment.detail} (${address})`);
+  }
 }
