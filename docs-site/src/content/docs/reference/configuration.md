@@ -377,7 +377,7 @@ with those explicit additions, or set it to `false` to expose only `models`.
 | `reasoning?` | `string` | `low` | Reasoning effort for the sidecar (`minimal` is rejected with web search). |
 | `maxSearchesPerTurn?` | `number` | `3` | Total real searches per main-model turn (loop guard). |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only continuous raw response-byte inactivity deadline for each routed-model iteration. Must be an integer from `1` through `2147483647`; every non-empty response-body chunk resets it. |
-| `timeoutMs?` | `number` | `200000` | Separate deadline for one hosted web-search request. |
+| `timeoutMs?` | `number` | `60000` | Separate deadline for one hosted web-search request. Lowered from 200000 so an unavailable/limit-exhausted search backend degrades to a no-result answer within ~1 min instead of hanging the whole turn (#398). |
 
 The `openai` backend runs hosted search through an enabled ChatGPT `forward` provider, so it needs
 both a ChatGPT login and that provider. On Claude-inbound routed replays, opencodex injects the main
@@ -448,7 +448,7 @@ with the intended account and workload.
   "webSearchSidecar": {
     "maxSearchesPerTurn": 3,
     "routedModelStallTimeoutMs": 200000,
-    "timeoutMs": 200000
+    "timeoutMs": 60000
   },
   "visionSidecar": { "enabled": true }
 }

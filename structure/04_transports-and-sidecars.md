@@ -126,9 +126,12 @@ Four independent clocks bound this path. `stallTimeoutSec` is the base bridge ev
 not response-body generation. Config-file-only
 `webSearchSidecar.routedModelStallTimeoutMs` (default 200 s, integer 1..2147483647) bounds continuous
 raw response-byte inactivity for a routed-model iteration and resets on every non-empty byte.
-`webSearchSidecar.timeoutMs` (default 200 s) separately bounds one hosted search request. The
+`webSearchSidecar.timeoutMs` (default 60 s) separately bounds one hosted search request (lowered
+from 200 s so an unavailable/limit-exhausted search backend degrades within ~1 min instead of
+hanging the whole turn, #398). The
 effective web-search bridge watchdog is
-`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (230 s at defaults),
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (230 s at defaults,
+dominated by the routed-model stall clock),
 with seam heartbeats between bounded units. None of these clocks is a total generation deadline.
 
 ## Reasoning and tool-result compatibility

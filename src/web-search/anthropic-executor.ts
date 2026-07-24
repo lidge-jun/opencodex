@@ -3,6 +3,7 @@ import { getValidAccessToken } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
+import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import type { WebSearchSource } from "./parse";
@@ -168,7 +169,8 @@ export async function runAnthropicWebSearch(
     if (!res.ok) {
       const t = await res.text().catch(() => "");
       console.warn(`[web-search] anthropic sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
-      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${t.slice(0, 200)}` };
+      // Redact before surfacing: the body can echo auth headers/tokens (#398 review).
+      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
     }
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {

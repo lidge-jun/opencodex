@@ -16,7 +16,13 @@ const DEFAULT_ANTHROPIC_SIDECAR_MODEL = "claude-sonnet-5";
 // "tools cannot be used with reasoning.effort 'minimal'") — keeps the sidecar fast/cheap.
 const DEFAULT_SIDECAR_REASONING = "low";
 const DEFAULT_MAX_SEARCHES = 3;
-const DEFAULT_TIMEOUT_MS = 200_000;
+// Per-search sidecar deadline. Lowered from 200_000 to 60_000 (#398): a hung
+// hosted web_search used to run the full 200s, so the client cancelled first
+// (turn 499) or the forced-answer routed iteration failed (502). Hosted-search
+// p90 is ~43s, so 60s bounds hangs while leaving tail margin. `cfg.timeoutMs`
+// still overrides. Distinct from DEFAULT_ROUTED_MODEL_STALL_TIMEOUT_MS below,
+// which is the routed-model body-inactivity budget (unchanged).
+const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_ROUTED_MODEL_STALL_TIMEOUT_MS = 200_000;
 const MAX_ROUTED_MODEL_STALL_TIMEOUT_MS = 2_147_483_647;
 const STALL_MARGIN_SEC = 30;

@@ -276,7 +276,7 @@ Codex 目录会公布 `max` reasoning，同时与 `xhigh` 保持
 | `reasoning?` | `string` | `low` | sidecar reasoning effort（网络搜索会拒绝 `minimal`）。 |
 | `maxSearchesPerTurn?` | `number` | `3` | 每个主模型 turn 的真实搜索总次数（loop guard）。 |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | 仅可在配置文件中设置的路由模型迭代原始响应 byte 连续无活动 deadline。必须是 `1` 到 `2147483647` 的整数；每个非空响应 body chunk 都会重置该计时器。 |
-| `timeoutMs?` | `number` | `200000` | 单次托管 web-search 请求的独立 deadline。 |
+| `timeoutMs?` | `number` | `60000` | 单次托管 web-search 请求的独立 deadline。已从 200000 下调，使不可用/额度耗尽的搜索后端在约 1 分钟内降级为无结果回答，而不会拖住整轮请求（#398）。 |
 
 `openai` 后端通过已启用的 ChatGPT `forward` provider 执行托管搜索，因此同时需要 ChatGPT 登录
 和该 provider。Claude 入站的路由重放会把主 ChatGPT 认证注入内部 sidecar 请求，使该路径仍可
@@ -343,7 +343,7 @@ Anthropic OAuth 搜索和图像描述请求沿用 opencodex 已有的 Claude Cod
   "webSearchSidecar": {
     "maxSearchesPerTurn": 3,
     "routedModelStallTimeoutMs": 200000,
-    "timeoutMs": 200000
+    "timeoutMs": 60000
   },
   "visionSidecar": { "enabled": true }
 }
