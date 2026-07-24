@@ -55,10 +55,25 @@ keepalives are typically 1/15-30s).
 
 ### 3. src/adapters/google.ts — wire activity
 
-After phase 1's scanner remains line-based: treat any non-empty upstream
-line that is not a data frame (comments, blanks) as liveness; emit
-`{ type: "heartbeat" }` when no content event has been produced by the
-current read batch. Keep it cheap: at most one heartbeat per read batch.
+After phase 1's scanner remains line-based. DECIDED 5-tier line
+classification (A-gate fold):
+1. valid `data:` frame -> content events (existing WP1 behavior)
+2. malformed `data:` JSON -> terminal error (existing WP1, unrelated to
+   liveness)
+3. `:`-prefixed comment line (non-empty) -> liveness tick; EXCLUDED from
+   debugDroppedFrame (keepalives are not dropped frames); heartbeat only
+   when the current read batch produced no content event
+4. blank line -> counts as liveness (bare-newline keepalives), same
+   one-heartbeat-per-batch cap
+5. other garbage non-data lines -> liveness + debugDroppedFrame (existing
+   WP1). Garbage resetting the stall clock is CORRECT semantics: the stall
+   clock measures "are bytes flowing", while truncation judgment belongs
+   to the EOF residual/terminal-signal checks — liveness cannot mask
+   truncation.
+EOF-residual rule (A-gate fold; also resolves the WP1 C-gate Low note):
+a residual line at EOF that starts with `:` is consumed as a comment
+(liveness, NOT a truncation error); any other non-data residual stays a
+truncation error per WP1.
 
 ### 4. src/bridge.ts — verify heartbeat handling (:196 region)
 
