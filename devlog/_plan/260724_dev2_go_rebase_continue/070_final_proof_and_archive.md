@@ -26,7 +26,7 @@ None beyond MOVE.
 ## Copy-executable checklist
 
 ```bash
-cd /Users/jun/.codex/worktrees/e479/opencodex
+cd /Users/jun/Developer/new/700_projects/opencodex-dev2-go-ports
 git status --short --branch
 FINAL=$(git rev-parse HEAD)
 git merge-base --is-ancestor origin/dev HEAD
