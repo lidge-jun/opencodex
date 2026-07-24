@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lidge-jun/opencodex-go/internal/bridge"
+	"github.com/lidge-jun/opencodex-go/internal/combos"
 	"github.com/lidge-jun/opencodex-go/internal/types"
 )
 
@@ -18,6 +19,7 @@ type AdapterResolver func(model *types.ResolvedModel, transport *types.Transport
 
 type Config struct {
 	Registry          types.Registry
+	Combos            *combos.Resolver
 	Auth              types.AuthProvider
 	ResolveAdapter    AdapterResolver
 	Client            *http.Client
@@ -107,13 +109,23 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "a valid JSON body with model is required")
 		return
 	}
-	resolved, err := s.config.Registry.ResolveModel(body.Model)
+	requestedModel := body.Model
+	normalized := &types.NormalizedRequest{ModelID: body.Model, PreviousResponseID: body.PreviousResponseID, Stream: body.Stream, RawBody: raw, Options: types.RequestOptions{Reasoning: body.Reasoning.Effort}}
+	modelRouter := ModelRouter{Registry: s.config.Registry, Combos: s.config.Combos}
+	resolved, comboPick, err := modelRouter.ResolveRequest(normalized)
 	if err != nil {
+		var unavailable *combos.NoAvailableTargetsError
+		if errors.As(err, &unavailable) {
+			writeJSONError(w, http.StatusServiceUnavailable, "combo_unavailable", err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, "model_not_found", err.Error())
 		return
 	}
-	effort, keepEffort := EnforceEffort(body.Reasoning.Effort, s.config.EffortCap, s.config.SubagentEffortCap, IsThreadSpawnRequest(r.Header), (ModelRouter{Registry: s.config.Registry}).SupportedEfforts(resolved))
-	if effort != body.Reasoning.Effort || !keepEffort {
+	raw = normalized.RawBody
+	body.Reasoning.Effort = normalized.Options.Reasoning
+	effort, keepEffort := EnforceEffort(body.Reasoning.Effort, s.config.EffortCap, s.config.SubagentEffortCap, IsThreadSpawnRequest(r.Header), modelRouter.SupportedEfforts(resolved))
+	if effort != normalized.Options.Reasoning || !keepEffort {
 		var mutable map[string]any
 		if json.Unmarshal(raw, &mutable) == nil {
 			if keepEffort {
@@ -130,53 +142,84 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			body.Reasoning.Effort = effort
 		}
 	}
-	var auth *types.AuthContext
-	if s.config.Auth != nil {
-		auth, err = s.config.Auth.ResolveAuth(r.Context(), resolved.Provider, r.Header.Get("thread-id"))
-		if err != nil {
-			writeJSONError(w, http.StatusUnauthorized, "authentication_error", err.Error())
-			return
-		}
-	}
-	transport, err := s.config.Registry.ResolveTransport(resolved.Provider, auth)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "transport_error", err.Error())
-		return
-	}
-	adapter, err := s.config.ResolveAdapter(resolved, transport, auth, r.Header.Clone())
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "adapter_error", err.Error())
-		return
-	}
-	normalized := &types.NormalizedRequest{ModelID: resolved.Model, PreviousResponseID: body.PreviousResponseID, Stream: body.Stream, RawBody: raw, Options: types.RequestOptions{Reasoning: body.Reasoning.Effort}}
-	upstreamRequest, err := adapter.BuildRequest(r.Context(), normalized)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "request_build_error", err.Error())
-		return
-	}
-	if auth != nil {
-		for name, value := range auth.Headers {
-			upstreamRequest.Header.Set(name, value)
-		}
-	}
+	normalized.RawBody = raw
+	normalized.Options.Reasoning = body.Reasoning.Effort
 	streamCtx, done := s.lifecycle.Track(r.Context())
 	defer done()
-	response, err := FetchProvider(streamCtx, s.config.Client, upstreamRequest, 0)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "provider_fetch_error", err.Error())
-		return
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		defer response.Body.Close()
+	var adapter types.Adapter
+	var response *http.Response
+	for {
+		var auth *types.AuthContext
+		if s.config.Auth != nil {
+			auth, err = s.config.Auth.ResolveAuth(streamCtx, resolved.Provider, r.Header.Get("thread-id"))
+			if err != nil {
+				if comboPick != nil {
+					next, nextErr := s.config.Combos.Next(normalized, comboPick, http.StatusUnauthorized, "invalid_api_key", err.Error(), "")
+					if nextErr == nil {
+						comboPick, resolved = next, next.Resolved
+						continue
+					}
+				}
+				writeJSONError(w, http.StatusUnauthorized, "authentication_error", err.Error())
+				return
+			}
+		}
+		transport, transportErr := s.config.Registry.ResolveTransport(resolved.Provider, auth)
+		if transportErr != nil {
+			writeJSONError(w, http.StatusBadGateway, "transport_error", transportErr.Error())
+			return
+		}
+		adapter, err = s.config.ResolveAdapter(resolved, transport, auth, r.Header.Clone())
+		if err != nil {
+			writeJSONError(w, http.StatusBadGateway, "adapter_error", err.Error())
+			return
+		}
+		upstreamRequest, buildErr := adapter.BuildRequest(streamCtx, normalized)
+		if buildErr != nil {
+			writeJSONError(w, http.StatusBadRequest, "request_build_error", buildErr.Error())
+			return
+		}
+		if auth != nil {
+			for name, value := range auth.Headers {
+				upstreamRequest.Header.Set(name, value)
+			}
+		}
+		response, err = FetchProvider(streamCtx, s.config.Client, upstreamRequest, 0)
+		if err != nil {
+			if comboPick != nil {
+				next, nextErr := s.config.Combos.Next(normalized, comboPick, http.StatusBadGateway, "upstream_server_error", err.Error(), "")
+				if nextErr == nil {
+					comboPick, resolved = next, next.Resolved
+					continue
+				}
+			}
+			writeJSONError(w, http.StatusBadGateway, "provider_fetch_error", err.Error())
+			return
+		}
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			if comboPick != nil {
+				s.config.Combos.NoteSuccess(comboPick)
+			}
+			break
+		}
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-		writeJSONError(w, http.StatusBadGateway, "provider_error", strings.TrimSpace(string(payload)))
+		_ = response.Body.Close()
+		message := strings.TrimSpace(string(payload))
+		if comboPick != nil && combos.FailureDecision(response.StatusCode, "upstream_error", message) == combos.DecisionHop {
+			next, nextErr := s.config.Combos.Next(normalized, comboPick, response.StatusCode, "upstream_error", message, response.Header.Get("Retry-After"))
+			if nextErr == nil {
+				comboPick, resolved = next, next.Resolved
+				continue
+			}
+		}
+		writeJSONError(w, http.StatusBadGateway, "provider_error", message)
 		return
 	}
 	if body.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		if err := bridge.Stream(streamCtx, w, resolved.Model, adapter.ParseStream(streamCtx, response.Body)); err != nil && !errors.Is(err, context.Canceled) {
+		if err := bridge.Stream(streamCtx, w, requestedModel, adapter.ParseStream(streamCtx, response.Body)); err != nil && !errors.Is(err, context.Canceled) {
 			if s.config.Logger != nil {
 				s.config.Logger.Error("responses_stream", "error", err)
 			}
@@ -194,7 +237,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, "provider_parse_error", err.Error())
 		return
 	}
-	_, buffered := bridge.Convert(resolved.Model, events)
+	_, buffered := bridge.Convert(requestedModel, events)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(buffered)
 }
