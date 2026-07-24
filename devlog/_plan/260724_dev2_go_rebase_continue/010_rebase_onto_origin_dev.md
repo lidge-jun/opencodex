@@ -71,12 +71,9 @@ GOOS=darwin GOARCH=amd64 go build ./...
 GOOS=linux GOARCH=arm64 go build ./...
 cd ..
 
-# Record the rebase/range-diff/local-gate outputs in this unit, then commit the
-# tracked local evidence. Goalplan runtime evidence is updated out-of-band after
-# hosted CI. NEW is captured only after this local evidence checkpoint.
-git add devlog/_plan/260724_dev2_go_rebase_continue/010_rebase_onto_origin_dev.md
-git diff --cached --check
-git commit -m "docs(devlog): record dev2-go rebase proof"
+# Command outputs and hosted-CI proof are captured in the goalplan runtime
+# ledger, which does not change the branch tip. The committed round-2 plan is
+# the local evidence checkpoint; NEW is the clean post-rebase tip under test.
 test -z "$(git status --porcelain)"
 NEW=$(git rev-parse HEAD)
 
@@ -163,8 +160,9 @@ fi
   `--force-with-lease=refs/heads/dev2-go:105cab4f3dda939fa00fa080605eb7b3ee9378a7`
 
 Execution order for this resume is fixed: independent A-gate review, rebase,
-ancestry/range-diff inspection, local Go gates, evidence commit, one last remote
-lease stale-check, force-with-lease push to `dev2-go` only, then exact-head Go CI.
+ancestry/range-diff inspection, local Go gates, capture the clean tested `NEW`,
+one last remote lease stale-check, force-with-lease push to `dev2-go` only, then
+exact-head Go CI and out-of-band goalplan evidence capture.
 Any unexpected conflict or lease mismatch returns this work-phase to P/A.
 
 ## A-gate round 1 fold-back
@@ -182,3 +180,16 @@ Any unexpected conflict or lease mismatch returns this work-phase to P/A.
      obsolete `222b4371`.
 
 Round 2 must use the same reviewer and must pass before any rebase begins.
+
+## A-gate round 2 fold-back
+
+- Reviewer: Dalton (`019f9393-3506-7ae3-87fe-1623fb6c91bd`)
+- Verdict: `FAIL` (1 blocker)
+- Prior four findings: verified resolved
+- New finding: the procedure staged an unchanged evidence file, so `git commit`
+  would stop the `set -e` flow before push.
+- Resolution: removed the empty tracked-evidence commit. The clean committed plan
+  checkpoint becomes `PRE`, the clean rebased/tested tip becomes `NEW`, and command
+  plus CI proof is stored in the goalplan runtime ledger without changing `NEW`.
+
+Round 3 must use the same reviewer and must pass before rebase.
