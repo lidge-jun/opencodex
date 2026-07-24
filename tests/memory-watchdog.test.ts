@@ -120,6 +120,7 @@ describe("GET /api/system/memory", () => {
     const body = await res!.json() as {
       pid: number; bunVersion: string; platform: string; rss: number;
       heapUsed: number; jscHeap: { heapSize: number } | null;
+      responseState: { count: number; totalBytes: number; largestBytes: number; oldestAgeMs: number };
       streamMode: string; eagerRelay: unknown;
       watchdog: { samples: unknown[]; warnThresholdBytes: number } | null;
     };
@@ -128,6 +129,13 @@ describe("GET /api/system/memory", () => {
     expect(body.rss).toBeGreaterThan(0);
     expect(body.heapUsed).toBeGreaterThan(0);
     expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
+    // responseState is a scalar-only continuation-store attribution block: every field is a
+    // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
+    expect(typeof body.responseState.count).toBe("number");
+    expect(typeof body.responseState.totalBytes).toBe("number");
+    expect(typeof body.responseState.largestBytes).toBe("number");
+    expect(typeof body.responseState.oldestAgeMs).toBe("number");
+    expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.streamMode).toBe("auto");
     // Non-win32 test runners report no gate decision; win32 reports one.
     if (process.platform === "win32") expect(body.eagerRelay).not.toBeNull();

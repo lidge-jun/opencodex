@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { formatUptime } from "../formatUptime";
+import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
 import { IconAlert, IconExternal, IconInfo, IconRefresh, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { useI18n, type TKey } from "../i18n/shared";
@@ -1074,6 +1075,8 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
           ))}
         </div>
       )}
+
+      <MemoryObservabilityCard apiBase={apiBase} />
 
       <dialog
         ref={updateDialogRef}
