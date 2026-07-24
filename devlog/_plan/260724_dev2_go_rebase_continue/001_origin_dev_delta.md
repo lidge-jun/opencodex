@@ -97,3 +97,16 @@ GUI, docs-site/README locales, issue-triage Actions, release-notes automation, p
 - changed-file intersection since merge-base: 0
 - `git merge-tree --write-tree HEAD origin/dev` succeeded (tree `94a3ea0349b7b8added8d35fe9a73e319da7b7ed`)
 - `go test ./...` green on pre-rebase tip
+
+## Resume delta amendment (2026-07-24 18:51 KST)
+
+- HEAD and fetched `origin/dev2-go`: `105cab4f3dda939fa00fa080605eb7b3ee9378a7`
+- fetched `origin/dev`: `cc7bb577184a94784adab43e39a366b8ce65a7b6`
+- merge-base: `d34e8ba5d199776834a9fc33dd54bcaab5d70a65`
+- `git rev-list --left-right --count HEAD...origin/dev`: `33 1`
+- the one new base commit changes only the docs-site header component and stylesheet
+- changed-path intersection from the current merge-base: **none**
+- current synthetic merge: success (`99594400f0eb715ab27a8b660ec79210bca7ff81`)
+
+This amendment changes only the rebase input. It does not change the residual Go
+port classification or the dependency order locked in `000_plan.md`.

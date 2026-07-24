@@ -45,6 +45,29 @@ Hosted CI is never required before push.
 | merge-tree write-tree | success (`94a3ea0349b7b8added8d35fe9a73e319da7b7ed`) |
 | pre-rebase `go test ./...` | green |
 
+## Resume stale-check — authoritative snapshot (2026-07-24 18:51 KST)
+
+This snapshot supersedes the original Phase-0 ref table for `wp1_rebase_dev`.
+The earlier values remain above as provenance for the locked roadmap.
+
+| Ref / check | Current value |
+|-----|-----|
+| HEAD / origin/dev2-go | `105cab4f3dda939fa00fa080605eb7b3ee9378a7` |
+| origin/dev | `cc7bb577184a94784adab43e39a366b8ce65a7b6` |
+| merge-base | `d34e8ba5d199776834a9fc33dd54bcaab5d70a65` |
+| `HEAD...origin/dev` left-right | 33 / 1 |
+| new origin/dev commit | `cc7bb577 fix(docs): redesign header preference controls` |
+| new origin/dev paths | `docs-site/src/components/Header.astro`, `docs-site/src/styles/custom.css` |
+| changed-path intersection from merge-base | **0** |
+| merge-tree write-tree | success (`99594400f0eb715ab27a8b660ec79210bca7ff81`) |
+| force-with-lease value | `refs/heads/dev2-go:105cab4f3dda939fa00fa080605eb7b3ee9378a7` |
+
+The latest base delta is docs-only and does not overlap the 33 commits unique to
+`dev2-go`. Rebase is expected to replay without a conflict. Any conflict or remote
+lease movement invalidates this snapshot and requires a new stale-check before push.
+The audited plan amendments are committed as a local pre-rebase checkpoint, so the
+captured `PRE` may advance while the remote lease deliberately remains `105cab4f`.
+
 ## Dependency-ordered work-phase map (locked target)
 
 | workPhaseId | Decade doc | Purpose |
@@ -68,6 +91,10 @@ Hosted CI is never required before push.
 
 ## Rollback
 
-- Pre-push: abort rebase; tip remains `222b4371`
-- Post-lease: only re-push previous tip with maintainer confirmation if consumers require it
+- Capture `PRE` after the plan checkpoint and before rebase; pre-push rollback is
+  `git rebase --abort` while active, or a new branch at `PRE` after completion.
+- The current old remote tip / lease is
+  `REMOTE_TIP=105cab4f3dda939fa00fa080605eb7b3ee9378a7`.
+- Post-push: only restore `REMOTE_TIP` with fresh maintainer confirmation if
+  downstream consumers require it; do not infer rollback authorization here.
 - Never rewrite `dev`/`preview`/`main`
