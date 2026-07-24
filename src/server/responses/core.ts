@@ -1360,6 +1360,15 @@ export async function handleResponses(
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
+          onUsage: usage => {
+            // Raw adapter usage, pre wire-normalization: the bridged SSE now always carries
+            // zero-default detail objects, so provenance must come from here (cache_detail_missing).
+            logCtx.usageFromBridge = true;
+            if (usage) {
+              logCtx.usage = usage;
+              if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+            }
+          },
           ...(routedCompaction ? {} : {
             onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) =>
               rememberResponseState(
@@ -1397,6 +1406,13 @@ export async function handleResponses(
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
+      onUsage: usage => {
+        logCtx.usageFromBridge = true;
+        if (usage) {
+          logCtx.usage = usage;
+          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+        }
+      },
     });
     if (!routedCompaction) {
       rememberResponseState(
@@ -1428,6 +1444,13 @@ export async function handleResponses(
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onUsage: usage => {
+        logCtx.usageFromBridge = true;
+        if (usage) {
+          logCtx.usage = usage;
+          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+        }
+      },
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
@@ -1646,6 +1669,14 @@ export async function handleResponses(
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
+        onUsage: usage => {
+          // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
+          logCtx.usageFromBridge = true;
+          if (usage) {
+            logCtx.usage = usage;
+            if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+          }
+        },
         // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
         // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
         // giant stale chain Codex just replaced.
@@ -1683,6 +1714,13 @@ export async function handleResponses(
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
+      onUsage: usage => {
+        logCtx.usageFromBridge = true;
+        if (usage) {
+          logCtx.usage = usage;
+          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+        }
+      },
     });
     // See the streaming branch: compaction turns skip the continuation cache.
     if (!routedCompaction) {

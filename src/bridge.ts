@@ -14,7 +14,20 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
 }
 
 function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
-  if (!usage) return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  // input_tokens_details / output_tokens_details are ALWAYS emitted (zero defaults):
+  // strict Responses clients deserialize them as required fields — grok-build's pinned
+  // async-openai fork (rev 95b52ebd, response_usage.rs) has non-Option InputTokenDetails/
+  // OutputTokenDetails, so omitting them turns a successful turn into a hard exit after
+  // response.completed ("missing field `input_tokens_details`", verified live 2026-07-23).
+  if (!usage) {
+    return {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    };
+  }
   // inputTokens is already inclusive of cache read/write (types.ts convention).
   const inputTokens = usage.inputTokens;
   const out: Record<string, unknown> = {
@@ -22,20 +35,13 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
     output_tokens: usage.outputTokens,
     total_tokens: usageDisplayTotalTokens(usage) ?? inputTokens + usage.outputTokens,
   };
-  const inputDetails: Record<string, number> = {};
-  if (usage.cachedInputTokens !== undefined) {
-    // cached_tokens carries cache READS only, matching OpenAI semantics.
-    inputDetails.cached_tokens = usage.cachedInputTokens;
-  }
+  // cached_tokens carries cache READS only, matching OpenAI semantics.
+  const inputDetails: Record<string, number> = { cached_tokens: usage.cachedInputTokens ?? 0 };
   if (usage.cacheCreationInputTokens !== undefined) {
     inputDetails.cache_write_tokens = usage.cacheCreationInputTokens;
   }
-  if (Object.keys(inputDetails).length > 0) {
-    out.input_tokens_details = inputDetails;
-  }
-  if (usage.reasoningOutputTokens !== undefined) {
-    out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens };
-  }
+  out.input_tokens_details = inputDetails;
+  out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
   return out;
 }
 
@@ -98,6 +104,15 @@ export function bridgeToResponsesSSE(
     onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
     onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
+    /**
+     * Raw adapter-reported usage at the terminal event, BEFORE wire normalization.
+     * responsesUsage() always emits token-detail objects with zero defaults for strict
+     * clients (grok-build), which makes the wire unusable as a provenance source: the
+     * request log must not read synthetic zeros as measured cache/reasoning numbers
+     * (cache_detail_missing would be silently suppressed). Callers set logCtx.usage
+     * from this callback instead of re-parsing the bridged SSE.
+     */
+    onUsage?: (usage: OcxUsage | undefined) => void;
   },
 ): ReadableStream<Uint8Array> {
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
@@ -661,11 +676,13 @@ export function bridgeToResponsesSSE(
                 // Cache max-output partials so previous_response_id replay can continue them;
                 // rememberResponseState rejects content-filtered incomplete responses.
                 options?.onCompletedResponse?.(response, event.providerState);
+                options?.onUsage?.(event.usage);
                 emit("response.incomplete", { response });
                 reportTerminal("incomplete");
               } else {
                 const response = { ...responseSnapshot("completed", finishedItems, event.endTurn), usage: responsesUsage(event.usage) };
                 options?.onCompletedResponse?.(response, event.providerState);
+                options?.onUsage?.(event.usage);
                 emit("response.completed", {
                   response,
                 });
@@ -682,6 +699,7 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               flushHiddenReasoningEnvelope();
+              options?.onUsage?.(event.usage);
               emit("response.incomplete", {
                 response: {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
@@ -705,6 +723,7 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               const failure = adapterFailureFromEvent(event);
+              if (event.usage) options?.onUsage?.(event.usage);
               emit("response.failed", {
                 response: {
                   ...responseSnapshot("failed", finishedItems),
@@ -762,6 +781,7 @@ export function bridgeToResponsesSSE(
         flushHiddenRawReasoning();
         if (currentToolCall) closeCurrentToolCall();
         if (currentWebSearch) closeCurrentWebSearch("failed", []);
+        options?.onUsage?.(undefined);
         emit("response.incomplete", {
           response: {
             ...responseSnapshot("incomplete", finishedItems),
@@ -856,6 +876,8 @@ export function buildResponseJSON(
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
     compaction?: boolean;
     onProviderState?: (state: OcxProviderContinuationState) => void;
+    /** Raw adapter-reported usage before wire normalization (see bridgeToResponsesSSE onUsage). */
+    onUsage?: (usage: OcxUsage | undefined) => void;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -1072,6 +1094,7 @@ export function buildResponseJSON(
     : incompleteEvent || stopReason === "max_tokens"
       ? "incomplete"
       : "completed";
+  options?.onUsage?.(incompleteEvent?.usage ?? usage);
   return {
     id: responseId, object: "response",
     created_at: Math.floor(Date.now() / 1000),

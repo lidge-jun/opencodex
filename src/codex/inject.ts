@@ -69,7 +69,7 @@ function isLoopbackHostname(hostname: string | undefined): boolean {
   return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
-function providerBaseHost(hostname: string | undefined): string {
+export function providerBaseHost(hostname: string | undefined): string {
   const trimmed = (hostname ?? "127.0.0.1").trim();
   const lower = trimmed.toLowerCase();
   // Match what the server actually binds. Writing "localhost" while binding IPv4-only

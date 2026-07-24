@@ -58,6 +58,11 @@ export interface RequestLogContext {
   /** Route adapter type ("cursor"/"kiro"/"anthropic"/…): drives estimated-usage detection
    *  independent of the user-chosen provider NAME (devlog 130 B2). */
   providerAdapter?: string;
+  /** Set when the bridge reported raw adapter usage via onUsage: the bridged wire now always
+   *  carries synthetic zero-default token-detail objects (strict-client normalization, see
+   *  responsesUsage in src/bridge.ts), so SSE/JSON re-parsing must not overwrite the raw
+   *  provenance — a synthetic cached_tokens:0 is NOT a measured cache read. */
+  usageFromBridge?: boolean;
   /** Secret-redacted upstream error reason (e.g. the granular Cursor "rate limit exceeded…"
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
@@ -338,7 +343,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) logCtx.responseServiceTier = serviceTier;
   const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
-  if (usage) {
+  if (usage && !logCtx.usageFromBridge) {
     logCtx.usage = usage;
     if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
   }

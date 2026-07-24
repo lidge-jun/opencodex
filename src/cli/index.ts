@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { currentExternalCodexModelProvider, restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
+import { stripGrokConfig } from "../grok/inject";
 import { restoreLegacyOpenaiHistory } from "../codex/history-provider";
 import { writeJournal, reconcileJournal } from "../codex/journal";
 import {
@@ -208,6 +209,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
       try { restoreNativeCodex(); } catch { /* best-effort restore */ }
     }
+    if (!process.env.OCX_SERVICE) { try { stripGrokConfig(); } catch { /* best-effort restore */ } }
   };
 
   let shuttingDown = false;
@@ -265,6 +267,15 @@ async function handleStart(options: { block?: boolean } = {}) {
       [...visibleNativeSlugs(config)],
       models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
     );
+    // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an
+    // installed grok CLI can pick opencodex-routed models without manual config. No-op
+    // when ~/.grok is absent; removed again by stop/eject/uninstall/shutdown.
+    try {
+      const { syncGrokConfig } = await import("../grok/sync");
+      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+      else if (!r.ok) console.error(`⚠️  ${r.message}`);
+    } catch { /* best-effort — grok integration must never block startup */ }
   } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
@@ -286,6 +297,14 @@ async function handleEnsure() {
       });
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
       await injectSystemEnv(live.port, config).catch(() => {});
+      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
+      // hostname the running proxy actually bound — config.hostname may have drifted.
+      try {
+        const { syncGrokConfig } = await import("../grok/sync");
+        const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
+        if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+        else if (!g.ok) console.error(`⚠️  ${g.message}`);
+      } catch { /* best-effort */ }
       console.log(`✅ Proxy running on port ${live.port}`);
       return;
     }
@@ -304,6 +323,15 @@ async function handleEnsure() {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exit(1);
   }
+  // Deterministic fence guarantee: the spawned child injects late in its own startup, but
+  // this parent returns as soon as /healthz responds — inject here too (idempotent block
+  // replace) so `ocx ensure` never returns without the Grok fence in place.
+  try {
+    const { syncGrokConfig } = await import("../grok/sync");
+    const g = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+    else if (!g.ok) console.error(`⚠️  ${g.message}`);
+  } catch { /* best-effort */ }
   // Always sync the LIVE port: after a fallback-port start, config.port still names the
   // busy preferred port — syncing that would point Codex at a dead listener.
   await syncModelsToCodex(port).catch(e => {
@@ -354,11 +382,22 @@ async function handleTrayProxyRestart(): Promise<void> {
 }
 
 async function handleStop() {
-  const stoppedService = stopServiceIfInstalled();
-  if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
+  // Service-manager stop can throw (e.g. OPENCODEX_HOME mismatch guard). That must not
+  // abort the rest of the teardown — proxy stop, Codex restore, env revert, and the
+  // Grok config strip below all still need to run.
+  let stopFailed = false;
+  let stoppedService = false;
+  try {
+    stoppedService = stopServiceIfInstalled();
+    if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
+  } catch (err) {
+    // Service-manager failure (e.g. OPENCODEX_HOME mismatch guard) is warned but does not
+    // fail the whole stop: the local proxy/codex/grok teardown below is independent, and
+    // `ocx restart` must still be able to proceed to its ensure step.
+    console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const pid = readPid();
-  let stopFailed = false;
   if (pid) {
     try {
       // Graceful-first (management-API drain) — on Windows this is the only path where
@@ -403,6 +442,12 @@ async function handleStop() {
   // Safety net: revert system env vars even if the daemon's syncCleanup didn't run
   // (e.g. SIGKILL). revertSystemEnv is ownership-checked and idempotent.
   try { revertSystemEnv(); } catch { /* best-effort */ }
+  // Same safety net for the Grok Build managed block (marker-owned, idempotent).
+  try {
+    const g = stripGrokConfig();
+    if (g.changed) console.log(`↩️  ${g.message}`);
+    else if (!g.ok) console.error(`⚠️  ${g.message}`);
+  } catch { /* best-effort */ }
   if (stopFailed) process.exit(1);
 }
 
@@ -445,6 +490,12 @@ async function handleUninstall() {
   await runStep("native Codex restored", () => {
     const r = restoreNativeCodex();
     if (!r.success) throw new Error(r.message);
+  });
+
+  await runStep("Grok Build config restored", () => {
+    const r = stripGrokConfig();
+    if (!r.ok) throw new Error(r.message);
+    return r.changed;
   });
 
   await runStep("system env vars reverted", () => {
@@ -580,6 +631,11 @@ switch (command) {
     }
     const r = restoreNativeCodex();
     console.log(r.success ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+    try {
+      const g = stripGrokConfig();
+      if (g.changed) console.log(`✅ ${g.message}`);
+      else if (!g.ok) console.error(`⚠️  ${g.message}`);
+    } catch { /* best-effort */ }
     console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
     break;
   }

@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -188,6 +188,8 @@ export interface WebSearchLoopDeps {
   stallTimeoutSec?: number;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
+  /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
+  onUsage?: (usage: OcxUsage | undefined) => void;
   /**
    * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
    * or null when the pool is exhausted (same semantics as the normal routed path).
@@ -561,6 +563,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
+      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });

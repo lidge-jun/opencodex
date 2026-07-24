@@ -7,6 +7,7 @@ import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
+import { chatCompletionsUsage } from "../src/chat/outbound";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -144,6 +145,62 @@ test("chatCompletionsToResponsesBody maps messages/tools/system", () => {
 test("chatCompletionsToResponsesBody rejects missing model", () => {
   expect(() => chatCompletionsToResponsesBody({ messages: [{ role: "user", content: "x" }] }))
     .toThrow(ChatCompletionsRequestError);
+});
+
+test("chatCompletionsUsage always emits detail objects with zero defaults", () => {
+  // Strict OpenAI-compatible clients (grok-build) require token-detail objects;
+  // routed providers that report no cache/reasoning numbers must still produce them.
+  expect(chatCompletionsUsage({ input_tokens: 9, output_tokens: 4 })).toEqual({
+    prompt_tokens: 9,
+    completion_tokens: 4,
+    total_tokens: 13,
+    prompt_tokens_details: { cached_tokens: 0 },
+    completion_tokens_details: { reasoning_tokens: 0 },
+  });
+  expect(chatCompletionsUsage(undefined)).toEqual({
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    prompt_tokens_details: { cached_tokens: 0 },
+    completion_tokens_details: { reasoning_tokens: 0 },
+  });
+  expect(chatCompletionsUsage({
+    input_tokens: 20,
+    output_tokens: 10,
+    input_tokens_details: { cached_tokens: 5 },
+    output_tokens_details: { reasoning_tokens: 3 },
+  })).toEqual({
+    prompt_tokens: 20,
+    completion_tokens: 10,
+    total_tokens: 30,
+    prompt_tokens_details: { cached_tokens: 5 },
+    completion_tokens_details: { reasoning_tokens: 3 },
+  });
+});
+
+test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwarding a raw frame", async () => {
+  // grok-build's strict Responses decoder dies on unknown variants (response.heartbeat),
+  // which is why the injected Grok config pins api_backend = "chat_completions". This
+  // regression pins the safety property: heartbeats never surface as raw frames here —
+  // at most a valid role chunk is emitted.
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const upstream = new Response([
+    `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "hi" })}\n\n`,
+    `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
+  ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+  const stream = responsesSseToChatCompletionsSse(upstream.body!, "routed/model");
+  const text = await new Response(stream).text();
+  expect(text).not.toContain("response.heartbeat");
+  expect(text).toContain('"content":"hi"');
+  expect(text).toContain("data: [DONE]");
+  // Every data frame must be a chat.completion.chunk — no Responses-vocab leaks.
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+    const parsed = JSON.parse(line.slice(6)) as { object?: string };
+    expect(parsed.object).toBe("chat.completion.chunk");
+  }
 });
 
 test("POST /v1/chat/completions streams OpenAI-shaped chunks end to end", async () => {
