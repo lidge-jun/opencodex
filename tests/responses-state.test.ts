@@ -85,6 +85,73 @@ describe("Responses previous_response_id state", () => {
     ]);
   });
 
+  test("stores incomplete partial output for previous_response_id replay", () => {
+    const partial = {
+      type: "message",
+      id: "msg_incomplete",
+      role: "assistant",
+      content: [{ type: "output_text", text: "partial answer" }],
+    };
+    rememberResponseState(
+      { model: "cursor/auto", input: "start" },
+      {
+        id: "resp_incomplete",
+        status: "incomplete",
+        output: [partial],
+        incomplete_details: { reason: "max_output_tokens" },
+      },
+    );
+
+    const expanded = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: "resp_incomplete",
+      input: "continue",
+    }) as { input: unknown[] };
+
+    expect(expanded.input).toEqual([
+      { role: "user", content: "start" },
+      partial,
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  test("does not store content-filtered incomplete output for previous_response_id replay", () => {
+    const next = {
+      model: "cursor/auto",
+      previous_response_id: "resp_content_filter",
+      input: "continue safely",
+    };
+    rememberResponseState(
+      { model: "cursor/auto", input: "start" },
+      {
+        id: "resp_content_filter",
+        status: "incomplete",
+        output: [{ type: "message", role: "assistant", content: "filtered partial" }],
+        incomplete_details: { reason: "content_filter" },
+      },
+    );
+
+    expect(expandPreviousResponseInput(next)).toEqual(next);
+  });
+
+  test("does not store failed partial output for previous_response_id replay", () => {
+    const next = {
+      model: "cursor/auto",
+      previous_response_id: "resp_failed",
+      input: "retry",
+    };
+    rememberResponseState(
+      { model: "cursor/auto", input: "start" },
+      {
+        id: "resp_failed",
+        status: "failed",
+        output: [{ type: "message", role: "assistant", content: "do not replay" }],
+      },
+    );
+
+    expect(expandPreviousResponseInput(next)).toEqual(next);
+  });
+
   test("expanded function_call_output can be parsed with its prior tool metadata", () => {
     const firstBody = { model: "cursor/auto", input: "use ping" };
     const first = buildResponseJSON([

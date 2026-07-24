@@ -94,5 +94,5 @@ opencodex は決して Codex 設定を削除しません。すべての注入は
 
 ## 次へ
 
-[クイックスタート](/opencodex/ja/getting-started/quickstart/)に進んで最初のプロバイダーを設定するか、
-アーキテクチャを知るには[仕組み](/opencodex/ja/getting-started/how-it-works/)をお読みください。
+[クイックスタート](/ja/getting-started/quickstart/)に進んで最初のプロバイダーを設定するか、
+アーキテクチャを知るには[仕組み](/ja/getting-started/how-it-works/)をお読みください。

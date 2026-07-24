@@ -9,7 +9,11 @@ describe("Models page provider grouping", () => {
       [{ provider: "openai", id: "gpt-5.6-sol", native: true }],
       [
         { name: "openai", authMode: "forward" },
-        { name: "empty-live", liveModels: true },
+        {
+          name: "empty-live",
+          liveModels: true,
+          discovery: { status: "failed", reason: "http", httpStatus: 401 },
+        },
         { name: "empty-static", liveModels: false, models: [] },
       ],
     );
@@ -21,6 +25,7 @@ describe("Models page provider grouping", () => {
     ]);
     expect(groups[0]?.native).toBe(true);
     expect(groups[1]?.native).toBe(false);
+    expect(groups[1]?.discovery).toEqual({ status: "failed", reason: "http", httpStatus: 401 });
   });
 
   test("excludes disabled and empty forward providers but preserves row-backed groups", () => {

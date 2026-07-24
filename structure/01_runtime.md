@@ -6,14 +6,14 @@
 | --- | --- |
 | `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled Bun binary (`bun` dependency), lazy-runs its `install.js` if only the placeholder stub is present, then execs `src/cli/index.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. |
 | `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, `durableBunPath()` (path baked into service/shim artifacts). |
-| `src/cli/index.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
+| `src/cli/index.ts` | `ocx` / `opencodex` CLI: init, start, stop, restore/eject, sync, status, login/logout, gui, service, update. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
 | `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing, exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, `/v1/*` JSON 404 guard, GUI fallback, and facade re-exports for split server modules. |
 | `src/server/images.ts` | Standalone Images data plane: forward-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/config.ts` | `~/.opencodex/config.json`, defaults, PID path, env-value resolution, `websocketsEnabled()`. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
-| `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and detects stale/overwritten wrappers for repair. |
+| `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. |
 
 The `src/` root stays thin: process entry, shared config/types, router, bridge, service manager, and
@@ -37,6 +37,18 @@ their own files.
 config/catalog, then serves until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+
+An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
+bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
+prefixes across a 100 ms observation interval; changing launchers are silently deferred, while mixed
+sibling sets warn and defer as a unit. Guarded repair holds a self-identifying atomic-mkdir
+interprocess lock across its final revalidation, rename, shim write, and state commit. Its owner record
+uses the unique token as the filename, so stale-owner deletion cannot name a successor's record. An
+aged lock is reclaimed only when its owner PID is no longer alive and the same token, lock-directory
+identity, and owner fingerprint are still present immediately before deletion. Repair preflights every
+tracked sibling before mutation and rolls back earlier siblings in reverse order on a later race.
+Failures warn without changing the requested command's exit behavior. The probe uses read-only config
+diagnostics only for a confirmed candidate and never reads adjacent auth state.
 
 The bridge enforces a heartbeat stall deadline: after 5 minutes (150 ticks at the default 2 s
 interval) of upstream silence with no real events, the stream is closed and the upstream request

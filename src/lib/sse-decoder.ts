@@ -3,6 +3,10 @@ export interface ServerSentEvent {
   data: string;
 }
 
+export type SseRecord =
+  | { kind: "event"; event?: string; data: string }
+  | { kind: "comment"; comment: string };
+
 /**
  * Decode text/event-stream records across arbitrary fetch chunk boundaries.
  *
@@ -10,10 +14,18 @@ export interface ServerSentEvent {
  * final newline. That matters for compatible APIs that place a terminal event in the last bytes of
  * the body: dropping that record turns a successful response into an adapter_eof failure.
  */
+export function decodeServerSentEvents(
+  source: ReadableStream<Uint8Array>,
+  options: { includeComments: true; signal?: AbortSignal },
+): AsyncGenerator<SseRecord>;
+export function decodeServerSentEvents(
+  source: ReadableStream<Uint8Array>,
+  options?: { includeComments?: false; signal?: AbortSignal },
+): AsyncGenerator<ServerSentEvent>;
 export async function* decodeServerSentEvents(
   source: ReadableStream<Uint8Array>,
-  options?: { signal?: AbortSignal },
-): AsyncGenerator<ServerSentEvent> {
+  options?: { includeComments?: boolean; signal?: AbortSignal },
+): AsyncGenerator<ServerSentEvent | SseRecord> {
   const reader = source.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -27,7 +39,9 @@ export async function* decodeServerSentEvents(
   if (signal?.aborted) onAbort();
   else signal?.addEventListener("abort", onAbort, { once: true });
 
-  const dispatch = (): ServerSentEvent | undefined => {
+  const includeComments = options?.includeComments === true;
+
+  const dispatch = (): ServerSentEvent | SseRecord | undefined => {
     if (dataLines.length === 0) {
       event = undefined;
       return undefined;
@@ -35,13 +49,18 @@ export async function* decodeServerSentEvents(
     const record = { ...(event ? { event } : {}), data: dataLines.join("\n") };
     event = undefined;
     dataLines = [];
-    return record;
+    return includeComments ? { kind: "event", ...record } : record;
   };
 
-  const acceptLine = (rawLine: string): ServerSentEvent | undefined => {
+  const acceptLine = (rawLine: string): ServerSentEvent | SseRecord | undefined => {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line === "") return dispatch();
-    if (line.startsWith(":")) return undefined;
+    if (line.startsWith(":")) {
+      if (!includeComments) return undefined;
+      let comment = line.slice(1);
+      if (comment.startsWith(" ")) comment = comment.slice(1);
+      return { kind: "comment", comment };
+    }
 
     const colon = line.indexOf(":");
     const field = colon < 0 ? line : line.slice(0, colon);

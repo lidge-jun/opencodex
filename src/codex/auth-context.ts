@@ -7,7 +7,11 @@ import {
 import { markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountUsable } from "./account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
-import { getCodexAccountCooldownUntil, resolveCodexAccountForThreadDetailed } from "./routing";
+import {
+  getCodexAccountCooldownUntil,
+  pickLowestUsageCodexAccount,
+  resolveCodexAccountForThreadDetailed,
+} from "./routing";
 import { getAccountQuota } from "./quota";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -89,17 +93,29 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
   return !(cause instanceof CodexCredentialGenerationConflictError) && !(cause instanceof CodexCredentialRefreshLockTimeoutError);
 }
 
+export interface ResolveCodexAuthContextOptions {
+  excludeAccountId?: string;
+}
+
 export async function resolveCodexAuthContext(
   headers: Headers,
   config: OcxConfig,
   mode: CodexAccountMode,
+  options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
   if (mode === "direct") {
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     return { kind: "main", accountId: null };
   }
   const threadId = headers.get("x-codex-parent-thread-id");
-  const resolution = resolveCodexAccountForThreadDetailed(threadId, config);
+  const resolution = options.excludeAccountId
+    ? (() => {
+        const accountId = pickLowestUsageCodexAccount(config, options.excludeAccountId);
+        return accountId
+          ? { status: "selected" as const, accountId }
+          : { status: "none" as const };
+      })()
+    : resolveCodexAccountForThreadDetailed(threadId, config);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   const accountId = resolution.status === "selected" ? resolution.accountId : null;
   if (!accountId) throw new CodexPoolAuthenticationError();

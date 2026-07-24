@@ -152,7 +152,9 @@ describe("Umans provider", () => {
           `event: content_block_delta\n` +
           `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"umans\\"}"}}\n\n` +
           `event: content_block_stop\n` +
-          `data: {"type":"content_block_stop"}\n\n`,
+          `data: {"type":"content_block_stop"}\n\n` +
+          `event: message_stop\n` +
+          `data: {"type":"message_stop"}\n\n`,
         ));
         controller.close();
       },

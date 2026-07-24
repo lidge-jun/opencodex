@@ -45,7 +45,7 @@ cd docs-site && bun install && bun dev
 
 ## Docs publishing
 
-The public docs publish to GitHub Pages at <https://lidge-jun.github.io/opencodex/>. The
+The public docs publish to GitHub Pages at <https://opencodex.me/>. The
 `.github/workflows/deploy-docs.yml` workflow runs on `main` pushes that touch `docs-site/**` or the
 workflow itself, builds `docs-site`, and deploys the generated site. Before pushing docs changes,
 run:
@@ -119,7 +119,7 @@ live in `src/oauth/`; registry metadata alone is not an OAuth flow.
 
 ## Adding an adapter
 
-Implement `ProviderAdapter` (see [Adapters](/opencodex/reference/adapters/)) in `src/adapters/`,
+Implement `ProviderAdapter` (see [Adapters](/reference/adapters/)) in `src/adapters/`,
 register its name in `src/server/adapter-resolve.ts`, and bridge its output to internal
 `AdapterEvent`s. Reuse `image.ts` for image handling and follow `openai-chat.ts` for ordinary
 streaming/tool calls; use `fetchResponse` only when the adapter owns transport retries, or `runTurn`

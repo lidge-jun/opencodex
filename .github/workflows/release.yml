@@ -317,11 +317,6 @@ jobs:
           fi
           npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
 
-          if [ -z "$existing_tag_sha" ]; then
-            git tag "$release_tag" "$GITHUB_SHA"
-            git push origin "refs/tags/${release_tag}"
-          fi
-
           # Preview builds must be marked prerelease so GitHub "latest" keeps pointing at the
           # stable channel (matching npm dist-tags); see issue #64.
           prerelease_flag=""
@@ -329,26 +324,57 @@ jobs:
             prerelease_flag="--prerelease"
           fi
 
-          if gh release view "$release_tag" >/dev/null 2>&1; then
-            notes_file="$(mktemp)"
+          # Build notes before tagging: if generate-notes fails after a tag push, preflight
+          # blocks retries because the tag already exists. API uses target_commitish, so the
+          # tag need not exist yet. Preflight already rejects an existing GitHub Release for
+          # non-dry runs, so this step only creates.
+          notes_file="$(mktemp)"
+          pr_notes=""
+          if [ -n "$previous_tag" ]; then
             generate_notes_api=(
               "repos/${GITHUB_REPOSITORY}/releases/generate-notes"
               -f "tag_name=${release_tag}"
               -f "target_commitish=${GITHUB_SHA}"
+              -f "previous_tag_name=${previous_tag}"
             )
-            if [ -n "$previous_tag" ]; then
-              generate_notes_api+=(-f "previous_tag_name=${previous_tag}")
-            fi
-            {
-              printf '%s\n\n' "$npm_metadata"
-              gh api "${generate_notes_api[@]}" --jq '.body'
-            } > "$notes_file"
-            gh release edit "$release_tag" --title "$release_tag" --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+            # Fail closed: missing PR categories is a broken release note, not a soft skip.
+            pr_notes="$(gh api "${generate_notes_api[@]}" --jq '.body')"
+            # Drop generate-notes' trailing compare link; we re-append it after the commit list.
+            pr_notes="$(printf '%s\n' "$pr_notes" | sed '/^\*\*Full Changelog\*\*:/d')"
           else
-            generate_notes_args=(--generate-notes)
-            if [ -n "$previous_tag" ]; then
-              generate_notes_args+=(--notes-start-tag "$previous_tag")
-            fi
-            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
-              --notes "$npm_metadata" "${generate_notes_args[@]}" ${prerelease_flag:+$prerelease_flag}
+            # First release on this channel: never call generate-notes without previous_tag_name.
+            # GitHub would baseline the newest repo tag, which may belong to the other channel.
+            echo "::notice::No previous channel tag; skipping generate-notes (commits-only notes)"
           fi
+
+          if [ -n "$previous_tag" ]; then
+            commit_range="${previous_tag}..${GITHUB_SHA}"
+            commits="$(git log --pretty=format:'- %s (%h)' "$commit_range")"
+          else
+            # First release on a channel has no previous tag; cap history so the notes
+            # body stays within GitHub release size limits.
+            commits="$(git log --pretty=format:'- %s (%h)' --max-count=100 "$GITHUB_SHA")"
+          fi
+
+          {
+            printf '%s\n\n' "$npm_metadata"
+            if [ -n "$(printf '%s' "$pr_notes" | tr -d '[:space:]')" ]; then
+              printf '%s\n\n' "$pr_notes"
+            fi
+            if [ -n "$commits" ]; then
+              printf '## Commits\n\n'
+              printf '%s\n\n' "$commits"
+            fi
+            if [ -n "$previous_tag" ]; then
+              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+                "$GITHUB_REPOSITORY" "$previous_tag" "$release_tag"
+            fi
+          } > "$notes_file"
+
+          if [ -z "$existing_tag_sha" ]; then
+            git tag "$release_tag" "$GITHUB_SHA"
+            git push origin "refs/tags/${release_tag}"
+          fi
+
+          gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+            --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}

@@ -8,6 +8,7 @@ import {
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
+  CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
@@ -46,6 +47,7 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth("pool-a");
+  clearAccountNeedsReauth("pool-b");
 });
 
 afterEach(() => {
@@ -53,6 +55,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth("pool-a");
+  clearAccountNeedsReauth("pool-b");
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -110,6 +113,54 @@ describe("Codex auth context", () => {
       accessToken: "pool_token",
       chatgptAccountId: "pool_acc",
     });
+  });
+
+  test("exclusion selects another eligible account without changing the active account", async () => {
+    const cfg = config();
+    cfg.codexAccounts?.push({
+      id: "pool-b",
+      email: "pool-b@example.test",
+      isMain: false,
+      chatgptAccountId: "pool_b_acc",
+    });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      excludeAccountId: "pool-a",
+    })).resolves.toMatchObject({
+      kind: "pool",
+      accountId: "pool-b",
+      accessToken: "pool_b_token",
+      chatgptAccountId: "pool_b_acc",
+    });
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
+  });
+
+  test("exclusion fails closed when no alternate account is eligible", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer caller_token" }),
+      config(),
+      "pool",
+      { excludeAccountId: "pool-a" },
+    )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
   });
 
   test("selected pool headers replace inbound main auth", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
@@ -328,6 +329,55 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+const MAX_RESPONSES_CALL_ID_LENGTH = 64;
+const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
+const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
+
+/**
+ * The ChatGPT Responses backend rejects input `call_id` values longer than 64 characters. Codex
+ * sidechat/fork replay can namespace call ids from routed providers past that limit. Forward mode
+ * already sends explicit replay input without `previous_response_id`, so it is safe to replace each
+ * oversized id and every matching call/output occurrence with one deterministic request-local alias.
+ * Raw API-key continuations are intentionally excluded because an output-only continuation may
+ * reference a call stored upstream under the original id. Proxy-expanded API-key replays are
+ * explicit and stateless here, so they are safe to repair too.
+ */
+function repairOversizedReplayCallIds(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  const occupied = new Set<string>();
+  for (const item of body.input) {
+    if (!isPlainObject(item) || typeof item.call_id !== "string") continue;
+    if (item.call_id.length <= MAX_RESPONSES_CALL_ID_LENGTH) occupied.add(item.call_id);
+  }
+
+  const aliases = new Map<string, string>();
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || typeof item.call_id !== "string") return item;
+    const original = item.call_id;
+    if (original.length <= MAX_RESPONSES_CALL_ID_LENGTH) return item;
+
+    let alias = aliases.get(original);
+    if (!alias) {
+      let salt = 0;
+      do {
+        const hashInput = salt === 0 ? original : `${original}\0${salt}`;
+        const digest = createHash("sha256").update(hashInput).digest("hex");
+        alias = `${REPAIRED_CALL_ID_PREFIX}${digest.slice(0, REPAIRED_CALL_ID_DIGEST_LENGTH)}`;
+        salt += 1;
+      } while (occupied.has(alias));
+      aliases.set(original, alias);
+      occupied.add(alias);
+    }
+
+    changed = true;
+    return { ...item, call_id: alias };
+  });
+
+  return changed ? { ...body, input } : body;
+}
+
 /** Flatten a Responses tool-output `output` value (string or content-part array) to plain text. */
 function toolOutputText(output: unknown): string {
   if (typeof output === "string") return output;
@@ -515,8 +565,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
-      if (forward) outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      if (forward) {
+        outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      }
       else outBody = stripConflictingHostedTools(outBody);
+      if (forward || parsed._previousResponseInputExpanded === true) {
+        outBody = repairOversizedReplayCallIds(outBody);
+      }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
       return {
         url,

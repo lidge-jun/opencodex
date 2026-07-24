@@ -100,7 +100,7 @@ ocx logout xai
 デフォルトの OpenAI 経路は**キー不要**です — 既存の `codex login` 認証情報をそのまま転送します。
 OpenAI API キーを別に使うには `openai-apikey` プロバイダーを追加してください。このプリセットには
 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` が含まれますが、API キーに実際の利用権が必要です
-([プロバイダー](/opencodex/ja/guides/providers/)参照)。
+([プロバイダー](/ja/guides/providers/)参照)。
 
 ## 停止と復元
 
@@ -112,6 +112,6 @@ ocx restore back  # 実行中のプロキシに Codex を再接続
 
 ## 次へ
 
-- [仕組み](/opencodex/ja/getting-started/how-it-works/) — 各リクエストで何が起きるか。
-- [プロバイダー](/opencodex/ja/guides/providers/) — 認証のすべての方法。
-- [設定](/opencodex/ja/reference/configuration/) — 完全な `config.json` リファレンス。
+- [仕組み](/ja/getting-started/how-it-works/) — 各リクエストで何が起きるか。
+- [プロバイダー](/ja/guides/providers/) — 認証のすべての方法。
+- [設定](/ja/reference/configuration/) — 完全な `config.json` リファレンス。

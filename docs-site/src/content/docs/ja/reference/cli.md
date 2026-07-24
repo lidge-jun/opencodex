@@ -323,7 +323,7 @@ ocx login xai
 
 ### `ocx gui`
 
-`http://localhost:<port>` で [ウェブダッシュボード](/opencodex/ja/guides/web-dashboard/) を開きます。
+`http://localhost:<port>` で [ウェブダッシュボード](/ja/guides/web-dashboard/) を開きます。
 プロキシが実行中でない場合は自動的に起動します。
 
 ## バックグラウンドサービス
@@ -357,8 +357,12 @@ ocx service uninstall
 PATH 上のスクリプトベース `codex` ランチャーを軽量な自動起動スクリプトで包みます。実際の `codex.exe`
 対象は正確な実行ファイル呼び出しが壊れないように触りません。
 
-Codex 更新がラッパーを上書きしても次の `install` 呼び出しで shim が自己修復します。新しい
-バイナリをバックアップしたのち新しいラッパーを書きます。
+完了した外部 Codex 更新がインストール済み shim を上書きした場合、次の通常の `ocx` コマンドが
+安定した新しいランチャーをバックアップし、コマンド実行前に shim を復元します。まだ変更中の
+ランチャーには触れず、後で再試行します。修復失敗は要求されたコマンドを失敗させず警告だけを
+表示し、手動の代替手段は `ocx codex-shim install` です。自動修復を無効にするには
+`codexShimAutoRestore` を `false` にするか、プロセスで
+`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
 
 | Subcommand | Action |
 | --- | --- |

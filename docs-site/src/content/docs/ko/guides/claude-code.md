@@ -126,6 +126,8 @@ Claude 페이지에서 압축 값을 조절할 수 있어요. **경고:** 모델
 `ANTHROPIC_SMALL_FAST_MODEL`이에요. 실제 Haiku 값은 `tierModels.haiku ?? smallFastModel`이며,
 두 Haiku 변수에 모두 들어가요.
 
+`tierModels.haiku`와 `smallFastModel`이 모두 없으면 OpenCodex는 두 보조 모델 변수를 설정하지 않아요. 그러면 Claude Code가 네이티브 보조 모델(현재 Sonnet)을 선택하며, 네이티브 프로바이더 요금이 발생할 수 있어요.
+
 ## 로스터 에이전트(injectAgents)
 
 `ocx claude`와 시스템 환경 데몬은 추천 서브에이전트 로스터(Subagents 탭, 최대 5개 모델)와
@@ -227,7 +229,7 @@ ChatGPT bearer는 메인 라우팅 프로바이더에는 전달하지 않아요.
 모델, detail, 이미지 바이트, 요청 문맥을 기준으로 캐시해 같은 이미지와 문맥을 매번 다시 설명하지
 않아요. 내용이 바뀔 수 있는 원격 `https:` 이미지는 캐시하지 않아요.
 
-전체 설정 키는 [설정 레퍼런스](/opencodex/ko/reference/configuration/#sidecars)에서 확인할 수
+전체 설정 키는 [설정 레퍼런스](/ko/reference/configuration/#sidecars)에서 확인할 수
 있어요. Anthropic OAuth 웹 검색과 이미지 설명은 저장소에서 이미 사용 중인 Claude Code OAuth
 fingerprint 방식을 그대로 따르지만, 장시간 무인 작업에 쓰기 전에는 본인 계정과 실제 작업으로
 충분히 soak test하는 편이 좋아요.

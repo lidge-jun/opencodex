@@ -183,12 +183,6 @@ dialog::backdrop {
   -webkit-backdrop-filter: blur(6px);
 }
 
-/* theme + language selects: pill chrome */
-starlight-theme-select select,
-starlight-lang-select select {
-  border-radius: var(--ocx-radius-pill);
-}
-
 /* ---- right rail (toc) ---------------------------------------------------- */
 .right-sidebar {
   border-inline-start: 1px solid var(--sl-color-hairline-light);

@@ -52,6 +52,7 @@ opencodex настраивается файлом `~/.opencodex/config.json`. Е
 | `websockets?` | `boolean` | `false` | Объявляет `supports_websockets`, чтобы Codex использовал путь Responses WebSocket. Опустите или установите `false`, чтобы остаться на HTTP/SSE. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Дополнительные сгенерированные учётные данные `ocx_…`, принимаемые аутентификацией management API и плоскости данных на не-loopback-привязках. Управляются дашбордом; поля записей перечислены ниже. |
 | `codexAutoStart?` | `boolean` | `true` | Разрешает shim Codex выполнять `ocx ensure` перед запуском Codex. `false` делает `ocx ensure` пустой операцией. |
+| `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает ранее установленный shim после того, как завершённое внешнее обновление Codex заменило его. Для отключения задайте `false` или установите процессу `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. opencodex резервирует исходные метаданные потоков Codex, переназначает старые интерактивные строки OpenAI на `opencodex` и временно повышает созданные opencodex строки `exec` до видимого в приложении источника. `ocx stop` / `ocx restore` восстанавливают зарезервированные строки OpenAI и возвращают оставшиеся пользовательские потоки opencodex обратно к OpenAI, чтобы нативный Codex мог возобновлять их после удаления прокси из `config.toml`. Установите `false`, чтобы отказаться. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Метаданные аккаунтов пула ChatGPT/Codex, управляемые дашбордом Codex Auth. Секреты хранятся отдельно в `codex-accounts.json`. |
 | `activeCodexAccountId?` | `string` | — | Аккаунт пула, используемый для следующего нового потока Codex. Существующие привязки потоков сохраняют исходный аккаунт. |
@@ -167,7 +168,7 @@ x-opencodex-api-key: your-secret-token
 | `headers?` | `Record<string,string>` | Дополнительные заголовки для вышестоящей стороны. Authorization, cookie, заголовки API-ключей, встроенные переводы строк и недопустимые имена заголовков отклоняются. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Настройки маршрутизации провайдеров OpenRouter по умолчанию. Поддерживает `order`, `only` и `allowFallbacks`; действует только с каноническим URL OpenRouter и адаптером `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | Настройки для точных id моделей, заменяющие `openRouterRouting`. |
-| `authMode?` | `"key" \| "forward" \| "oauth"` | Способ аутентификации (по умолчанию `key`). См. [Провайдеры](/opencodex/ru/guides/providers/#режимы-аутентификации). |
+| `authMode?` | `"key" \| "forward" \| "oauth"` | Способ аутентификации (по умолчанию `key`). См. [Провайдеры](/ru/guides/providers/#режимы-аутентификации). |
 | `codexAccountMode?` | `"pool" \| "direct"` | Только для канонического `openai`; по умолчанию Pool, если опущено. Direct обходит состояние пула. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Переопределение политики Token Guardian для этого OAuth-провайдера. |
 | `reasoningEfforts?` | `string[]` | Метки рассуждений Codex на уровне провайдера, которые объявляются и отправляются (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
@@ -184,7 +185,7 @@ x-opencodex-api-key: your-secret-token
 | `preserveReasoningContentModels?` | `string[]` | Модели, требующие сохранять предыдущий assistant `reasoning_content` в истории чата. |
 | `thinkingToggleModels?` | `string[]` | Chat-модели, использующие вендорский переключатель `thinking.enabled` вместо лестницы уровней рассуждений. |
 | `thinkingBudgetModels?` | `string[]` | Chat-модели, использующие целочисленный `thinking_budget`; уровень отображается в долю бюджета. |
-| `noVisionModels?` | `string[]` | Модели только для текста — [vision-сайдкар](/opencodex/ru/guides/sidecars/) описывает для них изображения. Сопоставление допускает тег Ollama `:size`. |
+| `noVisionModels?` | `string[]` | Модели только для текста — [vision-сайдкар](/ru/guides/sidecars/) описывает для них изображения. Сопоставление допускает тег Ollama `:size`. |
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic-совместимые шлюзы, такие как Umans, могут требовать экранирования имён инструментов на wire; opencodex убирает префикс перед возвратом вызовов инструментов в Codex. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Режим транспорта/аутентификации Google. По умолчанию `ai-studio`. |
 | `project?` | `string` | Id проекта Vertex или id проекта Antigravity Cloud Code Assist. |
@@ -223,7 +224,7 @@ x-opencodex-api-key: your-secret-token
 Флаг относится к **объекту провайдера** (`providers.cursor`), а не к верхнему уровню
 `config.json`.
 
-Его также можно установить из [веб-дашборда](/opencodex/ru/guides/web-dashboard/): **Providers →
+Его также можно установить из [веб-дашборда](/ru/guides/web-dashboard/): **Providers →
 Cursor → Edit JSON**, добавьте `"unsafeAllowNativeLocalExec": true`, сохраните, затем
 перезапустите прокси (`ocx restart` или `ocx stop` + `ocx start`).
 

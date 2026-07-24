@@ -144,7 +144,7 @@ Codex の `spawn_agent` は優先度でソートした後**ピッカーに表示
 ```
 
 優先度ランク: フィーチャー済み (0–4) < その他ルーティング (5) < ネイティブ (9)。これは
-[ウェブダッシュボード](/opencodex/ja/guides/web-dashboard/)でも管理できます。
+[ウェブダッシュボード](/ja/guides/web-dashboard/)でも管理できます。
 
 ## Codex アカウントのウォームアップ
 
@@ -168,6 +168,6 @@ ocx restore    # 停止せずに復元  (エイリアス: ocx eject)
 ocx restore back # 実行中のプロキシに通常 Codex を再接続
 ```
 
-opencodex が管理対象[バックグラウンドサービス](/opencodex/ja/reference/cli/#ocx-service)として実行されるときは
+opencodex が管理対象[バックグラウンドサービス](/ja/reference/cli/#ocx-service)として実行されるときは
 `OCX_SERVICE=1` を設定するため、サービス主導の再起動が Codex 設定を揺るがすことは**ありません** — 明示的な
 `ocx stop` / `ocx service stop` のみがネイティブ Codex を復元します。

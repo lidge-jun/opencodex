@@ -28,7 +28,7 @@ body:
     attributes:
       label: Documentation location
       description: Public documentation URL or repository path.
-      placeholder: "https://lidge-jun.github.io/opencodex/providers/ or docs/providers.md"
+      placeholder: "https://opencodex.me/providers/ or docs/providers.md"
     validations:
       required: true
 

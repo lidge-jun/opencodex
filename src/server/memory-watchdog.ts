@@ -39,7 +39,7 @@ const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_WARN_THRESHOLD_BYTES = 4 * 1024 ** 3; // 4 GiB
 const DEFAULT_RING_SIZE = 360; // ≈6h at 60s
 const WARN_INTERVAL_MS = 30 * 60_000;
-const DOCS_URL = "https://lidge-jun.github.io/opencodex/troubleshooting/windows-memory/";
+const DOCS_URL = "https://opencodex.me/troubleshooting/windows-memory/";
 
 let active: MemoryWatchdog | null = null;
 

@@ -3,6 +3,10 @@ import {
   createCursorAdapter,
   cursorExecDeniedMessage,
 } from "../src/adapters/cursor";
+import {
+  clearCursorThreadContinuityForTests,
+  lookupCursorThreadConversation,
+} from "../src/adapters/cursor/thread-continuity";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
 
@@ -125,6 +129,36 @@ describe("Cursor adapter live transport", () => {
     expect(JSON.stringify(events).includes("secret-token-123")).toBe(false);
   });
 
+  test("derives distinct thread conversation ids per Cursor credential", async () => {
+    const ids: string[] = [];
+    const scopes: Array<string | undefined> = [];
+    for (const apiKey of ["cursor-token-a", "cursor-token-b"]) {
+      const adapter = createCursorAdapter({ ...provider, apiKey }, {
+        createTransport: () => ({
+          async *run(request) {
+            ids.push(request.conversationId);
+            yield { type: "done" } satisfies CursorServerMessage;
+          },
+          writeClient() {},
+        }),
+      });
+      const body: OcxParsedRequest = {
+        modelId: "cursor/auto",
+        context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+        stream: false,
+        options: {},
+        _clientThreadId: `cred-scope-thread`,
+      };
+      await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+      scopes.push(body._cursorIdentityScope);
+    }
+    expect(scopes[0]).toBeTruthy();
+    expect(scopes[1]).toBeTruthy();
+    expect(scopes[0]).not.toBe(scopes[1]);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
   test("parseStream reports that the fetch path is disabled", async () => {
     const adapter = createCursorAdapter(provider);
 
@@ -141,7 +175,7 @@ describe("Cursor adapter live transport", () => {
     expect(cursorExecDeniedMessage("shellArgs")).toContain("legacy mock transport cannot execute");
   });
 
-  test("retries external-model invalid_argument once with a fresh conversation id", async () => {
+  test("does not retry external tool-result invalid_argument with a fresh conversation id", async () => {
     const seen: string[] = [];
     let attempts = 0;
     const adapter = createCursorAdapter({
@@ -152,13 +186,10 @@ describe("Cursor adapter live transport", () => {
         async *run(request) {
           attempts += 1;
           seen.push(request.conversationId);
-          if (attempts === 1) {
-            throw Object.assign(
-              new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
-              { code: "invalid_argument" },
-            );
-          }
-          yield { type: "done" } satisfies CursorServerMessage;
+          throw Object.assign(
+            new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+            { code: "invalid_argument" },
+          );
         },
         writeClient() {},
       }),
@@ -194,15 +225,99 @@ describe("Cursor adapter live transport", () => {
 
     await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
 
+    expect(attempts).toBe(1);
+    expect(seen).toEqual(["cursor_corrupt"]);
+    expect(body._cursorConversationId).toBe("cursor_corrupt");
+    expect(events.filter(event => event.type === "error")).toHaveLength(1);
+  });
+
+  test("retries external-model invalid_argument on plain-user continuations too", async () => {
+    const seen: string[] = [];
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            throw Object.assign(
+              new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+              { code: "invalid_argument" },
+            );
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+
+    const events: AdapterEvent[] = [];
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: {
+        messages: [
+          { role: "user", content: "first turn", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/gpt-5.6-sol",
+            timestamp: 2,
+            content: [{ type: "text", text: "ack" }],
+          },
+          { role: "user", content: "second turn", timestamp: 3 },
+        ],
+      },
+      stream: false,
+      options: { reasoning: "xhigh" },
+      _cursorConversationId: "cursor_stale",
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
     expect(attempts).toBe(2);
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).not.toBe("cursor_corrupt");
-    expect(seen[1]).not.toBe(seen[0]);
+    expect(seen[0]).toBe("cursor_stale");
+    expect(seen[1]).not.toBe("cursor_stale");
     expect(body._cursorConversationId).toBe(seen[1]);
     expect(events.filter(event => event.type === "error")).toHaveLength(0);
   });
 
-  test("rotation rekeys context usage through the injectable seam", async () => {
+  test("does not replay invalid_argument after a local side effect", async () => {
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          yield { type: "local_side_effect" } satisfies CursorServerMessage;
+          throw Object.assign(
+            new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+            { code: "invalid_argument" },
+          );
+        },
+        writeClient() {},
+      }),
+    });
+
+    const events: AdapterEvent[] = [];
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "run a command", timestamp: 1 }] },
+      stream: false,
+      options: { reasoning: "xhigh" },
+      _cursorConversationId: "cursor_side_effect",
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events.some(event => event.type === "error")).toBe(true);
+  });
+
+  test("same-id tool continuation does not rekey context usage", async () => {
     const rekeyCalls: Array<[string, string]> = [];
     const seen: string[] = [];
     const adapter = createCursorAdapter({
@@ -249,14 +364,86 @@ describe("Cursor adapter live transport", () => {
     const events: AdapterEvent[] = [];
     await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
 
-    // External-model toolResult continuation rotates the conversation id and the
-    // adapter must rekey the carry-forward context usage onto the new id.
     expect(seen).toHaveLength(1);
-    expect(seen[0]).not.toBe("cursor_prior");
-    expect(rekeyCalls).toEqual([["cursor_prior", seen[0]!]]);
-    expect(body._cursorConversationId).toBe(seen[0]);
+    expect(seen[0]).toBe("cursor_prior");
+    expect(rekeyCalls).toEqual([]);
+    expect(body._cursorConversationId).toBe("cursor_prior");
   });
-});
+
+  test("isolated helper turns do not rekey parent context usage", async () => {
+    const rekeyCalls: Array<[string, string]> = [];
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: (from, to) => rekeyCalls.push([from, to]),
+    });
+
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _clientThreadId: "parent-thread-isolate-rekey",
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIsolateConversation: true,
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBe("cursor_parent_real");
+    expect(seen[0]?.startsWith("cursor_")).toBe(true);
+    expect(rekeyCalls).toEqual([]);
+  });
+
+  test("isolated invalid_argument recovery does not remember under the parent thread", async () => {
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(
+              new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+              { code: "invalid_argument" },
+            );
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+
+    const threadId = "parent-thread-isolate-remember";
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "helper ask", timestamp: 1 }] },
+      stream: false,
+      options: { reasoning: "xhigh" },
+      _clientThreadId: threadId,
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIsolateConversation: true,
+      _cursorIdentityScope: "acct-isolate-test",
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(attempts).toBe(2);
+    expect(lookupCursorThreadConversation(threadId, "acct-isolate-test")).toBeUndefined();
+  });
 
   test("does not replay invalid_argument after non-heartbeat output was already emitted", async () => {
     let attempts = 0;
@@ -311,3 +498,4 @@ describe("Cursor adapter live transport", () => {
     expect(events.some(event => event.type === "text_delta")).toBe(true);
     expect(events.some(event => event.type === "error")).toBe(true);
   });
+});

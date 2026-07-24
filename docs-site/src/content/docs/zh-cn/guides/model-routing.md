@@ -75,4 +75,4 @@ OpenAI 的 bare `gpt-*` 使用单一 `openai` provider。`codexAccountMode` 在 
 - **为提供商预置 `models[]` 或 `defaultModel`**，这样短 id（规则 2/4）无需 `provider/` 前缀即可解析。
 - **前缀模式只是一种便利**，而非保证：只有当确实配置了同名（例如 `anthropic`、`openai`、`groq`）的提供商时，它们才会解析成功。
 
-这些规则读取的提供商字段请参见 [配置](/opencodex/zh-cn/reference/configuration/)。
+这些规则读取的提供商字段请参见 [配置](/zh-cn/reference/configuration/)。

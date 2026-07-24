@@ -42,5 +42,8 @@ export function mapCursorServerMessage(
     case "exec":
       state.writeClient(cursorExecResult(message.requestId, message.execCase));
       return [];
+    case "local_side_effect":
+      // Internal retry-safety signal only; keep the bridge alive without producing protocol output.
+      return [{ type: "heartbeat" }];
   }
 }

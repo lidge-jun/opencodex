@@ -158,16 +158,16 @@ export function bridgeToResponsesSSE(
   // upstream silence so a stalled routed provider never trips "idle timeout waiting for SSE".
   let activity = false;
   let beat: ReturnType<typeof setInterval> | undefined;
-
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let emittedSinceYield = false;
-      const emit = (name: string, data: Record<string, unknown>) => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let emittedFrames = 0;
+  let gated = false;
+  let stepping = false;
+  const emit = (name: string, data: Record<string, unknown>) => {
         if (closed) return;
         activity = true;
         try {
           controller.enqueue(encoder.encode(sseEvent(name, { type: name, sequence_number: seq++, ...data })));
-          emittedSinceYield = true;
+          emittedFrames++;
         } catch {
           closed = true;
         }
@@ -176,6 +176,7 @@ export function bridgeToResponsesSSE(
         if (closed) return;
         try {
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          emittedFrames++;
         } catch {
           closed = true;
         }
@@ -191,40 +192,10 @@ export function bridgeToResponsesSSE(
         ...(endTurn !== undefined ? { end_turn: endTurn } : {}),
       });
 
-      emit("response.created", { response: responseSnapshot("in_progress", []) });
-
-      // Re-arm Codex's idle timer during silence with a parser-ignored heartbeat (RC3). Skips a tick
-      // whenever a real event was emitted since the last tick, so it only fires on a genuine stall.
       const heartbeatFrame = encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
-      beat = setInterval(() => {
-        if (closed) return;
-        if (activity) { activity = false; stallTicks = 0; return; }
-        if (++stallTicks >= maxStallTicks) {
-          if (currentMsg) closeCurrentMessage();
-          if (currentReasoning) closeCurrentReasoning();
-          if (currentRawReasoning) closeCurrentRawReasoning();
-          flushHiddenRawReasoning();
-          if (currentToolCall) closeCurrentToolCall();
-          if (currentWebSearch) closeCurrentWebSearch("failed", []);
-          emit("response.incomplete", {
-            response: {
-              ...responseSnapshot("incomplete", finishedItems),
-              incomplete_details: { reason: "upstream_stall_timeout" },
-            },
-          });
-          reportTerminal("incomplete");
-          terminated = true;
-          closed = true;
-          clearInterval(beat!);
-          beat = undefined;
-          onCancel?.();
-          return;
-        }
-        try { controller.enqueue(heartbeatFrame); } catch { closed = true; }
-      }, heartbeatMs);
 
       let currentMsg: { itemId: string; outputIndex: number; text: string; phase?: OcxMessagePhase } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string } | null = null;
@@ -432,19 +403,46 @@ export function bridgeToResponsesSSE(
         firstOutputReported = true;
         try { options?.onFirstOutput?.(); } catch { /* metrics must not break the stream */ }
       };
-      let macrotaskFired = true;
-      let macrotaskTimer: ReturnType<typeof setTimeout> | undefined;
-
-      try {
-        for await (const event of events) {
-          if (!macrotaskFired && emittedSinceYield) {
-            await new Promise<void>(r => setTimeout(r, 0));
-            macrotaskFired = true;
+      const it = events[Symbol.asyncIterator]();
+      let iteratorStarted = false;
+      let iteratorReturned = false;
+      let upstreamDone = false;
+      const returnIterator = () => {
+        if (iteratorReturned) return;
+        iteratorReturned = true;
+        const finishReturn = () => {
+          try {
+            void it.return?.()?.catch(() => {});
+          } catch {
+            /* synchronous iterator cleanup failure is also best-effort */
           }
-          emittedSinceYield = false;
-          macrotaskFired = false;
-          if (macrotaskTimer !== undefined) clearTimeout(macrotaskTimer);
-          macrotaskTimer = setTimeout(() => { macrotaskFired = true; macrotaskTimer = undefined; }, 0);
+        };
+        // Async-generator return() before the first next() does not enter the generator, so its
+        // finally blocks cannot cancel prepared upstream bodies. The cancel hook has already
+        // aborted the turn; bootstrap one cleanup step, then close the iterator without awaiting it.
+        if (!iteratorStarted) {
+          iteratorStarted = true;
+          try {
+            void it.next().then(finishReturn, () => {}).catch(() => {});
+          } catch {
+            /* synchronous iterator start failure is also best-effort */
+          }
+          return;
+        }
+        finishReturn();
+      };
+      const step = async () => {
+        if (stepping || closed) return;
+        stepping = true;
+        gated = false;
+        const emittedAtStart = emittedFrames;
+        try {
+        while (!terminated && !closed && emittedFrames === emittedAtStart) {
+          iteratorStarted = true;
+          const next = await it.next();
+          if (next.done) { upstreamDone = true; break; }
+          const event = next.value;
+          let terminalEvent = false;
           activity = true;
           stallTicks = 0;
           reportFirstOutput(event);
@@ -650,15 +648,18 @@ export function bridgeToResponsesSSE(
                 finishedItems.push(item as OutputItem);
                 outputIndex++;
               }
-              if (event.stopReason === "max_tokens") {
-                // Upstream hit its output token cap. Surface as incomplete so the client can
-                // distinguish a truncated turn from a genuinely finished one (issue #246).
+              if (event.stopReason === "max_tokens" || event.stopReason === "content_filter") {
+                // Upstream stopped before a normal completion. Surface as incomplete so the
+                // client can distinguish a truncated/filtered turn from a finished one.
                 const response = {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
-                  incomplete_details: { reason: "max_output_tokens" },
+                  incomplete_details: {
+                    reason: event.stopReason === "max_tokens" ? "max_output_tokens" : "content_filter",
+                  },
                 };
-                // Still cache the partial output so previous_response_id replay works.
+                // Cache max-output partials so previous_response_id replay can continue them;
+                // rememberResponseState rejects content-filtered incomplete responses.
                 options?.onCompletedResponse?.(response, event.providerState);
                 emit("response.incomplete", { response });
                 reportTerminal("incomplete");
@@ -670,7 +671,7 @@ export function bridgeToResponsesSSE(
                 });
                 reportTerminal("completed");
               }
-              terminated = true;
+              terminalEvent = true;
               break;
             }
             case "incomplete": {
@@ -693,7 +694,7 @@ export function bridgeToResponsesSSE(
                 },
               });
               reportTerminal("incomplete");
-              terminated = true;
+              terminalEvent = true;
               break;
             }
             case "error": {
@@ -716,27 +717,41 @@ export function bridgeToResponsesSSE(
                 },
               });
               reportTerminal("failed");
-              terminated = true;
+              terminalEvent = true;
               break;
             }
           }
+          if (terminalEvent) {
+            onCancel?.();
+            terminated = true;
+            returnIterator();
+            break;
+          }
         }
       } catch (err) {
-        flushHiddenRawReasoning();
-        if (currentWebSearch) closeCurrentWebSearch("failed", []);
-        emit("response.failed", {
-          response: {
-            ...responseSnapshot("failed", finishedItems),
-            error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
-            last_error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
-          },
-        });
-        reportTerminal("failed");
-        terminated = true;
+        if (!terminated) {
+          flushHiddenRawReasoning();
+          if (currentWebSearch) closeCurrentWebSearch("failed", []);
+          emit("response.failed", {
+            response: {
+              ...responseSnapshot("failed", finishedItems),
+              error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
+              last_error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
+            },
+          });
+          reportTerminal("failed");
+          onCancel?.();
+          terminated = true;
+          returnIterator();
+        }
       }
 
-      if (beat) clearInterval(beat);
-      if (macrotaskTimer !== undefined) clearTimeout(macrotaskTimer);
+      if (!terminated && !upstreamDone) {
+        gated = true;
+        stepping = false;
+        return;
+      }
+      if (beat) { clearInterval(beat); beat = undefined; }
 
       if (!terminated) {
         // The adapter generator ended without an explicit done/error event. Mark as incomplete
@@ -755,6 +770,7 @@ export function bridgeToResponsesSSE(
           },
         });
         reportTerminal("incomplete");
+        terminated = true;
       }
 
       emitDone();
@@ -763,6 +779,59 @@ export function bridgeToResponsesSSE(
       } catch {
         /* already closed (e.g. client cancelled) */
       }
+      closed = true;
+      gated = true;
+      stepping = false;
+      };
+
+      const startStream = () => {
+        emit("response.created", { response: responseSnapshot("in_progress", []) });
+        // The default ReadableStream strategy has HWM=1. Once one event's frames fill that
+        // queue, pull stepping pauses; no custom FIFO or queuing strategy is layered on top.
+        gated = true;
+        beat = setInterval(() => {
+          if (closed || gated) return;
+          if (activity) { activity = false; stallTicks = 0; return; }
+          if (++stallTicks >= maxStallTicks) {
+            if (currentMsg) closeCurrentMessage();
+            if (currentReasoning) closeCurrentReasoning();
+            if (currentRawReasoning) closeCurrentRawReasoning();
+            flushHiddenRawReasoning();
+            if (currentToolCall) closeCurrentToolCall();
+            if (currentWebSearch) closeCurrentWebSearch("failed", []);
+            emit("response.incomplete", {
+              response: {
+                ...responseSnapshot("incomplete", finishedItems),
+                incomplete_details: { reason: "upstream_stall_timeout" },
+              },
+            });
+            reportTerminal("incomplete");
+            onCancel?.();
+            terminated = true;
+            returnIterator();
+            emitDone();
+            if (beat) clearInterval(beat);
+            beat = undefined;
+            try { controller.close(); } catch { /* already closed */ }
+            closed = true;
+            return;
+          }
+          try {
+            controller.enqueue(heartbeatFrame);
+            emittedFrames++;
+          } catch {
+            closed = true;
+          }
+        }, heartbeatMs);
+      };
+
+  return new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      startStream();
+    },
+    pull() {
+      return step();
     },
     cancel() {
       // Client (Codex) disconnected. Stop emitting and let the caller abort the upstream fetch so a
@@ -771,6 +840,7 @@ export function bridgeToResponsesSSE(
       closed = true;
       if (beat) clearInterval(beat);
       onCancel?.();
+      returnIterator();
     },
   });
 }

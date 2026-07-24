@@ -20,7 +20,7 @@ interface ProviderAdapter {
 `buildRequest` lowers an `OcxParsedRequest` into an upstream HTTP request; `parseStream` /
 `parseResponse` lift the provider's reply back into internal `AdapterEvent`s. `fetchResponse` lets an
 adapter own retries/timeouts, while `runTurn` supports transports that cannot be represented as one
-HTTP fetch followed by one response stream. [`bridge.ts`](/opencodex/reference/architecture/#the-bridge)
+HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
 ## `openai-chat`
@@ -49,7 +49,7 @@ streams the response back **untranslated**.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
-  that also powers the [sidecars](/opencodex/guides/sidecars/).
+  that also powers the [sidecars](/guides/sidecars/).
 
 ## `anthropic`
 

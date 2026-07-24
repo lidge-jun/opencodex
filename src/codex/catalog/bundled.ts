@@ -33,13 +33,28 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
+import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
+import { resolveAndPersistCodexRuntime } from "../runtime";
+import type { EffortClampDiagnostic } from "../runtime";
+
+export { isSpawnableCodexCandidate, codexExecInvocation } from "../exec-invocation";
 
 export const BUNDLED_CATALOG_CACHE_MS = 60_000;
 
-export let bundledCatalogCache: { expiresAt: number; value: RawCatalog | null } | null = null;
+export let bundledCatalogCache: {
+  /** Selected runtime identity; must change when doctor/sync picks a different binary. */
+  key: string;
+  expiresAt: number;
+  value: RawCatalog | null;
+} | null = null;
 
 /** Test-only: clear the bundled-catalog cache (owned here; sync.ts calls this instead of assigning the import). */
 export function resetBundledCatalogCacheForTests(): void {
+  bundledCatalogCache = null;
+}
+
+/** Drop the process-local bundled catalog memo (e.g. after runtime selection changes). */
+export function invalidateBundledCatalogCache(): void {
   bundledCatalogCache = null;
 }
 
@@ -52,12 +67,21 @@ export type ExecFile = (
     timeout: number;
     windowsHide: boolean;
     shell?: boolean;
+    windowsVerbatimArguments?: boolean;
   },
 ) => string;
 
 export interface BundledCatalogDeps {
   commandCandidates?: () => string[];
   execFileSync?: ExecFile;
+  onEffortClamp?: (diagnostic: EffortClampDiagnostic) => void;
+  configDir?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  existsSync?: (path: string) => boolean;
+  readFileSync?: (path: string, encoding: "utf8") => string;
+  now?: () => number;
+  discoverAlternatives?: boolean;
 }
 
 export function unique(values: string[]): string[] {
@@ -75,11 +99,6 @@ export function codexCommandCandidates(): string[] {
   }
   candidates.push("codex");
   return unique(candidates);
-}
-
-export function isSpawnableCodexCandidate(path: string, platform: NodeJS.Platform = process.platform): boolean {
-  if (platform !== "win32") return true;
-  return /\.(cmd|bat|exe|com)$/i.test(path);
 }
 
 export function codexShimCommandCandidates(): string[] {
@@ -105,45 +124,82 @@ export function codexShimCommandCandidates(): string[] {
   }
 }
 
-export function codexExecInvocation(
+export function runCodexDebugModels(
   command: string,
-  platform: NodeJS.Platform = process.platform,
-): { file: string; shell: boolean } {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
-    return { file: `"${command.replace(/"/g, "")}"`, shell: true };
-  }
-  return { file: command, shell: false };
-}
-
-export function runCodexDebugModels(command: string, execFile: ExecFile): string {
+  execFile: ExecFile,
+  deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync"> = {},
+): string {
   const args = ["debug", "models", "--bundled"];
-  const invocation = codexExecInvocation(command);
-  return execFile(invocation.file, args, {
+  const invocation = codexExecInvocation(command, args, deps.platform ?? process.platform, {
+    env: deps.env,
+    exists: deps.existsSync,
+  });
+  return execFile(invocation.file, invocation.args, {
     encoding: "utf8" as const,
     stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
     timeout: 10_000,
     windowsHide: true,
-    shell: invocation.shell,
+    ...invocation.options,
   });
 }
 
 export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatalog | null {
-  const useCache = !deps.commandCandidates && !deps.execFileSync;
-  if (useCache && bundledCatalogCache && bundledCatalogCache.expiresAt > Date.now()) {
+  const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.configDir && !deps.env;
+  const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
+  // Prefer the single resolved runtime so sync/clamp never probe a different binary
+  // than OpenCodex will launch. Tests may inject commandCandidates to stub probing.
+  let cacheKey: string | null = null;
+  const candidates = deps.commandCandidates?.() ?? (() => {
+    const resolved = resolveAndPersistCodexRuntime({
+      execFileSync: execFile,
+      configDir: deps.configDir,
+      env: deps.env,
+      platform: deps.platform,
+      existsSync: deps.existsSync,
+      readFileSync: deps.readFileSync,
+      now: deps.now,
+      discoverAlternatives: deps.discoverAlternatives,
+    });
+    if (useCache) {
+      cacheKey = [
+        resolved.runtime.command,
+        resolved.runtime.version ?? "",
+        process.env.OPENCODEX_HOME ?? "",
+      ].join("\0");
+    }
+    return [resolved.runtime.command];
+  })();
+  if (
+    useCache
+    && cacheKey
+    && bundledCatalogCache
+    && bundledCatalogCache.key === cacheKey
+    && bundledCatalogCache.expiresAt > Date.now()
+  ) {
     return bundledCatalogCache.value;
   }
-  const candidates = deps.commandCandidates?.() ?? codexCommandCandidates();
-  const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
-  for (const command of candidates) {
+  for (const command of unique(candidates)) {
     try {
-      const catalog = parseCatalogJson(runCodexDebugModels(command, execFile));
+      const catalog = parseCatalogJson(runCodexDebugModels(command, execFile, deps));
       if (catalog && findNativeTemplate(catalog)) {
-        if (useCache) bundledCatalogCache = { expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS, value: catalog };
+        if (useCache && cacheKey) {
+          bundledCatalogCache = {
+            key: cacheKey,
+            expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS,
+            value: catalog,
+          };
+        }
         return catalog;
       }
     } catch { /* try next candidate */ }
   }
-  if (useCache) bundledCatalogCache = { expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS, value: null };
+  if (useCache && cacheKey) {
+    bundledCatalogCache = {
+      key: cacheKey,
+      expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS,
+      value: null,
+    };
+  }
   return null;
 }
 

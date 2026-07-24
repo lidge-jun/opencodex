@@ -94,5 +94,5 @@ opencodex는 절대 Codex 설정을 삭제하지 않습니다. 모든 주입은 
 
 ## 다음
 
-[Quickstart](/opencodex/ko/getting-started/quickstart/)로 이동해 첫 프로바이더를 설정하거나,
-아키텍처를 알아보려면 [작동 방식](/opencodex/ko/getting-started/how-it-works/)을 읽어 보세요.
+[Quickstart](/ko/getting-started/quickstart/)로 이동해 첫 프로바이더를 설정하거나,
+아키텍처를 알아보려면 [작동 방식](/ko/getting-started/how-it-works/)을 읽어 보세요.

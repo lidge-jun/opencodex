@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { isVertexTruncationReason, vertexTruncationErrorMessage } from "../src/adapters/google-truncation";
+import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent, OcxProviderConfig } from "../src/types";
 
 function sseResponse(chunks: unknown[]): Response {
@@ -55,11 +56,21 @@ describe("vertex parseStream fail-closed truncation", () => {
   });
 
   test("MAX_TOKENS with NO tool call still completes (text truncation is not fail-closed)", async () => {
-    const events = await collect(vertexProvider, [
+    const chunks = [
       { candidates: [{ content: { parts: [{ text: "partial" }] }, finishReason: "MAX_TOKENS" }] },
-    ]);
-    expect(events.some(e => e.type === "done")).toBe(true);
+    ];
+    const events = await collect(vertexProvider, chunks);
+    const done = events.find(e => e.type === "done");
+    expect(done).toMatchObject({ type: "done", stopReason: "max_tokens" });
     expect(events.some(e => e.type === "error")).toBe(false);
+
+    const bridged = bridgeToResponsesSSE(
+      createGoogleAdapter(vertexProvider).parseStream(sseResponse(chunks)),
+      "google-vertex/gemini-3-pro",
+    );
+    const text = await new Response(bridged).text();
+    expect(text).toContain("event: response.incomplete");
+    expect(text).toContain('"incomplete_details":{"reason":"max_output_tokens"}');
   });
 
   test("usage-only final chunk (no candidates) is not dropped", async () => {

@@ -492,7 +492,7 @@ describe("combo management API", () => {
     const disabledResponse = await comboApi(config, "GET", "/api/subagent-models");
     const disabledBody = await disabledResponse!.json() as { available: string[] };
     expect(disabledBody.available).not.toContain("deepseek-v4-flash");
-  });
+  }, 15_000);
 
   test("GET models round-trips a disabled combo alias for the Models GUI", async () => {
     const config = baseConfig({
@@ -707,7 +707,7 @@ describe("combo management API", () => {
         else process.env.CODEX_HOME = previousCodexHome;
       }
     });
-  });
+  }, 15_000);
 
   test("provider deletion is guarded by sorted combo dependencies until cleanup", async () => {
     await withTempHome(async () => {

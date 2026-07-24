@@ -7,15 +7,16 @@
  * settable alone via PUT (legacy codexAutoStart-only PUTs keep working).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
+import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
 
+let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
-let testDir = "";
 
 function baseConfig(): OcxConfig {
   return {
@@ -47,15 +48,22 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
 }
 
 beforeEach(() => {
-  testDir = mkdtempSync(join(tmpdir(), "ocx-settings-stream-mode-"));
-  process.env.OPENCODEX_HOME = testDir;
+  invalidateStartupHealthCache();
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-settings-stream-"));
+  process.env.OPENCODEX_HOME = TEST_DIR;
 });
 
 afterEach(() => {
+  invalidateStartupHealthCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
-  testDir = "";
+  if (TEST_DIR && existsSync(TEST_DIR)) {
+    try {
+      rmSync(TEST_DIR, { recursive: true, force: true });
+    } catch {
+      /* Windows may briefly lock while a background startup-health probe exits */
+    }
+  }
 });
 
 describe("GET /api/settings", () => {
@@ -71,6 +79,72 @@ describe("GET /api/settings", () => {
     const config = { ...baseConfig(), streamMode: "eager-relay" as const };
     const body = await (await getSettings(config))!.json() as { streamMode?: string };
     expect(body.streamMode).toBe("eager-relay");
+  });
+
+  test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
+    const { chmodSync } = await import("node:fs");
+    const {
+      persistEffortClamp,
+      resetCodexRuntimeResolveCacheForTests,
+    } = await import("../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+
+    const fakeCodex = process.platform === "win32"
+      ? join(TEST_DIR, "bin", "codex.cmd")
+      : join(TEST_DIR, "bin", "codex");
+    mkdirSync(join(TEST_DIR, "bin"), { recursive: true });
+    if (process.platform === "win32") {
+      writeFileSync(fakeCodex, "@echo off\r\necho codex-cli 0.133.0\r\n", "utf8");
+    } else {
+      writeFileSync(fakeCodex, "#!/bin/sh\necho 'codex-cli 0.133.0'\n", "utf8");
+      chmodSync(fakeCodex, 0o755);
+    }
+    persistEffortClamp({
+      runtimePath: fakeCodex,
+      runtimeVersion: "0.133.0",
+      removedEfforts: ["max", "ultra"],
+      affectedModels: ["gpt-5.6-sol"],
+    }, { configDir: TEST_DIR });
+
+    const previousCli = process.env.CODEX_CLI_PATH;
+    const previousPath = process.env.PATH;
+    try {
+      process.env.CODEX_CLI_PATH = fakeCodex;
+      process.env.PATH = "";
+      const body = await (await getSettings(baseConfig()))!.json() as {
+        codexRuntime?: {
+          path?: string;
+          version?: string | null;
+          source?: string;
+          warning?: string | null;
+          newerAvailable?: { path?: string; version?: string | null } | null;
+          catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
+        };
+      };
+      expect(typeof body.codexRuntime?.path).toBe("string");
+      // OPENCODEX_HOME lives under the OS user profile; username must stay redacted on all OS.
+      expect(body.codexRuntime?.path?.toLowerCase()).not.toMatch(/[/\\]users[/\\][^/\\[\]]+[/\\]/i);
+      expect(body.codexRuntime?.path?.toLowerCase()).not.toContain("alice");
+      expect(body.codexRuntime?.version).toBe("0.133.0");
+      expect(body.codexRuntime?.source).toBe("environment");
+      expect(body.codexRuntime?.catalogClamp).toEqual({
+        active: true,
+        removedEfforts: ["max", "ultra"],
+        runtimeVersion: "0.133.0",
+      });
+      expect(
+        body.codexRuntime?.newerAvailable === null
+        || (typeof body.codexRuntime?.newerAvailable === "object" && body.codexRuntime?.newerAvailable !== null),
+      ).toBe(true);
+      expect(typeof body.codexRuntime?.warning).toBe("string");
+      expect(body.codexRuntime?.warning).toContain("0.133.0");
+    } finally {
+      if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCli;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
   });
 });
 

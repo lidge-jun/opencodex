@@ -56,7 +56,7 @@ parent reasoning effort; clearing the model also clears the stored effort.
 This picker is delegation guidance for the v1 compatibility surface. On `multi_agent_v2`, the
 current proxy does not append the v1 injection message, and every spawned sub-agent inherits the
 parent session's model. It is not a proxy-side cross-model router. See
-[Sub-agent Surface](/opencodex/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
+[Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
 :::
 
 The picker offers enabled native and routed models plus the global Codex effort ladder. The API
@@ -109,6 +109,6 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 
 :::tip
 Adding **Ollama Cloud** or another catalog provider from the dashboard copies its text-versus-vision
-classification into the saved provider config, so the [vision sidecar](/opencodex/guides/sidecars/)
+classification into the saved provider config, so the [vision sidecar](/guides/sidecars/)
 is gated correctly without manual classification.
 :::

@@ -97,7 +97,7 @@ ocx logout xai
 默认 OpenAI 路径**无需 key** —— 它会直接转发你现有的 `codex login` 凭据。若要使用 OpenAI
 API key，请添加 `openai-apikey` provider。该预设包含 `gpt-5.6-sol`、`gpt-5.6-terra`、
 `gpt-5.6-luna`，但你的 API key 必须拥有实际使用权限
-(参见 [Provider](/opencodex/zh-cn/guides/providers/))。
+(参见 [Provider](/zh-cn/guides/providers/))。
 
 ## 停止与恢复
 
@@ -109,6 +109,6 @@ ocx restore back  # 让 Codex 再次使用仍在运行的代理
 
 ## 下一步
 
-- [工作原理](/opencodex/zh-cn/getting-started/how-it-works/) —— 每个请求都发生了什么。
-- [Provider](/opencodex/zh-cn/guides/providers/) —— 各种认证方式。
-- [配置](/opencodex/zh-cn/reference/configuration/) —— 完整的 `config.json` 参考。
+- [工作原理](/zh-cn/getting-started/how-it-works/) —— 每个请求都发生了什么。
+- [Provider](/zh-cn/guides/providers/) —— 各种认证方式。
+- [配置](/zh-cn/reference/configuration/) —— 完整的 `config.json` 参考。

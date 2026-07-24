@@ -6,7 +6,7 @@ description: Внутреннее устройство opencodex — карта 
 opencodex — это один процесс Bun. Запрос приходит как OpenAI Responses, нормализуется во
 внутреннюю модель, маршрутизируется, отправляется провайдеру через адаптер и мостом
 преобразуется обратно в Responses SSE. Сквозной поток описан в разделе
-[Как это работает](/opencodex/ru/getting-started/how-it-works/).
+[Как это работает](/ru/getting-started/how-it-works/).
 
 ## Карта модулей
 
@@ -50,7 +50,9 @@ src/
    `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (ретранслируются модулем `server/images.ts` вышестоящему провайдеру семейства OpenAI для
-   встроенного инструмента codex `image_gen`), а также необязательный WebSocket-апгрейд на
+   встроенного инструмента codex `image_gen`), `POST /v1/live` / `POST /v1/realtime/calls`
+   (создание голосового/Realtime-вызова ChatGPT / Codex App, ретранслируется `server/live.ts`),
+   sideband WebSocket на `/v1/live/{callId}`, а также необязательный WebSocket-апгрейд на
    `/v1/responses`.
 2. `server/responses/core.ts` распаковывает и парсит JSON, разворачивает локально запомненный вход
    `previous_response_id`, когда он доступен, затем вызывает `responses/parser.ts`.
@@ -161,7 +163,7 @@ Compaction контекста Codex работает для маршрутизи
 - `codex/catalog/sync.ts`, экспортируемый через фасад `codex/catalog.ts`, сливает маршрутизируемые
   модели в каталог Codex как записи с пространствами
   имён, ставит рекомендуемые
-  [модели подагентов](/opencodex/ru/guides/codex-integration/#the-subagent-picker) первыми,
+  [модели подагентов](/ru/guides/codex-integration/#the-subagent-picker) первыми,
   фильтрует `disabledModels` и может полностью восстановить первозданный каталог из одноразовой
   резервной копии.
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Notice, Select } from "../ui";
+import { Notice, Select, type SelectOption } from "../ui";
 import { IconPlus, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { useT } from "../i18n/shared";
@@ -19,6 +19,7 @@ interface ClaudeCodeState {
   autoCompactWindow: number | null;
   injectAgents: boolean;
   smallFastModel: string;
+  tierModels?: { haiku?: string };
   effectiveModelEnv: Record<string, string>;
   available: string[];
   aliases: { id: string; display_name: string }[];
@@ -101,6 +102,41 @@ export function AutoConnectSetting({
   );
 }
 
+export function SmallFastModelSetting({
+  value,
+  tierHaikuModel,
+  options,
+  onChange,
+}: {
+  value: string;
+  tierHaikuModel?: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+}) {
+  const t = useT();
+  const effectiveHelperModel = tierHaikuModel ?? value;
+  return (
+    <>
+      <div className="h-section">{t("claude.smallFastModel")}</div>
+      <p className="muted text-label" style={{ margin: "0 0 8px" }}>
+        {t("claude.smallFastModelAccurateHint")}
+      </p>
+      <Select
+        value={value}
+        options={options}
+        onChange={onChange}
+        label={t("claude.smallFastModel")}
+        style={{ maxWidth: 420 }}
+      />
+      {effectiveHelperModel === "" && (
+        <p className="notice-warn" role="status" style={{ marginTop: 8 }}>
+          {t("claude.smallFastModelNativeWarning")}
+        </p>
+      )}
+    </>
+  );
+}
+
 export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [state, setState] = useState<ClaudeCodeState | null>(null);
@@ -140,7 +176,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
 
   const modelOptions = useMemo(() => {
     const options = (state?.available ?? []).map(m => ({ value: m, label: String(modelLabel(m)) }));
-    return [{ value: "", label: t("claude.slotUnset") }, ...options];
+    return [{ value: "", label: t("claude.smallFastModelUnsetOption") }, ...options];
   }, [state?.available, t]);
 
   // Auto-compact window presets (devlog 020 + user request): dropdown like the model
@@ -345,14 +381,11 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         <pre className="mono card text-label" style={{ padding: "10px 14px", overflowX: "auto", margin: "6px 0 0" }}>{manualEnv}</pre>
       </details>
 
-      <div className="h-section">{t("claude.smallFastModel")}</div>
-      <p className="muted text-label" style={{ margin: "0 0 8px" }}>{t("claude.smallFastModelHint")}</p>
-      <Select
+      <SmallFastModelSetting
         value={state.smallFastModel}
+        tierHaikuModel={state.tierModels?.haiku}
         options={modelOptions}
-        onChange={v => setState({ ...state, smallFastModel: v })}
-        label={t("claude.smallFastModel")}
-        style={{ maxWidth: 420 }}
+        onChange={smallFastModel => setState({ ...state, smallFastModel })}
       />
 
       <div className="h-section">{t("claude.modelMap")} <span className="count">{rows.length}</span></div>

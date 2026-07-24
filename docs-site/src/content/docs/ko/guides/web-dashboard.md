@@ -55,7 +55,7 @@ Dashboard의 **Sub-agent delegation** 선택기는 `injectionModel`과 선택적
 이 선택기는 v1 호환 서피스용 위임 안내입니다. `multi_agent_v2`에서는 현재 프록시가 v1 주입
 메시지를 덧붙이지 않으며, 생성된 모든 서브에이전트가 부모 세션의 모델을 상속합니다. 프록시가
 스폰마다 모델을 바꾸는 라우터가 아닙니다. v1/base/v2의 정확한 동작은
-[서브에이전트 서피스](/opencodex/ko/guides/sub-agent-surface/)를 참고하세요.
+[서브에이전트 서피스](/ko/guides/sub-agent-surface/)를 참고하세요.
 :::
 
 선택기에는 활성화된 네이티브 및 라우팅 모델과 Codex 전역 reasoning 단계가 표시됩니다. API는
@@ -106,5 +106,5 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 :::tip
 대시보드에서 **Ollama Cloud** 같은 카탈로그 프로바이더를 추가하면 텍스트/비전 모델 분류가 저장된
 프로바이더 설정에 복사됩니다. 별도 분류 작업 없이도
-[비전 사이드카](/opencodex/ko/guides/sidecars/)가 올바른 조건에서만 실행됩니다.
+[비전 사이드카](/ko/guides/sidecars/)가 올바른 조건에서만 실행됩니다.
 :::

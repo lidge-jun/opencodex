@@ -95,5 +95,5 @@ or `ocx eject` strip exactly the lines opencodex added and restore native Codex.
 
 ## Next
 
-Continue to the [Quickstart](/opencodex/getting-started/quickstart/) to configure your first provider,
-or read [How It Works](/opencodex/getting-started/how-it-works/) for the architecture.
+Continue to the [Quickstart](/getting-started/quickstart/) to configure your first provider,
+or read [How It Works](/getting-started/how-it-works/) for the architecture.

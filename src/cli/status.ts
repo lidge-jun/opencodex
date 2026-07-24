@@ -7,6 +7,8 @@ import { diagnoseService } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
+import { redactSecretString, redactUserPath } from "../lib/redact";
 
 type HealthCheck = {
   ok: boolean;
@@ -51,6 +53,18 @@ export type CliStatusJson = {
   service: { summary: string };
   codexShim: { summary: string };
   codexPlugins: CodexPluginsDiagnostic;
+  codexRuntime: {
+    path: string;
+    version: string | null;
+    source: string;
+    newerAvailable: { path: string; version: string | null } | null;
+    warning: string | null;
+    catalogClamp: {
+      active: boolean;
+      removedEfforts: string[];
+      runtimeVersion: string | null;
+    };
+  };
 };
 
 export type CliStatusView = {
@@ -129,6 +143,71 @@ export async function collectStatus(): Promise<CliStatusView> {
     routingKind: getCodexRoutingKind(),
   });
   const codexPlugins = diagnoseCodexBundledPlugins();
+  const resolvedRuntime = (() => {
+    try {
+      return resolveCodexRuntime();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
+      return {
+        runtime: { command: "codex", version: null, source: "fallback" as const },
+        failures: [{
+          command: "codex",
+          source: "fallback" as const,
+          reason: `resolve threw: ${redacted}`,
+        }],
+        replacedConfigured: undefined,
+        newerAvailable: undefined,
+      };
+    }
+  })();
+  const lastClamp = loadLastEffortClamp();
+  const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
+  const warningParts: string[] = [];
+  if (
+    resolvedRuntime.replacedConfigured
+    && resolvedRuntime.replacedConfigured.from.command !== resolvedRuntime.runtime.command
+  ) {
+    warningParts.push(
+      `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolvedRuntime.runtime.command)} instead. Run ocx doctor for diagnosis and recovery.`,
+    );
+  } else if (
+    resolvedRuntime.runtime.source === "fallback"
+    && resolvedRuntime.failures.length > 0
+    && !resolvedRuntime.runtime.version
+  ) {
+    const detail = resolvedRuntime.failures[0]?.reason;
+    warningParts.push(
+      detail
+        ? `No validated Codex runtime found (${detail}); falling back to \`codex\`. Run ocx doctor for diagnosis and recovery.`
+        : "No validated Codex runtime found; falling back to `codex`. Run ocx doctor for diagnosis and recovery.",
+    );
+  }
+  if (resolvedRuntime.newerAvailable) {
+    warningParts.push("OpenCodex is using an older Codex binary. Run ocx doctor for diagnosis and recovery.");
+  }
+  if (clampActive) {
+    warningParts.push(
+      `Catalog clamp removed: ${lastClamp!.removedEfforts.join(", ")}. Run ocx doctor for diagnosis and recovery.`,
+    );
+  }
+  const codexRuntime = {
+    path: displayCodexRuntimePath(resolvedRuntime.runtime.command),
+    version: resolvedRuntime.runtime.version,
+    source: resolvedRuntime.runtime.source,
+    newerAvailable: resolvedRuntime.newerAvailable
+      ? {
+        path: displayCodexRuntimePath(resolvedRuntime.newerAvailable.command),
+        version: resolvedRuntime.newerAvailable.version,
+      }
+      : null,
+    warning: warningParts.length > 0 ? warningParts.join(" ") : null,
+    catalogClamp: {
+      active: clampActive,
+      removedEfforts: clampActive ? (lastClamp?.removedEfforts ?? []) : [],
+      runtimeVersion: clampActive ? (lastClamp?.runtimeVersion ?? null) : null,
+    },
+  };
   const proxyLabel = pid && health.ok
     ? `running (PID ${pid})`
     : pid
@@ -176,6 +255,7 @@ export async function collectStatus(): Promise<CliStatusView> {
       service: { summary: serviceSummary },
       codexShim: { summary: codexShimSummary },
       codexPlugins,
+      codexRuntime,
     },
   };
 }

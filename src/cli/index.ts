@@ -36,6 +36,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
+import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { maybeShowStarPrompt } from "./star-prompt";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
@@ -49,8 +50,9 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(0);
 }
 
-if (command === "help" && args[1]) {
-  printSubcommandUsage(args[1]);
+if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+  if (command === "help" && args[1]) printSubcommandUsage(args[1]);
+  else printUsage();
   process.exit(0);
 }
 
@@ -58,6 +60,8 @@ if (command !== undefined && command !== "help" && hasHelpFlag(args.slice(1))) {
   printSubcommandUsage(command);
   process.exit(0);
 }
+
+maybeAutoRestoreCodexShim(command, args);
 
 function parsePortOption(): number | undefined {
   if (args.length === 1) return undefined;
@@ -507,6 +511,16 @@ async function handleStatus() {
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}`);
   console.log(`   Service: ${status.json.service.summary}`);
   console.log(`   ${status.json.codexShim.summary}`);
+  console.log(`   Codex runtime: ${status.json.codexRuntime.path}`);
+  console.log(`   Codex version: ${status.json.codexRuntime.version ?? "unknown"}`);
+  console.log(`   Codex source: ${status.json.codexRuntime.source}`);
+  console.log(`   Catalog clamp: ${status.json.codexRuntime.catalogClamp.active ? "active" : "inactive"}`);
+  if (status.json.codexRuntime.catalogClamp.removedEfforts.length > 0) {
+    console.log(`   Removed efforts: ${status.json.codexRuntime.catalogClamp.removedEfforts.join(", ")}`);
+  }
+  if (status.json.codexRuntime.warning) {
+    console.log(`   ⚠️  ${status.json.codexRuntime.warning}`);
+  }
   if (status.json.codexPlugins.applicable) {
     const icon = status.json.codexPlugins.stale ? "⚠️ " : "✅";
     console.log(`   ${icon} Codex bundled plugins: ${status.json.codexPlugins.summary}`);
@@ -581,7 +595,7 @@ switch (command) {
     break;
   case "doctor": {
     const { runDoctor } = await import("./doctor");
-    await runDoctor();
+    await runDoctor(args.slice(1));
     break;
   }
   case "debug": {

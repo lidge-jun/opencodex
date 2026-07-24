@@ -96,4 +96,4 @@ description: Как opencodex решает, какой провайдер буд
   таким именем (например, `anthropic`, `openai`, `groq`) действительно настроен.
 
 Поля провайдера, которые читают эти правила, описаны в разделе
-[Конфигурация](/opencodex/ru/reference/configuration/).
+[Конфигурация](/ru/reference/configuration/).

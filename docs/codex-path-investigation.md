@@ -5,7 +5,7 @@ Date: 2026-06-19
 > **Archive note.** This is a dated investigation record, not current behavior
 > documentation. Some details (e.g. the referenced Codex version) reflect the state
 > at the time of writing. For current behavior see
-> [lidge-jun.github.io/opencodex](https://lidge-jun.github.io/opencodex/) and the
+> [opencodex.me](https://opencodex.me/) and the
 > maintainer source-of-truth under [`structure/`](../structure).
 
 This note records the web/source investigation behind opencodex's Codex path

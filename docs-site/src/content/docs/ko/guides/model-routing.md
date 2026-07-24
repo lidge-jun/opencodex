@@ -89,4 +89,4 @@ Pool(기본, 메인+추가 계정) 또는 Direct(현재 caller/메인 bearer)를
 - **프리픽스 패턴은 편의 기능**일 뿐 보장이 아닙니다: 해당 이름(예: `anthropic`, `openai`, `groq`)의
   프로바이더가 실제로 설정되어 있을 때만 해석됩니다.
 
-이 규칙들이 읽는 프로바이더 필드는 [설정](/opencodex/ko/reference/configuration/)을 참고하세요.
+이 규칙들이 읽는 프로바이더 필드는 [설정](/ko/reference/configuration/)을 참고하세요.

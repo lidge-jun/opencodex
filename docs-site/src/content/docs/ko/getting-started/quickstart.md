@@ -100,7 +100,7 @@ ocx logout xai
 기본 OpenAI 경로는 **키가 필요 없습니다** — 기존 `codex login` 자격 증명을 그대로 포워딩합니다.
 OpenAI API 키를 따로 쓰려면 `openai-apikey` 프로바이더를 추가하세요. 이 프리셋에는
 `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`가 포함되지만, API 키에 실제 사용 권한이 있어야 합니다
-([프로바이더](/opencodex/ko/guides/providers/) 참고).
+([프로바이더](/ko/guides/providers/) 참고).
 
 ## 중지 및 복원
 
@@ -112,6 +112,6 @@ ocx restore back  # 실행 중인 프록시로 Codex를 다시 연결
 
 ## 다음
 
-- [작동 방식](/opencodex/ko/getting-started/how-it-works/) — 각 요청에 무슨 일이 일어나는지.
-- [프로바이더](/opencodex/ko/guides/providers/) — 인증하는 모든 방법.
-- [구성](/opencodex/ko/reference/configuration/) — 전체 `config.json` 레퍼런스.
+- [작동 방식](/ko/getting-started/how-it-works/) — 각 요청에 무슨 일이 일어나는지.
+- [프로바이더](/ko/guides/providers/) — 인증하는 모든 방법.
+- [구성](/ko/reference/configuration/) — 전체 `config.json` 레퍼런스.

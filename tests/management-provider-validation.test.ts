@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -27,9 +27,14 @@ import {
   startServer,
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
+import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+// Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
+// default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(60_000);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -111,6 +116,42 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider discovery status is additive and omitted before an attempt", async () => {
+    markProviderDiscoveryFailed("auth-broken", { reason: "http", httpStatus: 401 });
+    try {
+      const requestUrl = new URL("http://127.0.0.1/api/providers");
+      const response = await handleManagementAPI(
+        new Request(requestUrl),
+        requestUrl,
+        {
+          providers: {
+            "auth-broken": {
+              adapter: "openai-chat",
+              baseUrl: "https://api.example.test/v1",
+              models: [],
+            },
+            "not-attempted": {
+              adapter: "openai-chat",
+              baseUrl: "https://static.example.test/v1",
+              liveModels: false,
+              models: [],
+            },
+          },
+        },
+      );
+      const providers = await response!.json() as Array<Record<string, unknown>>;
+
+      expect(providers).toContainEqual(expect.objectContaining({
+        name: "auth-broken",
+        discovery: { status: "failed", reason: "http", httpStatus: 401 },
+      }));
+      expect(providers.find(provider => provider.name === "not-attempted"))
+        .not.toHaveProperty("discovery");
+    } finally {
+      clearModelCache();
+    }
+  });
+
   test("provider management rejects externally supplied forward auth providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

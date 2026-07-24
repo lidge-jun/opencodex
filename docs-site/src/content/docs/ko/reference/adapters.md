@@ -21,7 +21,7 @@ interface ProviderAdapter {
 `parseResponse`는 프로바이더 응답을 내부 `AdapterEvent`로 올립니다. `fetchResponse`가 있으면
 어댑터가 재시도와 타임아웃을 직접 맡습니다. `runTurn`은 한 번의 HTTP fetch와 뒤이은 응답
 스트림으로 표현할 수 없는 전송 방식을 지원합니다. 이후
-[`bridge.ts`](/opencodex/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
+[`bridge.ts`](/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
 
 ## `openai-chat`
 
@@ -49,7 +49,7 @@ interface ProviderAdapter {
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
-  [사이드카](/opencodex/ko/guides/sidecars/)에도 쓰입니다.
+  [사이드카](/ko/guides/sidecars/)에도 쓰입니다.
 
 ## `anthropic`
 

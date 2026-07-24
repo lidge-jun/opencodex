@@ -826,6 +826,11 @@ class LiveCursorTransport implements CursorTransport {
           return;
         }
       }
+      // Native exec/MCP is handled inside this transport and can mutate files/process state
+      // without emitting a Responses tool event. Mark the turn replay-unsafe before executing so
+      // an eventual invalid_argument cannot cause the adapter's fresh-conversation fallback to
+      // run the same local action twice.
+      push({ type: "local_side_effect" });
       const replies = await handleCursorNativeExec(message.message.value, this.execContext);
       for (const reply of replies) this.stream.write(encodeConnectFrame(reply));
       return;
@@ -916,6 +921,8 @@ function describeCursorServerFrame(message: AgentServerMessage): Record<string, 
     out.id = message.message.value.id;
   } else if (message.message.case === "kvServerMessage") {
     out.kv = message.message.value.message.case ?? "unknown";
+  } else if (message.message.case === "conversationCheckpointUpdate") {
+    out.usedTokens = message.message.value.tokenDetails?.usedTokens ?? 0;
   }
   return out;
 }

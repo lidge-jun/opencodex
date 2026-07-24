@@ -68,7 +68,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 `websockets` is off by default. Dedicated-provider and catalog entries advertise
 `supports_websockets = true` only when `"websockets": true`; on loopback, Codex's built-in provider
 may probe WebSocket first, and a disabled proxy returns `426` so Codex falls back to HTTP/SSE. See
-[Codex Integration](/opencodex/guides/codex-integration/) for the full injection and restore flow.
+[Codex Integration](/guides/codex-integration/) for the full injection and restore flow.
 
 ## Why routed models show up
 
@@ -138,7 +138,7 @@ with `{ "multiAgentMode": "v1" }`. Changes apply to new Codex sessions.
 :::caution
 On the v2 (`multi_agent_v2`) surface, spawned sub-agents inherit the parent session's model. The
 dashboard's delegation model/effort picker is v1 prompt guidance, not a proxy-side per-spawn
-cross-model router. See [Sub-agent Surface](/opencodex/guides/sub-agent-surface/) for the canonical
+cross-model router. See [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical
 behavior.
 :::
 

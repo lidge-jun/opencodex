@@ -44,7 +44,7 @@ cd docs-site && bun install && bun dev
 
 ## 文档发布
 
-公开文档发布到 GitHub Pages：<https://lidge-jun.github.io/opencodex/zh-cn/>。
+公开文档发布到 GitHub Pages：<https://opencodex.me/zh-cn/>。
 `.github/workflows/deploy-docs.yml` 会在 `main` push 中 `docs-site/**` 或 workflow 本身发生变化时
 运行，构建 `docs-site` 并部署生成的网站。推送文档变更前请运行：
 
@@ -111,7 +111,7 @@ bun run release:watch               # 观察最新的 Release workflow run
 ## 添加 adapter
 
 在 `src/adapters/` 中实现 `ProviderAdapter`（参见
-[Adapters](/opencodex/zh-cn/reference/adapters/)），在 `src/server/adapter-resolve.ts` 注册其名称，
+[Adapters](/zh-cn/reference/adapters/)），在 `src/server/adapter-resolve.ts` 注册其名称，
 并把输出桥接成内部 `AdapterEvent`。图像处理请复用 `image.ts`；普通 streaming/tool call 以
 `openai-chat.ts` 为参考。只有 adapter 自己负责 transport retry 时才使用 `fetchResponse`；Cursor
 这类真正的双向 transport 应使用 `runTurn`。在 `tests/` 中添加聚焦测试；如果 factory 属于 public

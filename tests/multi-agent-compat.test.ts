@@ -662,6 +662,14 @@ describe("injectDeveloperMessage", () => {
 });
 
 describe("sanitizeEncryptedContentInPlace", () => {
+  const fernetFixture = (): string => {
+    const raw = Buffer.alloc(73, 0x5a);
+    raw[0] = 0x80;
+    raw.writeBigUInt64BE(1_720_000_000n, 1);
+    const unpadded = raw.toString("base64url");
+    return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
+  };
+
   test("plaintext parked in encrypted slots becomes input_text; real blobs survive", () => {
     const blob = "gAAAAAB".padEnd(120, "Qw1_-=");
     const input = [
@@ -690,7 +698,7 @@ describe("sanitizeEncryptedContentInPlace", () => {
   });
 
   test("mixed slot (hook preamble + embedded Fernet task) splits into text + encrypted parts", () => {
-    const fernet = "gAAAA" + "Ab1_-".repeat(20) + "==";
+    const fernet = fernetFixture();
     const input = [
       { type: "message", role: "user", content: [
         { type: "encrypted_content", encrypted_content: `[CXC-LEAF-GUARD] follow the rules.\n\n${fernet}` },
@@ -704,7 +712,7 @@ describe("sanitizeEncryptedContentInPlace", () => {
   });
 
   test("pure Fernet slot stays byte-identical", () => {
-    const fernet = "gAAAA" + "Ab1_-".repeat(20) + "==";
+    const fernet = fernetFixture();
     const input = [
       { type: "message", role: "user", content: [
         { type: "encrypted_content", encrypted_content: fernet },

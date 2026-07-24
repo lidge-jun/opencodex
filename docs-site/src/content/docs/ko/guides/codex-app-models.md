@@ -47,7 +47,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 `"websockets": true`일 때만 `supports_websockets = true`를 광고합니다. 루프백에서는 Codex의
 내장 프로바이더가 WebSocket을 먼저 시도할 수 있으며, 기능이 꺼진 프록시는 `426`을 반환해
 HTTP/SSE로 폴백시킵니다. 주입과 복원 전체 흐름은
-[Codex 통합](/opencodex/ko/guides/codex-integration/)을 참고하세요.
+[Codex 통합](/ko/guides/codex-integration/)을 참고하세요.
 
 ## 라우팅 모델이 표시되는 이유
 
@@ -116,7 +116,7 @@ Dashboard나 Models 페이지, `ocx v2 mode v1|default|v2`, 또는
 :::caution
 v2(`multi_agent_v2`) 서피스에서 생성된 서브에이전트는 부모 세션의 모델을 상속합니다. 대시보드의
 위임 모델/강도 선택기는 v1 프롬프트 안내이며, 프록시가 스폰마다 다른 모델로 라우팅하는 기능이
-아닙니다. 정확한 동작은 [서브에이전트 서피스](/opencodex/ko/guides/sub-agent-surface/)를
+아닙니다. 정확한 동작은 [서브에이전트 서피스](/ko/guides/sub-agent-surface/)를
 참고하세요.
 :::
 

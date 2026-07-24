@@ -61,7 +61,7 @@ effort to use; v2 requests keep Codex's native multi-agent guidance.
 2. **Route** — `router.ts` maps the requested model id to a configured provider using a fixed
    precedence: explicit `provider/model` → a provider's `defaultModel` → built-in prefix patterns
    (`claude-`, `gpt-`, `o1-`/`o3-`/`o4-`, `llama-`/`mixtral-`/`gemma-`) → a provider's `models[]` →
-   the `defaultProvider` fallback. See [Model Routing](/opencodex/guides/model-routing/).
+   the `defaultProvider` fallback. See [Model Routing](/guides/model-routing/).
 
 3. **Authenticate** — for an `oauth` provider, opencodex swaps in a fresh, auto-refreshed access
    token as the bearer key, so the existing adapters authenticate unchanged. For ChatGPT/Codex pool
@@ -71,7 +71,7 @@ effort to use; v2 requests keep Codex's native multi-agent guidance.
 4. **Vision sidecar (optional)** — if the routed model is listed in `provider.noVisionModels` and the
    request carries an image, opencodex describes each image with the configured ChatGPT vision
    sidecar and replaces it with text, so a text-only model can still reason about it.
-   See [Sidecars](/opencodex/guides/sidecars/).
+   See [Sidecars](/guides/sidecars/).
 
 5. **Passthrough fast path** — if the adapter is a Responses passthrough (`openai-responses` or
    `azure-openai`), opencodex keeps the Responses body, applies targeted routing and compatibility
@@ -103,5 +103,5 @@ Codex hard-codes the Responses API. By translating at the protocol boundary, ope
 Codex **CLI, App, and SDK** unchanged, survives Codex updates, and lets you switch providers per
 request without touching Codex itself. The translation is bidirectional and streaming-faithful:
 reasoning summaries, MCP tool namespaces, freeform (`apply_patch`) tools, and `tool_search` discovery
-all round-trip correctly. See the [Architecture reference](/opencodex/reference/architecture/) for the
+all round-trip correctly. See the [Architecture reference](/reference/architecture/) for the
 event-by-event mapping.

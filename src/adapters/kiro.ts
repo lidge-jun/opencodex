@@ -917,23 +917,9 @@ async function* parseKiroAttempt(
         terminal: { type: "done", usage: finalUsage, endTurn: false, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
       };
     }
-    // A clean Smithy EOF after ordinary assistant text is a complete answer even when the
-    // private completion tool was advertised. Replaying that answer through a second Kiro
-    // request adds latency and can hang an otherwise-finished Codex turn if the retry stalls.
-    // Reasoning-only output still needs the bounded fallback because it has no user-facing text.
-    if (mode === "required" && sawText) {
-      return {
-        assistantText,
-        sawReasoning,
-        terminal: {
-          type: "done",
-          usage: finalUsage,
-          endTurn: true,
-          ...(finalProviderState ? { providerState: finalProviderState } : {}),
-        },
-      };
-    }
-    if (mode === "required" && sawReasoning) {
+    // Kiro text has no trustworthy final/progress marker. When completion is required, ordinary
+    // text and reasoning remain unfinished until the one bounded fallback validates the turn.
+    if (mode === "required" && (sawText || sawReasoning)) {
       return { assistantText, sawReasoning, needsFallback: true, usage: finalUsage, providerState: finalProviderState };
     }
     if (!sawText && !sawReasoning) {

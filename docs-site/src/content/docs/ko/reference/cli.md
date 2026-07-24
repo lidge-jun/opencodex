@@ -342,7 +342,7 @@ ocx login xai
 
 ### `ocx gui`
 
-`http://localhost:<port>`에서 [웹 대시보드](/opencodex/ko/guides/web-dashboard/)를 엽니다.
+`http://localhost:<port>`에서 [웹 대시보드](/ko/guides/web-dashboard/)를 엽니다.
 프록시가 실행 중이 아니면 자동으로 시작합니다.
 
 ## 백그라운드 서비스
@@ -376,8 +376,11 @@ ocx service uninstall
 PATH에 있는 스크립트 기반 `codex` 런처를 가벼운 자동 시작 스크립트로 감쌉니다. 실제 `codex.exe`
 대상은 정확한 실행 파일 호출이 깨지지 않도록 건드리지 않습니다.
 
-Codex 업데이트가 래퍼를 덮어쓰더라도 다음 `install` 호출에서 shim이 스스로 복구됩니다. 새
-바이너리를 백업한 뒤 새 래퍼를 씁니다.
+완료된 외부 Codex 업데이트가 설치된 shim을 덮어쓰면 다음 일반 `ocx` 명령이 안정화된 새 런처를
+백업하고 명령 실행 전에 shim을 복구합니다. 아직 변경 중인 런처는 건드리지 않고 이후에 다시
+시도합니다. 복구 실패는 요청한 명령을 실패시키지 않고 경고만 출력하며, 수동 대체 명령은
+`ocx codex-shim install`입니다. 자동 복구를 끄려면 `codexShimAutoRestore`를 `false`로 설정하거나
+프로세스에 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정하세요.
 
 | Subcommand | Action |
 | --- | --- |

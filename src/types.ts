@@ -11,6 +11,18 @@ export interface OcxParsedRequest {
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
   _cursorConversationId?: string;
+  /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
+  _clientThreadId?: string;
+  /**
+   * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
+   * When absent (single-operator local proxy), derivation stays local-scoped.
+   */
+  _cursorIdentityScope?: string;
+  /**
+   * True for helper/shadow/compaction turns that must not append into the main Cursor conversation
+   * derived from the parent thread id.
+   */
+  _cursorIsolateConversation?: boolean;
   /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
   _providerContinuation?: OcxProviderContinuationState;
   /**
@@ -540,6 +552,8 @@ export interface OcxConfig {
   apiKeys?: Array<{ id: string; name: string; key: string; createdAt: string }>;
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
+  /** Restore an installed shim after a stable external Codex update replaces it. Default true. */
+  codexShimAutoRestore?: boolean;
   /**
    * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
    * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default

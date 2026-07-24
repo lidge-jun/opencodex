@@ -2,7 +2,7 @@
 
 Thanks for helping with opencodex.
 
-- Start with the canonical guide: [Contributing](https://lidge-jun.github.io/opencodex/contributing/)
+- Start with the canonical guide: [Contributing](https://opencodex.me/contributing/)
 - Public user docs live in [`docs-site/`](./docs-site)
 - Current maintainer invariants live in [`structure/`](./structure)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)

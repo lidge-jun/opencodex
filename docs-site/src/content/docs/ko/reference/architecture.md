@@ -5,7 +5,7 @@ description: opencodex 내부 구조 — 모듈 맵, AdapterEvent 브리지, 요
 
 opencodex는 단일 Bun 프로세스입니다. 요청은 OpenAI Responses로 들어와 내부 모델로 정규화되고,
 라우팅된 뒤, 어댑터를 통해 프로바이더로 전송되고, 다시 Responses SSE로 브리징됩니다. 엔드투엔드
-플로우는 [동작 원리](/opencodex/ko/getting-started/how-it-works/)를 참조하세요.
+플로우는 [동작 원리](/ko/getting-started/how-it-works/)를 참조하세요.
 
 ## 모듈 맵
 
@@ -47,7 +47,9 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
    주기를 기록합니다. 여기서 `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (Codex 내장 `image_gen` 도구용 — `server/images.ts`가 OpenAI 계열 업스트림으로 중계),
-   `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
+   `POST /v1/live` / `POST /v1/realtime/calls`(ChatGPT / Codex App 음성 및 OpenAI Realtime
+   호출 생성, `server/live.ts`가 중계)와 `/v1/live/{callId}` 사이드밴드 WebSocket,
+   그리고 `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
 2. `server/responses/core.ts`가 압축을 풀고 JSON을 읽습니다. 기억해 둔 `previous_response_id` 입력이 있으면
    펼친 다음 `responses/parser.ts`로 넘깁니다.
 3. `router.ts`가 일반 모델 id 또는 `provider/model` id를 해석합니다. 이어서 Codex 계정 affinity를
@@ -126,7 +128,7 @@ Codex 컨텍스트 compaction은 라우팅된 모델에서도 동작합니다. `
   자체 캐시와 일치), fetch가 실패하면 stale-fallback을 제공합니다.
 - `codex/catalog.ts` facade가 내보내는 `codex/catalog/sync.ts`는 라우팅된 모델을 네임스페이스
   항목으로 Codex의 카탈로그에 병합하고, 추천
-  [서브에이전트 모델](/opencodex/ko/guides/codex-integration/#the-subagent-picker)을 먼저 랭크하며,
+  [서브에이전트 모델](/ko/guides/codex-integration/#the-subagent-picker)을 먼저 랭크하며,
   `disabledModels`를 필터링하고, 일회성 백업으로부터 원본 카탈로그를 완전히 복원할 수 있습니다.
 
 ## Reasoning effort

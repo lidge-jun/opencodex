@@ -1,12 +1,12 @@
 ---
-// Custom Starlight header: default chrome (title / search / social / theme /
-// language) plus a desktop-only hover-dropdown nav in the liquid-glass grammar.
+// Custom Starlight header: default chrome (title / search / social) plus a
+// desktop-only hover-dropdown nav and custom preference controls in the
+// liquid-glass grammar.
 // Mobile (<72rem) hides the nav; the built-in hamburger flow is untouched.
-import LanguageSelect from '@astrojs/starlight/components/LanguageSelect.astro';
+import { Icon } from '@astrojs/starlight/components';
 import Search from '@astrojs/starlight/components/Search.astro';
 import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
 import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
-import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
 
 const { locale } = Astro.locals.starlightRoute;
 // Splash pages have no Starlight sidebar/hamburger, so the pill carries its own
@@ -21,6 +21,39 @@ type NavGroup = { label: string; links: NavLink[] };
 
 const t = (en: string, ko: string, zh: string, ru: string, ja: string) =>
 	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'ru' ? ru : locale === 'ja' ? ja : en;
+
+type LanguageOption = { code: 'root' | 'ko' | 'zh-cn' | 'ru' | 'ja'; label: string };
+const languages: LanguageOption[] = [
+	{ code: 'root', label: 'English' },
+	{ code: 'ko', label: '한국어' },
+	{ code: 'zh-cn', label: '简体中文' },
+	{ code: 'ru', label: 'Русский' },
+	{ code: 'ja', label: '日本語' },
+];
+const currentLanguage = languages.find(({ code }) => code === (locale ?? 'root')) ?? languages[0];
+
+// Preserve the current document path when switching locale. Starlight's root
+// locale has no URL segment, while every translated locale does.
+const routePrefix = locale ? `${base}${locale}/` : base;
+const routeSuffix = Astro.url.pathname.startsWith(routePrefix)
+	? Astro.url.pathname.slice(routePrefix.length)
+	: '';
+const languageHref = (code: LanguageOption['code']) =>
+	`${code === 'root' ? base : `${base}${code}/`}${routeSuffix}`;
+
+const themeLabels = {
+	auto: t('Auto', '자동', '自动', 'Авто', '自動'),
+	light: t('Light', '라이트', '浅色', 'Светлая', 'ライト'),
+	dark: t('Dark', '다크', '深色', 'Тёмная', 'ダーク'),
+};
+const themeName = t('Theme', '테마', '主题', 'Тема', 'テーマ');
+const themeCycleHint = t(
+	'Click to use the next theme',
+	'클릭하여 다음 테마로 전환',
+	'点击切换到下一个主题',
+	'Нажмите, чтобы включить следующую тему',
+	'クリックして次のテーマに切り替え',
+);
 
 const groups: NavGroup[] = [
 	{
@@ -99,8 +132,64 @@ const contributing: NavLink = {
 		<div class="sl-flex social-icons">
 			<SocialIcons />
 		</div>
-		<ThemeSelect />
-		<LanguageSelect />
+		<div class="sl-flex header-preferences">
+			{/*
+				[Decision Log]
+				- 목적과 의도: Keep theme switching one click away and make locale navigation visually consistent with the site's custom menus.
+				- 기존 구현 및 제약 조건: Starlight's native selects inherit browser/OS popup styling and mouse focus borders that cannot match the glass design system.
+				- 검토한 주요 대안: Restyle the native selects; replace both with popovers; cycle theme while keeping language as a popover.
+				- 선택한 방식: Auto -> Light -> Dark theme cycle button plus a server-rendered language popover.
+				- 다른 대안 대신 이 방식을 선택한 이유: Native option popups are not fully styleable, and theme has only three predictable states that do not need a menu.
+				- 장점, 단점 및 영향: Consistent chrome and faster theme changes; the cycle order must remain stable and keyboard focus must remain visible.
+			*/}
+			<button
+				type="button"
+				class="preference-control theme-cycle"
+				data-theme-value="auto"
+				data-auto-label={themeLabels.auto}
+				data-light-label={themeLabels.light}
+				data-dark-label={themeLabels.dark}
+				data-theme-name={themeName}
+				data-cycle-hint={themeCycleHint}
+				aria-label={`${themeName}: ${themeLabels.auto}. ${themeCycleHint}`}
+				title={`${themeName}: ${themeLabels.auto}`}
+			>
+				<span class="preference-icon" data-theme-icon="auto"><Icon name="laptop" /></span>
+				<span class="preference-icon" data-theme-icon="light" hidden><Icon name="sun" /></span>
+				<span class="preference-icon" data-theme-icon="dark" hidden><Icon name="moon" /></span>
+				<span data-theme-label>{themeLabels.auto}</span>
+			</button>
+
+			<div class="header-preference language-preference">
+				<button
+					type="button"
+					class="preference-control language-trigger"
+					aria-haspopup="menu"
+					aria-expanded="false"
+					aria-controls="language-menu"
+					aria-label={t('Select language', '언어 선택', '选择语言', 'Выбрать язык', '言語を選択')}
+				>
+					<Icon name="translate" class="preference-icon" />
+					<span>{currentLanguage.label}</span>
+					<Icon name="down-caret" class="preference-caret" />
+				</button>
+				<div class="language-menu" id="language-menu" role="menu">
+					<ul>
+						{languages.map((language) => (
+							<li>
+								<a
+									href={languageHref(language.code)}
+									role="menuitemradio"
+									aria-checked={language.code === (locale ?? 'root') ? 'true' : 'false'}
+								>
+									{language.label}
+								</a>
+							</li>
+						))}
+					</ul>
+				</div>
+			</div>
+		</div>
 	</div>
 	{isSplash && (
 		<div class="lp-menu print:hidden">
@@ -170,10 +259,120 @@ const contributing: NavLink = {
 		gap: 1rem;
 		align-items: center;
 	}
+	.header-preferences {
+		gap: 0.125rem;
+		align-items: center;
+	}
 	.social-icons::after {
 		content: '';
 		height: 2rem;
 		border-inline-end: 1px solid var(--sl-color-gray-5);
+	}
+
+	/* ---- theme cycle + language popover -------------------------------- */
+	.header-preference {
+		position: relative;
+	}
+	.preference-control {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.375rem;
+		min-height: 2.25rem;
+		padding: 0.375rem 0.75rem;
+		border: 0;
+		border-radius: var(--ocx-radius-pill, 999px);
+		background: transparent;
+		color: var(--sl-color-gray-2);
+		font: inherit;
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		line-height: 1;
+		white-space: nowrap;
+		cursor: pointer;
+		transition: background-color 0.12s, color 0.12s;
+	}
+	.preference-control:hover,
+	.preference-control[aria-expanded='true'] {
+		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		color: var(--sl-color-white);
+	}
+	.preference-control:focus:not(:focus-visible) {
+		outline: none;
+		box-shadow: none;
+	}
+	.preference-control:focus-visible {
+		outline: 2px solid color-mix(in srgb, var(--sl-color-accent) 55%, transparent);
+		outline-offset: 2px;
+	}
+	.preference-icon {
+		display: inline-flex;
+		font-size: 0.9rem;
+	}
+	.preference-icon[hidden] {
+		display: none;
+	}
+	.preference-caret {
+		font-size: 1rem;
+		opacity: 0.55;
+		transition: transform 0.15s ease;
+	}
+	.language-trigger[aria-expanded='true'] .preference-caret {
+		transform: rotate(180deg);
+	}
+	.language-menu {
+		position: absolute;
+		top: calc(100% + 0.625rem);
+		inset-inline-end: 0;
+		min-width: 12rem;
+		padding: 0.375rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: var(--ocx-radius, 12px);
+		background-color: var(--ocx-glass-panel, canvas);
+		backdrop-filter: var(--ocx-glass-blur, blur(22px));
+		-webkit-backdrop-filter: var(--ocx-glass-blur, blur(22px));
+		box-shadow: var(--ocx-shadow, 0 10px 28px rgba(0, 0, 0, 0.2));
+		opacity: 0;
+		visibility: hidden;
+		translate: 0 -0.25rem;
+		transition: opacity 0.16s ease, visibility 0.16s, translate 0.16s ease;
+		z-index: var(--sl-z-index-navbar);
+	}
+	.language-preference:has(> .language-trigger[aria-expanded='true']) .language-menu {
+		opacity: 1;
+		visibility: visible;
+		translate: 0 0;
+	}
+	.language-menu ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.language-menu a {
+		display: block;
+		padding: 0.5rem 0.75rem;
+		border-radius: var(--ocx-radius-sm, 8px);
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		text-decoration: none;
+		transition: background-color 0.12s, color 0.12s;
+	}
+	.language-menu a:hover,
+	.language-menu a:focus-visible,
+	.language-menu a[aria-checked='true'] {
+		background-color: var(--ocx-hover, rgba(128, 128, 128, 0.1));
+		color: var(--sl-color-white);
+	}
+	.language-menu a:focus:not(:focus-visible) {
+		outline: none;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.preference-control,
+		.preference-caret,
+		.language-menu {
+			transition: none;
+		}
 	}
 
 	/* ---- hover-dropdown nav (desktop only) ---- */
@@ -360,7 +559,9 @@ const contributing: NavLink = {
 	// Click/Enter/Space toggles the dropdowns (hover and focus-within still work
 	// via CSS); Escape or an outside click closes any open menu.
 	const buttons = Array.from(
-		document.querySelectorAll<HTMLButtonElement>('.glass-nav .nav-link[aria-haspopup], .lp-menu-btn'),
+		document.querySelectorAll<HTMLButtonElement>(
+			'.glass-nav .nav-link[aria-haspopup], .lp-menu-btn, .language-trigger',
+		),
 	);
 	const closeAll = (except?: HTMLButtonElement) => {
 		for (const b of buttons) if (b !== except) b.setAttribute('aria-expanded', 'false');
@@ -373,9 +574,93 @@ const contributing: NavLink = {
 		});
 	}
 	document.addEventListener('click', (e) => {
-		if (!(e.target instanceof Element) || !e.target.closest('.glass-nav, .lp-menu')) closeAll();
+		if (!(e.target instanceof Element) || !e.target.closest('.glass-nav, .lp-menu, .header-preference')) closeAll();
 	});
 	document.addEventListener('keydown', (e) => {
 		if (e.key === 'Escape') closeAll();
 	});
+
+	// The theme has three predictable states, so each activation advances the
+	// stable Auto -> Light -> Dark order instead of opening another menu.
+	type Theme = 'auto' | 'light' | 'dark';
+	const themeOrder: Theme[] = ['auto', 'light', 'dark'];
+	const storageKey = 'starlight-theme';
+	const preferredTheme = () =>
+		window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+	const loadTheme = (): Theme => {
+		const stored = localStorage.getItem(storageKey);
+		return stored === 'light' || stored === 'dark' ? stored : 'auto';
+	};
+	const updateThemeButton = (button: HTMLButtonElement, theme: Theme) => {
+		const label = button.dataset[`${theme}Label`] ?? theme;
+		button.dataset.themeValue = theme;
+		button.querySelector<HTMLElement>('[data-theme-label]')!.textContent = label;
+		for (const icon of button.querySelectorAll<HTMLElement>('[data-theme-icon]')) {
+			icon.hidden = icon.dataset.themeIcon !== theme;
+		}
+		const themeName = button.dataset.themeName ?? 'Theme';
+		button.title = `${themeName}: ${label}`;
+		button.setAttribute('aria-label', `${themeName}: ${label}. ${button.dataset.cycleHint ?? ''}`.trim());
+	};
+	const applyTheme = (button: HTMLButtonElement, theme: Theme) => {
+		document.documentElement.dataset.theme = theme === 'auto' ? preferredTheme() : theme;
+		localStorage.setItem(storageKey, theme === 'auto' ? '' : theme);
+		updateThemeButton(button, theme);
+	};
+	for (const button of document.querySelectorAll<HTMLButtonElement>('.theme-cycle')) {
+		applyTheme(button, loadTheme());
+		button.addEventListener('click', () => {
+			const current = (button.dataset.themeValue as Theme | undefined) ?? 'auto';
+			const next = themeOrder[(themeOrder.indexOf(current) + 1) % themeOrder.length] ?? 'auto';
+			applyTheme(button, next);
+		});
+	}
+	window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+		if (loadTheme() !== 'auto') return;
+		for (const button of document.querySelectorAll<HTMLButtonElement>('.theme-cycle')) {
+			applyTheme(button, 'auto');
+		}
+	});
+
+	// Arrow keys move directly through language links; Escape returns focus to
+	// the trigger so keyboard navigation behaves like the other header menus.
+	for (const trigger of document.querySelectorAll<HTMLButtonElement>('.language-trigger')) {
+		const menu = trigger.parentElement?.querySelector<HTMLElement>('.language-menu');
+		const items = Array.from(menu?.querySelectorAll<HTMLAnchorElement>('a[role^="menuitem"]') ?? []);
+		trigger.addEventListener('keydown', (event) => {
+			if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+			event.preventDefault();
+			closeAll(trigger);
+			trigger.setAttribute('aria-expanded', 'true');
+			const target = items[event.key === 'ArrowDown' ? 0 : items.length - 1];
+			// The popover intentionally transitions `visibility`; Chromium refuses
+			// to focus descendants until that transition has made them visible.
+			const focusWhenVisible = (attempt = 0) => {
+				if (!target || !menu || trigger.getAttribute('aria-expanded') !== 'true') return;
+				if (getComputedStyle(menu).visibility === 'visible') {
+					target.focus();
+					return;
+				}
+				if (attempt < 20) requestAnimationFrame(() => focusWhenVisible(attempt + 1));
+			};
+			focusWhenVisible();
+		});
+		menu?.addEventListener('keydown', (event) => {
+			const activeIndex = items.indexOf(document.activeElement as HTMLAnchorElement);
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				trigger.setAttribute('aria-expanded', 'false');
+				trigger.focus();
+				return;
+			}
+			if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+			event.preventDefault();
+			const nextIndex =
+				event.key === 'Home' ? 0 :
+				event.key === 'End' ? items.length - 1 :
+				event.key === 'ArrowDown' ? (activeIndex + 1) % items.length :
+				(activeIndex - 1 + items.length) % items.length;
+			items[nextIndex]?.focus();
+		});
+	}
 </script>

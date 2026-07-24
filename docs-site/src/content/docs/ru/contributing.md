@@ -45,7 +45,7 @@ cd docs-site && bun install && bun dev
 
 ## Публикация документации
 
-Публичная документация публикуется на GitHub Pages по адресу <https://lidge-jun.github.io/opencodex/ru/>.
+Публичная документация публикуется на GitHub Pages по адресу <https://opencodex.me/ru/>.
 Воркфлоу `.github/workflows/deploy-docs.yml` запускается на push в `main`, затрагивающих
 `docs-site/**` или сам воркфлоу, собирает `docs-site` и разворачивает сгенерированный сайт. Перед
 push изменений документации выполните:
@@ -116,7 +116,7 @@ bun run release:watch               # наблюдение за последни
 
 ## Добавление адаптера
 
-Реализуйте `ProviderAdapter` (см. [Адаптеры](/opencodex/ru/reference/adapters/)) в `src/adapters/`,
+Реализуйте `ProviderAdapter` (см. [Адаптеры](/ru/reference/adapters/)) в `src/adapters/`,
 зарегистрируйте его имя в `src/server/adapter-resolve.ts` и приведите его вывод к внутренним
 событиям `AdapterEvent`. Переиспользуйте `image.ts` для работы с изображениями и ориентируйтесь на
 `openai-chat.ts` для обычной потоковой передачи и вызовов инструментов; используйте `fetchResponse`

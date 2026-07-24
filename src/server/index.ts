@@ -122,11 +122,90 @@ import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
+import { handleLive, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
+const LIVE_SIDEBAND_PENDING_MAX = 32;
+
+function closeLiveSideband(ws: ServerWebSocket<WsData>, code = 1000, reason = ""): void {
+  try {
+    ws.data.liveUpstream?.close(code, reason);
+  } catch {
+    /* upstream already gone */
+  }
+  ws.data.liveUpstream = undefined;
+  ws.data.livePending = undefined;
+  try {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(code, reason);
+    }
+  } catch {
+    /* client already gone */
+  }
+}
+
+function attachLiveSidebandUpstream(ws: ServerWebSocket<WsData>): void {
+  const url = ws.data.liveUpstreamUrl;
+  if (!url) {
+    closeLiveSideband(ws, 1011, "missing upstream");
+    return;
+  }
+  let upstream: WebSocket;
+  try {
+    // Bun accepts per-handshake headers; the DOM lib types only list protocol arrays.
+    upstream = new WebSocket(url, { headers: ws.data.liveUpstreamHeaders ?? {} } as unknown as string[]);
+  } catch {
+    closeLiveSideband(ws, 1011, "upstream connect failed");
+    return;
+  }
+  ws.data.liveUpstream = upstream;
+  ws.data.cancel = () => {
+    try {
+      upstream.close(1000, "client closed");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  upstream.addEventListener("open", () => {
+    ws.data.liveOpened = true;
+    const pending = ws.data.livePending ?? [];
+    ws.data.livePending = undefined;
+    for (const frame of pending) {
+      try {
+        upstream.send(frame);
+      } catch {
+        closeLiveSideband(ws, 1011, "upstream send failed");
+        return;
+      }
+    }
+  });
+  upstream.addEventListener("message", (event) => {
+    try {
+      if (typeof event.data === "string") ws.send(event.data);
+      else if (event.data instanceof ArrayBuffer) ws.send(event.data);
+      else if (ArrayBuffer.isView(event.data)) {
+        ws.send(event.data.buffer.slice(event.data.byteOffset, event.data.byteOffset + event.data.byteLength));
+      } else ws.send(event.data as Buffer);
+    } catch {
+      closeLiveSideband(ws, 1011, "client send failed");
+    }
+  });
+  upstream.addEventListener("close", (event) => {
+    try {
+      ws.close(event.code || 1000, event.reason || "");
+    } catch {
+      /* ignore */
+    }
+    ws.data.liveUpstream = undefined;
+  });
+  upstream.addEventListener("error", () => {
+    closeLiveSideband(ws, 1011, "upstream error");
+  });
+}
 
 // GUI static serving extracted to ./server/gui-static. Re-exported below to keep the
 // "../src/server" import surface stable for tests/callers.
@@ -498,6 +577,77 @@ export function startServer(port?: number) {
         return withCors(response, req, config);
       }
 
+      // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
+      // Clients hit either /v1/live (Frameless App) or /v1/realtime/calls (codex RealtimeCallClient /
+      // public Realtime API). Sideband WS joins are handled just below.
+      if (
+        req.method === "POST"
+        && (url.pathname === "/v1/live" || url.pathname === "/v1/realtime/calls")
+      ) {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) {
+          return new Response("Service shutting down", {
+            status: 503,
+            headers: { ...corsHeaders(req, config), "Retry-After": "5" },
+          });
+        }
+        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: "gpt-live", provider: "unknown" };
+        const response = await handleLive(req, config, logCtx);
+        addFinalRequestLog(
+          requestId,
+          start,
+          logCtx,
+          response.status,
+          response.status === 499 ? { closeReason: "client_cancel" } : undefined,
+        );
+        return withCors(response, req, config);
+      }
+
+      // Voice / Realtime sideband WebSocket: Frameless joins /v1/live/{callId}; Realtime v1 joins
+      // /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Transparent bidirectional relay.
+      const liveSidebandTarget = req.headers.get("upgrade")?.toLowerCase() === "websocket"
+        ? parseLiveSidebandTarget(url.pathname, url.searchParams)
+        : null;
+      if (liveSidebandTarget) {
+        if (isDraining()) {
+          return new Response("Service shutting down", {
+            status: 503,
+            headers: { ...corsHeaders(req, config), "Retry-After": "5" },
+          });
+        }
+        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, config);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: "gpt-live", provider: "unknown" };
+        const resolved = await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget);
+        if (resolved instanceof Response) {
+          addFinalRequestLog(requestId, start, logCtx, resolved.status);
+          return withCors(resolved, req, config);
+        }
+        addFinalRequestLog(requestId, start, logCtx, 101);
+        if (server.upgrade(req, {
+          data: {
+            kind: "live-sideband",
+            liveUpstreamUrl: resolved.upstreamWsUrl,
+            liveUpstreamHeaders: resolved.headers,
+            livePending: [],
+            liveOpened: false,
+          } satisfies WsData,
+        })) return undefined as unknown as Response;
+        return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, config);
+      }
+
       // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
@@ -519,10 +669,37 @@ export function startServer(port?: number) {
       // Responses WebSocket data plane (phase 120.2). Re-frames the same SSE pipeline onto the
       // socket: parse response.create → run handleResponses unchanged → pump its SSE body as WS
       // Text frames. response.processed is a no-op ack. close() aborts the upstream (RC2 parity).
+      // Live sideband sockets (kind=live-sideband) are a transparent bidirectional relay instead.
       open(ws: ServerWebSocket<WsData>) {
+        if (ws.data.kind === "live-sideband") {
+          attachLiveSidebandUpstream(ws);
+          return;
+        }
         registerCodexWebSocket(ws);
       },
       message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
+        if (ws.data.kind === "live-sideband") {
+          const upstream = ws.data.liveUpstream;
+          if (!upstream || upstream.readyState === WebSocket.CONNECTING || !ws.data.liveOpened) {
+            const pending = ws.data.livePending ?? (ws.data.livePending = []);
+            if (pending.length >= LIVE_SIDEBAND_PENDING_MAX) {
+              closeLiveSideband(ws, 1009, "too many pending frames");
+              return;
+            }
+            pending.push(raw);
+            return;
+          }
+          if (upstream.readyState !== WebSocket.OPEN) {
+            closeLiveSideband(ws, 1011, "upstream not open");
+            return;
+          }
+          try {
+            upstream.send(raw);
+          } catch {
+            closeLiveSideband(ws, 1011, "upstream send failed");
+          }
+          return;
+        }
         const rawBytes = typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength;
         if (rawBytes > MAX_WS_FRAME_BYTES) {
           sendJsonFrame(ws, buildWsErrorFrame(413, {
@@ -639,6 +816,11 @@ export function startServer(port?: number) {
         })();
       },
       close(ws: ServerWebSocket<WsData>) {
+        if (ws.data.kind === "live-sideband") {
+          ws.data.cancel?.();
+          ws.data.liveUpstream = undefined;
+          return;
+        }
         unregisterCodexWebSocket(ws);
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects
       },

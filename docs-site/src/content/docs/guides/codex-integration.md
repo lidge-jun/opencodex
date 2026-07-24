@@ -215,7 +215,7 @@ priority. `subagentModels` accepts up to five ids, either bare native GPT slugs 
 ```
 
 Priority ranking: featured (0–4) < other routed (5) < native (9). You can also manage this from the
-[web dashboard](/opencodex/guides/web-dashboard/).
+[web dashboard](/guides/web-dashboard/).
 
 ## Codex account warmup
 
@@ -239,6 +239,6 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-When opencodex runs as a managed [background service](/opencodex/reference/cli/#ocx-service), it sets
+When opencodex runs as a managed [background service](/reference/cli/#ocx-service), it sets
 `OCX_SERVICE=1` so a service-driven restart does **not** thrash the Codex config — only an explicit
 `ocx stop` / `ocx service stop` restores native Codex.

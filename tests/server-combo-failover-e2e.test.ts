@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,10 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { formatCodexProviderForLog } from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+
+// Full-suite Windows load: startServer + combo rename/delete management flows exceed the
+// default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(30_000);
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -506,7 +510,7 @@ describe("server combo failover 030 activation matrix", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 60_000);
 
   test("ordinary /v1/models preserves raw nested selectors while an exact combo alias wins", async () => {
     const config = comboConfig({
@@ -1525,7 +1529,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     expect(seen[1]).toBe(seen[0]);
   });
 
-  test("external-model toolResult continuation rotates and persists the NEW id", async () => {
+  test("external-model toolResult continuation preserves and persists the same id", async () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
@@ -1535,8 +1539,6 @@ describe("cursor conversation continuity across store:false chains", () => {
     const firstJson = await first.json() as { id: string };
     expect(seen).toHaveLength(1);
 
-    // A toolResult-terminated continuation on an external wire model forces a fresh
-    // conversation id (stateless replay; request-builder.ts forceFreshConversation).
     const second = await postCursor(config, {
       model: "cursortest/grok-4.5",
       previous_response_id: firstJson.id,
@@ -1544,11 +1546,70 @@ describe("cursor conversation continuity across store:false chains", () => {
     });
     expect(second.status).toBe(200);
     expect(seen).toHaveLength(2);
-    expect(seen[1]).not.toBe(seen[0]);
+    expect(seen[1]).toBe(seen[0]);
 
-    // The NEW id is what continuation state persists for the next turn.
     const secondJson = await second.json() as { id: string };
     const { previousResponseProviderState } = await import("../src/responses/state");
     expect(previousResponseProviderState(secondJson.id)?.cursor?.conversationId).toBe(seen[1]);
+  });
+
+  test("external store:false full-history turns reuse the client thread identity", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-external",
+      },
+      body: JSON.stringify({
+        model: "cursortest/grok-4.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("start")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "start" },
+      { role: "assistant", content: "working" },
+      { type: "function_call_output", call_id: "call_x", output: "tool result" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-native",
+      },
+      body: JSON.stringify({
+        model: "cursortest/composer-2.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("hello")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "cursor ok" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
   });
 });

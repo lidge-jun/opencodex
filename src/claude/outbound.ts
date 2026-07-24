@@ -77,6 +77,43 @@ function sseFrame(name: string, data: Rec): string {
 }
 
 /**
+ * Claude Code / Anthropic WebSearch domain filters are optional and mutually exclusive.
+ * Empty arrays are rejected ("ambiguous"); both fields together are rejected. Routed models
+ * often emit both shapes — sanitize before Claude Code sees the tool_use / server_tool_use
+ * input (issue #381).
+ */
+export function isClaudeWebSearchToolName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === "WebSearch" || /^web_search/i.test(trimmed);
+}
+
+function normalizeWebSearchDomainList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const domains = value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map(entry => entry.trim());
+  return domains.length > 0 ? domains : undefined;
+}
+
+/** Strip empty domain filters; if both remain, keep `allowed_domains` and drop `blocked_domains`. */
+export function sanitizeWebSearchInput(input: unknown): Rec {
+  const src: Rec = isRec(input) ? { ...input } : {};
+  const allowed = normalizeWebSearchDomainList(src.allowed_domains);
+  const blocked = normalizeWebSearchDomainList(src.blocked_domains);
+  delete src.allowed_domains;
+  delete src.blocked_domains;
+  if (allowed && blocked) {
+    // Prefer allow-list (restrict-to) when a routed model sets both non-empty fields.
+    src.allowed_domains = allowed;
+  } else if (allowed) {
+    src.allowed_domains = allowed;
+  } else if (blocked) {
+    src.blocked_domains = blocked;
+  }
+  return src;
+}
+
+/**
  * Map a Responses `web_search_call` item to its Anthropic pair: the server_tool_use
  * input (query/queries) and the web_search_tool_result content (hits, or the error
  * object when the search failed). Shared by the SSE and JSON translation paths.
@@ -87,7 +124,9 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
     : [];
   const query = typeof action.query === "string" ? action.query : "";
-  const input: Rec = queries.length > 1 ? { queries } : { query: queries[0] ?? query };
+  const input = sanitizeWebSearchInput(
+    queries.length > 1 ? { queries } : { query: queries[0] ?? query },
+  );
   const completed = item.status !== "failed";
   let resultContent: unknown;
   if (completed) {
@@ -125,6 +164,10 @@ interface OpenBlock {
   index: number;
   /** Responses item_id (tool calls) so output_item.done can match. */
   itemId?: string;
+  /** Buffer WebSearch args and emit one sanitized input_json_delta on close (#381). */
+  bufferWebSearchArgs?: boolean;
+  argsBuf?: string;
+  webSearchArgsEmitted?: boolean;
 }
 
 /** Streaming: Responses SSE bytes -> Anthropic Messages SSE bytes. */
@@ -170,6 +213,19 @@ export function responsesSseToAnthropicSse(
       }
       const closeOpenBlock = () => {
         if (!open) return;
+        if (open.kind === "tool_use" && open.bufferWebSearchArgs && !open.webSearchArgsEmitted) {
+          // Emit sanitized args even if output_item.done never supplied a full arguments field
+          // (finish/fail paths, or deltas-only streams).
+          let parsed: unknown = {};
+          const rawArgs = open.argsBuf ?? "";
+          try { parsed = rawArgs.length > 0 ? JSON.parse(rawArgs) : {}; } catch { parsed = {}; }
+          emit("content_block_delta", {
+            type: "content_block_delta",
+            index: open.index,
+            delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
+          });
+          open.webSearchArgsEmitted = true;
+        }
         if (open.kind === "thinking") {
           // Synthetic signature: Claude Code accepts it (003 E6); inbound drops replays anyway.
           emit("content_block_delta", {
@@ -253,21 +309,34 @@ export function responsesSseToAnthropicSse(
             closeOpenBlock();
             sawToolUse = true;
             const index = blockIndex++;
+            const name = typeof item.name === "string" ? item.name : "";
+            const bufferWebSearchArgs = isClaudeWebSearchToolName(name);
             emit("content_block_start", {
               type: "content_block_start", index,
               content_block: {
                 type: "tool_use",
                 id: typeof item.call_id === "string" ? item.call_id : `toolu_${uuid()}`,
-                name: typeof item.name === "string" ? item.name : "",
+                name,
                 input: {},
               },
             });
-            open = { kind: "tool_use", index, itemId: typeof item.id === "string" ? item.id : undefined };
+            open = {
+              kind: "tool_use",
+              index,
+              itemId: typeof item.id === "string" ? item.id : undefined,
+              bufferWebSearchArgs,
+              argsBuf: "",
+              webSearchArgsEmitted: false,
+            };
             break;
           }
           case "response.function_call_arguments.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;
             if (!open || open.kind !== "tool_use") break;
+            if (open.bufferWebSearchArgs) {
+              open.argsBuf = `${open.argsBuf ?? ""}${data.delta}`;
+              break;
+            }
             emit("content_block_delta", {
               type: "content_block_delta", index: open.index,
               delta: { type: "input_json_delta", partial_json: data.delta },
@@ -307,7 +376,22 @@ export function responsesSseToAnthropicSse(
             if (!open) break;
             // Close the matching open block (message/reasoning items close implicitly on
             // the next block; function_call items must close here so tool input parses).
-            if (open.kind === "tool_use" && item.type === "function_call") closeOpenBlock();
+            if (open.kind === "tool_use" && item.type === "function_call") {
+              if (open.bufferWebSearchArgs && !open.webSearchArgsEmitted) {
+                const rawArgs = typeof item.arguments === "string" && item.arguments.length > 0
+                  ? item.arguments
+                  : (open.argsBuf ?? "");
+                let parsed: unknown = {};
+                try { parsed = rawArgs.length > 0 ? JSON.parse(rawArgs) : {}; } catch { parsed = {}; }
+                emit("content_block_delta", {
+                  type: "content_block_delta",
+                  index: open.index,
+                  delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
+                });
+                open.webSearchArgsEmitted = true;
+              }
+              closeOpenBlock();
+            }
             else if (open.kind === "text" && item.type === "message") closeOpenBlock();
             else if (open.kind === "thinking" && item.type === "reasoning") closeOpenBlock();
             break;
@@ -442,11 +526,12 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string): R
         if (typeof raw.arguments === "string" && raw.arguments.length > 0) {
           try { input = JSON.parse(raw.arguments); } catch { input = {}; }
         }
+        const name = typeof raw.name === "string" ? raw.name : "";
         content.push({
           type: "tool_use",
           id: typeof raw.call_id === "string" ? raw.call_id : `toolu_${uuid()}`,
-          name: typeof raw.name === "string" ? raw.name : "",
-          input,
+          name,
+          input: isClaudeWebSearchToolName(name) ? sanitizeWebSearchInput(input) : input,
         });
         break;
       }

@@ -108,8 +108,8 @@ the watchdog.
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
-progress visible. A clean Kiro stream EOF after user-facing text completes directly; reasoning-only
-output still gets one bounded completion retry. Synthetic search calls, real tool calls,
+progress visible. A Kiro stream EOF after user-facing text or reasoning gets one bounded completion
+retry, because the upstream text event does not distinguish progress from a final answer. Synthetic search calls, real tool calls,
 and terminal events remain buffered until the iteration validates. Only the first iteration's final
 response headers/status and any 429 key rotations are handled eagerly. A failure before downstream
 SSE starts returns non-2xx JSON; once headers have started the final response, a generation failure
@@ -141,6 +141,13 @@ by an intervening user/developer barrier or an interrupted turn — is closed by
 messages until the round completes, reattaching real results to their original call occurrence,
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
 (Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_plan/260718_dangling_toolcall_hardening`).
+
+Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
+API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
+so each oversized id and all matching call/output items receive the same deterministic,
+request-local alias. Raw API-key continuations deliberately preserve ids because an output-only
+continuation may reference a call stored upstream under its original id; proxy-expanded API-key
+replays are explicit and receive the same repair.
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
