@@ -53,6 +53,22 @@ final class OpenCodexMenuBarCoreTests: XCTestCase {
         XCTAssertEqual(commandPlan(for: .stop, status: status), [.run(["stop"])])
     }
 
+
+    func testStaleServiceCommandPlan() throws {
+        let status = try fixture(serviceSummary: "installed, but stale (launchd; logs: service.log)")
+
+        XCTAssertTrue(status.serviceInstalled)
+        XCTAssertTrue(status.serviceStale)
+        XCTAssertFalse(status.serviceStartable)
+        XCTAssertEqual(status.phase, .failed)
+        XCTAssertEqual(commandPlan(for: .start, status: status), [.run(["service", "install"])])
+        XCTAssertEqual(commandPlan(for: .restart, status: status), [
+            .run(["stop"]),
+            .run(["service", "install"]),
+        ])
+        XCTAssertEqual(commandPlan(for: .stop, status: status), [.run(["stop"])])
+    }
+
     func testStandaloneCommandPlan() throws {
         let status = try fixture(serviceSummary: "not installed (logs: service.log)")
 

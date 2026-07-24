@@ -44,8 +44,20 @@ public struct OcxStatus: Decodable, Equatable {
         service.summary.hasPrefix("installed")
     }
 
+    /// launchd/systemd can report "installed, but stale" after an ocx/Bun path move.
+    /// Those services are installed, but not startable until repaired.
+    public var serviceStale: Bool {
+        let summary = service.summary.lowercased()
+        return summary.contains("but stale") || summary.contains("stale or missing service assets")
+    }
+
+    public var serviceStartable: Bool {
+        serviceInstalled && !serviceStale
+    }
+
     public var phase: ProxyPhase {
         if proxy.running { return .running }
+        if serviceStale { return .failed }
         if proxy.pid != nil || proxy.health.ok { return .degraded }
         return .stopped
     }
@@ -76,11 +88,19 @@ public enum OcxCommandStep: Equatable {
 public func commandPlan(for operation: ProxyControlOperation, status: OcxStatus) -> [OcxCommandStep] {
     switch operation {
     case .start:
-        return status.serviceInstalled
+        if status.serviceStale {
+            // Prefer repair over start: a stale launchd/systemd unit can accept
+            // `service start` while the baked executable immediately fails.
+            return [.run(["service", "install"])]
+        }
+        return status.serviceStartable
             ? [.run(["service", "start"])]
             : [.launch(["start"])]
     case .restart:
-        return status.serviceInstalled
+        if status.serviceStale {
+            return [.run(["stop"]), .run(["service", "install"])]
+        }
+        return status.serviceStartable
             ? [.run(["service", "stop"]), .run(["service", "start"])]
             : [.run(["stop"]), .launch(["start"])]
     case .stop:

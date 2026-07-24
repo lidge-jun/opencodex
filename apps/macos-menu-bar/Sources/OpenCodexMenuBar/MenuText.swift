@@ -19,6 +19,8 @@ enum Text {
     static var resetCLI: String { isKorean ? "CLI 자동 탐색 사용" : "Use Auto-detected CLI" }
     static var quit: String { isKorean ? "메뉴바 앱 종료" : "Quit Menu Bar App" }
     static var noService: String { isKorean ? "launchd 서비스 없음" : "No launchd service" }
+    static var serviceStale: String { isKorean ? "서비스 손상 — 재설치 필요" : "Service stale — repair required" }
+    static var repairService: String { isKorean ? "서비스 복구" : "Repair Service" }
     static var serviceRunning: String { isKorean ? "launchd 서비스 사용 중" : "Launchd service enabled" }
     static var serviceStopped: String { isKorean ? "launchd 서비스 중지됨" : "Launchd service stopped" }
     static var runtime: String { isKorean ? "Bun 런타임" : "Bun runtime" }

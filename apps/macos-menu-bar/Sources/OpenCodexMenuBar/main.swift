@@ -173,6 +173,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let hasCLI = client.executableURL != nil
         openDashboardItem.isEnabled = !isBusy && (status?.proxy.health.ok ?? false)
         startItem.isHidden = canStop
+        startItem.title = (status?.serviceStale == true) ? Text.repairService : Text.start
         startItem.isEnabled = !isBusy && hasCLI && status != nil
         restartItem.isHidden = !canStop
         restartItem.isEnabled = !isBusy && hasCLI
@@ -241,6 +242,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     private func serviceTitle(_ status: OcxStatus) -> String {
         guard status.serviceInstalled else { return Text.noService }
+        if status.serviceStale { return Text.serviceStale }
         return status.service.summary.contains("not loaded") ? Text.serviceStopped : Text.serviceRunning
     }
 
