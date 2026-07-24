@@ -38,7 +38,7 @@
 .provider-catalog-group.active { background: var(--accent-soft); border-color: var(--accent-ring); color: var(--text); }
 .provider-catalog-custom { margin: auto 8px 4px; align-self: flex-start; }
 .provider-catalog-accounts-hint { padding: 10px; line-height: var(--leading-body); }
-.provider-catalog-browser { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
+.provider-catalog-browser { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border); }
 .provider-catalog-search-wrap { padding: 14px; border-bottom: 1px solid var(--border-soft); }
 .provider-catalog-search { width: 100%; }
 .provider-catalog-rows { display: flex; flex-direction: column; gap: 7px; padding: 10px; overflow-y: auto; min-height: 0; }

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   accessGroupCounts,
   curatedPresets,
@@ -55,4 +56,10 @@ test("search matches provider label/id and reference presets are not actionable"
   expect(filterPresets(rows, "google gemini").map(row => row.id)).toEqual(["gemini"]);
   expect(isPresetActionable(rows.find(row => row.id === "duckduckgo-web")!)).toBe(false);
   expect(isPresetActionable(rows.find(row => row.id === "groq")!)).toBe(true);
+});
+
+test("provider browser lets its row list scroll inside the modal", () => {
+  const css = readFileSync(new URL("../src/styles/provider-catalog.css", import.meta.url), "utf8");
+  expect(css).toMatch(/\.provider-catalog-browser\s*\{[^}]*min-height:\s*0;/);
+  expect(css).toMatch(/\.provider-catalog-rows\s*\{[^}]*overflow-y:\s*auto;/);
 });
