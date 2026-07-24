@@ -62,6 +62,7 @@ describe("subagent model fallback chain", () => {
   });
 
   test("selectAvailableSubagentModel skips quota-exhausted native models", () => {
+    resetSubagentModelFallbackStateForTests();
     updateAccountQuota("main", 95, undefined, 20);
     const selected = selectAvailableSubagentModel("gpt-5.6-sol", cfg());
     expect(selected).toEqual({
@@ -72,10 +73,34 @@ describe("subagent model fallback chain", () => {
   });
 
   test("selectAvailableSubagentModel skips cached routed failures", () => {
-    noteSubagentModelFailure("alibaba-token-plan/qwen3.8-max-preview", "quota exhausted");
+    resetSubagentModelFallbackStateForTests();
+    noteSubagentModelFailure("alibaba-token-plan/qwen3.8-max-preview", "quota exhausted", cfg());
     const selected = selectAvailableSubagentModel("gpt-5.6-sol", cfg());
     expect(selected.model).toBe("kimi/k3");
     expect(isSubagentModelUnavailable("alibaba-token-plan/qwen3.8-max-preview", cfg())).toBe(true);
+  });
+
+  test("noteSubagentModelFailure treats numeric 429 as quota-like", () => {
+    resetSubagentModelFallbackStateForTests();
+    noteSubagentModelFailure("kimi/k3", "429", cfg());
+    expect(isSubagentModelUnavailable("kimi/k3", cfg())).toBe(true);
+  });
+
+  test("readCodexAgentModelFallback parses multiline TOML arrays", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "executor.toml"), [
+      "name = \"executor\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [",
+      "  \"alibaba-token-plan/qwen3.8-max-preview\",",
+      "  \"kimi/k3\",",
+      "]",
+      "",
+    ].join("\n"), "utf8");
+    expect(readCodexAgentModelFallback("executor", dir)).toEqual([
+      "alibaba-token-plan/qwen3.8-max-preview",
+      "kimi/k3",
+    ]);
   });
 
   test("applySubagentModelFallback rewrites parsed request model", () => {

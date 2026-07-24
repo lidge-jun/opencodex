@@ -12,7 +12,8 @@ import { slugsEquivalent } from "../providers/slug-codec";
 import { CODEX_HOME, getCodexHome } from "./paths";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { computeCodexUsageScore } from "./routing";
-import { getMainAccountPlan } from "./main-account";
+import { nativeOpenAiSlugs } from "./catalog";
+import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
 
 export const DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS = 60_000;
@@ -24,6 +25,25 @@ type ModelHealth = {
 
 const modelHealth = new Map<string, ModelHealth>();
 const quotaPrimedAt = new Map<string, number>();
+const nativeSlugSet = () => new Set(nativeOpenAiSlugs().map(slug => slug.toLowerCase()));
+
+function healthKey(model: string, accountId: string | null): string {
+  return `${accountId ?? "none"}::${model.toLowerCase()}`;
+}
+
+function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
+  return (config.codexAccounts ?? []).find(account => account.id === accountId)?.plan;
+}
+
+function isDisabledFallbackModel(model: string, config: OcxConfig): boolean {
+  const disabled = config.disabledModels ?? [];
+  if (disabled.length === 0) return false;
+  if (!model.includes("/")) return disabled.some(stored => slugEquals(stored, "openai", model));
+  const slash = model.indexOf("/");
+  const provider = model.slice(0, slash);
+  const modelId = model.slice(slash + 1);
+  return disabled.some(stored => stored === model || slugEquals(stored, provider, modelId));
+}
 
 function pollIntervalMs(config: OcxConfig): number {
   const configured = config.subagentModelFallbackPollMs;
@@ -59,7 +79,7 @@ export function buildSubagentModelChain(
 }
 
 function isNativeOpenAiSlug(model: string): boolean {
-  return !model.includes("/");
+  return nativeSlugSet().has(model.toLowerCase());
 }
 
 function quotaThreshold(config: OcxConfig): number {
@@ -76,18 +96,19 @@ export function isNativeModelQuotaExhausted(model: string, config: OcxConfig, no
   const accountId = activeCodexAccountId(config);
   if (!accountId) return false;
   const quota = getAccountQuota(accountId);
-  const usage = computeCodexUsageScore(quota, getMainAccountPlan());
+  const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, accountId));
   if (usage >= CODEX_UNKNOWN_USAGE_SCORE) return false;
   return usage >= quotaThreshold(config);
 }
 
-export function isModelHealthBlocked(model: string, now = Date.now()): boolean {
-  const health = modelHealth.get(model.toLowerCase());
+export function isModelHealthBlocked(model: string, config: OcxConfig, now = Date.now()): boolean {
+  const health = modelHealth.get(healthKey(model, activeCodexAccountId(config)));
   return !!health && health.unavailableUntil > now;
 }
 
 export function isSubagentModelUnavailable(model: string, config: OcxConfig, now = Date.now()): boolean {
-  if (isModelHealthBlocked(model, now)) return true;
+  if (isDisabledFallbackModel(model, config)) return true;
+  if (isModelHealthBlocked(model, config, now)) return true;
   if (isNativeOpenAiSlug(model)) return isNativeModelQuotaExhausted(model, config, now);
   return false;
 }
@@ -110,16 +131,26 @@ export function selectAvailableSubagentModel(
   return { model: primary, rewritten: false, skipped };
 }
 
-export function noteSubagentModelFailure(model: string, message: string, now = Date.now(), ttlMs?: number): void {
+export function noteSubagentModelFailure(
+  model: string,
+  message: string,
+  config: OcxConfig,
+  now = Date.now(),
+  ttlMs?: number,
+): void {
   const interval = ttlMs ?? DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS;
-  const lower = message.toLowerCase();
+  const normalized = String(message).trim();
+  const lower = normalized.toLowerCase();
+  const numericStatus = Number(normalized);
   const quotaLike = lower.includes("insufficient_quota")
     || lower.includes("quota exhausted")
     || lower.includes("usage limit")
     || lower.includes("exceeded your current quota")
-    || lower.includes("account quota exceeded");
+    || lower.includes("account quota exceeded")
+    || numericStatus === 429
+    || numericStatus === 402;
   if (!quotaLike) return;
-  modelHealth.set(model.toLowerCase(), {
+  modelHealth.set(healthKey(model, activeCodexAccountId(config)), {
     unavailableUntil: now + interval,
     reason: "quota_exhausted",
   });
@@ -206,7 +237,7 @@ export function recordSubagentQuotaFailureForThreadSpawn(
   now = Date.now(),
 ): void {
   if (!isThreadSpawnRequest(headers)) return;
-  noteSubagentModelFailure(model, String(message), now, pollIntervalMs(config));
+  noteSubagentModelFailure(model, String(message), config, now, pollIntervalMs(config));
 }
 
 export function applySubagentModelFallback(
@@ -235,16 +266,24 @@ export function subagentFallbackGuidanceText(config: OcxConfig): string {
   return ` Subagent model fallback chain (priority order): ${quoted}. When the primary model is quota-exhausted, opencodex rewrites thread_spawn requests to the next available model automatically.`;
 }
 
-const TOML_STRING_ARRAY = /^(model_fallback)\s*=\s*\[(.*)\]\s*$/;
+const TOML_STRING_ARRAY = /^(model_fallback)\s*=\s*\[(.*)\]\s*$/s;
 
 function parseTomlStringArray(raw: string): string[] {
   const matches = [...raw.matchAll(/"((?:\\.|[^"\\])*)"/g)];
   return matches.map(match => match[1]!.replace(/\\"/g, "\""));
 }
 
+function parseTomlModelFallback(content: string): string[] | null {
+  const match = content.match(/^\s*model_fallback\s*=\s*\[(.*)\]\s*$/ms);
+  if (!match) return null;
+  return parseTomlStringArray(match[1] ?? "");
+}
+
 export function readAgentModelFallback(filePath: string): string[] | null {
   try {
     const content = readFileSync(filePath, "utf8");
+    const multiline = parseTomlModelFallback(content);
+    if (multiline) return multiline;
     for (const line of content.split(/\r?\n/)) {
       const match = line.match(TOML_STRING_ARRAY);
       if (!match) continue;

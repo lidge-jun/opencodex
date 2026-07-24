@@ -225,11 +225,12 @@ export async function multiAgentGuidanceText(
         .map(item => `${item.configured}:${item.reason}`)
         .join(", ")}`);
     }
-    if (!injectionModel && roster === "") return null;
+    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
+    if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
     if (injectionPrompt) {
       return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, injectionModel, injectionEffort, roster)}</multi_agent_mode>`;
     }
-    if (!preferred && roster === "") return null;
+    if (!preferred && roster === "" && fallbackGuidance === "") return null;
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "
@@ -240,7 +241,7 @@ export async function multiAgentGuidanceText(
         + (injectionEffort ? `, reasoning_effort "${injectionEffort}"` : "")
         + " — use it unless the user names another.";
     }
-    text += subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
+    text += fallbackGuidance;
     text += roster;
     if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
       // Roster is the only unbounded part — drop it before breaking the budget.

@@ -311,21 +311,26 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   if (url.pathname === "/api/subagent-model-fallback" && req.method === "PUT") {
     let body: { models?: unknown; pollMs?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    let nextModels = config.subagentModelFallback;
+    let nextPollMs = config.subagentModelFallbackPollMs;
     if ("models" in body) {
       if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
       const models = body.models.filter((m): m is string => typeof m === "string" && m.trim().length > 0);
-      if (models.length > 0) config.subagentModelFallback = models;
-      else delete config.subagentModelFallback;
+      nextModels = models.length > 0 ? models : undefined;
     }
     if ("pollMs" in body) {
       const pollMs = body.pollMs;
-      if (pollMs === null || pollMs === "") delete config.subagentModelFallbackPollMs;
+      if (pollMs === null || pollMs === "") nextPollMs = undefined;
       else if (typeof pollMs === "number" && Number.isInteger(pollMs) && pollMs >= 5_000 && pollMs <= 600_000) {
-        config.subagentModelFallbackPollMs = pollMs;
+        nextPollMs = pollMs;
       } else {
         return jsonResponse({ error: "pollMs must be an integer between 5000 and 600000" }, 400);
       }
     }
+    if (nextModels !== undefined) config.subagentModelFallback = nextModels;
+    else delete config.subagentModelFallback;
+    if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
+    else delete config.subagentModelFallbackPollMs;
     saveConfig(config);
     return jsonResponse({
       ok: true,

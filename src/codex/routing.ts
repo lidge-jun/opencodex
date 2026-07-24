@@ -264,7 +264,7 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   return ids;
 }
 
-function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
+export function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return getMainAccountPlan();
   return (config.codexAccounts ?? []).find(account => !account.isMain && account.id === accountId)?.plan;
 }
