@@ -13,7 +13,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
-import { effectiveGoogleMode } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 
@@ -436,13 +436,16 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
   );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
+  const registry = getProviderRegistryEntry(providerName);
+  const sameRegistryEndpoint = registry?.baseUrl.replace(/\/+$/, "") === effectiveProvider.baseUrl.replace(/\/+$/, "");
+  const trustedModelsUrl = sameRegistryEndpoint ? registry?.modelsUrl : undefined;
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
     // enough to list everything without a pageToken loop. Vertex/antigravity keep the
     // generic branch (they fall back to their static model lists).
     if (apiKey) headers["x-goog-api-key"] = apiKey;
-    return { url: `${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`, headers };
+    return { url: trustedModelsUrl ?? `${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`, headers };
   }
   if (effectiveProvider.adapter === "anthropic") {
     headers["anthropic-version"] = "2023-06-01";
@@ -452,10 +455,10 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     } else if (apiKey) {
       headers["x-api-key"] = apiKey;
     }
-    return { url: `${effectiveProvider.baseUrl}/v1/models?limit=1000`, headers };
+    return { url: trustedModelsUrl ?? `${effectiveProvider.baseUrl}/v1/models?limit=1000`, headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: `${effectiveProvider.baseUrl}/models`, headers };
+  return { url: trustedModelsUrl ?? `${effectiveProvider.baseUrl}/models`, headers };
 }
 
 /**
