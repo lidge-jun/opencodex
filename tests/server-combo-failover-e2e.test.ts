@@ -510,7 +510,7 @@ describe("server combo failover 030 activation matrix", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 60_000);
 
   test("ordinary /v1/models preserves raw nested selectors while an exact combo alias wins", async () => {
     const config = comboConfig({

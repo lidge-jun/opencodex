@@ -7,6 +7,8 @@ import type { AccountQuota } from "../codex-quota-utils";
 import QuotaBars from "./QuotaBars";
 import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
+import CodexAutoSwitchSetting from "./CodexAutoSwitchSetting";
+import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 
 export interface CodexAccountEntry {
   id: string; alias?: string; email: string; plan?: string; isMain: boolean;
@@ -29,9 +31,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   onActiveNeedsReauthChange?: (needs: boolean) => void;
 }) {
   const t = useT();
+  const autoSwitch = useCodexAutoSwitch(apiBase, {
+    updated: t("codexAuth.autoSwitchUpdated"),
+    updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
+    invalid: t("codexAuth.autoSwitchThresholdInvalid"),
+  });
+  const { beginServerRead, acceptServerRead, rejectServerRead } = autoSwitch;
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [autoThreshold, setAutoThreshold] = useState(80);
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -49,25 +56,39 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const load = useCallback(async (refreshQuota = false) => {
     const generation = ++loadGenerationRef.current;
+    const autoSwitchReadRevision = beginServerRead();
     if (!refreshQuota) setLoadState("loading");
-    try {
-      const [accountsResponse, activeResponse] = await Promise.all([
-        fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`),
-        fetch(`${apiBase}/api/codex-auth/active`),
-      ]);
-      if (!accountsResponse.ok || !activeResponse.ok) throw new Error("account load failed");
-      const [accts, active] = await Promise.all([accountsResponse.json(), activeResponse.json()]);
-      if (loadGenerationRef.current !== generation) return false;
-      setAccounts(accts.accounts ?? []);
-      setActiveId(active.activeCodexAccountId ?? null);
-      setAutoThreshold(active.autoSwitchThreshold ?? 80);
-      setLoadState("ready");
-      return true;
-    } catch {
-      if (loadGenerationRef.current === generation) setLoadState("error");
-      return false;
-    }
-  }, [apiBase]);
+    const accountsTask = (async (): Promise<boolean> => {
+      try {
+        const response = await fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`);
+        if (!response.ok) throw new Error("account load failed");
+        const accts = await response.json();
+        if (loadGenerationRef.current === generation) setAccounts(accts.accounts ?? []);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    const activeTask = (async (): Promise<boolean> => {
+      try {
+        const response = await fetch(`${apiBase}/api/codex-auth/active`);
+        if (!response.ok) throw new Error("active account load failed");
+        const active = await response.json();
+        if (loadGenerationRef.current === generation) {
+          setActiveId(active.activeCodexAccountId ?? null);
+          acceptServerRead(active.autoSwitchThreshold, autoSwitchReadRevision);
+        }
+        return true;
+      } catch {
+        if (loadGenerationRef.current === generation) rejectServerRead();
+        return false;
+      }
+    })();
+    const [accountsOk, activeOk] = await Promise.all([accountsTask, activeTask]);
+    if (loadGenerationRef.current !== generation) return false;
+    setLoadState(accountsOk && activeOk ? "ready" : "error");
+    return accountsOk && activeOk;
+  }, [acceptServerRead, apiBase, beginServerRead, rejectServerRead]);
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void load();
@@ -177,15 +198,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       setToastError(true);
       setTimeout(() => setToast(""), 5000);
     }
-  };
-
-  const toggleAuto = async () => {
-    const next = autoThreshold > 0 ? 0 : 80;
-    await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ threshold: next }),
-    });
-    setAutoThreshold(next);
   };
 
   const refreshQuotas = async () => {
@@ -312,7 +324,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         <div className="card-sub">{main?.email ?? "Codex App login"}{main?.plan ? ` · ${main.plan}` : ""}</div>
         {main?.needsReauth
           ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
-          : main?.quota && <QuotaBars quota={main.quota} plan={main.plan} threshold={autoThreshold} t={t} />}
+          : main?.quota && <QuotaBars quota={main.quota} plan={main.plan} threshold={autoSwitch.threshold ?? 0} t={t} />}
       </div>
 
       <div className="section-sep">
@@ -374,20 +386,26 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           <div className="card-sub">{a.email}{a.plan ? ` · ${a.plan}` : ""} · {t("prov.accountId")}: {a.id}</div>
           {a.needsReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
-            : <QuotaBars quota={a.quota} plan={a.plan} threshold={autoThreshold} t={t} />}
+            : <QuotaBars quota={a.quota} plan={a.plan} threshold={autoSwitch.threshold ?? 0} t={t} />}
         </div>
       ))}
 
-      <div className="card card-row" style={{ marginTop: 16 }}>
-        <div>
-          <strong>{t("codexAuth.autoSwitch")}</strong>
-          <div className="card-sub">{t("codexAuth.autoSwitchDesc")}</div>
-        </div>
-        <button className={`toggle ${autoThreshold > 0 ? "on" : ""}`} onClick={toggleAuto}
-          aria-pressed={autoThreshold > 0} aria-label={t("codexAuth.autoSwitch")} title={t("codexAuth.autoSwitch")}>
-          <span className="toggle-knob" />
-        </button>
-      </div>
+      <CodexAutoSwitchSetting
+        threshold={autoSwitch.threshold}
+        draft={autoSwitch.draft}
+        saving={autoSwitch.saving}
+        loadError={autoSwitch.loadError}
+        feedback={autoSwitch.feedback}
+        onDraftChange={autoSwitch.setDraft}
+        onEditingChange={autoSwitch.setEditing}
+        onCommit={autoSwitch.commit}
+        onCancel={autoSwitch.cancel}
+        onToggle={autoSwitch.toggle}
+        onRetry={() => {
+          autoSwitch.retry();
+          void load();
+        }}
+      />
 
       {confirm && (
         <div className="modal-overlay" onClick={() => setConfirm(null)}>

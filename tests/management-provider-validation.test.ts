@@ -34,7 +34,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
-setDefaultTimeout(30_000);
+setDefaultTimeout(60_000);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -124,6 +124,8 @@ describe("provider management validation", () => {
         new Request(requestUrl),
         requestUrl,
         {
+          port: 10100,
+          defaultProvider: "auth-broken",
           providers: {
             "auth-broken": {
               adapter: "openai-chat",

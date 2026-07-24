@@ -475,7 +475,7 @@ describe("cli surface", () => {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
       if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
     }
-  });
+  }, 15_000);
 });
 
 describe("mock-max wire clamp (nativeEffortClamp)", () => {

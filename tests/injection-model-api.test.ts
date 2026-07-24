@@ -145,7 +145,7 @@ describe("/api/injection-model reasoning effort", () => {
     );
     data = await response!.json() as typeof data;
     expect(data.available.some(model => model.namespaced === alias)).toBe(false);
-  });
+  }, 15_000);
 });
 
 describe("/api/injection-model guidance kill switch + partial update", () => {

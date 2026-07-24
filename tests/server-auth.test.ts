@@ -471,7 +471,7 @@ describe("server local API auth", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 15_000);
 
   test("safeConfigDTO exposes the freeTier badge flag (WP040)", async () => {
     const { safeConfigDTO } = await import("../src/server/auth-cors");

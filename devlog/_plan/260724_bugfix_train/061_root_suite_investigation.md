@@ -110,3 +110,31 @@ Cycle 6 may update the contributor branch only when:
 - two consecutive post-change `bun run test` executions pass;
 - the focused release-helper run is supporting evidence, not sole closure; and
 - required Cross-platform CI is green on the exact pushed head.
+
+## 2026-07-24 — Cycle 6 investigation result
+
+- Live contributor head at takeover: `5f84301252865dc6f792d3272c2fe0db6d09eb0e`.
+- `CYCLE6_BASE_SHA`: `c63589ccfe9e053d92acc029f55be0a809fb6fca` (`origin/dev` after the cycle-start fetch).
+- Rebased pre-repair head: `8feb0980`; `git range-diff` mapped both contributor commits exactly (`=`) to `458b3a39` and `8feb0980`.
+- Environment: macOS arm64 (`Darwin 25.6.0`), Bun `1.3.14`.
+- Evidence directory: `devlog/_plan/260724_bugfix_train/evidence/cycle6-pr337-root/`.
+- The contributor's retained public report contains only the aggregate `3780 passed, 4 skipped, 4 failed` and says the four failures were in this five-test file. It does not retain the four failing names, assertion text, stderr, or first-failure line. The original four failure identities therefore remain unresolved.
+
+### Inferred current candidates — not recovered failures
+
+The four success-path cases below are investigation candidates only because they are the four cases in the current five-test file that require a zero release-helper exit. They are not recovered names for the originally reported failures and cannot receive per-failure classifications without the missing original reporter evidence.
+
+| Inferred current candidate | Original failing log/line | Current rerun evidence | Classification | Causal evidence | Owner path | Disposition |
+|---|---|---|---|---|---|---|
+| `preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs` | Unavailable; current source line 216 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Unresolved — original failure identity unavailable | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` | No per-failure disposition; suite-level unresolved |
+| `preview branch still defaults to preview tag and dry-run dispatch` | Unavailable; current source line 250 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Unresolved — original failure identity unavailable | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` | No per-failure disposition; suite-level unresolved |
+| `dispatch pins the audited release SHA via expected-sha` | Unavailable; current source line 263 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Unresolved — original failure identity unavailable | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` | No per-failure disposition; suite-level unresolved |
+| `aborts before dispatch when the remote branch moved during the CI wait` | Unavailable; current source line 275 is not an original failure line | PR: standalone 3/3 + full 3/3 pass; base: standalone 1/1 + full 2/2 pass | Unresolved — original failure identity unavailable | This current case passed in every recorded PR/base order; it does not identify an original failure | `tests/release-helper.test.ts` | No per-failure disposition; suite-level unresolved |
+
+### Current green rerun evidence
+
+- PR initial/repeats: `pr337-root-initial.log`, `pr337-root-repeat-1.log`, `pr337-root-repeat-2.log` — each `3861 pass / 0 fail`.
+- PR standalone: `release-helper-1.log`, `release-helper-2.log`, `release-helper-3.log` — each `5 pass / 0 fail`.
+- Exact-base comparison: `baseline-release-helper.log` (`5 pass / 0 fail`), `baseline-root-1.log`, `baseline-root-2.log` (each `3861 pass / 0 fail`).
+
+The current reruns do not provide evidence for a release-helper source change in this scoped PR: the investigated current cases and full suites were green at the recorded PR and base heads, and no causal PR diff path was found. They do not reconstruct or resolve the original four failures. Their names, assertions, stderr, and first failing lines remain unresolved unless the original CI or test-reporter metadata is recovered. Accordingly, the historical suite-level disposition remains unresolved, and the final exact-head root gates are still required without changing release code or tests.

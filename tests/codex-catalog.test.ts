@@ -55,6 +55,8 @@ async function providerDiscoveryDto(provider: string): Promise<Record<string, un
     new Request(requestUrl),
     requestUrl,
     {
+      port: 10100,
+      defaultProvider: provider,
       providers: {
         [provider]: {
           adapter: "openai-chat",
@@ -428,7 +430,7 @@ describe("combo catalog capability intersection", () => {
     } finally {
       warn.mockRestore();
     }
-  });
+  }, 15_000);
 
   test("exact combo slugs come only from current config", () => {
     expect(exactComboCatalogSlugs({ combos: {

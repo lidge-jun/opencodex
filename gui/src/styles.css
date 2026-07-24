@@ -766,6 +766,20 @@ dialog.modal-overlay::backdrop {
 .toggle.on { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
 .toggle-knob { width: 16px; height: 16px; background: light-dark(#ffffff, #ececec); border-radius: var(--radius-round); position: absolute; top: 1px; left: 1px; transition: left var(--motion-normal), background var(--motion-normal); }
 .toggle.on .toggle-knob { left: 17px; background: var(--toggle-dot-color); }
+.toggle:disabled { cursor: not-allowed; opacity: 0.55; }
+.codex-auto-switch-card { gap: 16px; flex-wrap: wrap; }
+.codex-auto-switch-copy { flex: 1 1 auto; min-width: 0; }
+.codex-auto-switch-copy .card-sub { padding: 2px 0 0; }
+.codex-auto-switch-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-auto-switch-controls > .toggle { margin-left: auto; }
+.codex-auto-switch-threshold { display: flex; flex-direction: column; align-items: flex-start; margin: 0; }
+.codex-auto-switch-threshold .field-label { margin-bottom: 4px; white-space: nowrap; }
+.codex-auto-switch-input-wrap { display: flex; align-items: center; gap: 6px; }
+.codex-auto-switch-input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+.codex-auto-switch-input[readonly] { cursor: progress; opacity: 0.7; }
+.codex-auto-switch-unit { color: var(--muted); font-size: var(--text-control); }
+.codex-auto-switch-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
+.codex-auto-switch-feedback.is-error { color: var(--red); }
 .notice-warn { font-size: var(--text-label); line-height: var(--leading-body); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--amber-soft); color: var(--amber); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
@@ -998,6 +1012,9 @@ button.prov-account-row.active { cursor: default; }
   .setting-row > .select-sm { width: 100%; }
   .api-form-row { align-items: stretch; flex-direction: column; }
   .api-form-row .btn { width: 100%; min-height: 40px; }
+  .codex-auto-switch-card { align-items: stretch; flex-direction: column; }
+  .codex-auto-switch-controls { align-items: flex-end; justify-content: space-between; width: 100%; }
+  .codex-auto-switch-feedback { margin-top: -6px; text-align: left; }
   .stat-row > .stat { min-width: 100px; }
   .tbl { min-width: 460px; }   /* keep columns readable; .tbl-wrap scrolls horizontally */
   .usage-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }

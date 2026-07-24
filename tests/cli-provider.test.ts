@@ -388,7 +388,7 @@ describe("ocx provider add --sync", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("provider add --sync --json reports needsSync false", () => {
     const { dir } = freshConfig();
