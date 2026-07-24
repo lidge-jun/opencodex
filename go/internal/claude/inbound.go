@@ -30,6 +30,9 @@ func ResolveInboundModel(model string, cfg *InboundConfig) string {
 	if resolved, ok := ResolveAlias(model); ok {
 		return resolved
 	}
+	if resolved, ok := ResolveDesktop3pAlias(model); ok {
+		return resolved
+	}
 	if cfg != nil {
 		if v := cfg.ModelMap[model]; v != "" {
 			return v
