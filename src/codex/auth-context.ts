@@ -6,6 +6,7 @@ import {
 } from "./account-store";
 import { markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountUsable } from "./account-usability";
+import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import {
   getCodexAccountCooldownUntil,
@@ -107,6 +108,7 @@ export async function resolveCodexAuthContext(
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     return { kind: "main", accountId: null };
   }
+  reconcileMainCodexAccountRuntimeState();
   const threadId = headers.get("x-codex-parent-thread-id");
   const resolution = options.excludeAccountId
     ? (() => {

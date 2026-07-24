@@ -9,7 +9,7 @@ import {
   CodexCredentialRefreshLockTimeoutError,
   TokenRefreshError,
 } from "./account-store";
-import { deleteCodexAccount } from "./account-lifecycle";
+import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -34,6 +34,13 @@ export {
 } from "./quota";
 import { extractAccountId, decodeJwtPayload } from "../oauth/chatgpt";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
+import {
+  clearMainAccountInfoCache,
+  getMainAccountInfoCache,
+  setMainAccountInfoCache,
+  type MainAccountInfo,
+} from "./main-account-cache";
+export { clearMainAccountInfoCache } from "./main-account-cache";
 import { maskEmail } from "../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
@@ -187,7 +194,6 @@ function expireCodexAuthFlow(flowId: string | null, error = "Login cancelled"): 
   }
 }
 
-let mainAccountCache: { email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null; ts: number } | null = null;
 const MAIN_CACHE_TTL = 5 * 60_000;
 const POOL_CACHE_TTL = 5 * 60_000;
 const POOL_QUOTA_REFRESH_CONCURRENCY = 4;
@@ -253,15 +259,16 @@ async function isTerminalMainAuthResponse(resp: Response): Promise<boolean> {
   }
 }
 
-export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null }> {
+export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAccountInfo> {
   const tokens = readCodexTokens();
   if (!tokens) {
-    mainAccountCache = null;
+    clearMainAccountInfoCache();
     markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     return { email: null, plan: null, quota: null };
   }
-  if (!forceRefresh && mainAccountCache && Date.now() - mainAccountCache.ts < MAIN_CACHE_TTL) {
-    return mainAccountCache;
+  const cached = getMainAccountInfoCache();
+  if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
+    return cached;
   }
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
@@ -270,7 +277,7 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
     });
     if (!resp.ok) {
       if (await isTerminalMainAuthResponse(resp)) {
-        mainAccountCache = null;
+        clearMainAccountInfoCache();
         markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
       }
       return { email: null, plan: null, quota: null };
@@ -282,7 +289,7 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
       quota: parseUsageQuota(data),
       ts: Date.now(),
     };
-    mainAccountCache = result;
+    setMainAccountInfoCache(result);
     clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     // Mirror main quota + plan into the shared stores so the rotation engine can
     // score and auto-switch the main account exactly like a pool account (Option A).
@@ -363,6 +370,10 @@ export async function primeCodexPoolQuotas(config: OcxConfig, reason: string): P
     || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
   if (primeInFlight) return primeInFlight;
+  // Seed the observed physical main identity before startup/lazy priming can populate quota or
+  // plan state. Otherwise the first post-startup account switch sees no previous identity and
+  // skips the purge that protects the stable __main__ alias.
+  reconcileMainCodexAccountRuntimeState();
   primeInFlight = (async () => {
     const runtimeConfig = getRuntimeConfig(config);
     const pool = (runtimeConfig.codexAccounts ?? []).filter(a => !a.isMain);
