@@ -6,13 +6,19 @@ on:
       - opened
       - edited
       - reopened
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to validate and enforce
+        required: true
+        type: number
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: issue-quality-${{ github.event.issue.number }}
+  group: issue-quality-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +45,9 @@ jobs:
             } = require(path.join(process.cwd(), ".github", "scripts", "issue-quality.cjs"));
 
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.issue.number;
+            const issue_number = context.eventName === "workflow_dispatch"
+              ? Number(context.payload.inputs.issue_number)
+              : context.payload.issue.number;
             const actor = context.actor;
             const eventType = context.eventName === "issues"
               ? context.payload.action
