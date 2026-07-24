@@ -17,6 +17,28 @@ interface CacheEntry {
   fetchedAt: number;
 }
 
+export type ProviderModelDiscoveryFailureReason =
+  | "http"
+  | "blocked"
+  | "invalid_response"
+  | "network"
+  | "provider";
+
+export type ProviderModelDiscoveryStatus =
+  | { status: "ok" }
+  | { status: "failed"; reason: "http"; httpStatus: number }
+  | {
+      status: "failed";
+      reason: Exclude<ProviderModelDiscoveryFailureReason, "http">;
+      httpStatus?: never;
+    };
+
+export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends infer Status
+  ? Status extends { status: "failed" }
+    ? Omit<Status, "status">
+    : never
+  : never;
+
 const cache = new Map<string, CacheEntry>();
 
 /** Cooldown after a failed live `/models` fetch, so a dead/unreachable provider doesn't re-pay
@@ -24,9 +46,29 @@ const cache = new Map<string, CacheEntry>();
 export const MODELS_FETCH_FAILURE_COOLDOWN_MS = 30_000;
 
 const failureAt = new Map<string, number>();
+const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
 
 export function markModelsFetchFailure(provider: string, now = Date.now()): void {
   failureAt.set(provider, now);
+}
+
+export function markProviderDiscoveryOk(provider: string): void {
+  discoveryStatus.set(provider, { status: "ok" });
+}
+
+export function markProviderDiscoveryFailed(
+  provider: string,
+  failure: ProviderModelDiscoveryFailure,
+): void {
+  discoveryStatus.set(provider, { status: "failed", ...failure });
+}
+
+export function clearProviderDiscoveryStatus(provider: string): void {
+  discoveryStatus.delete(provider);
+}
+
+export function getProviderDiscoveryStatus(provider: string): ProviderModelDiscoveryStatus | undefined {
+  return discoveryStatus.get(provider);
 }
 
 export function isModelsFetchCoolingDown(provider: string, cooldownMs = MODELS_FETCH_FAILURE_COOLDOWN_MS, now = Date.now()): boolean {
@@ -55,8 +97,10 @@ export function clearModelCache(provider?: string): void {
   if (provider) {
     cache.delete(provider);
     failureAt.delete(provider);
+    discoveryStatus.delete(provider);
   } else {
     cache.clear();
     failureAt.clear();
+    discoveryStatus.clear();
   }
 }

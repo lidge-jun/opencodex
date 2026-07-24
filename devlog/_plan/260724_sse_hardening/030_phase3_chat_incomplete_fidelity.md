@@ -17,6 +17,12 @@ failure taxonomy — verify only), WS bridge (verify only).
 
 ### 1. src/chat/outbound.ts — MODIFY response.incomplete case (~323-330)
 
+STALE-CHECK (WP3 P, post-#363): the case now lives at outbound.ts:348-356;
+the file was restructured by #363 (shared decodeServerSentEvents, buffered
+tool-call frames) but the incomplete mapping logic is verbatim-identical,
+so the plan applies unchanged at the new anchors. collectChatCompletion is
+now at :479; the EOF-truncation fail at :389 is pre-existing.
+
 Current (verified):
 ```ts
 case "response.incomplete": {
@@ -40,14 +46,17 @@ Change:
   `upstream stream ended early (<reason>)`. fail() already emits an OpenAI
   error frame and closes WITHOUT [DONE] (:179-200) — truthful abnormal end.
 
-### 2. src/chat/outbound.ts — MODIFY collectChatCompletion (~454)
+### 2. src/chat/outbound.ts — collectChatCompletion (:479): NO CODE CHANGE
+### (A-gate precision)
 
-Non-stream collectors iterate the same SSE generator; an incomplete that is
-not max_output_tokens/content_filter must surface as a thrown
-ChatCompletionsStreamError (existing type, :68) so the endpoint answers
-with an error status instead of a 200 chat.completion assembled from a
-truncated turn. max_output_tokens/content_filter keep returning the partial
-completion with the mapped finish_reason (OpenAI behavior for length).
+Once item 1 routes stall/eof incompletes to fail(), the error frame travels
+the SAME converter output stream and collectChatCompletion's existing
+error-frame branch already throws ChatCompletionsStreamError
+(outbound.ts:516-523, 559), which the endpoint maps to an error response
+(chat-completions.ts:203-206). Item 2 is therefore achieved structurally:
+B only verifies it and adds the accept-criterion-5 test. Implementation
+detail: use `details.message` only after a `typeof === "string"` check
+(same pattern as claude outbound).
 
 ### 3. Verify-only: claude/outbound.ts and ws-bridge.ts
 
@@ -59,9 +68,12 @@ audit finds a false-success mapping; if found, amend this doc before B.
 
 1. Stall scenario: Responses bridge emits response.incomplete with reason
    upstream_stall_timeout -> chat stream ends with an error frame and NO
-   [DONE]; client sees a non-success termination. Activation: endpoint test
-   injecting a stalled fake adapter (chat-completions-endpoint harness has
-   stall coverage patterns already).
+   [DONE]; client sees a non-success termination. Activation (as realized):
+   converter-level tests driving response.incomplete frames through
+   responsesSseToChatCompletionsSse + a collectChatCompletion throw test;
+   the endpoint error mapping is pinned by the existing "non-streaming
+   /v1/chat/completions returns error status on upstream failure" test
+   (chat-completions.ts:203-206, same fail->error-frame->StreamError path).
 2. adapter_eof incomplete -> same error-frame contract.
 3. max_output_tokens incomplete -> finish_reason "length" + [DONE]
    (unchanged, pinned).

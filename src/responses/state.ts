@@ -241,9 +241,13 @@ export function previousResponseProviderState(responseId: string | undefined): O
   return providers ? structuredClone(providers) : undefined;
 }
 
+/**
+ * Cache completed output and max_output_tokens partial output for previous_response_id replay.
+ * Content-filtered incomplete and failed output are not authoritative replay history.
+ */
 export function rememberResponseState(
   requestBody: unknown,
-  response: { id?: unknown; output?: unknown; status?: unknown },
+  response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
   opts?: { force?: boolean },
 ): void {
@@ -256,7 +260,11 @@ export function rememberResponseState(
   // real server-side response storage.
   if (request.store === false && !opts?.force) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
-  if (response.status !== undefined && response.status !== "completed") return;
+  if (response.status === "incomplete") {
+    const details = response.incomplete_details;
+    if (!details || typeof details !== "object" || Array.isArray(details)
+      || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
+  } else if (response.status !== undefined && response.status !== "completed") return;
   ensureLoaded();
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }

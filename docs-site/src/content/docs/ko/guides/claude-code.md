@@ -126,6 +126,8 @@ Claude 페이지에서 압축 값을 조절할 수 있어요. **경고:** 모델
 `ANTHROPIC_SMALL_FAST_MODEL`이에요. 실제 Haiku 값은 `tierModels.haiku ?? smallFastModel`이며,
 두 Haiku 변수에 모두 들어가요.
 
+`tierModels.haiku`와 `smallFastModel`이 모두 없으면 OpenCodex는 두 보조 모델 변수를 설정하지 않아요. 그러면 Claude Code가 네이티브 보조 모델(현재 Sonnet)을 선택하며, 네이티브 프로바이더 요금이 발생할 수 있어요.
+
 ## 로스터 에이전트(injectAgents)
 
 `ocx claude`와 시스템 환경 데몬은 추천 서브에이전트 로스터(Subagents 탭, 최대 5개 모델)와

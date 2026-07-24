@@ -27,6 +27,7 @@ import {
   startServer,
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
+import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -115,6 +116,42 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider discovery status is additive and omitted before an attempt", async () => {
+    markProviderDiscoveryFailed("auth-broken", { reason: "http", httpStatus: 401 });
+    try {
+      const requestUrl = new URL("http://127.0.0.1/api/providers");
+      const response = await handleManagementAPI(
+        new Request(requestUrl),
+        requestUrl,
+        {
+          providers: {
+            "auth-broken": {
+              adapter: "openai-chat",
+              baseUrl: "https://api.example.test/v1",
+              models: [],
+            },
+            "not-attempted": {
+              adapter: "openai-chat",
+              baseUrl: "https://static.example.test/v1",
+              liveModels: false,
+              models: [],
+            },
+          },
+        },
+      );
+      const providers = await response!.json() as Array<Record<string, unknown>>;
+
+      expect(providers).toContainEqual(expect.objectContaining({
+        name: "auth-broken",
+        discovery: { status: "failed", reason: "http", httpStatus: 401 },
+      }));
+      expect(providers.find(provider => provider.name === "not-attempted"))
+        .not.toHaveProperty("discovery");
+    } finally {
+      clearModelCache();
+    }
+  });
+
   test("provider management rejects externally supplied forward auth providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

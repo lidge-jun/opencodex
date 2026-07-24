@@ -134,6 +134,8 @@ shell-файлом: `ANTHROPIC_MODEL`, четыре `ANTHROPIC_DEFAULT_{OPUS,SON
 устаревший `ANTHROPIC_SMALL_FAST_MODEL`. Эффективное значение Haiku — `tierModels.haiku ??
 smallFastModel`; оно подставляется в обе переменные Haiku.
 
+Если отсутствуют и `tierModels.haiku`, и `smallFastModel`, OpenCodex оставляет обе переменные вспомогательной модели незаданными. Затем Claude Code выбирает нативную вспомогательную модель (сейчас Sonnet), что может привести к расходам у нативного провайдера.
+
 ## Агенты из ростера (injectAgents)
 
 `ocx claude` (и демон системного окружения) синхронизирует ваш ростер избранных подагентов

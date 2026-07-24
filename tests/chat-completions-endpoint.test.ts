@@ -97,6 +97,7 @@ async function convertResponsesFrames(frames: string[], model = "gpt-test") {
   return {
     chunks,
     toolCalls: chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls ?? []),
+    raw: text,
   };
 }
 
@@ -284,6 +285,50 @@ test("responsesSseToChatCompletionsSse emits parallel tool calls once with stabl
       function: { name: "beta", arguments: '{"b":2}' },
     },
   ]);
+});
+
+test("responsesSseToChatCompletionsSse bounds upstream reads until the chat client pulls", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  let pulls = 0;
+  const upstream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoder.encode(
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: `${pulls}` })}\n\n`,
+      ));
+      if (pulls === 100) controller.close();
+    },
+  });
+
+  const stream = responsesSseToChatCompletionsSse(upstream, "mock/test-model");
+  await new Promise(resolve => setTimeout(resolve, 25));
+
+  expect(pulls).toBeLessThanOrEqual(2);
+  await stream.cancel();
+});
+
+test("responsesSseToChatCompletionsSse delivers the first frame before a macrotask turn", async () => {
+  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const encoder = new TextEncoder();
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(
+        `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { status: "in_progress" } })}\n\n`,
+      ));
+    },
+  });
+  const reader = responsesSseToChatCompletionsSse(upstream, "mock/test-model").getReader();
+  let macrotaskRan = false;
+  const timer = setTimeout(() => { macrotaskRan = true; }, 0);
+
+  const first = await reader.read();
+
+  clearTimeout(timer);
+  expect(first.done).toBe(false);
+  expect(new TextDecoder().decode(first.value)).toContain("chat.completion.chunk");
+  expect(macrotaskRan).toBe(false);
+  await reader.cancel();
 });
 
 test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
@@ -850,4 +895,70 @@ test("responsesSseToChatCompletionsSse cancel promptly cancels an idle upstream"
   // Give the abort->reader.cancel microtask a beat to reach the source.
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(upstreamCancelled).toBe(true);
+});
+
+// --- WP3/030: incomplete error fidelity -------------------------------------
+
+test("stall incomplete becomes an error frame with no [DONE] (WP3)", async () => {
+  const frames = [
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\n\n`,
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "upstream_stall_timeout" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  const errorChunk = chunks.find(chunk => (chunk as { error?: unknown }).error !== undefined);
+  expect(errorChunk).toBeDefined();
+  expect(raw).not.toContain("[DONE]");
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "stop")).toBe(false);
+});
+
+test("adapter_eof incomplete surfaces the upstream message and no [DONE] (WP3)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message: "upstream closed mid-turn" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  const errorChunk = chunks.find(chunk => (chunk as { error?: { message?: string } }).error !== undefined) as
+    { error: { message: string } } | undefined;
+  expect(errorChunk?.error.message).toBe("upstream closed mid-turn");
+  expect(raw).not.toContain("[DONE]");
+});
+
+test("max_output_tokens incomplete still maps to finish_reason length with [DONE] (WP3 pin)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "length")).toBe(true);
+  expect(raw).toContain("[DONE]");
+});
+
+test("content_filter incomplete still maps to finish_reason content_filter with [DONE] (WP3 pin)", async () => {
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } })}\n\n`,
+  ];
+  const { raw, chunks } = await convertResponsesFrames(frames);
+  expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "content_filter")).toBe(true);
+  expect(raw).toContain("[DONE]");
+});
+
+test("collectChatCompletion throws ChatCompletionsStreamError on a stall incomplete (WP3)", async () => {
+  const { responsesSseToChatCompletionsSse, collectChatCompletion, isChatCompletionsStreamError } =
+    await import("../src/chat/outbound");
+  const frames = [
+    `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "upstream_stall_timeout" } } })}\n\n`,
+  ];
+  const stream = responsesSseToChatCompletionsSse(new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  }), "gpt-test");
+  let caught: unknown;
+  try {
+    await collectChatCompletion(stream, "gpt-test");
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeDefined();
+  expect(isChatCompletionsStreamError(caught)).toBe(true);
 });

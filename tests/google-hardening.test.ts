@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
@@ -117,6 +119,73 @@ describe("google provider hardening", () => {
     ));
 
     expect(events).toContainEqual({ type: "text_delta", text: "final" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("comment and blank keepalives emit at most one heartbeat per read batch", async () => {
+    const encoder = new TextEncoder();
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      byteStreamResponse([
+        encoder.encode(": keepalive\n\n"),
+        encoder.encode("\n"),
+      ]),
+    ));
+
+    expect(events.filter(event => event.type === "heartbeat")).toEqual([
+      { type: "heartbeat" },
+      { type: "heartbeat" },
+    ]);
+  });
+
+  test("keepalives do not add a heartbeat to a batch that emitted content", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response([
+        ": keepalive",
+        'data: {"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}',
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    ));
+
+    expect(events.filter(event => event.type === "heartbeat")).toEqual([]);
+    expect(events).toContainEqual({ type: "text_delta", text: "final" });
+  });
+
+  test("garbage stays debug-dropped while comment keepalives are excluded", async () => {
+    resetDebugLogBufferForTests();
+    setDebugSettings({ debug: true });
+    try {
+      const events = await collect(createGoogleAdapter(provider()).parseStream(
+        new Response([
+          ": keepalive",
+          "garbage",
+          'data: {"candidates":[{"finishReason":"STOP"}]}',
+          "",
+          "",
+        ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+      ));
+
+      expect(events).toContainEqual({ type: "heartbeat" });
+      const dropped = getDebugLogEntries().filter(entry => entry.line.includes("[ocx:frame-drop] google"));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]?.line).toContain("bytes=7");
+    } finally {
+      resetDebugSettingsForTests();
+      resetDebugLogBufferForTests();
+    }
+  });
+
+  test("EOF comment residual is liveness instead of a truncation error", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response([
+        'data: {"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}',
+        "",
+        ": trailing keepalive",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    ));
+
+    expect(events).toContainEqual({ type: "heartbeat" });
     expect(events.at(-1)?.type).toBe("done");
     expect(events.some(event => event.type === "error")).toBe(false);
   });

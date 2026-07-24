@@ -125,6 +125,8 @@ fall back to 350k.
 `ANTHROPIC_SMALL_FAST_MODEL`. The effective Haiku is `tierModels.haiku ?? smallFastModel`, fed
 to both Haiku variables.
 
+When both `tierModels.haiku` and `smallFastModel` are absent, OpenCodex leaves both helper variables unset; Claude Code then chooses its native helper model (currently Sonnet), which may incur native-provider charges.
+
 ## Roster agents (injectAgents)
 
 `ocx claude` (and the system-env daemon) syncs your featured subagent roster (Subagents tab,

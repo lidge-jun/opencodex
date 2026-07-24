@@ -14,7 +14,7 @@ import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
-import { Select } from "./ui";
+import { Select, Switch } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
@@ -204,7 +204,7 @@ export default function App() {
   const displayedVersion = runtimeVersion ?? __APP_VERSION__;
 
   const [stopping, setStopping] = useState(false);
-  // Sidebar "Claude ON" toggle — literal label in every locale (product name).
+  // Claude navigation row also owns the connection toggle.
   const [claudeEnabled, setClaudeEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -299,26 +299,24 @@ export default function App() {
         </div>
         <nav>
           {NAV.map(({ id, tkey, Icon }) => (
-            <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
-              onClick={() => {
-                // Always sync the hash on nav click so Providers restores Classic/Workspace preference.
-                window.location.hash = id === "providers" ? providersHashForPage() : id;
-                setPageState(id);
-                setNavOpen(false);
-              }}
-              aria-current={page === id ? "page" : undefined}>
-              <Icon /> {t(tkey)}
-            </button>
+            <div key={id} className={`nav-entry${id === "claude" ? ` nav-entry-claude${page === id ? " active" : ""}` : ""}`}>
+              <button className={`nav-item${page === id ? " active" : ""}`} data-page={id}
+                onClick={() => {
+                  // Always sync the hash on nav click so Providers restores Classic/Workspace preference.
+                  window.location.hash = id === "providers" ? providersHashForPage() : id;
+                  setPageState(id);
+                  setNavOpen(false);
+                }}
+                aria-current={page === id ? "page" : undefined}>
+                <Icon /> {t(tkey)}
+              </button>
+              {id === "claude" && claudeEnabled !== null && (
+                <Switch on={claudeEnabled} onClick={() => void toggleClaude()} label={t("claude.toggleAria")} />
+              )}
+            </div>
           ))}
         </nav>
         <div className="sidebar-foot">
-          {claudeEnabled !== null && (
-            <button type="button" className="theme-toggle" onClick={toggleClaude}
-              aria-pressed={claudeEnabled} aria-label={t("claude.toggleAria")} title={t("claude.toggleAria")}
-              style={claudeEnabled ? { color: "var(--accent)" } : undefined}>
-              <IconSparkle /> <span className="mode">{claudeEnabled ? t("app.claudeOn") : t("app.claudeOff")}</span>
-            </button>
-          )}
           <div className="lang-toggle">
             <IconGlobe aria-hidden />
             <Select

@@ -47,7 +47,9 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
    주기를 기록합니다. 여기서 `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (Codex 내장 `image_gen` 도구용 — `server/images.ts`가 OpenAI 계열 업스트림으로 중계),
-   `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
+   `POST /v1/live` / `POST /v1/realtime/calls`(ChatGPT / Codex App 음성 및 OpenAI Realtime
+   호출 생성, `server/live.ts`가 중계)와 `/v1/live/{callId}` 사이드밴드 WebSocket,
+   그리고 `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
 2. `server/responses/core.ts`가 압축을 풀고 JSON을 읽습니다. 기억해 둔 `previous_response_id` 입력이 있으면
    펼친 다음 `responses/parser.ts`로 넘깁니다.
 3. `router.ts`가 일반 모델 id 또는 `provider/model` id를 해석합니다. 이어서 Codex 계정 affinity를

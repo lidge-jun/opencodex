@@ -108,8 +108,8 @@ the watchdog.
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
-progress visible. A clean Kiro stream EOF after user-facing text completes directly; reasoning-only
-output still gets one bounded completion retry. Synthetic search calls, real tool calls,
+progress visible. A Kiro stream EOF after user-facing text or reasoning gets one bounded completion
+retry, because the upstream text event does not distinguish progress from a final answer. Synthetic search calls, real tool calls,
 and terminal events remain buffered until the iteration validates. Only the first iteration's final
 response headers/status and any 429 key rotations are handled eagerly. A failure before downstream
 SSE starts returns non-2xx JSON; once headers have started the final response, a generation failure

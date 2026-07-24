@@ -2,6 +2,26 @@ import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 
 describe("Responses parser", () => {
+  test("describes the exact apply_patch freeform envelope", () => {
+    const parsed = parseRequest({
+      model: "xai/grok-4.5",
+      input: "Update a file",
+      tools: [{ type: "custom", name: "apply_patch", description: "Apply a patch" }],
+    });
+
+    expect(parsed.context.tools?.[0]).toMatchObject({
+      name: "apply_patch",
+      freeform: true,
+      parameters: {
+        properties: {
+          input: {
+            description: expect.stringContaining("begin exactly with `*** Begin Patch`"),
+          },
+        },
+      },
+    });
+  });
+
   test("preserves assistant message phase when replaying Responses output", () => {
     const parsed = parseRequest({
       model: "kiro/gpt-5.6-sol",

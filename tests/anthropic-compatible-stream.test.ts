@@ -47,7 +47,74 @@ async function collectAdapterEvents(response: Response): Promise<AdapterEvent[]>
   return events;
 }
 
+function liveCommentResponse(intervalMs: number): { response: Response; stop: () => void } {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearInterval(timer);
+    try { controller?.close(); } catch { /* already closed */ }
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      streamController.enqueue(encoder.encode(": keepalive\n\n"));
+      timer = setInterval(() => {
+        try { streamController.enqueue(encoder.encode(": keepalive\n\n")); } catch { stop(); }
+      }, intervalMs);
+    },
+    cancel: stop,
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    stop,
+  };
+}
+
 describe("Anthropic-compatible reasoning stream termination (#312)", () => {
+  test("comment-only stream records become adapter heartbeat events", async () => {
+    const events = await collectAdapterEvents(new Response(
+      ": keepalive\n\n: still-alive\n\n",
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+
+    expect(events.slice(0, 2)).toEqual([{ type: "heartbeat" }, { type: "heartbeat" }]);
+  });
+
+  test("comment-only live upstream does not trip the bridge stall watchdog", async () => {
+    const upstream = liveCommentResponse(25);
+    const stream = bridgeToResponsesSSE(
+      createAnthropicAdapter(provider).parseStream(upstream.response),
+      "kimi/k3",
+      undefined,
+      undefined,
+      undefined,
+      upstream.stop,
+      50,
+      { stallTimeoutSec: 1 },
+    );
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const probeElapsed = new Promise<null>(resolve => setTimeout(() => resolve(null), 1_200));
+
+    while (true) {
+      const result = await Promise.race([reader.read(), probeElapsed]);
+      if (result === null) break;
+      if (result.done) break;
+      if (result.value) text += decoder.decode(result.value, { stream: true });
+      if (text.includes("upstream_stall_timeout")) break;
+    }
+
+    await reader.cancel();
+    upstream.stop();
+    expect(text).not.toContain("upstream_stall_timeout");
+    expect(text).not.toContain("response.incomplete");
+  });
+
   test("preserves reasoning and visible text, then emits done from final message_stop", async () => {
     const events = await collectAdapterEvents(arbitrarilyChunkedResponse());
 

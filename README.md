@@ -305,13 +305,19 @@ opencodex has two ways to auto-start the proxy:
 | **How** | OS service manager (launchd / systemd / schtasks) | Wraps script launchers for `codex`; real `codex.exe` is left untouched |
 | **When** | Always running after login | On-demand — runs `ocx ensure` when `codex` is launched |
 | **Restart** | Auto-restarts on crash | Starts once per `codex` invocation |
-| **Codex updates** | Unaffected | Repairs on next `ocx codex-shim install` or `ocx update` |
+| **Codex updates** | Unaffected | A completed stable launcher replacement is repaired by the next ordinary `ocx` command |
 | **Remove** | `ocx service uninstall` | `ocx codex-shim uninstall` |
 
 Use the **service** for always-on proxy (recommended for development machines). Use the **shim** for
 lightweight, on-demand proxy startup without a background daemon. Shim autostart is enabled by default
 and can be disabled from the GUI dashboard. If the configured proxy port is already busy, `ocx start`
 automatically picks another free local port and updates Codex to use it.
+
+If an external Codex update overwrites an installed shim, the next ordinary `ocx` command backs up
+the stable new launcher and restores the shim. A launcher that is still changing is left untouched
+and retried later. Repair failures warn without failing the requested command; use
+`ocx codex-shim install` as the manual fallback. Set `codexShimAutoRestore` to `false`, or set
+`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
 
 ### Uninstall
 

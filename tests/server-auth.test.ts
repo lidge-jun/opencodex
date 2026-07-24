@@ -286,7 +286,9 @@ describe("server local API auth", () => {
   });
 
   test("CORS preflight permits the opencodex API key header", () => {
-    expect(corsHeaders()["Access-Control-Allow-Headers"]).toContain("X-OpenCodex-API-Key");
+    const allowed = corsHeaders()["Access-Control-Allow-Headers"];
+    expect(allowed).toContain("X-OpenCodex-API-Key");
+    expect(allowed).toContain("ChatGPT-Account-Id");
   });
 
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {

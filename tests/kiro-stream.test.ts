@@ -279,23 +279,31 @@ describe("kiro adapter — parseStream", () => {
     }
   });
 
-  test("text-only required response completes without a second upstream request", async () => {
-    let fetches = 0;
-    globalThis.fetch = (async () => {
-      fetches++;
-      throw new Error("unexpected fallback");
+  test("progress-only required response makes exactly one structural text fallback", async () => {
+    const requests: Record<string, any>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return new Response(streamOf(eventFrame({ content: "Final from fallback." })));
     }) as typeof fetch;
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
 
     const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
-      eventFrame({ content: "Task complete." }),
+      eventFrame({ content: "I am checking." }),
       eventFrame({ conversationId: "returned-conversation-42" }),
     ))));
 
-    expect(fetches).toBe(0);
+    expect(requests).toHaveLength(1);
+    const retry = requests[0].conversationState;
+    expect(retry.conversationId).toBe("returned-conversation-42");
+    expect(retry.history.at(-1).assistantResponseMessage).toEqual({ content: "I am checking." });
+    expect(retry.currentMessage.userInputMessage.content).toBe(KIRO_COMPLETION_RETRY_MESSAGE);
+    expect(retry.currentMessage.userInputMessage.userInputMessageContext.tools.map(
+      (tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name,
+    )).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
     expect(events.filter(event => event.type === "text_delta")).toEqual([
-      { type: "text_delta", text: "Task complete.", phase: "commentary" },
+      { type: "text_delta", text: "I am checking.", phase: "commentary" },
+      { type: "text_delta", text: "Final from fallback.", phase: "final_answer" },
     ]);
     expect(events.at(-1)).toMatchObject({
       type: "done",

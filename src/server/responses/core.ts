@@ -98,6 +98,7 @@ import {
 } from "../relay";
 import { relaySseEagerBounded } from "../relay-eager";
 import { decideEagerRelay } from "../../lib/bun-stream-caps";
+import { cancelBodyOnAbort } from "../../lib/abort";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
@@ -662,6 +663,8 @@ export async function handleResponses(
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
     parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
+    const clientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim();
+    if (clientThreadId) parsed._clientThreadId = clientThreadId;
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
@@ -687,7 +690,10 @@ export async function handleResponses(
       (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
     }
     (logCtx as unknown as Record<string, unknown>).shadowCallRewrittenFrom = _sciOriginal;
+    // Helpers must not resume/append into the parent thread's Cursor conversation.
+    parsed._cursorIsolateConversation = true;
   }
+  if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
 
   let route;
   try {
@@ -850,6 +856,10 @@ export async function handleResponses(
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+  // Prefer Codex pool account as the Cursor thread namespace when present. Cursor routes without
+  // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
+  const identityScope = codexLogAccountId(authCtx);
+  if (identityScope) parsed._cursorIdentityScope = identityScope;
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
@@ -1304,7 +1314,9 @@ export async function handleResponses(
   if (adapter.runTurn) {
     const runTurnAbort = new AbortController();
     linkAbortSignal(runTurnAbort, options.abortSignal);
-    const queue = createAdapterEventQueue();
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => runTurnAbort.abort(),
+    });
     const runTurn = async (): Promise<void> => {
       try {
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
@@ -1727,6 +1739,7 @@ export async function handleResponses(
       yield { type: "error", message: `Provider continuation parse failed: ${error instanceof Error ? error.message : String(error)}` };
     }
   };
+  cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
 
   if (parsed.stream) {
     const initialEventStream = activeAdapter.parseStream(upstreamResponse);

@@ -442,6 +442,7 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  codexShimAutoRestore: z.boolean().optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
@@ -793,6 +794,15 @@ export function codexAutoStartEnabled(config: Pick<OcxConfig, "codexAutoStart">)
   return config.codexAutoStart !== false;
 }
 
+export const CODEX_SHIM_AUTO_RESTORE_ENV = "OPENCODEX_CODEX_SHIM_AUTO_RESTORE";
+
+export function codexShimAutoRestoreEnabled(
+  config: Pick<OcxConfig, "codexShimAutoRestore">,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return config.codexShimAutoRestore !== false && env[CODEX_SHIM_AUTO_RESTORE_ENV] !== "0";
+}
+
 export function multiAgentGuidanceEnabled(
   config: Pick<OcxConfig, "multiAgentGuidanceEnabled">,
 ): boolean {
@@ -822,6 +832,7 @@ export function getDefaultConfig(): OcxConfig {
     multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,
+    codexShimAutoRestore: true,
   };
 }
 
