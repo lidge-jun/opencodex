@@ -77,17 +77,58 @@ function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
     && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
 }
 
+
+function snapshotHasWeekly(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.weeklyPercent !== undefined || quota.weeklyResetAt !== undefined;
+}
+
+function snapshotHasMonthly(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.monthlyPercent !== undefined || quota.monthlyResetAt !== undefined;
+}
+
+function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota);
+}
 export function setAccountQuotaFromParsed(
   accountId: string,
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
 ): void {
   if (!quota) return;
+  const existing = accountQuota.get(accountId);
   const next: StoredAccountQuota = { updatedAt: Date.now() };
-  if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
-  if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
-  if (quota.monthlyPercent !== undefined) next.monthlyPercent = quota.monthlyPercent;
-  if (quota.monthlyResetAt !== undefined) next.monthlyResetAt = quota.monthlyResetAt;
+  const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
+
+  if (creditsOnly) {
+    if (existing?.weeklyPercent !== undefined) next.weeklyPercent = existing.weeklyPercent;
+    if (existing?.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
+    if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
+    if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
+    next.resetCredits = quota.resetCredits;
+    accountQuota.set(accountId, next);
+    return;
+  }
+
+  if (snapshotHasWeekly(quota)) {
+    if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
+    if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
+  } else if (snapshotHasMonthly(quota) && !snapshotHasWeekly(quota)) {
+    // Monthly-only snapshots intentionally clear stale weekly values (issue #382).
+  } else if (existing?.weeklyPercent !== undefined) {
+    next.weeklyPercent = existing.weeklyPercent;
+    if (existing.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
+  }
+
+  if (snapshotHasMonthly(quota)) {
+    if (quota.monthlyPercent !== undefined) next.monthlyPercent = quota.monthlyPercent;
+    if (quota.monthlyResetAt !== undefined) next.monthlyResetAt = quota.monthlyResetAt;
+  } else if (snapshotHasWeekly(quota) && existing?.monthlyPercent !== undefined) {
+    next.monthlyPercent = existing.monthlyPercent;
+    if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
+  }
+
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
+  else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
+
   accountQuota.set(accountId, next);
 }
 
@@ -130,7 +171,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
     }
   }
 
-  if (tertiaryPercent !== undefined) {
+  if (tertiaryPercent !== undefined && quota.monthlyPercent === undefined) {
     quota.monthlyPercent = tertiaryPercent;
     if (tertiaryResetAt !== undefined) quota.monthlyResetAt = tertiaryResetAt;
   }
