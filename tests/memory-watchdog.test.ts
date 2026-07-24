@@ -6,6 +6,7 @@ import { setRestartHistoryPathForTests } from "../src/server/memory-restart-hist
 import {
   captureMemorySnapshot,
   parseProcStatusCommitted,
+  parseWindowsProbeOutput,
   setMemoryPlatformForTests,
   setProcStatusReaderForTests,
   setWindowsProbeRunnerForTests,
@@ -168,6 +169,26 @@ describe("memory-usage snapshot", () => {
       setMemoryPlatformForTests(null);
       setWindowsProbeRunnerForTests(null);
     }
+  });
+
+  test("labeled probe output parses order-independently and tolerates missing values", () => {
+    const full = parseWindowsProbeOutput("P=100\nC=200\nL=300\nA=400\n");
+    expect(full).toMatchObject({ privateBytes: 100, systemCommittedBytes: 200, systemCommitLimitBytes: 300, availablePhysicalBytes: 400 });
+    expect(full.error).toBeUndefined();
+
+    // Shuffled line order must not reassign fields (the old positional parser's failure mode).
+    const shuffled = parseWindowsProbeOutput("A=400\r\nL=300\r\nP=100\r\nC=200");
+    expect(shuffled).toMatchObject({ privateBytes: 100, systemCommittedBytes: 200 });
+
+    // A $null private renders as "P=" — private degrades to null WITHOUT shifting commit values.
+    const noPrivate = parseWindowsProbeOutput("P=\nC=200\nL=300\nA=400");
+    expect(noPrivate.privateBytes).toBeNull();
+    expect(noPrivate.systemCommittedBytes).toBe(200);
+    expect(noPrivate.error).toBeUndefined();
+
+    // Garbage / empty output is an explicit parse failure, not a zero-filled snapshot.
+    expect(parseWindowsProbeOutput("").error).toBe("parse-failed");
+    expect(parseWindowsProbeOutput("access denied\nblah").error).toBe("parse-failed");
   });
 
   // Real end-to-end probe: only meaningful (and only run) on an actual Windows host. Verifies the
@@ -746,6 +767,70 @@ describe("startMemoryWatchdog — probe-driven loop (§2, §8)", () => {
     });
     stopMemoryWatchdog();
     expect(aborted).toBe(true);
+  });
+
+  test("audit #1: an auto-restart that stops the watchdog mid-tick does not crash or reschedule", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-watchdog-restart-race-"));
+    let captures = 0;
+    try {
+      setRestartHistoryPathForTests(join(root, "absent.json")); // fresh guards regardless of runner env
+      startMemoryWatchdog(
+        { memoryWatchdog: { enabled: true, autoRestart: true, requireSupervisor: false } } as OcxConfig,
+        {
+          capture: async () => { captures += 1; return snapshot(90 * MiB); }, // 90/100 = critical (>0.75)
+          now: () => 1_000,
+          supervised: true,
+          restart: () => stopMemoryWatchdog(), // exactly what defaultRestart does synchronously
+          recordRestart: () => {}, // keep the test disk-free
+          log: () => {},
+        },
+      );
+      await Bun.sleep(0); // let the immediate probe's microtasks complete
+      // With the pre-fix code this turn died on `running.cfg` (unhandled TypeError at reschedule).
+      expect(memoryWatchdogReport()).toBeNull(); // the restart's stop was respected — nothing revived
+      expect(captures).toBe(1); // and no extra capture was scheduled by the dead loop
+    } finally {
+      stopMemoryWatchdog();
+      setRestartHistoryPathForTests(null);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("audit #2: a throwing capture still evaluates exactly once via the RSS fallback", async () => {
+    try {
+      startMemoryWatchdog({} as OcxConfig, {
+        capture: async () => { throw new Error("unexpected boom"); },
+        now: () => 5_000,
+        log: () => {},
+      });
+      await Bun.sleep(0);
+      const report = memoryWatchdogReport();
+      expect(report).not.toBeNull();
+      expect(report!.decision).not.toBeNull(); // the cycle was evaluated, not silenced
+      expect(report!.samplesCount).toBeGreaterThan(0);
+      expect(report!.lastProbeAt).toBe(5_000);
+      expect(report!.memory!.probeError).toBe("capture-threw");
+      expect(report!.memory!.processSource).toBe("rss-fallback");
+    } finally {
+      stopMemoryWatchdog();
+    }
+  });
+
+  test("audit #4: applyWatchdogRuntimeConfig defends systemCommitHighWater against NaN/undefined", () => {
+    try {
+      startMemoryWatchdog({} as OcxConfig, { capture: async () => snapshot(50 * MiB), now: () => 0, log: () => {} });
+      const nan = applyWatchdogRuntimeConfig({ systemCommitHighWater: Number.NaN });
+      expect(Number.isFinite(nan!.systemCommitHighWater)).toBe(true); // previous value kept, not NaN
+      expect(nan!.systemCommitHighWater).toBe(0.90);
+      const undef = applyWatchdogRuntimeConfig({ systemCommitHighWater: undefined as unknown as number });
+      expect(undef!.systemCommitHighWater).toBe(0.90);
+      const clamped = applyWatchdogRuntimeConfig({ systemCommitHighWater: 5 });
+      expect(clamped!.systemCommitHighWater).toBe(0.99); // clamped down into [0.50, 0.99]
+      const junkRestarts = applyWatchdogRuntimeConfig({ maxRestarts: Number.NaN });
+      expect(junkRestarts!.maxRestarts).toBe(3); // finite-guarded like resolveWatchdogConfig
+    } finally {
+      stopMemoryWatchdog();
+    }
   });
 });
 

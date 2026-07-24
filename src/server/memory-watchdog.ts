@@ -42,7 +42,7 @@
  *     logic is unit-tested without real timers or a real process exit.
  */
 
-import { captureMemorySnapshot, type MemorySnapshot } from "../lib/memory-usage";
+import { captureMemorySnapshot, rssFallbackSnapshot, type MemorySnapshot } from "../lib/memory-usage";
 import { responseStateMetrics, type ResponseStateMetrics } from "../responses/state";
 import { drainAndShutdown } from "./lifecycle";
 import { loadMemoryRestartHistory, recordMemoryRestart } from "./memory-restart-history";
@@ -556,33 +556,46 @@ export function tick(
  * stopMemoryWatchdog()/a restart replaced the singleton, so a late probe can never revive state.
  */
 async function probeOnce(generation: number): Promise<void> {
-  const r = running;
-  if (!r || r.generation !== generation) return;
-  r.timer = null;
-  r.abort = new AbortController();
-  let snapshot: MemorySnapshot | null = null;
+  // tick()'s restart hook can synchronously null the global `running` (defaultRestart calls
+  // stopMemoryWatchdog before draining) — so pin the instance this probe owns in a local and,
+  // from here on, decide "am I still current?" by IDENTITY against the global (audit #1).
+  const current = running;
+  if (!current || current.generation !== generation) return;
+  current.timer = null;
+  current.abort = new AbortController();
+
+  let snapshot: MemorySnapshot;
   try {
-    snapshot = await r.deps.capture(r.deps.now(), r.abort.signal);
+    snapshot = await current.deps.capture(current.deps.now(), current.abort.signal);
   } catch {
-    snapshot = null; // capture is contractually non-throwing; treat a bug as a skipped cycle
+    // Audit #2: captureMemorySnapshot is contractually non-throwing, but an unexpected runtime
+    // exception must not silence the cycle — evaluate exactly once on the RSS fallback instead.
+    snapshot = rssFallbackSnapshot(current.deps.now(), "capture-threw");
   }
-  if (!running || running.generation !== generation) return; // stopped mid-probe — drop late result
-  running.abort = null;
+
+  // Stopped/replaced mid-capture: drop the late result (global is null or a different instance).
+  if (running !== current || running.generation !== generation) return;
+  current.abort = null;
+
   try {
-    if (snapshot) {
-      running.last = tick(running.state, running.cfg, running.deps, snapshot);
-      running.lastSnapshot = snapshot;
-      // §7: COMPLETION time, not capture start — a slow probe must read as fresh, not stale.
-      const completedAt = running.deps.now();
-      running.lastProbeAt = completedAt;
-      if (snapshot.systemCommitAvailable) running.lastSuccessfulSystemProbeAt = completedAt;
-      // Response-state metrics serialize every entry — compute once per probe, not per poll.
-      try { running.responseState = responseStateMetrics(); } catch { running.responseState = null; }
-    }
+    const decision = tick(current.state, current.cfg, current.deps, snapshot);
+    // If tick fired an auto-restart, its hook already stopped (or replaced) the watchdog: leave
+    // the dead/foreign singleton untouched and do not reschedule — the restart owns the exit.
+    if (running !== current || running.generation !== generation) return;
+    current.last = decision;
+    current.lastSnapshot = snapshot;
+    // §7: COMPLETION time, not capture start — a slow probe must read as fresh, not stale.
+    const completedAt = current.deps.now();
+    current.lastProbeAt = completedAt;
+    if (snapshot.systemCommitAvailable) current.lastSuccessfulSystemProbeAt = completedAt;
+    // Response-state metrics serialize every entry — compute once per probe, not per poll.
+    try { current.responseState = responseStateMetrics(); } catch { current.responseState = null; }
   } catch {
     /* an evaluation failure must never crash the proxy */
   }
-  scheduleNextProbe(generation, running.cfg.intervalMs);
+
+  if (running !== current || running.generation !== generation) return;
+  scheduleNextProbe(generation, current.cfg.intervalMs);
 }
 
 function scheduleNextProbe(generation: number, delayMs: number): void {
@@ -646,6 +659,15 @@ export function applyWatchdogRuntimeConfig(
   }
   next.restartGraceMs = clampMs(next.restartGraceMs, RESTART_GRACE_MIN_MS, RESTART_GRACE_MAX_MS, running.cfg.restartGraceMs);
   next.minRestartIntervalMs = posNumOr(next.minRestartIntervalMs, running.cfg.minRestartIntervalMs);
+  // Audit #4: not PUT-exposed, but a programmatic partial carrying undefined/NaN would otherwise
+  // survive the spread — an NaN high-water makes `fraction >= NaN` permanently false and silently
+  // disables the commit warning. Same finite-guard pattern as resolveWatchdogConfig's maxRestarts.
+  next.systemCommitHighWater = Number.isFinite(next.systemCommitHighWater)
+    ? Math.min(0.99, Math.max(0.50, next.systemCommitHighWater))
+    : running.cfg.systemCommitHighWater;
+  next.maxRestarts = Number.isFinite(next.maxRestarts) && next.maxRestarts >= 0
+    ? Math.floor(next.maxRestarts)
+    : running.cfg.maxRestarts;
   normalizeRestartTiming(next);
   next.intervalMs = Math.max(1_000, posNumOr(next.intervalMs, running.cfg.intervalMs));
   const intervalChanged = next.intervalMs !== running.cfg.intervalMs;

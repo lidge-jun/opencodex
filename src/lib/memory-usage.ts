@@ -133,7 +133,11 @@ async function defaultWindowsProbeRunner(pid: number, timeoutMs: number, signal?
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `$p=(Get-Process -Id ${pid}).PrivateMemorySize64; $m=Get-CimInstance Win32_PerfRawData_PerfOS_Memory; Write-Output $p $m.CommittedBytes $m.CommitLimit $m.AvailableBytes`,
+        // Labeled output: a $null value would render as an empty line that trim() removes, shifting
+        // positional indexes — labels make the parse order-independent and loss-explicit.
+        `$p=(Get-Process -Id ${pid}).PrivateMemorySize64; `
+        + `$m=Get-CimInstance Win32_PerfRawData_PerfOS_Memory; `
+        + `Write-Output "P=$p" "C=$($m.CommittedBytes)" "L=$($m.CommitLimit)" "A=$($m.AvailableBytes)"`,
       ],
       { stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true },
     );
@@ -172,23 +176,37 @@ async function defaultWindowsProbeRunner(pid: number, timeoutMs: number, signal?
           finish({ ...EMPTY_PROBE, timedOut: false, error: `probe-exit-${proc.exitCode ?? "unknown"}` });
           return;
         }
-        const nums = text.trim().split(/\r?\n/).map(line => Number(line.trim()));
-        const val = (n: number | undefined): number | null =>
-          n !== undefined && Number.isFinite(n) && n > 0 ? n : null;
-        const result: WindowsProbeResult = {
-          privateBytes: val(nums[0]),
-          systemCommittedBytes: val(nums[1]),
-          systemCommitLimitBytes: val(nums[2]),
-          availablePhysicalBytes: val(nums[3]),
-          timedOut: false,
-        };
-        if (result.privateBytes === null && result.systemCommittedBytes === null) result.error = "parse-failed";
-        finish(result);
+        finish(parseWindowsProbeOutput(text));
       } catch {
         finish({ ...EMPTY_PROBE, timedOut: false, error: "probe-failed" });
       }
     })();
   });
+}
+
+/**
+ * Parse the labeled probe output (`P=` private, `C=` committed, `L=` limit, `A=` available).
+ * Order-independent and tolerant of missing/blank labels — a value PowerShell rendered as empty
+ * (`P=`) parses to NaN and degrades to null instead of shifting the other fields. Exported as a
+ * pure function so the parse path is unit-testable without spawning a child.
+ */
+export function parseWindowsProbeOutput(text: string): WindowsProbeResult {
+  const fields = new Map<string, number>();
+  for (const line of text.trim().split(/\r?\n/)) {
+    const match = /^([PCLA])=(.*)$/.exec(line.trim());
+    if (match) fields.set(match[1]!, Number(match[2]));
+  }
+  const val = (n: number | undefined): number | null =>
+    n !== undefined && Number.isFinite(n) && n > 0 ? n : null;
+  const result: WindowsProbeResult = {
+    privateBytes: val(fields.get("P")),
+    systemCommittedBytes: val(fields.get("C")),
+    systemCommitLimitBytes: val(fields.get("L")),
+    availablePhysicalBytes: val(fields.get("A")),
+    timedOut: false,
+  };
+  if (result.privateBytes === null && result.systemCommittedBytes === null) result.error = "parse-failed";
+  return result;
 }
 
 let windowsProbeRunner: WindowsProbeRunner = defaultWindowsProbeRunner;
@@ -251,6 +269,18 @@ function baseSnapshot(capturedAt: number): MemorySnapshot {
     availablePhysicalBytes: null,
     capturedAt,
   };
+}
+
+/**
+ * RSS-fallback snapshot for callers that must evaluate SOMETHING even when capture itself failed.
+ * captureMemorySnapshot is contractually non-throwing, but the probe loop uses this as a safety
+ * net so an unexpected runtime exception never silences a whole evaluation cycle (audit #2).
+ * probeError takes sanitized codes only — never raw command output or exception text.
+ */
+export function rssFallbackSnapshot(nowMs: number = Date.now(), probeError?: string): MemorySnapshot {
+  const snapshot = baseSnapshot(nowMs);
+  if (probeError !== undefined) snapshot.probeError = probeError;
+  return snapshot;
 }
 
 /**
