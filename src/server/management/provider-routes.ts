@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { parseProviderModelsApiItems } from "../../codex/catalog/provider-fetch";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -24,7 +25,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
+import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
@@ -405,6 +406,131 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   // standalone Vite package, so it consumes this runtime view instead of importing repo-root src.
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
     return jsonResponse({ providers: deriveProviderPresets() });
+  }
+
+  if (url.pathname === "/api/provider-presets/discover" && req.method === "POST") {
+    let body: { presetId?: unknown; provider?: unknown; freeOnly?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const presetId = typeof body.presetId === "string" ? body.presetId.trim() : "";
+    if (!presetId || !isValidProviderName(presetId)) return jsonResponse({ error: "invalid presetId" }, 400);
+    const entry = getProviderRegistryEntry(presetId);
+    if (!entry) return jsonResponse({ error: "unknown provider preset" }, 404);
+    if (body.freeOnly !== undefined && typeof body.freeOnly !== "boolean") return jsonResponse({ error: "freeOnly must be a boolean" }, 400);
+    if (body.freeOnly === true && presetId !== "openrouter") return jsonResponse({ error: "freeOnly is only supported for OpenRouter" }, 400);
+    if (entry.supportLevel === "reference") {
+      return jsonResponse({ error: "reference-only provider presets cannot be connected automatically" }, 400);
+    }
+    const providerError = providerManagementConfigError(presetId, body.provider);
+    if (providerError) return jsonResponse({ error: providerError }, 400);
+    const supplied = stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig);
+    const suppliedBaseUrl = supplied.baseUrl?.trim();
+    let matchesResolvedTemplate = false;
+    if (suppliedBaseUrl && entry.baseUrl.includes("{")) {
+      try {
+        const marker = "opencodex-template-value";
+        const templateUrl = new URL(entry.baseUrl.replace(/\{[^}]+\}/g, marker));
+        const candidateUrl = new URL(suppliedBaseUrl);
+        const escapedPath = templateUrl.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pathPattern = new RegExp(`^${escapedPath.replaceAll(marker, "[A-Za-z0-9_-]+")}/?$`);
+        matchesResolvedTemplate = candidateUrl.origin === templateUrl.origin
+          && !candidateUrl.search
+          && !candidateUrl.hash
+          && pathPattern.test(candidateUrl.pathname);
+      } catch {
+        matchesResolvedTemplate = false;
+      }
+    }
+    const normalizedSuppliedBaseUrl = suppliedBaseUrl?.replace(/\/+$/, "");
+    const matchesOfficialChoice = !!normalizedSuppliedBaseUrl && !!entry.baseUrlChoices?.some(choice =>
+      choice.baseUrl?.replace(/\/+$/, "") === normalizedSuppliedBaseUrl
+    );
+    const acceptsResolvedBaseUrl = entry.allowBaseUrlOverride === true || matchesResolvedTemplate || matchesOfficialChoice;
+    if (suppliedBaseUrl && suppliedBaseUrl.replace(/\/+$/, "") !== entry.baseUrl.replace(/\/+$/, "") && !acceptsResolvedBaseUrl) {
+      return jsonResponse({ error: "provider baseUrl does not match the trusted preset" }, 400);
+    }
+    const provider = {
+      ...providerConfigSeed(entry),
+      ...(suppliedBaseUrl ? { baseUrl: suppliedBaseUrl } : {}),
+      ...(supplied.apiKey ? { apiKey: supplied.apiKey } : {}),
+      ...(supplied.defaultModel ? { defaultModel: supplied.defaultModel } : {}),
+      ...(supplied.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+      ...(supplied.project ? { project: supplied.project } : {}),
+      ...(supplied.location ? { location: supplied.location } : {}),
+    };
+    const staticModels = (entry.models ?? []).map(id => ({
+      id,
+      ...(entry.modelContextWindows?.[id] ? { contextWindow: entry.modelContextWindows[id] } : {}),
+    }));
+    const fallbackModels = body.freeOnly === true
+      ? staticModels.filter(model => model.id.endsWith(":free"))
+      : staticModels;
+    const destinationError = await providerDestinationResolvedError(presetId, provider);
+    if (destinationError) return jsonResponse({ error: destinationError }, 400);
+    if (entry.discovery === "static" || entry.discovery === "unsupported" || entry.liveModels === false) {
+      return jsonResponse(fallbackModels.length
+        ? { ok: true, models: fallbackModels, source: "static", latencyMs: 0 }
+        : { ok: false, models: [], source: "static", latencyMs: 0, error: "No static model catalog is available for this preset" });
+    }
+    const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
+    const apiKey = await resolveModelsAuthToken(presetId, provider);
+    const request = buildModelsRequest(provider, apiKey, presetId);
+    const modelsDestinationError = await providerDestinationResolvedError(presetId, { baseUrl: request.url });
+    if (modelsDestinationError) return jsonResponse({ error: modelsDestinationError }, 400);
+    const started = Date.now();
+    try {
+      const response = await fetch(request.url, { headers: request.headers, redirect: "error", signal: AbortSignal.timeout(8000) });
+      const latencyMs = Date.now() - started;
+      if (!response.ok) {
+        const error = `upstream model discovery returned ${response.status}`;
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
+          : { ok: false, models: [], source: "live", latencyMs, error });
+      }
+      const allowsModelsEnvelope = (entry.adapter === "google" && (entry.googleMode ?? "ai-studio") === "ai-studio")
+        || new URL(request.url).pathname.replace(/\/+$/, "").endsWith("/api/tags");
+      const rows = parseProviderModelsApiItems(await response.json().catch(() => null), allowsModelsEnvelope);
+      if (!rows) {
+        const error = "upstream model discovery returned an unexpected shape";
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
+          : { ok: false, models: [], source: "live", latencyMs, error });
+      }
+      const uniqueRows = new Map<string, (typeof rows)[number]>();
+      for (const row of rows) {
+        const current = uniqueRows.get(row.id);
+        if (!current || (!current.context_length && row.context_length)) uniqueRows.set(row.id, row);
+        if (uniqueRows.size >= 2000) break;
+      }
+      const filteredRows = body.freeOnly === true
+        ? [...uniqueRows.values()].filter(row => {
+          const prompt = Number(row.pricing?.prompt);
+          const completion = Number(row.pricing?.completion);
+          return row.pricing !== undefined
+            && Number.isFinite(prompt) && prompt >= 0
+            && Number.isFinite(completion) && completion >= 0
+            && prompt === 0 && completion === 0;
+        })
+        : [...uniqueRows.values()];
+      const models = filteredRows.map(row => ({
+        id: row.id,
+        ...(row.context_length ? { contextWindow: row.context_length } : {}),
+      }));
+      if (models.length === 0) {
+        const error = body.freeOnly === true
+          ? "OpenRouter currently reports no free models"
+          : "upstream model discovery returned an empty catalog";
+        return jsonResponse(fallbackModels.length
+          ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
+          : { ok: false, models: [], source: "live", latencyMs, error });
+      }
+      return jsonResponse({ ok: true, models, source: "live", latencyMs });
+    } catch {
+      const latencyMs = Date.now() - started;
+      const error = "model discovery request failed";
+      return jsonResponse(fallbackModels.length
+        ? { ok: true, models: fallbackModels, source: "static", latencyMs, error }
+        : { ok: false, models: [], source: "live", latencyMs, error });
+    }
   }
   return null;
 }

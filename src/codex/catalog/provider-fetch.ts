@@ -57,20 +57,71 @@ export type ProviderModelsApiItem = {
   owned_by?: string;
   context_length?: number;
   max_model_len?: number;
+  pricing?: {
+    prompt: string;
+    completion: string;
+  };
   metadata?: {
     capabilities?: Record<string, unknown>;
     limits?: Record<string, unknown>;
   };
 };
 
-export function isProviderModelsApiItems(value: unknown): value is ProviderModelsApiItem[] {
-  return Array.isArray(value) && value.every(item =>
-    item !== null
-    && typeof item === "object"
-    && !Array.isArray(item)
-    && typeof (item as { id?: unknown }).id === "string"
-    && (item as { id: string }).id.trim().length > 0
-  );
+/** Normalize the common model-catalog envelopes without weakening malformed-response fallback. */
+export function parseProviderModelsApiItems(value: unknown, allowModelsEnvelope = false): ProviderModelsApiItem[] | null {
+  const rows = Array.isArray(value)
+    ? value
+    : value !== null && typeof value === "object"
+      ? (Array.isArray((value as { data?: unknown }).data)
+        ? (value as { data: unknown[] }).data
+        : allowModelsEnvelope && Array.isArray((value as { models?: unknown }).models)
+          ? (value as { models: unknown[] }).models
+          : null)
+      : null;
+  if (!rows) return null;
+
+  const normalized: ProviderModelsApiItem[] = [];
+  for (const row of rows) {
+    if (typeof row === "string" && row.trim()) {
+      normalized.push({ id: row.trim() });
+      continue;
+    }
+    if (row === null || typeof row !== "object" || Array.isArray(row)) return null;
+    const item = row as Record<string, unknown>;
+    const rawId = typeof item.id === "string" ? item.id
+      : typeof item.name === "string" ? item.name
+      : typeof item.model === "string" ? item.model
+      : "";
+    const id = rawId.trim()
+      .replace(/^models\//, "")
+      .replace(/^accounts\/fireworks\/models\//, "");
+    if (!id) return null;
+    const contextLength = [
+      item.context_length,
+      item.context_window,
+      item.contextWindow,
+      item.inputTokenLimit,
+      item.max_context_length,
+      item.max_model_len,
+    ].find(candidate => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) as number | undefined;
+    const rawPricing = item.pricing !== null && typeof item.pricing === "object" && !Array.isArray(item.pricing)
+      ? item.pricing as Record<string, unknown>
+      : null;
+    const pricing = rawPricing && typeof rawPricing.prompt === "string" && rawPricing.prompt.trim()
+      && typeof rawPricing.completion === "string" && rawPricing.completion.trim()
+      ? { prompt: rawPricing.prompt, completion: rawPricing.completion }
+      : undefined;
+    normalized.push({
+      id,
+      ...(typeof item.owned_by === "string" ? { owned_by: item.owned_by } : {}),
+      ...(contextLength ? { context_length: contextLength } : {}),
+      ...(pricing ? { pricing } : {}),
+      ...(item.metadata !== null && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+        ? { metadata: item.metadata as ProviderModelsApiItem["metadata"] }
+        : {}),
+    });
+  }
+  return normalized;
 }
 
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
@@ -326,7 +377,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       return models;
     }
 
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+    const res = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const { models, fallback } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       console.warn(
@@ -352,17 +403,16 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       );
       return models;
     }
-    const data = json !== null && typeof json === "object" && !Array.isArray(json)
-      ? (json as { data?: unknown }).data
-      : undefined;
-    if (!isProviderModelsApiItems(data)) {
+    const allowsModelsEnvelope = (prov.adapter === "google" && (prov.googleMode ?? "ai-studio") === "ai-studio")
+      || new URL(url).pathname.replace(/\/+$/, "").endsWith("/api/tags");
+    const items = parseProviderModelsApiItems(json, allowsModelsEnvelope);
+    if (!items) {
       const { models, fallback } = failedDiscoveryFallback({ reason: "invalid_response" });
       console.warn(
         `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
       );
       return models;
     }
-    const items = data;
     const live = items.map(m => applyProviderConfigHints(name, prov, {
       id: m.id,
       provider: name,
