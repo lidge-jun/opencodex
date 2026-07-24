@@ -71,3 +71,16 @@ gh workflow run "Go CI" --ref dev2-go
 
 - lease fails if remote moved → stop, re-fetch
 - CI path-filter skip → mandatory workflow_dispatch
+
+
+## Stale-check amendment (2026-07-24 post Phase-0)
+
+- Pre-rebase local tip after Phase-0 commit: `3f22d4945551795b23ba43cc3a6a14055e42e717` (docs unit)
+- `origin/dev` advanced to `d34e8ba5d199776834a9fc33dd54bcaab5d70a65` (`docs: move public site to opencodex.me`)
+- `origin/dev2-go` still `222b4371d13cb64d934c8f52848d15608a634f9b` (lease value)
+- Overlap since merge-base `6a670bce`: **only** `structure/06_docs-and-release.md`
+- Resolution strategy (keep both):
+  1. Take `origin/dev` Pages URL `https://opencodex.me/` + Decision Log
+  2. Keep HEAD `go-ci.yml` workflow map row
+  3. Keep HEAD `dev2-go` temporary track paragraph after service-lifecycle note
+- Expected other conflicts: none
