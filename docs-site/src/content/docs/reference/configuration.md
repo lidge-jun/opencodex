@@ -103,7 +103,9 @@ Namespaces alone are additive and preserve the existing bare native picker rows.
 labels the replacements `Personal / 5.6 Sol`, `Work / 5.6 Sol`, and so on. It does not remove or
 reroute bare model ids, so saved threads and configuration that use `gpt-*` continue to follow the
 configured Pool/Direct behavior. Remove the picker-mode key or set it to `additive` to restore the
-original presentation.
+original presentation. When namespaces are configured, the same choice is available on the
+dashboard's **Codex Auth** page as **Bare + accounts** or **Accounts only**; changing it refreshes
+the Codex catalog automatically.
 
 These selectors do not change `activeCodexAccountId`. They bypass quota auto-switch, transient-
 failure failover, affinity rebinding, and unsupported-model retry. If the exact account is missing,

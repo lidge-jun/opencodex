@@ -44,7 +44,8 @@ Namespace rows are additive by default. To replace the bare native picker rows w
 
 This changes picker presentation only. Bare `gpt-*` ids remain valid for saved threads and config,
 and continue to use the provider's Pool/Direct behavior. Omitting the setting keeps the existing
-additive behavior.
+additive behavior. The **Codex Auth** dashboard exposes the same setting when account namespaces
+exist and refreshes the catalog after a change.
 
 An account-qualified model never switches accounts. Missing credentials, cooldown, or
 reauthentication fail the request. Bare models retain normal Pool/Direct behavior, and future native

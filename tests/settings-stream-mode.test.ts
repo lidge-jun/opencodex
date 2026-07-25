@@ -33,13 +33,13 @@ function baseConfig(): OcxConfig {
   };
 }
 
-function putSettings(config: OcxConfig, body: unknown): Promise<Response | null> {
+function putSettings(config: OcxConfig, body: unknown, refreshCodexCatalog?: () => Promise<void>): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleManagementAPI(req, new URL(req.url), config);
+  return handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog });
 }
 
 function getSettings(config: OcxConfig): Promise<Response | null> {
@@ -193,6 +193,35 @@ describe("PUT /api/settings", () => {
     const config = baseConfig();
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
+  });
+
+  test("account picker mode persists, refreshes the catalog, and returns to the additive default", async () => {
+    const config = { ...baseConfig(), codexAccountNamespaces: { personal: "main", work: "work-id" } };
+    let refreshes = 0;
+    const refresh = async () => { refreshes += 1; };
+
+    const replaced = await putSettings(config, { codexAccountNamespacePickerMode: "replace-native" }, refresh);
+    expect(replaced!.status).toBe(200);
+    expect(config.codexAccountNamespacePickerMode).toBe("replace-native");
+    expect(refreshes).toBe(1);
+    expect(await replaced!.json()).toMatchObject({
+      codexAccountNamespacePickerMode: "replace-native",
+      codexAccountNamespaceCount: 2,
+    });
+
+    const additive = await putSettings(config, { codexAccountNamespacePickerMode: "additive" }, refresh);
+    expect(additive!.status).toBe(200);
+    expect(config.codexAccountNamespacePickerMode).toBeUndefined();
+    expect(refreshes).toBe(2);
+    expect(loadConfig().codexAccountNamespacePickerMode).toBeUndefined();
+  });
+
+  test("account picker mode rejects invalid values and replacement without namespaces", async () => {
+    const config = baseConfig();
+    expect((await putSettings(config, { codexAccountNamespacePickerMode: "grouped" }))!.status).toBe(400);
+    const missing = await putSettings(config, { codexAccountNamespacePickerMode: "replace-native" });
+    expect(missing!.status).toBe(400);
+    expect(await missing!.json()).toMatchObject({ error: expect.stringContaining("requires at least one") });
   });
 });
 

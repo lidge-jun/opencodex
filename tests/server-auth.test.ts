@@ -310,6 +310,8 @@ describe("server local API auth", () => {
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
     const unsafe = config("127.0.0.1");
     unsafe.openaiProviderTierVersion = 1;
+    unsafe.codexAccountNamespaces = { personal: "main", work: "private-work-account-id" };
+    unsafe.codexAccountNamespacePickerMode = "replace-native";
     Object.assign(unsafe.providers.openai as unknown as Record<string, unknown>, {
       apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
       modelMaxInputTokens: { "gpt-test": 1000 },
@@ -323,6 +325,8 @@ describe("server local API auth", () => {
     });
     const dto = safeConfigDTO(unsafe) as {
       providers: Record<string, Record<string, unknown>>;
+      codexAccountNamespaceCount: number;
+      codexAccountNamespacePickerMode: string;
     };
     const serialized = JSON.stringify(dto);
     for (const forbidden of [
@@ -331,7 +335,10 @@ describe("server local API auth", () => {
       "virtualModels", "codexAuthContext", "selectedForwardHeaders",
       "sidecarOutcomeRecorder", "recorder-runtime", "_codexAccountOverride",
       "_codexAccountRequired", "runtime-token", "override-token",
+      "private-work-account-id",
     ]) expect(serialized).not.toContain(forbidden);
+    expect(dto.codexAccountNamespaceCount).toBe(2);
+    expect(dto.codexAccountNamespacePickerMode).toBe("replace-native");
     expect(dto.providers.openai).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.example.test/v1",

@@ -332,6 +332,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     hostname: config.hostname ?? "127.0.0.1",
     defaultProvider: config.defaultProvider,
     codexAutoStart: codexAutoStartEnabled(config),
+    codexAccountNamespaceCount: Object.keys(config.codexAccountNamespaces ?? {}).length,
+    codexAccountNamespacePickerMode: config.codexAccountNamespacePickerMode ?? "additive",
     websockets: config.websockets,
     providers,
   };
