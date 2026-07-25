@@ -127,6 +127,7 @@ export const ja: Record<TKey, string> = {
   "dash.mem.jsHeap": "JS ヒープ（使用 / 合計）",
   "dash.mem.jscHeap": "JSC ヒープ",
   "dash.mem.growth": "1時間あたりの RSS 変化",
+  "dash.mem.perHour": "/時間",
   "dash.mem.store": "継続ストア",
   "dash.mem.storeHint": "プロキシの previous_response_id キャッシュ。ヒープ増加中に合計バイトが増える場合、ランタイムアロケータではなく会話保持を示します。",
   "dash.mem.storeEntries": "エントリ",

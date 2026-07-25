@@ -122,6 +122,7 @@ export const zh: Record<TKey, string> = {
   "dash.mem.jsHeap": "JS 堆（已用 / 总计）",
   "dash.mem.jscHeap": "JSC 堆",
   "dash.mem.growth": "每小时 RSS 变化",
+  "dash.mem.perHour": "/小时",
   "dash.mem.store": "延续存储",
   "dash.mem.storeHint": "代理 previous_response_id 缓存。堆上升时总字节数增加，说明是对话保留而非运行时分配器。",
   "dash.mem.storeEntries": "条目",

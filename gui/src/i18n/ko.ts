@@ -122,6 +122,7 @@ export const ko: Record<TKey, string> = {
   "dash.mem.jsHeap": "JS 힙 (사용 / 전체)",
   "dash.mem.jscHeap": "JSC 힙",
   "dash.mem.growth": "시간당 RSS 변화",
+  "dash.mem.perHour": "/시간",
   "dash.mem.store": "연속 응답 저장소",
   "dash.mem.storeHint": "프록시 previous_response_id 캐시. 힙이 증가하는 가운데 총 바이트가 늘면 런타임 할당기보다 대화 보존을 가리킵니다.",
   "dash.mem.storeEntries": "항목",

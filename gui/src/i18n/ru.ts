@@ -127,6 +127,7 @@ export const ru: Record<TKey, string> = {
   "dash.mem.jsHeap": "Куча JS (занято / всего)",
   "dash.mem.jscHeap": "Куча JSC",
   "dash.mem.growth": "Изменение RSS / час",
+  "dash.mem.perHour": "/ч",
   "dash.mem.store": "Хранилище продолжений",
   "dash.mem.storeHint": "Кэш прокси previous_response_id. Рост общего числа байт при растущей куче указывает на удержание диалогов, а не на аллокатор среды.",
   "dash.mem.storeEntries": "Записи",

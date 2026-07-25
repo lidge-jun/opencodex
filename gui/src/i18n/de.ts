@@ -116,6 +116,7 @@ export const de = {
   "dash.mem.jsHeap": "JS-Heap (belegt / gesamt)",
   "dash.mem.jscHeap": "JSC-Heap",
   "dash.mem.growth": "RSS-Drift / Stunde",
+  "dash.mem.perHour": "/Std",
   "dash.mem.store": "Fortsetzungsspeicher",
   "dash.mem.storeHint": "Proxy-Cache für previous_response_id. Steigende Gesamtbytes bei steigendem Heap deuten auf Konversationsspeicherung hin, nicht auf den Laufzeit-Allokator.",
   "dash.mem.storeEntries": "Einträge",

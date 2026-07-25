@@ -44,9 +44,9 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`;
 }
 
-/** Render a millisecond age via the locale-aware uptime formatter; non-positive ages render as "—". */
+/** Render a millisecond age via the locale-aware uptime formatter; invalid/negative ages render as "—". */
 function formatAge(ms: number, locale: Locale): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "—";
+  if (!Number.isFinite(ms) || ms < 0) return "—";
   return formatUptime(ms / 1000, locale);
 }
 
@@ -77,7 +77,12 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     const fetchMemory = async () => {
+      // Serialize polls: a stalled request must not stack up or let an older
+      // payload land after a newer one.
+      if (inFlight) return;
+      inFlight = true;
       try {
         const res = await fetch(`${apiBase}/api/system/memory`);
         if (!res.ok) throw new Error("memory unavailable");
@@ -89,6 +94,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       } catch {
         // Old servers (pre-#314) 404 this route; degrade to a quiet unavailable note.
         if (!cancelled) setUnavailable(true);
+      } finally {
+        inFlight = false;
       }
     };
     void fetchMemory();
@@ -128,7 +135,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         <Stat label={t("dash.mem.jscHeap")} value={data?.jscHeap ? formatBytes(data.jscHeap.heapSize) : "—"} />
         <Stat
           label={t("dash.mem.growth")}
-          value={growth === null ? "—" : `${growth >= 0 ? "+" : "-"}${formatBytes(Math.abs(growth))}/h`}
+          value={growth === null ? "—" : `${growth >= 0 ? "+" : "-"}${formatBytes(Math.abs(growth))}${t("dash.mem.perHour")}`}
         />
       </div>
 
@@ -143,7 +150,11 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           <Stat label={t("dash.mem.storeEntries")} value={responseState ? new Intl.NumberFormat(locale).format(responseState.count) : "—"} />
           <Stat label={t("dash.mem.storeTotal")} value={responseState ? formatBytes(responseState.totalBytes) : "—"} />
           <Stat label={t("dash.mem.storeLargest")} value={responseState ? formatBytes(responseState.largestBytes) : "—"} />
-          <Stat label={t("dash.mem.storeOldest")} value={responseState ? formatAge(responseState.oldestAgeMs, locale) : "—"} />
+          <Stat
+            label={t("dash.mem.storeOldest")}
+            // count distinguishes an empty store ("—") from a legit same-tick zero age ("0s").
+            value={responseState ? (responseState.count === 0 ? "—" : formatAge(responseState.oldestAgeMs, locale)) : "—"}
+          />
         </div>
 
         {data?.watchdog && (
