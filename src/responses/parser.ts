@@ -27,9 +27,11 @@ type InputBlock =
   | { type: "input_image"; image_url?: string; file_id?: string; detail?: string }
   | { type: "input_file"; file_id?: string; filename?: string };
 
-function inputContentParts(blocks: unknown[] | string | undefined): string | OcxContentPart[] {
+function inputContentParts(blocks: unknown): string | OcxContentPart[] {
   if (typeof blocks === "string") return blocks;
-  if (!blocks) return [];
+  // The catch-all can also hand back a non-array `content` (an object, a number), which would
+  // throw at the loop below before any per-block guard runs.
+  if (!Array.isArray(blocks)) return [];
   const parts: OcxContentPart[] = [];
   for (const raw of blocks) {
     // A malformed message item fails its strict schema and falls through to inputItemSchema's
@@ -61,9 +63,9 @@ function inputContentParts(blocks: unknown[] | string | undefined): string | Ocx
 
 type OutputBlock = { type: "output_text"; text: string } | { type: "text"; text: string } | { type: "refusal"; refusal: string };
 
-function outputTextOf(blocks: unknown[] | string | undefined): OcxTextContent[] {
+function outputTextOf(blocks: unknown): OcxTextContent[] {
   if (typeof blocks === "string") return blocks.length > 0 ? [{ type: "text", text: blocks }] : [];
-  if (!blocks) return [];
+  if (!Array.isArray(blocks)) return [];
   const out: OcxTextContent[] = [];
   for (const raw of blocks) {
     // Same catch-all caveat as inputContentParts: validate before use.
@@ -321,9 +323,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           content?: unknown;
         };
 
-        const content = inputContentParts(
-          agentMessage.content as unknown[] | string | undefined,
-        );
+        const content = inputContentParts(agentMessage.content);
 
         const hasContent =
           typeof content === "string"
@@ -348,7 +348,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         switch (msg.role) {
           case "system": {
             pendingReasoning.length = 0;
-            const text = inputContentParts(msg.content as unknown[] | string | undefined);
+            const text = inputContentParts(msg.content);
             const flat = typeof text === "string" ? text : text.map(p => (p.type === "text" ? p.text : "")).join("");
             if (flat.length > 0) systemPrompt.push(flat);
             break;
@@ -356,12 +356,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           case "user":
           case "developer": {
             pendingReasoning.length = 0;
-            const content = inputContentParts(msg.content as unknown[] | string | undefined);
+            const content = inputContentParts(msg.content);
             messages.push({ role: msg.role, content, timestamp: now });
             break;
           }
           case "assistant": {
-            const parts = outputTextOf(msg.content as unknown[] | string | undefined);
+            const parts = outputTextOf(msg.content);
             messages.push({
               role: "assistant",
               content: pendingReasoning.length > 0

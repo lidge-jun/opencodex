@@ -42,6 +42,25 @@ describe("responses parser — malformed content blocks", () => {
     expect(parsed.context.systemPrompt ?? []).toEqual([]);
   });
 
+  test("a non-array content container does not crash the parser", () => {
+    // The catch-all can also retain a `content` that is not an array at all; the block loop
+    // would throw ("{} is not iterable") before any per-block guard runs.
+    for (const container of [{ type: "input_text", text: "x" }, 42, true]) {
+      expect(() => userContent(container)).not.toThrow();
+      expect(userContent(container)).toEqual([]);
+    }
+  });
+
+  test("a non-array container on system and assistant roles is also safe", () => {
+    const container = { type: "input_text", text: "x" };
+    expect(() => parseRequest(inputOf("system", container))).not.toThrow();
+    expect(() => parseRequest(inputOf("assistant", container))).not.toThrow();
+
+    const assistant = parseRequest(inputOf("assistant", container));
+    const msg = assistant.context.messages[0] as { content: unknown[] };
+    expect(msg.content).toEqual([]);
+  });
+
   test("valid blocks alongside malformed ones survive", () => {
     expect(userContent([{ type: "input_text" }, { type: "input_text", text: "real" }])).toBe("real");
     expect(userContent([{ type: "input_text", text: "a" }, { type: "input_text", text: "b" }]))
