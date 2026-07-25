@@ -25,14 +25,17 @@ bypass Pool/Direct selection, quota balancing, failure failover, thread affinity
 model account retry. Cooldown, missing credentials, and reauthentication fail closed on the bound
 account and do not mutate the active pool selection.
 
-The namespace map is the picker opt-in. When present, friendly account-specific rows replace plain
-native rows in the picker and remain grouped ahead of ordinary routed providers. Plain ids remain
-routable and keep their Pool/Direct semantics for saved threads and configuration.
+A non-empty namespace map is the backward-compatible picker opt-in unless
+`codexAccountPickerEnabled` is `false`. The dashboard uses that override to hide friendly
+account-specific rows without deleting their bindings. When visible, those rows replace plain native
+rows and remain grouped ahead of ordinary routed providers. Plain ids remain routable and keep their
+Pool/Direct semantics for saved threads and configuration; configured account-qualified ids also
+remain exact and fail closed while hidden.
 
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
-personal/gpt-5.6-sol                # exact main/Desktop Codex account
-work/gpt-5.6-sol                    # exact added Codex account
+main/gpt-5.6-sol                    # exact main/Desktop Codex account
+side/gpt-5.6-sol                    # exact added Codex account
 openai-apikey/gpt-5.6-sol           # OpenAI API key
 openai-apikey/gpt-5.6-sol-pro       # API Pro virtual model
 ```
@@ -66,8 +69,8 @@ v2 backup blocks migration before save.
   change catalog, selected, requested, or wire model identity.
 - Each configured account namespace clones every currently supported native catalog row. When
   opencodex adds a native model to its supported catalog, the next sync creates its qualified copies
-  without another per-namespace model list. Account ids never appear in the catalog or request logs;
-  only the user-owned namespace is displayed.
+  without another per-namespace model list. User-owned local selector prefixes appear in the
+  catalog; upstream ChatGPT account ids and credentials never do.
 - Existing plain model ids stay valid, while plain subagent selections project onto visible
   account-specific rows.
 - Binding follows each request's selected model. Qualified subagent, injection, and shadow-helper
@@ -84,7 +87,9 @@ v2 backup blocks migration before save.
 
 ## Sidecars, management, and UI
 
-HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the same account mode.
+HTTP/SSE, Responses WebSocket, and compact preserve exact account-qualified routing. Standalone
+image and alpha-search relays use the canonical provider's global Pool/Direct mode because they do
+not carry the selected chat model; vision follows its own transport-specific account resolution.
 There is one mode-aware `openai` forward sidecar candidate; `openai-apikey` is not a ChatGPT-forward
 sidecar candidate and cannot hide a failed Codex credential with separately billed API usage.
 

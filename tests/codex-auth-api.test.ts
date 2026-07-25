@@ -23,6 +23,11 @@ import {
 import type { OcxConfig } from "../src/types";
 import type { WsData } from "../src/server/ws-bridge";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { visibleCodexAccountNamespaces } from "../src/codex/account-namespaces";
+import { deleteCodexAccount } from "../src/codex/account-lifecycle";
+import { routeModel } from "../src/router";
+import { CodexPoolAuthenticationError, resolveCodexAuthContext } from "../src/codex/auth-context";
+import * as codexRefresh from "../src/codex/refresh";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -678,6 +683,22 @@ describe("codex-auth API", () => {
     expect(body.error).toContain("Invalid account id");
   });
 
+  test("POST /api/codex-auth/accounts reserves main account ids", async () => {
+    enableManualImport();
+    for (const id of ["main", "__main__"]) {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id })),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      expect(resp!.status).toBe(400);
+      expect(await resp!.json()).toMatchObject({
+        error: "Account id is reserved for the main Codex login",
+      });
+    }
+  });
+
   test("POST /api/codex-auth/accounts rejects invalid JSON when manual import is explicitly enabled", async () => {
     enableManualImport();
     const req = new Request("http://localhost/api/codex-auth/accounts", {
@@ -714,6 +735,36 @@ describe("codex-auth API", () => {
     expect(readCodexAccountRecord("manual-enabled")?.lastCodexValidationStatus).toBe("ok");
     expect(readCodexAccountRecord("manual-enabled")?.lastCodexValidatedAt).toBeNumber();
     expect(warmup.calls()).toBe(1);
+  });
+
+  test("re-adding a deleted account refreshes its retained picker binding", async () => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
+    const config = makeConfig({
+      codexAccountNamespaces: { side: "manual-test" },
+      codexAccountPickerEnabled: true,
+    });
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockResolvedValue({
+      added: 0,
+      path: join(TEST_CODEX_HOME, "opencodex-catalog.json"),
+      catalogExists: false,
+      cacheSynced: false,
+    });
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody()),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+      expect(resp!.status).toBe(200);
+      expect(config.codexAccountNamespaces).toEqual({ side: "manual-test" });
+      expect(visibleCodexAccountNamespaces(config)).toEqual({ side: "manual-test" });
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      refreshSpy.mockRestore();
+    }
   });
 
   test("POST /api/codex-auth/accounts allows a pool account matching the main login", async () => {
@@ -879,9 +930,19 @@ describe("codex-auth API", () => {
 
   test("DELETE /api/codex-auth/accounts clears deleted active account from live runtime config", async () => {
     const config = makeConfig({
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
       activeCodexAccountId: "pool-delete",
       codexAccounts: [{ id: "pool-delete", email: "pool-delete@example.test", isMain: false }],
-      codexAccountNamespaces: { work: "pool-delete", personal: "main" },
+      codexAccountNamespaces: { side: "pool-delete", main: "main" },
+      codexAccountPickerEnabled: true,
     });
     saveCodexAccountCredential("pool-delete", {
       accessToken: "access-delete",
@@ -922,7 +983,8 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(200);
     expect(config.codexAccounts).toEqual([]);
     expect(config.activeCodexAccountId).toBeUndefined();
-    expect(config.codexAccountNamespaces).toEqual({ personal: "main" });
+    expect(config.codexAccountNamespaces).toEqual({ side: "pool-delete", main: "main" });
+    expect(visibleCodexAccountNamespaces(config)).toEqual({ main: "main" });
     expect(getCodexAccountCredential("pool-delete")).toBeNull();
     expect(getAccountQuota("pool-delete")).toBeNull();
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);
@@ -931,6 +993,38 @@ describe("codex-auth API", () => {
     expect(cancelled).toBe(true);
     expect(closed).toEqual([{ code: 4001, reason: "Codex account invalidated" }]);
     expect(getTrackedCodexWebSocketCountForAccount("pool-delete")).toBe(0);
+
+    const routed = routeModel(config, "side/gpt-5.5");
+    expect(routed).toMatchObject({
+      modelId: "gpt-5.5",
+      codexAccountId: "pool-delete",
+      codexAccountNamespace: "side",
+    });
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer caller" }),
+      config,
+      routed.codexAccountMode!,
+      { accountId: routed.codexAccountId },
+    )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+  });
+
+  test("account deletion signals a catalog refresh only when a visible binding disappears", () => {
+    const visible = makeConfig({
+      codexAccounts: [{ id: "side-id", email: "side@example.test", isMain: false }],
+      codexAccountNamespaces: { side: "side-id" },
+      codexAccountPickerEnabled: true,
+    });
+    expect(deleteCodexAccount(visible, "side-id")).toBe(true);
+    expect(visible.codexAccountNamespaces).toEqual({ side: "side-id" });
+    expect(visibleCodexAccountNamespaces(visible)).toEqual({});
+
+    const hidden = makeConfig({
+      codexAccounts: [{ id: "side-id", email: "side@example.test", isMain: false }],
+      codexAccountNamespaces: { side: "side-id" },
+      codexAccountPickerEnabled: false,
+    });
+    expect(deleteCodexAccount(hidden, "side-id")).toBe(false);
+    expect(hidden.codexAccountNamespaces).toEqual({ side: "side-id" });
   });
 
   test("GET /api/codex-auth/login-status returns idle by default", async () => {
@@ -1130,6 +1224,44 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(400);
     const data = await resp!.json() as { error: string };
     expect(data.error).toContain("Invalid account id");
+  });
+
+  test("POST /api/codex-auth/login reserves main account ids before OAuth starts", async () => {
+    for (const id of ["main", "__main__"]) {
+      const req = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      expect(resp!.status).toBe(400);
+      expect(await resp!.json()).toMatchObject({
+        error: "Account id is reserved for the main Codex login",
+      });
+    }
+  });
+
+  test("POST /api/codex-auth/login allows legacy reserved pool ids to reauthenticate", async () => {
+    const oauth = await import("../src/oauth");
+    const startSpy = spyOn(oauth, "startLoginFlow").mockRejectedValue(new Error("test-stop"));
+    try {
+      for (const id of ["main", "__main__"]) {
+        const config = makeConfig({
+          codexAccounts: [{ id, email: `${id}@example.test`, isMain: false }],
+        });
+        const req = new Request("http://localhost/api/codex-auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, reauth: true }),
+        });
+        const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+        expect(resp!.status).toBe(500);
+        expect(await resp!.json()).toMatchObject({ error: "test-stop" });
+      }
+      expect(startSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      startSpy.mockRestore();
+    }
   });
 
   test("POST /api/codex-auth/login rejects duplicate account id before OAuth starts", async () => {

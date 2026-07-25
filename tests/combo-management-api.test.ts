@@ -296,12 +296,12 @@ describe("combo management API", () => {
 
   test("PUT rejects aliases owned by a Codex account namespace without mutating config", async () => {
     await withTempHome(async () => {
-      const config = baseConfig({ codexAccountNamespaces: { work: "work-account-id" } });
+      const config = baseConfig({ codexAccountNamespaces: { side: "side-account-id" } });
       saveConfig(config);
 
       const response = await comboApi(config, "PUT", "/api/combos", {
         id: "intentional",
-        combo: { ...VALID_COMBO, alias: "work/gpt-5.5" },
+        combo: { ...VALID_COMBO, alias: "side/gpt-5.5" },
       });
 
       expect(response?.status).toBe(400);
@@ -309,7 +309,7 @@ describe("combo management API", () => {
         error: "combo alias must not use a configured Codex account namespace",
       });
       expect(config.combos?.intentional).toBeUndefined();
-      expect(readConfigDiagnostics().config.codexAccountNamespaces).toEqual({ work: "work-account-id" });
+      expect(readConfigDiagnostics().config.codexAccountNamespaces).toEqual({ side: "side-account-id" });
     });
   });
 
@@ -761,7 +761,7 @@ describe("combo management API", () => {
           combos: {
             fast: { alias: "fast-chat", targets: [{ provider: "a", model: "m1" }] },
           },
-          codexAccountNamespaces: { work: "main" },
+          codexAccountNamespaces: { side: "main" },
         });
 
         await syncCatalogModels(config);
@@ -770,7 +770,7 @@ describe("combo management API", () => {
         };
         const slugs = catalog.models.map(model => model.slug);
         expect(slugs).toContain("fast-chat");
-        expect(slugs).toContain("work/gpt-5.5");
+        expect(slugs).toContain("side/gpt-5.5");
       } finally {
         if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = previousCodexHome;

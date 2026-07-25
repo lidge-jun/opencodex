@@ -195,36 +195,80 @@ describe("PUT /api/settings", () => {
     expect(res!.status).toBe(400);
   });
 
-  test("account-specific model toggle creates aliases server-side and removes the feature cleanly", async () => {
+  test("enabling account-specific models avoids combo alias prefixes and survives config reload", async () => {
     const config: OcxConfig = {
       ...baseConfig(),
       codexAccounts: [
-        { id: "work-id", email: "work@example.test", alias: "Work", plan: "business", isMain: false },
+        { id: "side-id", email: "side@example.test", alias: "Side", plan: "business", isMain: false },
       ],
+      combos: {
+        primary: {
+          alias: "main/gpt-5.5",
+          targets: [{ provider: "openai", model: "gpt-test" }],
+        },
+        secondary: {
+          alias: "side-id/gpt-5.6-sol",
+          targets: [{ provider: "openai", model: "gpt-test" }],
+        },
+      },
     };
     let refreshes = 0;
     const refresh = async () => { refreshes += 1; };
 
-    const enabled = await putSettings(config, { codexAccountNamespacesEnabled: true }, refresh);
+    const enabled = await putSettings(config, { codexAccountPickerEnabled: true }, refresh);
     expect(enabled!.status).toBe(200);
-    expect(config.codexAccountNamespaces).toEqual({ personal: "main", work: "work-id" });
+    expect(config.codexAccountNamespaces).toEqual({ "main-2": "main", "side-id-2": "side-id" });
     expect(await enabled!.json()).toMatchObject({
-      codexAccountNamespacesEnabled: true,
+      codexAccountPickerEnabled: true,
     });
     expect(refreshes).toBe(1);
-
-    const disabled = await putSettings(config, { codexAccountNamespacesEnabled: false }, refresh);
-    expect(disabled!.status).toBe(200);
-    expect(config.codexAccountNamespaces).toBeUndefined();
-    expect(await disabled!.json()).toMatchObject({
-      codexAccountNamespacesEnabled: false,
+    expect(loadConfig()).toMatchObject({
+      codexAccountNamespaces: { "main-2": "main", "side-id-2": "side-id" },
+      codexAccountPickerEnabled: true,
     });
+  });
+
+  test("account picker toggle preserves a custom ordered selector map exactly", async () => {
+    const selectors = {
+      "secondary-profile": "side-id",
+      "primary-profile": "main",
+      "break-glass": "emergency-id",
+    };
+    const expectedEntries = Object.entries(selectors);
+    const config: OcxConfig = {
+      ...baseConfig(),
+      codexAccountNamespaces: { ...selectors },
+      codexAccountPickerEnabled: true,
+    };
+    let refreshes = 0;
+    const refresh = async () => { refreshes += 1; };
+
+    const disabled = await putSettings(config, { codexAccountPickerEnabled: false }, refresh);
+    expect(disabled!.status).toBe(200);
+    expect(Object.entries(config.codexAccountNamespaces ?? {})).toEqual(expectedEntries);
+    expect(config.codexAccountPickerEnabled).toBe(false);
+    expect(await disabled!.json()).toMatchObject({
+      codexAccountPickerEnabled: false,
+    });
+    expect(Object.entries(loadConfig().codexAccountNamespaces ?? {})).toEqual(expectedEntries);
+    expect(refreshes).toBe(1);
+
+    const reenabled = await putSettings(config, { codexAccountPickerEnabled: true }, refresh);
+    expect(reenabled!.status).toBe(200);
+    expect(Object.entries(config.codexAccountNamespaces ?? {})).toEqual(expectedEntries);
+    expect(config.codexAccountPickerEnabled).toBe(true);
+    expect(await reenabled!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+    });
+    const reloaded = loadConfig();
+    expect(Object.entries(reloaded.codexAccountNamespaces ?? {})).toEqual(expectedEntries);
+    expect(reloaded.codexAccountPickerEnabled).toBe(true);
     expect(refreshes).toBe(2);
   });
 
   test("account-specific model toggle rejects non-boolean values", async () => {
     const config = baseConfig();
-    expect((await putSettings(config, { codexAccountNamespacesEnabled: "yes" }))!.status).toBe(400);
+    expect((await putSettings(config, { codexAccountPickerEnabled: "yes" }))!.status).toBe(400);
   });
 });
 

@@ -310,7 +310,7 @@ describe("server local API auth", () => {
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
     const unsafe = config("127.0.0.1");
     unsafe.openaiProviderTierVersion = 1;
-    unsafe.codexAccountNamespaces = { personal: "main", work: "private-work-account-id" };
+    unsafe.codexAccountNamespaces = { main: "main", side: "private-side-account-id" };
     Object.assign(unsafe.providers.openai as unknown as Record<string, unknown>, {
       apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
       modelMaxInputTokens: { "gpt-test": 1000 },
@@ -324,7 +324,7 @@ describe("server local API auth", () => {
     });
     const dto = safeConfigDTO(unsafe) as {
       providers: Record<string, Record<string, unknown>>;
-      codexAccountNamespacesEnabled: boolean;
+      codexAccountPickerEnabled: boolean;
     };
     const serialized = JSON.stringify(dto);
     for (const forbidden of [
@@ -333,9 +333,9 @@ describe("server local API auth", () => {
       "virtualModels", "codexAuthContext", "selectedForwardHeaders",
       "sidecarOutcomeRecorder", "recorder-runtime", "_codexAccountOverride",
       "_codexAccountRequired", "runtime-token", "override-token",
-      "private-work-account-id",
+      "private-side-account-id",
     ]) expect(serialized).not.toContain(forbidden);
-    expect(dto.codexAccountNamespacesEnabled).toBe(true);
+    expect(dto.codexAccountPickerEnabled).toBe(true);
     expect(dto.providers.openai).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.example.test/v1",
@@ -344,6 +344,9 @@ describe("server local API auth", () => {
       hasHeaders: true,
       codexAccountMode: "pool",
     });
+
+    unsafe.codexAccountPickerEnabled = false;
+    expect((safeConfigDTO(unsafe) as { codexAccountPickerEnabled: boolean }).codexAccountPickerEnabled).toBe(false);
     expect(dto.providers.openai).not.toHaveProperty("apiKey");
     expect(dto.providers.openai).not.toHaveProperty("headers");
     expect(dto.providers.openai.disabled).toBeUndefined();
@@ -1702,10 +1705,10 @@ describe("server local API auth", () => {
     const body = unsupportedModelBody();
     const harness = await startPoolRetryHarness(
       () => rejectionResponse(body),
-      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+      { accountNamespaces: { side: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
     );
     try {
-      await expectOriginal400(await harness.request({ model: `work/${POOL_RETRY_MODEL}` }), body);
+      await expectOriginal400(await harness.request({ model: `side/${POOL_RETRY_MODEL}` }), body);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
       expect(harness.config.activeCodexAccountId).toBe("pool-b");
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
@@ -1717,13 +1720,13 @@ describe("server local API auth", () => {
   test("account-qualified compact request uses the same exact account", async () => {
     const harness = await startPoolRetryHarness(
       () => Response.json({ output: [] }),
-      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+      { accountNamespaces: { side: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
     );
     try {
       const response = await originalGlobalFetch(new URL("/v1/responses/compact", harness.server.url), {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-        body: JSON.stringify({ model: `work/${POOL_RETRY_MODEL}`, input: [] }),
+        body: JSON.stringify({ model: `side/${POOL_RETRY_MODEL}`, input: [] }),
       });
       expect(response.status).toBe(200);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
@@ -1741,10 +1744,10 @@ describe("server local API auth", () => {
         upstreamEffort = body.reasoning?.effort;
         return Response.json({ id: "clamped", status: "completed", output: [] });
       },
-      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+      { accountNamespaces: { side: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
     );
     try {
-      const response = await harness.request({ model: "work/gpt-5.5", reasoningEffort: "max" });
+      const response = await harness.request({ model: "side/gpt-5.5", reasoningEffort: "max" });
       expect(response.status).toBe(200);
       expect(upstreamEffort).toBe("xhigh");
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
@@ -1761,7 +1764,7 @@ describe("server local API auth", () => {
         'data: {"type":"response.completed","response":{"id":"qualified-ws","status":"completed","output":[]}}\n\n',
       ].join(""), { headers: { "content-type": "text/event-stream" } }),
       {
-        accountNamespaces: { work: "pool-a" },
+        accountNamespaces: { side: "pool-a" },
         activeAccountId: "pool-b",
         accountMode: "direct",
         websockets: true,
@@ -1785,7 +1788,7 @@ describe("server local API auth", () => {
       });
       ws.send(JSON.stringify({
         type: "response.create",
-        model: "work/gpt-5.5",
+        model: "side/gpt-5.5",
         input: "hello",
       }));
       await terminal;

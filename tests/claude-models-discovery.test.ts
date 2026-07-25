@@ -168,23 +168,63 @@ test("account-qualified native models appear in both OpenAI and Codex discovery"
         authMode: "forward",
       },
     },
-    codexAccountNamespaces: { personal: "main", work: "opaque-work-account-id" },
+    codexAccounts: [{
+      id: "opaque-side-account-id",
+      email: "side@example.test",
+      isMain: false,
+    }],
+    codexAccountNamespaces: { main: "main", side: "opaque-side-account-id" },
   });
   const server = startServer(0);
   try {
     const plain = await fetch(new URL("/v1/models", server.url)).then(response => response.json()) as {
       data: Array<{ id: string }>;
     };
-    expect(plain.data.some(model => model.id.startsWith("personal/gpt-"))).toBe(true);
-    expect(plain.data.some(model => model.id.startsWith("work/gpt-"))).toBe(true);
+    expect(plain.data.some(model => model.id.startsWith("main/gpt-"))).toBe(true);
+    expect(plain.data.some(model => model.id.startsWith("side/gpt-"))).toBe(true);
 
     const codex = await fetch(new URL("/v1/models?client_version=1.0.0", server.url)).then(response => response.json()) as {
       models: Array<{ slug?: string; description?: string }>;
     };
     const bound = codex.models.filter(model => model.description === "OpenAI native model bound to a Codex account namespace.");
-    expect(bound.some(model => model.slug?.startsWith("personal/gpt-"))).toBe(true);
-    expect(bound.some(model => model.slug?.startsWith("work/gpt-"))).toBe(true);
-    expect(JSON.stringify(codex)).not.toContain("opaque-work-account-id");
+    expect(bound.some(model => model.slug?.startsWith("main/gpt-"))).toBe(true);
+    expect(bound.some(model => model.slug?.startsWith("side/gpt-"))).toBe(true);
+    expect(JSON.stringify(codex)).not.toContain("opaque-side-account-id");
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("hidden account picker rows stay out of both OpenAI and Codex discovery", async () => {
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    codexAccountNamespaces: { main: "main", side: "opaque-side-account-id" },
+    codexAccountPickerEnabled: false,
+  });
+  const server = startServer(0);
+  try {
+    const plain = await fetch(new URL("/v1/models", server.url)).then(response => response.json()) as {
+      data: Array<{ id: string }>;
+    };
+    expect(plain.data.some(model => model.id.startsWith("main/gpt-"))).toBe(false);
+    expect(plain.data.some(model => model.id.startsWith("side/gpt-"))).toBe(false);
+    expect(plain.data.some(model => model.id.startsWith("gpt-"))).toBe(true);
+
+    const codex = await fetch(new URL("/v1/models?client_version=1.0.0", server.url)).then(response => response.json()) as {
+      models: Array<{ slug?: string; description?: string }>;
+    };
+    const bound = codex.models.filter(model => model.description === "OpenAI native model bound to a Codex account namespace.");
+    expect(bound).toEqual([]);
+    expect(codex.models.some(model => model.slug?.startsWith("gpt-"))).toBe(true);
   } finally {
     server.stop(true);
   }

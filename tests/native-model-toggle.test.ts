@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   accountBoundNativeDisplayName,
   appendDefaultCodexAccountNamespace,
+  codexAccountPickerHasVisibleRows,
+  codexAccountPickerIsEnabled,
   defaultCodexAccountNamespaces,
+  visibleCodexAccountNamespaces,
 } from "../src/codex/account-namespaces";
 import {
   applyNativeVisibility,
@@ -38,44 +41,117 @@ function nativeTemplate(): Record<string, unknown> {
 
 describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("account replacement labels title-case synthesized slug words", () => {
-    expect(accountBoundNativeDisplayName("work", { slug: "gpt-5.3-codex-spark" }))
-      .toBe("Work / 5.3 Codex Spark");
+    expect(accountBoundNativeDisplayName("side-account", { slug: "gpt-5.3-codex-spark" }))
+      .toBe("Side-Account / 5.3 Codex Spark");
   });
 
-  test("UI defaults generate safe unique account namespaces without exposing email labels", () => {
+  test("account replacement labels preserve separators that distinguish local ids", () => {
+    expect([
+      accountBoundNativeDisplayName("team-prod", { slug: "gpt-5.5" }),
+      accountBoundNativeDisplayName("team_prod", { slug: "gpt-5.5" }),
+      accountBoundNativeDisplayName("team.prod", { slug: "gpt-5.5" }),
+    ]).toEqual([
+      "Team-Prod / 5.5",
+      "Team_Prod / 5.5",
+      "Team.Prod / 5.5",
+    ]);
+  });
+
+  test("UI defaults use stable local account ids without exposing aliases or email labels", () => {
     const namespaces = defaultCodexAccountNamespaces({
       providers: {
-        work: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+        "side-id": { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
       },
       codexAccounts: [
-        { id: "work-id", email: "private@example.test", alias: "Work", isMain: false },
+        { id: "side-id", email: "private@example.test", alias: "Side", isMain: false },
         { id: "team-id", email: "other@example.test", alias: "Product Team", isMain: false },
       ],
     });
-    expect(namespaces).toEqual({ personal: "main", "work-2": "work-id", "product-team": "team-id" });
+    expect(namespaces).toEqual({ main: "main", "side-id-2": "side-id", "team-id": "team-id" });
     expect(JSON.stringify(namespaces)).not.toContain("example.test");
+    expect(JSON.stringify(namespaces)).not.toContain("Product Team");
+  });
+
+  test("UI defaults avoid prefixes already owned by combo aliases", () => {
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {},
+      combos: {
+        primary: { alias: "main/gpt-5.5", targets: [{ provider: "openai", model: "gpt-5.5" }] },
+        secondary: { alias: "side-id/gpt-5.6-sol", targets: [{ provider: "openai", model: "gpt-5.6-sol" }] },
+      },
+      codexAccounts: [
+        { id: "side-id", email: "side@example.test", isMain: false },
+      ],
+    });
+    expect(namespaces).toEqual({ "main-2": "main", "side-id-2": "side-id" });
   });
 
   test("new accounts append to an enabled map without renaming existing prefixes", () => {
     const config = {
-      providers: { work: { adapter: "openai-chat" as const, baseUrl: "https://example.test/v1" } },
-      codexAccountNamespaces: { personal: "main", legacy: "legacy-id" },
+      providers: { "side-id": { adapter: "openai-chat" as const, baseUrl: "https://example.test/v1" } },
+      codexAccountNamespaces: { main: "main", legacy: "legacy-id" },
     };
     expect(appendDefaultCodexAccountNamespace(config, {
-      id: "work-id",
-      alias: "Work",
+      id: "side-id",
       isMain: false,
     })).toBe(true);
     expect(config.codexAccountNamespaces).toEqual({
-      personal: "main",
+      main: "main",
       legacy: "legacy-id",
-      "work-2": "work-id",
+      "side-id-2": "side-id",
     });
     expect(appendDefaultCodexAccountNamespace(config, {
-      id: "work-id",
-      alias: "Renamed Work",
+      id: "side-id",
       isMain: false,
     })).toBe(false);
+  });
+
+  test("empty maps stay disabled and reserved main ids never become added-account selectors", () => {
+    const empty = { providers: {}, codexAccountNamespaces: {} as Record<string, string> };
+    expect(appendDefaultCodexAccountNamespace(empty, { id: "side", isMain: false })).toBe(false);
+    expect(empty.codexAccountNamespaces).toEqual({});
+
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {},
+      codexAccounts: [
+        { id: "main", email: "reserved-one@example.test", isMain: false },
+        { id: "__main__", email: "reserved-two@example.test", isMain: false },
+        { id: "side", email: "side@example.test", isMain: false },
+      ],
+    });
+    expect(namespaces).toEqual({ main: "main", side: "side" });
+  });
+
+  test("picker visibility defaults on for legacy maps and preserves dormant mappings", () => {
+    const legacy = { codexAccountNamespaces: { main: "main" } };
+    expect(codexAccountPickerIsEnabled(legacy)).toBe(true);
+    expect(visibleCodexAccountNamespaces(legacy)).toEqual({ main: "main" });
+
+    const dormant = {
+      providers: {},
+      codexAccountNamespaces: { main: "main" },
+      codexAccountPickerEnabled: false,
+    };
+    expect(codexAccountPickerIsEnabled(dormant)).toBe(false);
+    expect(visibleCodexAccountNamespaces(dormant)).toEqual({});
+    expect(appendDefaultCodexAccountNamespace(dormant, { id: "side", isMain: false })).toBe(true);
+    expect(dormant.codexAccountNamespaces).toEqual({ main: "main", side: "side" });
+    expect(codexAccountPickerIsEnabled(dormant)).toBe(false);
+  });
+
+  test("stale-only picker bindings preserve intent without hiding bare native rows", () => {
+    const stale = {
+      codexAccounts: [],
+      codexAccountNamespaces: { removed: "removed-account" },
+      codexAccountPickerEnabled: true,
+    };
+    expect(codexAccountPickerIsEnabled(stale)).toBe(true);
+    expect(visibleCodexAccountNamespaces(stale)).toEqual({});
+    expect(codexAccountPickerHasVisibleRows(stale)).toBe(false);
+
+    const entries = [nativeTemplate()];
+    applyNativeVisibility(entries, new Set(), codexAccountPickerHasVisibleRows(stale));
+    expect(entries[0]?.visibility).toBe("list");
   });
 
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {
@@ -158,7 +234,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("applyNativeVisibility mirrors disabled native state onto account-qualified clones", () => {
     const entries = [
       {
-        slug: "work/gpt-5.6-sol",
+        slug: "side/gpt-5.6-sol",
         description: "OpenAI native model bound to a Codex account namespace.",
         visibility: "list",
       },
@@ -171,30 +247,30 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const entries = buildCatalogEntries(
       nativeTemplate(),
       ["gpt-5.5"],
-      [{ provider: "litellm-personal", id: "qwen3.6" }],
+      [{ provider: "litellm-local", id: "qwen3.6" }],
       ["gpt-5.5"],
       false,
       "default",
       new Set(),
-      { personal: "main", work: "work-account-id" },
+      { main: "main", side: "side-account-id" },
     );
     applyNativeVisibility(entries, new Set(), true);
 
     const bare = entries.find(entry => entry.slug === "gpt-5.5");
-    const personal = entries.find(entry => entry.slug === "personal/gpt-5.5");
-    const work = entries.find(entry => entry.slug === "work/gpt-5.5");
-    const routed = entries.find(entry => entry.slug === "litellm-personal/qwen3.6");
+    const main = entries.find(entry => entry.slug === "main/gpt-5.5");
+    const side = entries.find(entry => entry.slug === "side/gpt-5.5");
+    const routed = entries.find(entry => entry.slug === "litellm-local/qwen3.6");
     expect(bare?.visibility).toBe("hide");
-    expect(personal).toMatchObject({
-      display_name: "Personal / 5.5",
+    expect(main).toMatchObject({
+      display_name: "Main / 5.5",
       visibility: "list",
       priority: 0,
     });
-    expect(work?.display_name).toBe("Work / 5.5");
-    expect(work?.visibility).toBe("list");
-    expect(work?.priority).toBeGreaterThan(personal?.priority as number);
-    expect(work?.priority).toBe(1);
-    expect(routed?.priority).toBeGreaterThan(work?.priority as number);
+    expect(side?.display_name).toBe("Side / 5.5");
+    expect(side?.visibility).toBe("list");
+    expect(side?.priority).toBeGreaterThan(main?.priority as number);
+    expect(side?.priority).toBe(1);
+    expect(routed?.priority).toBeGreaterThan(side?.priority as number);
     expect(entries.every(entry => Number.isInteger(entry.priority))).toBe(true);
   });
 
@@ -204,7 +280,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
         nativeTemplate(),
         {
           ...nativeTemplate(),
-          slug: "work/gpt-5.5",
+          slug: "side/gpt-5.5",
           description: "OpenAI native model bound to a Codex account namespace.",
         },
       ],
@@ -214,7 +290,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       false,
     );
 
-    expect(merged.some(entry => entry.slug === "work/gpt-5.5")).toBe(false);
+    expect(merged.some(entry => entry.slug === "side/gpt-5.5")).toBe(false);
     expect(merged.some(entry => entry.slug === "gpt-5.5")).toBe(true);
   });
 

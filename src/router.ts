@@ -3,7 +3,13 @@ import { COMBO_NAMESPACE, tryPickComboModel, type ComboPick } from "./combos";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
-import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import {
+  isCanonicalOpenAiForwardProvider,
+  LEGACY_CHATGPT_PROVIDER_ID,
+  LEGACY_OPENAI_MULTI_PROVIDER_ID,
+  OPENAI_API_PROVIDER_ID,
+  OPENAI_CODEX_PROVIDER_ID,
+} from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
@@ -250,7 +256,9 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
         throw new Error(`Codex account namespace ${namespace} only supports native OpenAI model ids`);
       }
       const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-      if (!provider || provider.disabled === true) throw new NoEnabledOpenAiProviderError(nativeModelId);
+      if (!provider || provider.disabled === true || !isCanonicalOpenAiForwardProvider(provider)) {
+        throw new NoEnabledOpenAiProviderError(nativeModelId);
+      }
       const routed = routeResult(OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId);
       return {
         ...routed,

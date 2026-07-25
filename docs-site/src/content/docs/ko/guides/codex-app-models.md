@@ -12,6 +12,23 @@ OpenAI id는 두 가지로 고정됩니다. bare native id는 `codexAccountMode`
 id는 변하지 않습니다. API GPT-5.6은 context 1,050,000 / max input 922,000이고,
 `*-pro` picker id는 공개 상태를 유지하면서 wire에서 base 모델 + `reasoning.mode: "pro"`가 됩니다.
 
+여러 Codex 계정에 로그인한 경우 **Codex Auth**에서 **각 Codex 계정을 모델 선택기에 별도로 표시**를
+켜면 로그아웃하지 않고도 대화에 사용할 계정을 명시적으로 고를 수 있습니다. 각 GPT 모델은 계정마다
+별도 항목으로 표시됩니다.
+
+```text
+main/gpt-5.6-sol                   # 내장 Codex 로그인에 고정
+side/gpt-5.6-sol                   # 로컬 ID가 side인 추가 계정에 고정
+```
+
+`main`은 내장 로그인을 뜻합니다. 추가 계정의 접두사는 사용자가 정한 로컬 ID에서 만들어지고 기존
+라우팅 이름과 겹치면 숫자 접미사가 붙습니다. 이 ID는 계정 유형이 아닙니다.
+계정 지정 모델은 Pool 선택과 폴백을 건너뛰며, 선택한 계정을 사용할 수 없으면 요청이 실패합니다.
+접두사 없는 `gpt-*`는 기존 Pool/Direct 동작을 유지합니다. 설정을 꺼도 항목만 숨겨지고 저장된 바인딩은
+삭제되지 않습니다. 추가 계정을 삭제하면 선택기 항목은 사라지지만 저장된 선택이 다른 계정으로 넘어가지
+않도록 바인딩은 남습니다. 같은 로컬 ID를 다시 추가하면 항목이 복원됩니다. 수동 설정과 `ocx sync`는
+[설정 레퍼런스](/ko/reference/configuration/)를 참고하세요.
+
 ## 통합 경로
 
 `ocx init`, `ocx start`, `ocx sync`는 해석된 `CODEX_HOME` 아래의 파일을 맞춥니다.

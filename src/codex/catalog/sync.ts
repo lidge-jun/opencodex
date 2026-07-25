@@ -33,7 +33,9 @@ import {
   accountBoundNativeDisplayName,
   accountBoundNativeCatalogSlug,
   CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION,
-  codexAccountNamespaceEntries,
+  visibleCodexAccountNamespaceEntries,
+  codexAccountPickerHasVisibleRows,
+  visibleCodexAccountNamespaces,
 } from "../account-namespaces";
 
 
@@ -120,19 +122,32 @@ export function effectiveSubagentRoster(
     }));
   const excluded = configured.flatMap((model): SubagentRosterExclusion[] => {
     if (ordered.some(({ entry }) => configuredSubagentModelMatchesEntry(model, entry))) return [];
-    const entry = configuredCatalogEntry(entries, model);
-    if (!entry) return [{ configured: model, reason: "missing_catalog_entry" }];
-    const catalogModel = entry.slug as string;
-    if (entry.visibility !== "list") {
-      return [{ configured: model, catalogModel, reason: "picker_hidden" }];
+    const matchingEntries = entries.filter(entry => configuredSubagentModelMatchesEntry(model, entry));
+    if (matchingEntries.length === 0) return [{ configured: model, reason: "missing_catalog_entry" }];
+
+    const visibleCompatible = matchingEntries.find(entry =>
+      entry.visibility === "list"
+      && (surface !== "v2" || entry.multi_agent_version === "v2")
+    );
+    if (visibleCompatible) {
+      return [{
+        configured: model,
+        catalogModel: visibleCompatible.slug as string,
+        reason: "outside_display_limit",
+      }];
     }
-    if (surface === "v2" && entry.multi_agent_version !== "v2") {
-      return [{ configured: model, catalogModel, reason: "surface_incompatible" }];
+
+    const visible = matchingEntries.find(entry => entry.visibility === "list");
+    if (visible) {
+      return [{
+        configured: model,
+        catalogModel: visible.slug as string,
+        reason: "surface_incompatible",
+      }];
     }
-    if (!candidates.some(candidate => candidate.model === catalogModel)) {
-      return [{ configured: model, catalogModel, reason: "outside_display_limit" }];
-    }
-    return [];
+
+    const hidden = configuredCatalogEntry(entries, model) ?? matchingEntries[0]!;
+    return [{ configured: model, catalogModel: hidden.slug as string, reason: "picker_hidden" }];
   });
   return { candidates, advertised, excluded };
 }
@@ -537,7 +552,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
     websocketsEnabled(config),
     multiAgentMode,
     exactComboSlugs,
-    config.codexAccountNamespaces,
+    visibleCodexAccountNamespaces(config),
   );
   const accountBoundEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
@@ -547,7 +562,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
     websocketsEnabled(config),
     multiAgentMode,
     exactComboSlugs,
-    config.codexAccountNamespaces,
+    visibleCodexAccountNamespaces(config),
   ).filter(entry => accountBoundNativeCatalogSlug(entry) !== undefined);
   const goEntries = [...routedEntries, ...accountBoundEntries];
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
@@ -560,12 +575,12 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
       .filter(([, prov]) => prov.disabled !== true)
       .map(([name]) => name),
   );
-  for (const [namespace] of codexAccountNamespaceEntries(config)) gatheredProviderNames.add(namespace);
+  for (const [namespace] of visibleCodexAccountNamespaceEntries(config)) gatheredProviderNames.add(namespace);
   // Central WS capability override on the FINAL on-disk catalog (the file Codex reads). Applies to
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
-  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, Object.keys(config.codexAccountNamespaces ?? {}).length > 0);
+  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, codexAccountPickerHasVisibleRows(config));
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");

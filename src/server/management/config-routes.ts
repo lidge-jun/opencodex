@@ -34,7 +34,10 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
-import { defaultCodexAccountNamespaces } from "../../codex/account-namespaces";
+import {
+  codexAccountPickerIsEnabled,
+  defaultCodexAccountNamespaces,
+} from "../../codex/account-namespaces";
 import { scanStorage } from "../../storage/scanner";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
@@ -191,20 +194,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let body: {
       codexAutoStart?: unknown;
       streamMode?: unknown;
-      codexAccountNamespacesEnabled?: unknown;
+      codexAccountPickerEnabled?: unknown;
     };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
-      && body.codexAccountNamespacesEnabled === undefined) {
+      && body.codexAccountPickerEnabled === undefined) {
       return jsonResponse({ error: "at least one supported setting is required" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
-    if (body.codexAccountNamespacesEnabled !== undefined
-      && typeof body.codexAccountNamespacesEnabled !== "boolean") {
-      return jsonResponse({ error: "codexAccountNamespacesEnabled boolean is required" }, 400);
+    if (body.codexAccountPickerEnabled !== undefined
+      && typeof body.codexAccountPickerEnabled !== "boolean") {
+      return jsonResponse({ error: "codexAccountPickerEnabled boolean is required" }, 400);
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
       return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
@@ -219,15 +222,18 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
       }
     }
-    const namespacesWereEnabled = Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
-    if (body.codexAccountNamespacesEnabled === true && !namespacesWereEnabled) {
-      config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
-    } else if (body.codexAccountNamespacesEnabled === false) {
-      delete config.codexAccountNamespaces;
+    const pickerWasEnabled = codexAccountPickerIsEnabled(config);
+    if (body.codexAccountPickerEnabled === true) {
+      if (Object.keys(config.codexAccountNamespaces ?? {}).length === 0) {
+        config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
+      }
+      config.codexAccountPickerEnabled = true;
+    } else if (body.codexAccountPickerEnabled === false) {
+      config.codexAccountPickerEnabled = false;
     }
-    const namespacesAreEnabled = Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
+    const pickerIsEnabled = codexAccountPickerIsEnabled(config);
     saveConfig(config);
-    if (namespacesWereEnabled !== namespacesAreEnabled) {
+    if (pickerWasEnabled !== pickerIsEnabled) {
       await refreshCodexCatalogBestEffort();
     }
     invalidateStartupHealthCache();
@@ -235,7 +241,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
-      codexAccountNamespacesEnabled: namespacesAreEnabled,
+      codexAccountPickerEnabled: pickerIsEnabled,
       startupHealth: await getCachedStartupHealth(config),
     });
   }

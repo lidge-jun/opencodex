@@ -11,7 +11,7 @@ Pool(default, main plus added accounts) or Direct(current caller/main bearer) wi
 model id. `openai-apikey/<model>` explicitly selects API-key transport. The two credential routes
 do not fall through to one another.
 
-Configured `codexAccountNamespaces` are checked first. A selector such as `work/gpt-5.6-sol`
+Configured `codexAccountNamespaces` are checked first. A selector such as `side/gpt-5.6-sol`
 resolves to the canonical `openai` provider plus one immutable account id. It bypasses pool
 selection and fails closed instead of changing accounts. Account namespace keys cannot collide with
 configured provider names.

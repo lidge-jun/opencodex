@@ -19,12 +19,14 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
 
   const loadMode = useCallback(async () => {
     try {
-      const config = await fetch(`${apiBase}/api/config`).then(r => r.json()) as {
-        codexAccountNamespacesEnabled?: boolean;
+      const response = await fetch(`${apiBase}/api/config`);
+      if (!response.ok) throw new Error("failed to load config");
+      const config = await response.json() as {
+        codexAccountPickerEnabled?: boolean;
       };
       setAccountModeState(codexAccountModeState(config));
       if (!namespaceMutationInFlightRef.current) {
-        setNamespacesEnabled(config.codexAccountNamespacesEnabled === true);
+        setNamespacesEnabled(config.codexAccountPickerEnabled === true);
       }
     } catch { /* banner degrades to no badge */ }
   }, [apiBase]);
@@ -46,14 +48,14 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
       const response = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codexAccountNamespacesEnabled: next }),
+        body: JSON.stringify({ codexAccountPickerEnabled: next }),
       });
       const result = await response.json().catch(() => ({})) as {
         error?: string;
-        codexAccountNamespacesEnabled?: boolean;
+        codexAccountPickerEnabled?: boolean;
       };
       if (!response.ok) throw new Error(result.error ?? "save failed");
-      setNamespacesEnabled(result.codexAccountNamespacesEnabled === true);
+      setNamespacesEnabled(result.codexAccountPickerEnabled === true);
       setNamespaceFeedback({ tone: "ok", message: t("codexAuth.namespacesSaved") });
     } catch {
       setNamespacesEnabled(previousEnabled);

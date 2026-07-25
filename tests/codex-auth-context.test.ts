@@ -96,6 +96,33 @@ describe("Codex auth context", () => {
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer   " }), config(), "direct"))
       .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
   });
+  test("fixed account resolution takes precedence over direct mode", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "fixed_pool_token",
+      refreshToken: "fixed_pool_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "fixed_pool_acc",
+    });
+
+    await expect(resolveCodexAuthContext(new Headers(), config(), "direct", { accountId: "pool-a" }))
+      .resolves.toMatchObject({
+        kind: "pool",
+        accountId: "pool-a",
+        accessToken: "fixed_pool_token",
+        chatgptAccountId: "fixed_pool_acc",
+        fixedAccount: true,
+      });
+  });
+
+  test("fixed account resolution in direct mode fails closed instead of using caller auth", async () => {
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer caller_token" }),
+      config(),
+      "direct",
+      { accountId: "missing-account" },
+    )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+  });
+
   test("selects pool auth independently of the routed provider", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",

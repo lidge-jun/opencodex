@@ -163,16 +163,43 @@ describe("multiAgentGuidanceText", () => {
     const boundDescription = "OpenAI native model bound to a Codex account namespace.";
     catalogFixture(dir, [
       { slug: "gpt-5.6-sol", visibility: "hide", priority: 0, multiAgentVersion: "v2" },
-      { slug: "personal/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2", description: boundDescription },
-      { slug: "work/gpt-5.6-sol", priority: 0.33, multiAgentVersion: "v2", description: boundDescription },
+      { slug: "main/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2", description: boundDescription },
+      { slug: "side/gpt-5.6-sol", priority: 0.33, multiAgentVersion: "v2", description: boundDescription },
     ]);
 
     const effective = effectiveSubagentRoster(["gpt-5.6-sol"], "v2");
     expect(effective.advertised.map(model => model.model)).toEqual([
-      "personal/gpt-5.6-sol",
-      "work/gpt-5.6-sol",
+      "main/gpt-5.6-sol",
+      "side/gpt-5.6-sol",
     ]);
     expect(effective.excluded).toEqual([]);
+  });
+
+  test("bare choices report an account-qualified replacement outside the display limit", () => {
+    const dir = codexHomeFixture(V2_ON);
+    const boundDescription = "OpenAI native model bound to a Codex account namespace.";
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-sol", visibility: "hide", priority: 0, multiAgentVersion: "v2" },
+      { slug: "filler-a", priority: 1, multiAgentVersion: "v2" },
+      { slug: "filler-b", priority: 2, multiAgentVersion: "v2" },
+      { slug: "filler-c", priority: 3, multiAgentVersion: "v2" },
+      { slug: "filler-d", priority: 4, multiAgentVersion: "v2" },
+      { slug: "filler-e", priority: 5, multiAgentVersion: "v2" },
+      {
+        slug: "main/gpt-5.6-sol",
+        priority: 6,
+        multiAgentVersion: "v2",
+        description: boundDescription,
+      },
+    ]);
+
+    const effective = effectiveSubagentRoster(["gpt-5.6-sol"], "v2");
+    expect(effective.advertised).toEqual([]);
+    expect(effective.excluded).toEqual([{
+      configured: "gpt-5.6-sol",
+      catalogModel: "main/gpt-5.6-sol",
+      reason: "outside_display_limit",
+    }]);
   });
 
   test("effective roster applies alias, visibility, v2 compatibility, stable priority, cap, and diagnostics", async () => {

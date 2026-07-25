@@ -449,7 +449,7 @@ describe("provider management validation", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     const cfg = {
       ...config("127.0.0.1"),
-      codexAccountNamespaces: { work: "work-account-id" },
+      codexAccountNamespaces: { side: "side-account-id" },
     };
     saveConfig(cfg);
 
@@ -459,10 +459,10 @@ describe("provider management validation", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: "work",
+          name: "side",
           provider: {
             adapter: "openai-chat",
-            baseUrl: "https://work.example.test/v1",
+            baseUrl: "https://side.example.test/v1",
           },
         }),
       }),
@@ -475,8 +475,8 @@ describe("provider management validation", () => {
     expect(await response?.json()).toEqual({
       error: "provider name must not collide with a configured Codex account namespace",
     });
-    expect(cfg.providers.work).toBeUndefined();
-    expect(loadConfig().codexAccountNamespaces).toEqual({ work: "work-account-id" });
+    expect(cfg.providers.side).toBeUndefined();
+    expect(loadConfig().codexAccountNamespaces).toEqual({ side: "side-account-id" });
   });
 
   test("provider management rejects base URLs with embedded credentials", async () => {

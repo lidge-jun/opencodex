@@ -18,6 +18,10 @@ import {
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
 import { invalidateCodexModelsCache } from "../codex/catalog";
+import {
+  codexAccountPickerHasVisibleRows,
+  visibleCodexAccountNamespaces,
+} from "../codex/account-namespaces";
 import { startMemoryWatchdog } from "./memory-watchdog";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
@@ -390,12 +394,12 @@ export function startServer(port?: number) {
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
           // on-disk sync; codex-rs keeps them out of the picker itself).
           const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), config.codexAccountNamespaces);
+          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), visibleCodexAccountNamespaces(config));
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
               disabledNativeSlugs(config),
-              Object.keys(config.codexAccountNamespaces ?? {}).length > 0,
+              codexAccountPickerHasVisibleRows(config),
             ),
           }, 200, req, config);
         }

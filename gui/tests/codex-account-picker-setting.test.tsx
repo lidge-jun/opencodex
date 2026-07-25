@@ -34,8 +34,9 @@ function renderSetting(
 describe("Codex account picker setting", () => {
   test("renders one intent-level off toggle without implementation terminology", () => {
     const html = renderSetting(false);
-    expect(html).toContain("Choose a Codex login per conversation");
-    expect(html).toContain("choose the login directly from the model picker");
+    expect(html).toContain("Show each Codex account separately in the model picker");
+    expect(html).toContain("choose exactly which account a conversation uses without logging out");
+    expect(html).toContain("does not remove any account");
     expect(html).toContain('aria-pressed="false"');
     expect(html).not.toContain("Bare + accounts");
     expect(html).not.toContain("Picker layout");
@@ -43,11 +44,14 @@ describe("Codex account picker setting", () => {
 
   test("explains strict binding and compatibility when enabled", () => {
     const html = renderSetting(true);
-    expect(html).toContain("The prefix is that login&#x27;s label, such as Personal or Work");
-    expect(html).toContain("pins the conversation to that login and its quota");
-    expect(html).toContain("OpenCodex will not switch accounts");
-    expect(html).toContain("does not change your Pool or Direct settings");
-    expect(html).toContain("existing conversations, or saved model selections");
+    expect(html).toContain("picker label derived from the local ID shown on their card");
+    expect(html).toContain("the built-in login starts with Main");
+    expect(html).toContain("numeric suffix resolves any label collision");
+    expect(html).toContain("pins the conversation to that exact account");
+    expect(html).toContain("will not switch or fall back to another account");
+    expect(html).toContain("replaces the regular GPT picker entries");
+    expect(html).toContain("saved model selections keep their current routing");
+    expect(html).toContain("bare GPT model IDs keep their Pool or Direct behavior");
     expect(html).toContain('aria-pressed="true"');
   });
 

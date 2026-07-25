@@ -1012,22 +1012,22 @@ describe("Codex catalog routed normalization", () => {
       false,
       "default",
       new Set(),
-      { personal: "main", work: "opaque-account-id" },
+      { main: "main", side: "opaque-account-id" },
     );
     const native = entries.find(entry => entry.slug === "gpt-5.5");
-    const personal = entries.find(entry => entry.slug === "personal/gpt-5.5");
-    const work = entries.find(entry => entry.slug === "work/gpt-5.5");
+    const main = entries.find(entry => entry.slug === "main/gpt-5.5");
+    const side = entries.find(entry => entry.slug === "side/gpt-5.5");
 
-    expect(personal).toBeDefined();
-    expect(work).toBeDefined();
-    expect(personal?.description).toBe("OpenAI native model bound to a Codex account namespace.");
-    expect(personal?.model_messages).toEqual(native?.model_messages);
-    expect(personal?.supported_reasoning_levels).toEqual(native?.supported_reasoning_levels);
-    expect(personal?.input_modalities).toEqual(native?.input_modalities);
-    expect(personal?.service_tiers).toEqual(native?.service_tiers);
-    expect(personal?.display_name).toBe("Personal / 5.5");
+    expect(main).toBeDefined();
+    expect(side).toBeDefined();
+    expect(main?.description).toBe("OpenAI native model bound to a Codex account namespace.");
+    expect(main?.model_messages).toEqual(native?.model_messages);
+    expect(main?.supported_reasoning_levels).toEqual(native?.supported_reasoning_levels);
+    expect(main?.input_modalities).toEqual(native?.input_modalities);
+    expect(main?.service_tiers).toEqual(native?.service_tiers);
+    expect(main?.display_name).toBe("Main / 5.5");
     expect(native?.visibility).toBe("hide");
-    expect(Number.isInteger(personal?.priority)).toBe(true);
+    expect(Number.isInteger(main?.priority)).toBe(true);
     expect(JSON.stringify(entries)).not.toContain("opaque-account-id");
   });
 
@@ -1036,14 +1036,14 @@ describe("Codex catalog routed normalization", () => {
       nativeTemplate(),
       ["gpt-5.5"],
       [],
-      ["work/gpt-5.5"],
+      ["side/gpt-5.5"],
       false,
       "default",
       new Set(),
-      { personal: "main", work: "work-account-id" },
+      { main: "main", side: "side-account-id" },
     );
-    expect(entries.find(entry => entry.slug === "work/gpt-5.5")?.priority).toBe(0);
-    expect(entries.find(entry => entry.slug === "personal/gpt-5.5")?.priority).toBeGreaterThan(0);
+    expect(entries.find(entry => entry.slug === "side/gpt-5.5")?.priority).toBe(0);
+    expect(entries.find(entry => entry.slug === "main/gpt-5.5")?.priority).toBeGreaterThan(0);
     expect(entries.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(9);
     expect(entries.find(entry => entry.slug === "gpt-5.5")?.visibility).toBe("hide");
   });

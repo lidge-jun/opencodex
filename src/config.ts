@@ -449,6 +449,14 @@ const configSchema = z.object({
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
 }).passthrough().superRefine((config, ctx) => {
+  const accountPickerEnabled = (config as { codexAccountPickerEnabled?: unknown }).codexAccountPickerEnabled;
+  if (accountPickerEnabled !== undefined && typeof accountPickerEnabled !== "boolean") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["codexAccountPickerEnabled"],
+      message: "codexAccountPickerEnabled must be a boolean",
+    });
+  }
   const accountNamespaces = (config as { codexAccountNamespaces?: unknown }).codexAccountNamespaces;
   if (accountNamespaces !== undefined) {
     if (!accountNamespaces || typeof accountNamespaces !== "object" || Array.isArray(accountNamespaces)) {

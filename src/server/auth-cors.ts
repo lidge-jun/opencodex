@@ -13,6 +13,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
+import { codexAccountPickerIsEnabled } from "../codex/account-namespaces";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -332,7 +333,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     hostname: config.hostname ?? "127.0.0.1",
     defaultProvider: config.defaultProvider,
     codexAutoStart: codexAutoStartEnabled(config),
-    codexAccountNamespacesEnabled: Object.keys(config.codexAccountNamespaces ?? {}).length > 0,
+    codexAccountPickerEnabled: codexAccountPickerIsEnabled(config),
     websockets: config.websockets,
     providers,
   };

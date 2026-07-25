@@ -12,6 +12,21 @@ OpenAI 身份固定为两种：bare native id 是由 `codexAccountMode` 控制 P
 context / 922,000 max input；`*-pro` picker id 保持公开身份，线上使用 base 模型加
 `reasoning.mode: "pro"`。
 
+如果已登录多个 Codex 账户，可在 **Codex Auth** 中启用 **在模型选择器中分别显示每个 Codex 账户**。
+这样无需退出任何账户，就能明确选择对话使用的账户；每个 GPT 模型都会为每个账户显示单独条目：
+
+```text
+main/gpt-5.6-sol                   # 仅使用内置 Codex 登录
+side/gpt-5.6-sol                   # 仅使用本地 ID 为 side 的已添加账户
+```
+
+`main` 表示内置登录。已添加账户的前缀由用户指定的本地 ID 生成；如果与现有路由名称冲突，则添加
+数字后缀。这个 ID 并不代表账户类型。账户专属模型会绕过
+Pool 选择与回退；如果指定账户不可用，请求会直接失败。不带前缀的 `gpt-*` 会保留原有 Pool/Direct
+行为。关闭设置只会隐藏这些条目，不会删除已保存的绑定。手动配置与 `ocx sync` 详见
+删除已添加账户后，其选择器条目会消失，但绑定会保留，确保已保存的选择不会转到其他账户。使用相同
+本地 ID 重新添加账户会恢复这些条目。手动配置与 `ocx sync` 详见[配置参考](/zh-cn/reference/configuration/)。
+
 ## 集成路径
 
 `ocx init`、`ocx start` 和 `ocx sync` 会保持解析后的 `CODEX_HOME` 目录下这些文件一致：

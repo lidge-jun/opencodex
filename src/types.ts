@@ -580,9 +580,14 @@ export interface OcxConfig {
   /**
    * Explicit model namespaces bound to one Codex account. Values are stored account ids;
    * `"main"` is shorthand for the Codex Desktop/main auth.json account. A selector such as
-   * `work/gpt-5.6-sol` fails closed when that account is unavailable and never pool-fails over.
+   * `side/gpt-5.6-sol` fails closed when that account is unavailable and never pool-fails over.
    */
   codexAccountNamespaces?: Record<string, string>;
+  /**
+   * UI-managed picker visibility for account-qualified native models. When omitted, a non-empty
+   * codexAccountNamespaces map is visible for backward-compatible hand-written configurations.
+   */
+  codexAccountPickerEnabled?: boolean;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

@@ -107,12 +107,15 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
-  if (mode === "direct") {
-    if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
-    return { kind: "main", accountId: null };
-  }
   if (options.accountId && options.excludeAccountId) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
+  }
+  // An explicit account binding is stronger than the provider's default mode. Account-qualified
+  // model selectors must resolve that exact credential even while the canonical provider is in
+  // Direct mode; otherwise they would silently fall back to the caller's current login.
+  if (mode === "direct" && !options.accountId) {
+    if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
+    return { kind: "main", accountId: null };
   }
   const threadId = headers.get("x-codex-parent-thread-id");
   const resolution = options.accountId

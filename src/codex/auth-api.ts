@@ -10,7 +10,11 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount } from "./account-lifecycle";
-import { appendDefaultCodexAccountNamespace } from "./account-namespaces";
+import {
+  appendDefaultCodexAccountNamespace,
+  codexAccountPickerIsEnabled,
+  isMainCodexAccountTarget,
+} from "./account-namespaces";
 import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -421,7 +425,7 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
 }
 
 async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<void> {
-  if (!changed) return;
+  if (!changed || !codexAccountPickerIsEnabled(config)) return;
   try {
     const { refreshCodexModelCatalog } = await import("./refresh");
     await refreshCodexModelCatalog(config);
@@ -452,6 +456,9 @@ export async function handleCodexAuthAPI(
     if (!ACCOUNT_ID_RE.test(body.id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
+    if (isMainCodexAccountTarget(body.id)) {
+      return jsonResponse({ error: "Account id is reserved for the main Codex login" }, 400);
+    }
     if (body.accessToken.length > 10_000 || body.refreshToken.length > 10_000) {
       return jsonResponse({ error: "Input too large" }, 400);
     }
@@ -480,11 +487,13 @@ export async function handleCodexAuthAPI(
     markCodexAccountValidated(body.id, warmup.validatedAt);
     clearAccountNeedsReauth(body.id);
     const addedAccount = withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts);
+    const retainedPickerBindingRestored = codexAccountPickerIsEnabled(runtimeConfig)
+      && Object.values(runtimeConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
     accounts.push(addedAccount);
     runtimeConfig.codexAccounts = accounts;
     const namespaceAdded = appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
     saveRuntimeConfig(config, runtimeConfig);
-    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceAdded);
+    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceAdded || retainedPickerBindingRestored);
     return jsonResponse({ ok: true });
   }
 
@@ -492,9 +501,9 @@ export async function handleCodexAuthAPI(
     const id = url.searchParams.get("id");
     if (!id) return jsonResponse({ error: "Missing id" }, 400);
     const runtimeConfig = getRuntimeConfig(config);
-    const namespaceRemoved = deleteCodexAccount(runtimeConfig, id);
+    const pickerChanged = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
-    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceRemoved);
+    await refreshAccountNamespaceCatalog(runtimeConfig, pickerChanged);
     return jsonResponse({ ok: true });
   }
 
@@ -646,13 +655,21 @@ export async function handleCodexAuthAPI(
     }
     const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
     const runtimeConfig = getRuntimeConfig(config);
+    const existingPoolAccount = requestedAccountId
+      ? configuredPoolAccount(runtimeConfig, requestedAccountId)
+      : undefined;
+    if (requestedAccountId
+      && isMainCodexAccountTarget(requestedAccountId)
+      && !(reauth && existingPoolAccount)) {
+      return jsonResponse({ error: "Account id is reserved for the main Codex login" }, 400);
+    }
     const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || Boolean(getCodexAccountCredential(accountId));
     if (exists && !reauth) {
       return jsonResponse({ error: `Account id already exists: ${accountId}` }, 400);
     }
     if (reauth) {
       if (!requestedAccountId) return jsonResponse({ error: "id required for reauth" }, 400);
-      if (!configuredPoolAccount(runtimeConfig, accountId)) {
+      if (!existingPoolAccount) {
         return jsonResponse({ error: "Unknown pool account for reauth" }, 404);
       }
     }
@@ -794,11 +811,13 @@ export async function handleCodexAuthAPI(
                 saveRuntimeConfig(config, latestConfig);
               } else {
                 const addedAccount = withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts);
+                const retainedPickerBindingRestored = codexAccountPickerIsEnabled(latestConfig)
+                  && Object.values(latestConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
                 accounts.push(addedAccount);
                 latestConfig.codexAccounts = accounts;
                 const namespaceAdded = appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
                 saveRuntimeConfig(config, latestConfig);
-                await refreshAccountNamespaceCatalog(latestConfig, namespaceAdded);
+                await refreshAccountNamespaceCatalog(latestConfig, namespaceAdded || retainedPickerBindingRestored);
               }
               codexAuthLoginState.set(flowId, { status: "done", accountId, email, doneAt: Date.now() });
               completed = true;

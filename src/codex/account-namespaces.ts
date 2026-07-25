@@ -7,19 +7,57 @@ export const CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION = "OpenAI native model boun
 
 const RESERVED_NAMESPACE_KEYS = new Set(["__proto__", "prototype", "constructor", "combo"]);
 
-function generatedNamespace(label: string): string {
-  const normalized = label.trim().toLowerCase()
+export function codexAccountPickerIsEnabled(
+  config: Pick<OcxConfig, "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): boolean {
+  return config.codexAccountPickerEnabled !== false
+    && Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
+}
+
+export function visibleCodexAccountNamespaces(
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): Readonly<Record<string, string>> {
+  if (!codexAccountPickerIsEnabled(config)) return {};
+  return Object.fromEntries(
+    Object.entries(config.codexAccountNamespaces!)
+      .filter(([, accountId]) =>
+        isMainCodexAccountTarget(accountId)
+        || (config.codexAccounts ?? []).some(account => !account.isMain && account.id === accountId)
+      ),
+  );
+}
+
+export function codexAccountPickerHasVisibleRows(
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): boolean {
+  return Object.keys(visibleCodexAccountNamespaces(config)).length > 0;
+}
+
+function generatedNamespace(localId: string): string {
+  const normalized = localId.trim().toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^[._-]+|[._-]+$/g, "");
   return normalized && !RESERVED_NAMESPACE_KEYS.has(normalized) ? normalized : "account";
 }
 
-/** Build the initial UI-managed namespace map without exposing account ids to the browser. */
+function comboAliasNamespaces(config: Pick<OcxConfig, "combos">): string[] {
+  return Object.values(config.combos ?? {}).flatMap((combo) => {
+    const alias = typeof combo?.alias === "string" ? combo.alias.trim() : "";
+    const slash = alias.indexOf("/");
+    return slash > 0 ? [alias.slice(0, slash)] : [];
+  });
+}
+
+/** Build the initial UI-managed map from local ids without exposing upstream account identity. */
 export function defaultCodexAccountNamespaces(
-  config: Pick<OcxConfig, "codexAccounts" | "providers">,
+  config: Pick<OcxConfig, "codexAccounts" | "combos" | "providers">,
 ): Record<string, string> {
   const namespaces: Record<string, string> = {};
-  const used = new Set([...Object.keys(config.providers), ...RESERVED_NAMESPACE_KEYS]);
+  const used = new Set([
+    ...Object.keys(config.providers),
+    ...comboAliasNamespaces(config),
+    ...RESERVED_NAMESPACE_KEYS,
+  ]);
   const claim = (requested: string): string => {
     const base = generatedNamespace(requested);
     let candidate = base;
@@ -29,27 +67,31 @@ export function defaultCodexAccountNamespaces(
     return candidate;
   };
 
-  namespaces[claim("personal")] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
+  namespaces[claim("main")] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
   for (const account of config.codexAccounts ?? []) {
-    if (account.isMain) continue;
-    namespaces[claim(account.alias || account.id)] = account.id;
+    if (account.isMain || isMainCodexAccountTarget(account.id)) continue;
+    namespaces[claim(account.id)] = account.id;
   }
   return namespaces;
 }
 
-/** Add a newly stored account to an already-enabled UI-managed picker without renaming old rows. */
+/** Add a newly stored account to an existing UI-managed map without renaming old rows. */
 export function appendDefaultCodexAccountNamespace(
-  config: Pick<OcxConfig, "codexAccountNamespaces" | "providers">,
-  account: { id: string; alias?: string; isMain: boolean },
+  config: Pick<OcxConfig, "codexAccountNamespaces" | "combos" | "providers">,
+  account: { id: string; isMain: boolean },
 ): boolean {
-  if (account.isMain || !config.codexAccountNamespaces) return false;
+  if (account.isMain
+    || isMainCodexAccountTarget(account.id)
+    || !config.codexAccountNamespaces
+    || Object.keys(config.codexAccountNamespaces).length === 0) return false;
   if (Object.values(config.codexAccountNamespaces).includes(account.id)) return false;
   const used = new Set([
     ...Object.keys(config.providers),
+    ...comboAliasNamespaces(config),
     ...Object.keys(config.codexAccountNamespaces),
     ...RESERVED_NAMESPACE_KEYS,
   ]);
-  const base = generatedNamespace(account.alias || account.id);
+  const base = generatedNamespace(account.id);
   let namespace = base;
   let suffix = 2;
   while (used.has(namespace)) namespace = `${base}-${suffix++}`;
@@ -59,10 +101,9 @@ export function appendDefaultCodexAccountNamespace(
 
 export function codexAccountNamespaceDisplayName(namespace: string): string {
   return namespace
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+    .split(/([._-]+)/)
+    .map(part => /^[._-]+$/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
 }
 
 export function accountBoundNativeDisplayName(namespace: string, native: {
@@ -92,22 +133,35 @@ export function accountBoundNativeCatalogSlug(entry: {
   return slash > 0 ? entry.slug.slice(slash + 1) : undefined;
 }
 
+export function isMainCodexAccountTarget(accountId: string): boolean {
+  return accountId === MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET || accountId === MAIN_CODEX_ACCOUNT_ID;
+}
+
 export function normalizeCodexAccountNamespaceTarget(accountId: string): string {
-  return accountId === MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET || accountId === MAIN_CODEX_ACCOUNT_ID
+  return isMainCodexAccountTarget(accountId)
     ? MAIN_CODEX_ACCOUNT_ID
     : accountId;
 }
 
-export function codexAccountNamespaceEntries(config: Pick<OcxConfig, "codexAccountNamespaces">): Array<[string, string]> {
+export function codexAccountNamespaceEntries(
+  config: Pick<OcxConfig, "codexAccountNamespaces">,
+): Array<[string, string]> {
   return Object.entries(config.codexAccountNamespaces ?? {})
     .map(([namespace, accountId]) => [namespace, normalizeCodexAccountNamespaceTarget(accountId)]);
 }
 
+export function visibleCodexAccountNamespaceEntries(
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): Array<[string, string]> {
+  return Object.entries(visibleCodexAccountNamespaces(config))
+    .map(([namespace, accountId]) => [namespace, normalizeCodexAccountNamespaceTarget(accountId)]);
+}
+
 export function accountBoundNativeModelSlugs(
-  config: Pick<OcxConfig, "codexAccountNamespaces">,
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
   nativeSlugs: Iterable<string>,
 ): string[] {
   const natives = [...nativeSlugs];
-  return codexAccountNamespaceEntries(config)
+  return visibleCodexAccountNamespaceEntries(config)
     .flatMap(([namespace]) => natives.map(slug => `${namespace}/${slug}`));
 }

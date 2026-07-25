@@ -24,27 +24,32 @@ gpt-5.6-sol                         # openai (Pool or Direct option)
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-For intentional per-thread account selection, turn on **Account-specific models** under
-**Codex Auth**, or configure `codexAccountNamespaces` and run `ocx sync`. The picker then also shows
-entries such as:
+When multiple Codex accounts are logged in, turn on **Show each Codex account separately in the
+model picker** under **Codex Auth** to target one account for a conversation without logging out.
+You can also configure `codexAccountNamespaces` and run `ocx sync`. The picker then shows a separate
+copy of every GPT model for every configured account:
 
 ```text
-personal/gpt-5.6-sol                # exact main/Desktop account
-work/gpt-5.6-sol                    # exact added work account
+main/gpt-5.6-sol                    # exact main/Desktop account
+side/gpt-5.6-sol                    # exact added account
 ```
 
-The opt-in replaces plain native picker rows with readable `Personal / 5.6 Sol` and
-`Work / 5.6 Sol` rows. The equivalent config is:
+`main` identifies the built-in Codex login. Every added account derives its selector prefix from its
+user-chosen local OpenCodex ID; a numeric suffix avoids existing provider or combo prefixes. Those
+IDs do not represent built-in account types. The equivalent config is:
 
 ```json
 {
-  "codexAccountNamespaces": { "personal": "main", "work": "work-account-id" }
+  "codexAccountNamespaces": { "main": "main", "side": "added-account-id" }
 }
 ```
 
 Plain `gpt-*` ids remain valid for saved threads and config, and continue to use the provider's
-Pool/Direct behavior. Omitting the map keeps the existing picker unchanged. The **Codex Auth**
-dashboard refreshes the catalog automatically after changing the toggle.
+Pool/Direct behavior. Omitting the map keeps the existing picker unchanged. Turning the dashboard
+setting off hides account-specific rows but preserves their bindings and explicit selectors. The
+**Codex Auth** dashboard refreshes the catalog automatically after changing the toggle.
+Deleting an added account removes its picker rows but retains the selector binding so saved
+conversations fail closed instead of falling through. Re-adding the same local ID restores those rows.
 
 An account-qualified model never switches accounts. Missing credentials, cooldown, or
 reauthentication fail the request. Bare models retain normal Pool/Direct behavior, and future native

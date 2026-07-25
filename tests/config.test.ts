@@ -715,20 +715,45 @@ describe("opencodex config defaults", () => {
         },
       },
       defaultProvider: "openai",
-      codexAccountNamespaces: { personal: "main", work: "work-account-id" },
+      codexAccountNamespaces: { main: "main", side: "side-account-id" },
+      codexAccountPickerEnabled: false,
     });
 
-    expect(loadConfig().codexAccountNamespaces).toEqual({ personal: "main", work: "work-account-id" });
+    expect(loadConfig().codexAccountNamespaces).toEqual({ main: "main", side: "side-account-id" });
+    expect(loadConfig().codexAccountPickerEnabled).toBe(false);
+  });
+
+  test("Codex account namespace visibility override must be boolean", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAccountNamespaces: { main: "main" },
+      codexAccountPickerEnabled: "yes",
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toEqual(getDefaultConfig());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("codexAccountPickerEnabled must be a boolean"));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test("Codex account namespaces cannot collide with provider routing", () => {
     writeConfig({
       port: 10100,
       providers: {
-        work: { adapter: "openai-chat", baseUrl: "https://work.example.test/v1" },
+        side: { adapter: "openai-chat", baseUrl: "https://side.example.test/v1" },
       },
-      defaultProvider: "work",
-      codexAccountNamespaces: { work: "work-account-id" },
+      defaultProvider: "side",
+      codexAccountNamespaces: { side: "side-account-id" },
     });
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -746,12 +771,38 @@ describe("opencodex config defaults", () => {
         openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
       },
       defaultProvider: "openai",
-      codexAccountNamespaces: { combo: "work-account-id" },
+      codexAccountNamespaces: { combo: "side-account-id" },
     });
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(loadConfig()).toEqual(getDefaultConfig());
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("combo namespaces"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("Codex account namespaces cannot overlap an existing combo alias prefix", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+      defaultProvider: "openai",
+      combos: {
+        intentional: {
+          alias: "side/gpt-5.5",
+          targets: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+      codexAccountNamespaces: { side: "side-account-id" },
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toEqual(getDefaultConfig());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(
+        "combo aliases must not use a configured Codex account namespace",
+      ));
     } finally {
       errorSpy.mockRestore();
     }
