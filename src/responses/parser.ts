@@ -32,20 +32,25 @@ function inputContentParts(blocks: unknown[] | string | undefined): string | Ocx
   if (!blocks) return [];
   const parts: OcxContentPart[] = [];
   for (const raw of blocks) {
+    // A malformed message item fails its strict schema and falls through to inputItemSchema's
+    // permissive catch-all, so blocks reaching here are NOT guaranteed to match the declared
+    // shape. Validate each field before use, as outputToToolResultContent already does.
+    if (!isObj(raw)) continue;
     const block = raw as InputBlock;
     if (block.type === "input_text" || block.type === "text") {
-      parts.push({ type: "text", text: (block as { text: string }).text });
+      if (typeof raw.text === "string") parts.push({ type: "text", text: raw.text });
     } else if (block.type === "input_image") {
       const b = block as { image_url?: string; file_id?: string; detail?: string };
-      if (b.image_url) {
+      if (typeof b.image_url === "string" && b.image_url.length > 0) {
         // Preserve the image as a structured part — adapters send it as a native image block.
         // NEVER inline the (often base64 data-URL) image_url as text: that explodes the token count.
-        parts.push({ type: "image", imageUrl: b.image_url, ...(b.detail ? { detail: normalizeImageDetail(b.detail) } : {}) });
+        parts.push({ type: "image", imageUrl: b.image_url, ...(typeof b.detail === "string" && b.detail.length > 0 ? { detail: normalizeImageDetail(b.detail) } : {}) });
       } else {
-        parts.push({ type: "text", text: `[image: ${b.file_id ?? "?"}]` }); // file_id ref → no inline data
+        parts.push({ type: "text", text: `[image: ${typeof b.file_id === "string" ? b.file_id : "?"}]` }); // file_id ref → no inline data
       }
     } else if (block.type === "input_file") {
-      const ref = (block as { file_id?: string; filename?: string }).file_id ?? (block as { filename?: string }).filename ?? "?";
+      const b = block as { file_id?: string; filename?: string };
+      const ref = typeof b.file_id === "string" ? b.file_id : typeof b.filename === "string" ? b.filename : "?";
       parts.push({ type: "text", text: `[file: ${ref}]` });
     }
   }
@@ -61,9 +66,14 @@ function outputTextOf(blocks: unknown[] | string | undefined): OcxTextContent[] 
   if (!blocks) return [];
   const out: OcxTextContent[] = [];
   for (const raw of blocks) {
+    // Same catch-all caveat as inputContentParts: validate before use.
+    if (!isObj(raw)) continue;
     const b = raw as OutputBlock;
-    if (b.type === "output_text" || b.type === "text") out.push({ type: "text", text: (b as { text: string }).text });
-    else if (b.type === "refusal") out.push({ type: "text", text: `[refusal: ${(b as { refusal: string }).refusal}]` });
+    if (b.type === "output_text" || b.type === "text") {
+      if (typeof raw.text === "string") out.push({ type: "text", text: raw.text });
+    } else if (b.type === "refusal") {
+      if (typeof raw.refusal === "string") out.push({ type: "text", text: `[refusal: ${raw.refusal}]` });
+    }
   }
   return out;
 }
