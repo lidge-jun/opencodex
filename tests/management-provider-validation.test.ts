@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -31,6 +31,7 @@ import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import * as destinationPolicy from "../src/lib/destination-policy";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -954,6 +955,51 @@ describe("provider management validation", () => {
       }
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test("canonical OpenAI bypasses fake-IP DNS rejection without weakening custom providers", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue("baseUrl hostname resolves to a benchmark network (198.18.0.30)");
+
+    try {
+      const post = (body: unknown) => {
+        const request = new Request("http://127.0.0.1/api/providers", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        return handleManagementAPI(request, new URL(request.url), liveConfig, {
+          refreshCodexCatalog: async () => undefined,
+        });
+      };
+      const canonical = await post({ name: "openai", provider: canonicalDirect });
+      expect(canonical?.status).toBe(200);
+      expect(resolvedError).not.toHaveBeenCalled();
+
+      const custom = await post({
+        name: "custom",
+        provider: { adapter: "openai-chat", baseUrl: "https://custom.example.test/v1" },
+      });
+      expect(custom?.status).toBe(400);
+      expect(resolvedError).toHaveBeenCalledTimes(1);
+    } finally {
+      resolvedError.mockRestore();
     }
   });
 

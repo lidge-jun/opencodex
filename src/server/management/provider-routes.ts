@@ -101,7 +101,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     // Hostname destinations additionally get a DNS-resolved SSRF check at write time —
     // the sync check above only classifies literal IPs (review finding, PR #96).
-    const resolvedError = await providerDestinationResolvedError(name, prov);
+    const resolvedError = name === "openai" && isCanonicalOpenAiForwardProvider(prov)
+      ? null
+      : await providerDestinationResolvedError(name, prov);
     if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
     // Catalog providers (e.g. ollama-cloud) carry a models + vision/reasoning classification the GUI
     // doesn't send — merge it in so the sidecars are gated correctly.

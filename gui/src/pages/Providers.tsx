@@ -6,6 +6,7 @@ import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/pr
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
+import { codexAccountProviderNames, ensureOpenAiProvider, openAiAccountProviderState } from "../provider-payload";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { Notice } from "../ui";
@@ -501,10 +502,8 @@ export default function Providers({ apiBase, viewMode }: { apiBase: string; view
   }
 
   const addModalAccountRows = [
-    ...Object.entries(config.providers)
-      .filter(([, prov]) => prov.authMode === "forward")
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name]) => ({
+    ...codexAccountProviderNames(config.providers)
+      .map(name => ({
         id: name,
         label: formatProviderDisplayName(name),
         kind: "codex" as const,
@@ -525,7 +524,26 @@ export default function Providers({ apiBase, viewMode }: { apiBase: string; view
     }
   }
 
-  const onAccountLogin = (provider: string) => {
+  const onAccountLogin = async (provider: string) => {
+    if (provider === "openai") {
+      const configured = config.providers.openai;
+      const state = openAiAccountProviderState(configured);
+      if (state === "invalid") {
+        notify(t("codexAuth.openaiMissing"), false);
+        return;
+      }
+      if (state === "absent" || state === "disabled") {
+        try {
+          await ensureOpenAiProvider(apiBase, state);
+          await fetchConfig();
+        } catch (error) {
+          notify(error instanceof Error ? error.message : t("prov.saveFailed"), false);
+          return;
+        }
+      }
+      setCodexLoginOpen(true);
+      return;
+    }
     if (isForwardProvider(provider)) {
       setCodexLoginOpen(true);
       return;
@@ -545,6 +563,7 @@ export default function Providers({ apiBase, viewMode }: { apiBase: string; view
       onAdded={() => {
         setCodexLoginOpen(false);
         notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }), true);
+        void fetchConfig();
         void fetchOauth();
         void fetchProviderQuotas(true);
         bumpModelsRefresh();
