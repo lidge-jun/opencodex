@@ -52,8 +52,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
-| `codexAccountNamespaces?` | `Record<string,string>` | `{}` | Optional picker namespace to exact Codex account id map. Use `"main"` for the current Codex Desktop/main login. Account-qualified native models fail closed and never pool-fail over. Namespace keys cannot collide with provider ids. |
-| `codexAccountNamespacePickerMode?` | `"additive" \| "replace-native"` | `"additive"` | Presentation for account-qualified native rows. `"additive"` keeps bare native rows in the picker. `"replace-native"` hides only those picker rows and gives the qualified replacements friendly labels; bare model ids remain routable. Requires at least one `codexAccountNamespaces` entry. |
+| `codexAccountNamespaces?` | `Record<string,string>` | `{}` | Optional picker namespace to exact Codex account id map. Use `"main"` for the current Codex Desktop/main login. When present, account-qualified native rows replace plain GPT rows in the picker and fail closed instead of switching accounts. Plain model ids remain routable. Namespace keys cannot collide with provider ids. |
 | `activeCodexAccountId?` | `string` | — | Pool account used for the next new Codex thread. Existing thread affinities keep their original account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
@@ -88,8 +87,7 @@ Use `codexAccountNamespaces` when account choice must be visible and intentional
   "codexAccountNamespaces": {
     "personal": "main",
     "work": "work-account-id"
-  },
-  "codexAccountNamespacePickerMode": "replace-native"
+  }
 }
 ```
 
@@ -98,29 +96,25 @@ label. After `ocx sync`, Codex exposes `personal/gpt-*` and `work/gpt-*` copies 
 supported native model. When a later opencodex update adds support for another native model, the next
 catalog sync gives it the same prefixes without adding the model separately to this map.
 
-The dashboard's **Codex Auth** page exposes **Account-specific models** as the feature-level opt-in.
-Turning it on creates `personal` for the main/Desktop login and uses each added account's alias (or
-id) for the other prefixes; turning it off removes all account-qualified catalog rows. Account ids
-stay server-side.
+The dashboard's **Codex Auth** page exposes **Choose account in model picker** as the single opt-in.
+Turning it on creates `personal` for the main/Desktop login and uses each currently added account's
+alias (or id) for the other prefixes. Turning it off removes the account-qualified catalog rows.
+Account ids stay server-side. Prefixes stay stable if an account alias is renamed; accounts added
+later receive a new prefix automatically while the feature remains enabled.
 
-Namespaces alone are additive and preserve the existing bare native picker rows. The optional
-`replace-native` picker mode is a second, explicit opt-in: it hides the bare rows from the picker and
-labels the replacements `Personal / 5.6 Sol`, `Work / 5.6 Sol`, and so on. It does not remove or
-reroute bare model ids, so saved threads and configuration that use `gpt-*` continue to follow the
-configured Pool/Direct behavior. Remove the picker-mode key or set it to `additive` to restore the
-original presentation. When the feature is enabled, a secondary **Picker layout** choice offers
-**Bare + accounts** or **Accounts only**; changing either setting refreshes the Codex catalog
-automatically. Because Codex exposes a flat picker rather than section metadata,
-replacement mode keeps the account-qualified native pairs together ahead of ordinary routed rows;
-explicitly featured subagent models still retain their higher priority.
+When enabled, plain native rows are hidden from the picker and replaced by readable entries such as
+`Personal / 5.6 Sol` and `Work / 5.6 Sol`. Plain model ids are not removed or rerouted: saved threads
+and configuration that use `gpt-*` continue to follow Pool/Direct behavior. Because Codex exposes a
+flat picker rather than section metadata, the account-specific pairs stay together ahead of ordinary
+routed rows; explicitly featured subagent models retain their higher priority.
 
 These selectors do not change `activeCodexAccountId`. They bypass quota auto-switch, transient-
 failure failover, affinity rebinding, and unsupported-model retry. If the exact account is missing,
 cooling down, or needs reauthentication, the request fails instead of using another account. Bare
 `gpt-*` models keep the configured Pool/Direct behavior.
 
-Account binding follows the model selector. In `replace-native` mode, a bare `subagentModels` entry
-is projected onto its visible account-qualified rows so Codex can advertise those choices; the
+Account binding follows the model selector. A bare `subagentModels` entry is projected onto its
+visible account-specific rows so Codex can advertise those choices; the
 client's five-model subagent limit still applies. Use qualified values in `subagentModels`,
 `injectionModel`, and `shadowCallIntercept.model` when those calls must use the same account. A
 child explicitly launched with a bare model uses ordinary Pool/Direct routing. Standalone client-

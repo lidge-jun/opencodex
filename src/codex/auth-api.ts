@@ -10,6 +10,7 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount } from "./account-lifecycle";
+import { appendDefaultCodexAccountNamespace } from "./account-namespaces";
 import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -419,6 +420,16 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
   return [main, ...withQuota];
 }
 
+async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<void> {
+  if (!changed) return;
+  try {
+    const { refreshCodexModelCatalog } = await import("./refresh");
+    await refreshCodexModelCatalog(config);
+  } catch {
+    // Account persistence succeeds even when no Codex catalog has been injected yet.
+  }
+}
+
 export async function handleCodexAuthAPI(
   req: Request,
   url: URL,
@@ -468,9 +479,12 @@ export async function handleCodexAuthAPI(
     });
     markCodexAccountValidated(body.id, warmup.validatedAt);
     clearAccountNeedsReauth(body.id);
-    accounts.push(withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts));
+    const addedAccount = withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts);
+    accounts.push(addedAccount);
     runtimeConfig.codexAccounts = accounts;
+    const namespaceAdded = appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
     saveRuntimeConfig(config, runtimeConfig);
+    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceAdded);
     return jsonResponse({ ok: true });
   }
 
@@ -478,8 +492,9 @@ export async function handleCodexAuthAPI(
     const id = url.searchParams.get("id");
     if (!id) return jsonResponse({ error: "Missing id" }, 400);
     const runtimeConfig = getRuntimeConfig(config);
-    deleteCodexAccount(runtimeConfig, id);
+    const namespaceRemoved = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
+    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceRemoved);
     return jsonResponse({ ok: true });
   }
 
@@ -778,9 +793,12 @@ export async function handleCodexAuthAPI(
                 latestConfig.codexAccounts = accounts;
                 saveRuntimeConfig(config, latestConfig);
               } else {
-                accounts.push(withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts));
+                const addedAccount = withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts);
+                accounts.push(addedAccount);
                 latestConfig.codexAccounts = accounts;
+                const namespaceAdded = appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
                 saveRuntimeConfig(config, latestConfig);
+                await refreshAccountNamespaceCatalog(latestConfig, namespaceAdded);
               }
               codexAuthLoginState.set(flowId, { status: "done", accountId, email, doneAt: Date.now() });
               completed = true;

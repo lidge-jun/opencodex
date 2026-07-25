@@ -192,13 +192,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAutoStart?: unknown;
       streamMode?: unknown;
       codexAccountNamespacesEnabled?: unknown;
-      codexAccountNamespacePickerMode?: unknown;
     };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
-      && body.codexAccountNamespacesEnabled === undefined
-      && body.codexAccountNamespacePickerMode === undefined) {
+      && body.codexAccountNamespacesEnabled === undefined) {
       return jsonResponse({ error: "at least one supported setting is required" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
@@ -210,17 +208,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
       return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
-    }
-    if (body.codexAccountNamespacePickerMode !== undefined
-      && body.codexAccountNamespacePickerMode !== "additive"
-      && body.codexAccountNamespacePickerMode !== "replace-native") {
-      return jsonResponse({ error: "codexAccountNamespacePickerMode must be additive or replace-native" }, 400);
-    }
-    const namespacesWillBeEnabled = body.codexAccountNamespacesEnabled === true
-      || (body.codexAccountNamespacesEnabled !== false
-        && Object.keys(config.codexAccountNamespaces ?? {}).length > 0);
-    if (body.codexAccountNamespacePickerMode === "replace-native" && !namespacesWillBeEnabled) {
-      return jsonResponse({ error: "replace-native picker mode requires at least one configured Codex account namespace" }, 400);
     }
     if (typeof body.codexAutoStart === "boolean") {
       config.codexAutoStart = body.codexAutoStart;
@@ -237,18 +224,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
     } else if (body.codexAccountNamespacesEnabled === false) {
       delete config.codexAccountNamespaces;
-      delete config.codexAccountNamespacePickerMode;
     }
     const namespacesAreEnabled = Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
-    const pickerModeChanged = body.codexAccountNamespacePickerMode !== undefined
-      && body.codexAccountNamespacePickerMode !== (config.codexAccountNamespacePickerMode ?? "additive");
-    if (body.codexAccountNamespacePickerMode === "replace-native" && namespacesAreEnabled) {
-      config.codexAccountNamespacePickerMode = "replace-native";
-    } else if (body.codexAccountNamespacePickerMode === "additive") {
-      delete config.codexAccountNamespacePickerMode;
-    }
     saveConfig(config);
-    if (pickerModeChanged || namespacesWereEnabled !== namespacesAreEnabled) {
+    if (namespacesWereEnabled !== namespacesAreEnabled) {
       await refreshCodexCatalogBestEffort();
     }
     invalidateStartupHealthCache();
@@ -257,8 +236,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
       codexAccountNamespacesEnabled: namespacesAreEnabled,
-      codexAccountNamespacePickerMode: config.codexAccountNamespacePickerMode ?? "additive",
-      codexAccountNamespaceCount: Object.keys(config.codexAccountNamespaces ?? {}).length,
       startupHealth: await getCachedStartupHealth(config),
     });
   }

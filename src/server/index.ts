@@ -390,12 +390,12 @@ export function startServer(port?: number) {
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
           // on-disk sync; codex-rs keeps them out of the picker itself).
           const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), config.codexAccountNamespaces, config.codexAccountNamespacePickerMode);
+          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), config.codexAccountNamespaces);
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
               disabledNativeSlugs(config),
-              config.codexAccountNamespacePickerMode === "replace-native",
+              Object.keys(config.codexAccountNamespaces ?? {}).length > 0,
             ),
           }, 200, req, config);
         }

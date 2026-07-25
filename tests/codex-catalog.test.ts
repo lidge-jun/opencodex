@@ -1025,9 +1025,9 @@ describe("Codex catalog routed normalization", () => {
     expect(personal?.supported_reasoning_levels).toEqual(native?.supported_reasoning_levels);
     expect(personal?.input_modalities).toEqual(native?.input_modalities);
     expect(personal?.service_tiers).toEqual(native?.service_tiers);
-    expect(personal?.display_name).toBe("personal/gpt-5.5");
-    expect(native?.visibility).toBe("list");
-    expect(personal?.priority).toBeGreaterThan(100);
+    expect(personal?.display_name).toBe("Personal / 5.5");
+    expect(native?.visibility).toBe("hide");
+    expect(Number.isInteger(personal?.priority)).toBe(true);
     expect(JSON.stringify(entries)).not.toContain("opaque-account-id");
   });
 
@@ -1043,8 +1043,9 @@ describe("Codex catalog routed normalization", () => {
       { personal: "main", work: "work-account-id" },
     );
     expect(entries.find(entry => entry.slug === "work/gpt-5.5")?.priority).toBe(0);
-    expect(entries.find(entry => entry.slug === "personal/gpt-5.5")?.priority).toBeGreaterThan(100);
+    expect(entries.find(entry => entry.slug === "personal/gpt-5.5")?.priority).toBeGreaterThan(0);
     expect(entries.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(9);
+    expect(entries.find(entry => entry.slug === "gpt-5.5")?.visibility).toBe("hide");
   });
 
   test("catalog sync keeps native OpenAI rows when adopted providers expose matching ids", () => {

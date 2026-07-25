@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { accountBoundNativeDisplayName, defaultCodexAccountNamespaces } from "../src/codex/account-namespaces";
+import {
+  accountBoundNativeDisplayName,
+  appendDefaultCodexAccountNamespace,
+  defaultCodexAccountNamespaces,
+} from "../src/codex/account-namespaces";
 import {
   applyNativeVisibility,
   buildCatalogEntries,
@@ -50,6 +54,28 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     });
     expect(namespaces).toEqual({ personal: "main", "work-2": "work-id", "product-team": "team-id" });
     expect(JSON.stringify(namespaces)).not.toContain("example.test");
+  });
+
+  test("new accounts append to an enabled map without renaming existing prefixes", () => {
+    const config = {
+      providers: { work: { adapter: "openai-chat" as const, baseUrl: "https://example.test/v1" } },
+      codexAccountNamespaces: { personal: "main", legacy: "legacy-id" },
+    };
+    expect(appendDefaultCodexAccountNamespace(config, {
+      id: "work-id",
+      alias: "Work",
+      isMain: false,
+    })).toBe(true);
+    expect(config.codexAccountNamespaces).toEqual({
+      personal: "main",
+      legacy: "legacy-id",
+      "work-2": "work-id",
+    });
+    expect(appendDefaultCodexAccountNamespace(config, {
+      id: "work-id",
+      alias: "Renamed Work",
+      isMain: false,
+    })).toBe(false);
   });
 
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {
@@ -141,7 +167,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(entries[0].visibility).toBe("hide");
   });
 
-  test("replace-native mode hides bare rows and substitutes friendly account-qualified pairs", () => {
+  test("account namespaces hide bare rows and substitute friendly account-qualified pairs", () => {
     const entries = buildCatalogEntries(
       nativeTemplate(),
       ["gpt-5.5"],
@@ -151,7 +177,6 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       "default",
       new Set(),
       { personal: "main", work: "work-account-id" },
-      "replace-native",
     );
     applyNativeVisibility(entries, new Set(), true);
 

@@ -195,27 +195,6 @@ describe("PUT /api/settings", () => {
     expect(res!.status).toBe(400);
   });
 
-  test("account picker mode persists, refreshes the catalog, and returns to the additive default", async () => {
-    const config = { ...baseConfig(), codexAccountNamespaces: { personal: "main", work: "work-id" } };
-    let refreshes = 0;
-    const refresh = async () => { refreshes += 1; };
-
-    const replaced = await putSettings(config, { codexAccountNamespacePickerMode: "replace-native" }, refresh);
-    expect(replaced!.status).toBe(200);
-    expect(config.codexAccountNamespacePickerMode).toBe("replace-native");
-    expect(refreshes).toBe(1);
-    expect(await replaced!.json()).toMatchObject({
-      codexAccountNamespacePickerMode: "replace-native",
-      codexAccountNamespaceCount: 2,
-    });
-
-    const additive = await putSettings(config, { codexAccountNamespacePickerMode: "additive" }, refresh);
-    expect(additive!.status).toBe(200);
-    expect(config.codexAccountNamespacePickerMode).toBeUndefined();
-    expect(refreshes).toBe(2);
-    expect(loadConfig().codexAccountNamespacePickerMode).toBeUndefined();
-  });
-
   test("account-specific model toggle creates aliases server-side and removes the feature cleanly", async () => {
     const config: OcxConfig = {
       ...baseConfig(),
@@ -231,31 +210,21 @@ describe("PUT /api/settings", () => {
     expect(config.codexAccountNamespaces).toEqual({ personal: "main", work: "work-id" });
     expect(await enabled!.json()).toMatchObject({
       codexAccountNamespacesEnabled: true,
-      codexAccountNamespaceCount: 2,
-      codexAccountNamespacePickerMode: "additive",
     });
     expect(refreshes).toBe(1);
 
-    config.codexAccountNamespacePickerMode = "replace-native";
     const disabled = await putSettings(config, { codexAccountNamespacesEnabled: false }, refresh);
     expect(disabled!.status).toBe(200);
     expect(config.codexAccountNamespaces).toBeUndefined();
-    expect(config.codexAccountNamespacePickerMode).toBeUndefined();
     expect(await disabled!.json()).toMatchObject({
       codexAccountNamespacesEnabled: false,
-      codexAccountNamespaceCount: 0,
-      codexAccountNamespacePickerMode: "additive",
     });
     expect(refreshes).toBe(2);
   });
 
-  test("account picker mode rejects invalid values and replacement without namespaces", async () => {
+  test("account-specific model toggle rejects non-boolean values", async () => {
     const config = baseConfig();
     expect((await putSettings(config, { codexAccountNamespacesEnabled: "yes" }))!.status).toBe(400);
-    expect((await putSettings(config, { codexAccountNamespacePickerMode: "grouped" }))!.status).toBe(400);
-    const missing = await putSettings(config, { codexAccountNamespacePickerMode: "replace-native" });
-    expect(missing!.status).toBe(400);
-    expect(await missing!.json()).toMatchObject({ error: expect.stringContaining("requires at least one") });
   });
 });
 

@@ -37,6 +37,26 @@ export function defaultCodexAccountNamespaces(
   return namespaces;
 }
 
+/** Add a newly stored account to an already-enabled UI-managed picker without renaming old rows. */
+export function appendDefaultCodexAccountNamespace(
+  config: Pick<OcxConfig, "codexAccountNamespaces" | "providers">,
+  account: { id: string; alias?: string; isMain: boolean },
+): boolean {
+  if (account.isMain || !config.codexAccountNamespaces) return false;
+  if (Object.values(config.codexAccountNamespaces).includes(account.id)) return false;
+  const used = new Set([
+    ...Object.keys(config.providers),
+    ...Object.keys(config.codexAccountNamespaces),
+    ...RESERVED_NAMESPACE_KEYS,
+  ]);
+  const base = generatedNamespace(account.alias || account.id);
+  let namespace = base;
+  let suffix = 2;
+  while (used.has(namespace)) namespace = `${base}-${suffix++}`;
+  config.codexAccountNamespaces[namespace] = account.id;
+  return true;
+}
+
 export function codexAccountNamespaceDisplayName(namespace: string): string {
   return namespace
     .split(/[._-]+/)

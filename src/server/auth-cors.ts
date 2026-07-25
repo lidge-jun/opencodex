@@ -333,8 +333,6 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     defaultProvider: config.defaultProvider,
     codexAutoStart: codexAutoStartEnabled(config),
     codexAccountNamespacesEnabled: Object.keys(config.codexAccountNamespaces ?? {}).length > 0,
-    codexAccountNamespaceCount: Object.keys(config.codexAccountNamespaces ?? {}).length,
-    codexAccountNamespacePickerMode: config.codexAccountNamespacePickerMode ?? "additive",
     websockets: config.websockets,
     providers,
   };
