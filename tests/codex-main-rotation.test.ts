@@ -263,6 +263,52 @@ describe("main account rotation (Option A)", () => {
     }
   });
 
+  test("discards an in-flight usage response after the main identity changes", async () => {
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+    const originalFetch = globalThis.fetch;
+    let resolveFirstUsage!: (response: Response) => void;
+    const requestedAccountIds: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      requestedAccountIds.push(new Headers(init?.headers).get("ChatGPT-Account-Id") ?? "");
+      if (requestedAccountIds.length === 1) {
+        return new Promise<Response>(resolve => { resolveFirstUsage = resolve; });
+      }
+      return new Response(JSON.stringify({
+        email: "b@example.test",
+        plan_type: "pro",
+        rate_limit: { primary_window: { used_percent: 12, reset_at: 1_789_000_000 } },
+      }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const infoPromise = fetchMainAccountInfo(true);
+      expect(requestedAccountIds).toEqual(["main_acct"]);
+
+      writeFileSync(
+        join(CODEX_DIR, "auth.json"),
+        JSON.stringify({ tokens: { access_token: "replacement_access", account_id: "replacement_acct" } }),
+      );
+      expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+      resolveFirstUsage(new Response(JSON.stringify({
+        email: "a@example.test",
+        plan_type: "plus",
+        rate_limit: { primary_window: { used_percent: 91, reset_at: 1_788_000_000 } },
+      }), { status: 200 }));
+
+      await expect(infoPromise).resolves.toMatchObject({
+        email: "b@example.test",
+        plan: "pro",
+        quota: { weeklyPercent: 12 },
+      });
+      expect(requestedAccountIds).toEqual(["main_acct", "replacement_acct"]);
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toMatchObject({ weeklyPercent: 12 });
+      expect((await fetchMainAccountInfo(false)).email).toBe("b@example.test");
+      expect(requestedAccountIds).toHaveLength(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("no active id selects from main plus added accounts and binds main affinity", async () => {
     const config = makeConfig({ activeCodexAccountId: undefined, autoSwitchThreshold: 0 });
     updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);

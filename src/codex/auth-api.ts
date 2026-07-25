@@ -10,7 +10,7 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
-import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
+import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -252,12 +252,31 @@ async function isTerminalMainAuthResponse(resp: Response): Promise<boolean> {
 }
 
 export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAccountInfo> {
+  return fetchMainAccountInfoAttempt(forceRefresh, 1);
+}
+
+const EMPTY_MAIN_ACCOUNT_INFO: MainAccountInfo = { email: null, plan: null, quota: null };
+
+async function retryMainAccountInfoIfIdentityChanged(
+  requestAccountId: string | null,
+  retriesRemaining: number,
+): Promise<MainAccountInfo | null> {
+  if (getMainChatgptAccountId() === requestAccountId) return null;
+  reconcileMainCodexAccountRuntimeState();
+  return retriesRemaining > 0
+    ? fetchMainAccountInfoAttempt(true, retriesRemaining - 1)
+    : EMPTY_MAIN_ACCOUNT_INFO;
+}
+
+async function fetchMainAccountInfoAttempt(forceRefresh: boolean, retriesRemaining: number): Promise<MainAccountInfo> {
+  reconcileMainCodexAccountRuntimeState();
   const tokens = readCodexTokens();
   if (!tokens) {
     clearMainAccountInfoCache();
     markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    return { email: null, plan: null, quota: null };
+    return EMPTY_MAIN_ACCOUNT_INFO;
   }
+  const requestAccountId = extractAccountId(tokens.id_token, tokens.access_token) ?? (tokens.account_id || null);
   const cached = getMainAccountInfoCache();
   if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
     return cached;
@@ -268,13 +287,18 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAc
       signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) {
-      if (await isTerminalMainAuthResponse(resp)) {
+      const terminalAuthFailure = await isTerminalMainAuthResponse(resp);
+      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+      if (retried) return retried;
+      if (terminalAuthFailure) {
         clearMainAccountInfoCache();
         markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
       }
-      return { email: null, plan: null, quota: null };
+      return EMPTY_MAIN_ACCOUNT_INFO;
     }
     const data = (await resp.json()) as WhamUsageResponse;
+    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+    if (retried) return retried;
     const result = {
       email: data.email ?? null,
       plan: data.plan_type ?? null,
@@ -298,7 +322,8 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAc
     }
     return result;
   } catch {
-    return { email: null, plan: null, quota: null };
+    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+    return retried ?? EMPTY_MAIN_ACCOUNT_INFO;
   }
 }
 
