@@ -34,8 +34,8 @@ function renderSetting(
 describe("Codex account picker setting", () => {
   test("renders one intent-level off toggle without implementation terminology", () => {
     const html = renderSetting(false);
-    expect(html).toContain("Choose account in model picker");
-    expect(html).toContain("GPT models use the Pool or Direct account mode above.");
+    expect(html).toContain("Choose a Codex login per conversation");
+    expect(html).toContain("choose the login directly from the model picker");
     expect(html).toContain('aria-pressed="false"');
     expect(html).not.toContain("Bare + accounts");
     expect(html).not.toContain("Picker layout");
@@ -43,9 +43,11 @@ describe("Codex account picker setting", () => {
 
   test("explains strict binding and compatibility when enabled", () => {
     const html = renderSetting(true);
-    expect(html).toContain("locks the thread to that account and never falls back");
-    expect(html).toContain("does not change the active Pool account");
-    expect(html).toContain("existing threads and saved settings still work");
+    expect(html).toContain("The prefix is that login&#x27;s label, such as Personal or Work");
+    expect(html).toContain("pins the conversation to that login and its quota");
+    expect(html).toContain("OpenCodex will not switch accounts");
+    expect(html).toContain("does not change your Pool or Direct settings");
+    expect(html).toContain("existing conversations, or saved model selections");
     expect(html).toContain('aria-pressed="true"');
   });
 
