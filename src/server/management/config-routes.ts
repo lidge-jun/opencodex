@@ -191,12 +191,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // not inherit shell env, so config.json is its only input). A stream-shape
     // change applies to NEW turns only — the config object is shared by
     // reference with the request handlers, no restart needed.
-    let body: {
+    let raw: unknown;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const body = raw as {
       codexAutoStart?: unknown;
       streamMode?: unknown;
       codexAccountPickerEnabled?: unknown;
     };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
       && body.codexAccountPickerEnabled === undefined) {

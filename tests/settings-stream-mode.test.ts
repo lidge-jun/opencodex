@@ -195,6 +195,16 @@ describe("PUT /api/settings", () => {
     expect(res!.status).toBe(400);
   });
 
+  test("rejects non-object JSON bodies without mutating config", async () => {
+    for (const input of [null, [], "codexAutoStart"]) {
+      const config = baseConfig();
+      const before = structuredClone(config);
+      const res = await putSettings(config, input);
+      expect(res!.status).toBe(400);
+      expect(config).toEqual(before);
+    }
+  });
+
   test("enabling account-specific models avoids combo alias prefixes and survives config reload", async () => {
     const config: OcxConfig = {
       ...baseConfig(),
