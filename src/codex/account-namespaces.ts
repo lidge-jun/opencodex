@@ -5,6 +5,38 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 export const MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET = "main";
 export const CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION = "OpenAI native model bound to a Codex account namespace.";
 
+const RESERVED_NAMESPACE_KEYS = new Set(["__proto__", "prototype", "constructor", "combo"]);
+
+function generatedNamespace(label: string): string {
+  const normalized = label.trim().toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "");
+  return normalized && !RESERVED_NAMESPACE_KEYS.has(normalized) ? normalized : "account";
+}
+
+/** Build the initial UI-managed namespace map without exposing account ids to the browser. */
+export function defaultCodexAccountNamespaces(
+  config: Pick<OcxConfig, "codexAccounts" | "providers">,
+): Record<string, string> {
+  const namespaces: Record<string, string> = {};
+  const used = new Set([...Object.keys(config.providers), ...RESERVED_NAMESPACE_KEYS]);
+  const claim = (requested: string): string => {
+    const base = generatedNamespace(requested);
+    let candidate = base;
+    let suffix = 2;
+    while (used.has(candidate)) candidate = `${base}-${suffix++}`;
+    used.add(candidate);
+    return candidate;
+  };
+
+  namespaces[claim("personal")] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
+  for (const account of config.codexAccounts ?? []) {
+    if (account.isMain) continue;
+    namespaces[claim(account.alias || account.id)] = account.id;
+  }
+  return namespaces;
+}
+
 export function codexAccountNamespaceDisplayName(namespace: string): string {
   return namespace
     .split(/[._-]+/)

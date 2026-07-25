@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { accountBoundNativeDisplayName } from "../src/codex/account-namespaces";
+import { accountBoundNativeDisplayName, defaultCodexAccountNamespaces } from "../src/codex/account-namespaces";
 import {
   applyNativeVisibility,
   buildCatalogEntries,
@@ -36,6 +36,20 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("account replacement labels title-case synthesized slug words", () => {
     expect(accountBoundNativeDisplayName("work", { slug: "gpt-5.3-codex-spark" }))
       .toBe("Work / 5.3 Codex Spark");
+  });
+
+  test("UI defaults generate safe unique account namespaces without exposing email labels", () => {
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {
+        work: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+      },
+      codexAccounts: [
+        { id: "work-id", email: "private@example.test", alias: "Work", isMain: false },
+        { id: "team-id", email: "other@example.test", alias: "Product Team", isMain: false },
+      ],
+    });
+    expect(namespaces).toEqual({ personal: "main", "work-2": "work-id", "product-team": "team-id" });
+    expect(JSON.stringify(namespaces)).not.toContain("example.test");
   });
 
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {

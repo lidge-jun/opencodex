@@ -325,6 +325,7 @@ describe("server local API auth", () => {
     });
     const dto = safeConfigDTO(unsafe) as {
       providers: Record<string, Record<string, unknown>>;
+      codexAccountNamespacesEnabled: boolean;
       codexAccountNamespaceCount: number;
       codexAccountNamespacePickerMode: string;
     };
@@ -338,6 +339,7 @@ describe("server local API auth", () => {
       "private-work-account-id",
     ]) expect(serialized).not.toContain(forbidden);
     expect(dto.codexAccountNamespaceCount).toBe(2);
+    expect(dto.codexAccountNamespacesEnabled).toBe(true);
     expect(dto.codexAccountNamespacePickerMode).toBe("replace-native");
     expect(dto.providers.openai).toMatchObject({
       adapter: "openai-chat",

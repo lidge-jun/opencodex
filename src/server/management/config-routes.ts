@@ -34,6 +34,7 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
+import { defaultCodexAccountNamespaces } from "../../codex/account-namespaces";
 import { scanStorage } from "../../storage/scanner";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
@@ -190,16 +191,22 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let body: {
       codexAutoStart?: unknown;
       streamMode?: unknown;
+      codexAccountNamespacesEnabled?: unknown;
       codexAccountNamespacePickerMode?: unknown;
     };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
+      && body.codexAccountNamespacesEnabled === undefined
       && body.codexAccountNamespacePickerMode === undefined) {
       return jsonResponse({ error: "at least one supported setting is required" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
+    }
+    if (body.codexAccountNamespacesEnabled !== undefined
+      && typeof body.codexAccountNamespacesEnabled !== "boolean") {
+      return jsonResponse({ error: "codexAccountNamespacesEnabled boolean is required" }, 400);
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
       return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
@@ -209,8 +216,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexAccountNamespacePickerMode !== "replace-native") {
       return jsonResponse({ error: "codexAccountNamespacePickerMode must be additive or replace-native" }, 400);
     }
-    if (body.codexAccountNamespacePickerMode === "replace-native"
-      && Object.keys(config.codexAccountNamespaces ?? {}).length === 0) {
+    const namespacesWillBeEnabled = body.codexAccountNamespacesEnabled === true
+      || (body.codexAccountNamespacesEnabled !== false
+        && Object.keys(config.codexAccountNamespaces ?? {}).length > 0);
+    if (body.codexAccountNamespacePickerMode === "replace-native" && !namespacesWillBeEnabled) {
       return jsonResponse({ error: "replace-native picker mode requires at least one configured Codex account namespace" }, 400);
     }
     if (typeof body.codexAutoStart === "boolean") {
@@ -223,20 +232,31 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
       }
     }
+    const namespacesWereEnabled = Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
+    if (body.codexAccountNamespacesEnabled === true && !namespacesWereEnabled) {
+      config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
+    } else if (body.codexAccountNamespacesEnabled === false) {
+      delete config.codexAccountNamespaces;
+      delete config.codexAccountNamespacePickerMode;
+    }
+    const namespacesAreEnabled = Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
     const pickerModeChanged = body.codexAccountNamespacePickerMode !== undefined
       && body.codexAccountNamespacePickerMode !== (config.codexAccountNamespacePickerMode ?? "additive");
-    if (body.codexAccountNamespacePickerMode === "replace-native") {
+    if (body.codexAccountNamespacePickerMode === "replace-native" && namespacesAreEnabled) {
       config.codexAccountNamespacePickerMode = "replace-native";
     } else if (body.codexAccountNamespacePickerMode === "additive") {
       delete config.codexAccountNamespacePickerMode;
     }
     saveConfig(config);
-    if (pickerModeChanged) await refreshCodexCatalogBestEffort();
+    if (pickerModeChanged || namespacesWereEnabled !== namespacesAreEnabled) {
+      await refreshCodexCatalogBestEffort();
+    }
     invalidateStartupHealthCache();
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
+      codexAccountNamespacesEnabled: namespacesAreEnabled,
       codexAccountNamespacePickerMode: config.codexAccountNamespacePickerMode ?? "additive",
       codexAccountNamespaceCount: Object.keys(config.codexAccountNamespaces ?? {}).length,
       startupHealth: await getCachedStartupHealth(config),

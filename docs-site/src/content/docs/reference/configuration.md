@@ -98,14 +98,19 @@ label. After `ocx sync`, Codex exposes `personal/gpt-*` and `work/gpt-*` copies 
 supported native model. When a later opencodex update adds support for another native model, the next
 catalog sync gives it the same prefixes without adding the model separately to this map.
 
+The dashboard's **Codex Auth** page exposes **Account-specific models** as the feature-level opt-in.
+Turning it on creates `personal` for the main/Desktop login and uses each added account's alias (or
+id) for the other prefixes; turning it off removes all account-qualified catalog rows. Account ids
+stay server-side.
+
 Namespaces alone are additive and preserve the existing bare native picker rows. The optional
 `replace-native` picker mode is a second, explicit opt-in: it hides the bare rows from the picker and
 labels the replacements `Personal / 5.6 Sol`, `Work / 5.6 Sol`, and so on. It does not remove or
 reroute bare model ids, so saved threads and configuration that use `gpt-*` continue to follow the
 configured Pool/Direct behavior. Remove the picker-mode key or set it to `additive` to restore the
-original presentation. When namespaces are configured, the same choice is available on the
-dashboard's **Codex Auth** page as **Bare + accounts** or **Accounts only**; changing it refreshes
-the Codex catalog automatically. Because Codex exposes a flat picker rather than section metadata,
+original presentation. When the feature is enabled, a secondary **Picker layout** choice offers
+**Bare + accounts** or **Accounts only**; changing either setting refreshes the Codex catalog
+automatically. Because Codex exposes a flat picker rather than section metadata,
 replacement mode keeps the account-qualified native pairs together ahead of ordinary routed rows;
 explicitly featured subagent models still retain their higher priority.
 

@@ -216,8 +216,42 @@ describe("PUT /api/settings", () => {
     expect(loadConfig().codexAccountNamespacePickerMode).toBeUndefined();
   });
 
+  test("account-specific model toggle creates aliases server-side and removes the feature cleanly", async () => {
+    const config: OcxConfig = {
+      ...baseConfig(),
+      codexAccounts: [
+        { id: "work-id", email: "work@example.test", alias: "Work", plan: "business", isMain: false },
+      ],
+    };
+    let refreshes = 0;
+    const refresh = async () => { refreshes += 1; };
+
+    const enabled = await putSettings(config, { codexAccountNamespacesEnabled: true }, refresh);
+    expect(enabled!.status).toBe(200);
+    expect(config.codexAccountNamespaces).toEqual({ personal: "main", work: "work-id" });
+    expect(await enabled!.json()).toMatchObject({
+      codexAccountNamespacesEnabled: true,
+      codexAccountNamespaceCount: 2,
+      codexAccountNamespacePickerMode: "additive",
+    });
+    expect(refreshes).toBe(1);
+
+    config.codexAccountNamespacePickerMode = "replace-native";
+    const disabled = await putSettings(config, { codexAccountNamespacesEnabled: false }, refresh);
+    expect(disabled!.status).toBe(200);
+    expect(config.codexAccountNamespaces).toBeUndefined();
+    expect(config.codexAccountNamespacePickerMode).toBeUndefined();
+    expect(await disabled!.json()).toMatchObject({
+      codexAccountNamespacesEnabled: false,
+      codexAccountNamespaceCount: 0,
+      codexAccountNamespacePickerMode: "additive",
+    });
+    expect(refreshes).toBe(2);
+  });
+
   test("account picker mode rejects invalid values and replacement without namespaces", async () => {
     const config = baseConfig();
+    expect((await putSettings(config, { codexAccountNamespacesEnabled: "yes" }))!.status).toBe(400);
     expect((await putSettings(config, { codexAccountNamespacePickerMode: "grouped" }))!.status).toBe(400);
     const missing = await putSettings(config, { codexAccountNamespacePickerMode: "replace-native" });
     expect(missing!.status).toBe(400);

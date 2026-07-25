@@ -24,8 +24,9 @@ gpt-5.6-sol                         # openai (Pool or Direct option)
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
-For intentional per-thread account selection, configure `codexAccountNamespaces` and run
-`ocx sync`. The picker then also shows entries such as:
+For intentional per-thread account selection, turn on **Account-specific models** under
+**Codex Auth**, or configure `codexAccountNamespaces` and run `ocx sync`. The picker then also shows
+entries such as:
 
 ```text
 personal/gpt-5.6-sol                # exact main/Desktop account
