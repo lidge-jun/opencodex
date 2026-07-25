@@ -5,6 +5,9 @@ description: Develop opencodex — setup, layout, conventions, and how to add a 
 
 ## Setup
 
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for users, but this checkout's scripts run through your local Bun installation.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

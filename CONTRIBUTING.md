@@ -20,6 +20,10 @@ Agent-facing repository and review rules live in [`AGENTS.md`](./AGENTS.md).
 For local development commands, architecture notes, and release workflow details, use the hosted
 contributing guide above instead of duplicating instructions here.
 
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for end users, but contributor commands such as `bun install`, `bun run test`, and
+`bun run prepush` run from your local Bun installation.
+
 ## Pre-push hook
 
 After cloning, run once to install a local pre-push hook that runs the typecheck,
