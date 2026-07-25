@@ -78,13 +78,19 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
+    let activeController: AbortController | null = null;
     const fetchMemory = async () => {
       // Serialize polls: a stalled request must not stack up or let an older
       // payload land after a newer one.
       if (inFlight) return;
       inFlight = true;
+      // Bound each poll so a hung request cannot pin inFlight forever and
+      // starve the unavailable fallback.
+      const controller = new AbortController();
+      activeController = controller;
+      const timeout = setTimeout(() => controller.abort(), 10_000);
       try {
-        const res = await fetch(`${apiBase}/api/system/memory`);
+        const res = await fetch(`${apiBase}/api/system/memory`, { signal: controller.signal });
         if (!res.ok) throw new Error("memory unavailable");
         const json = await res.json() as SystemMemory;
         if (!cancelled) {
@@ -95,6 +101,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         // Old servers (pre-#314) 404 this route; degrade to a quiet unavailable note.
         if (!cancelled) setUnavailable(true);
       } finally {
+        clearTimeout(timeout);
+        if (activeController === controller) activeController = null;
         inFlight = false;
       }
     };
@@ -102,6 +110,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     const interval = setInterval(() => void fetchMemory(), 5000);
     return () => {
       cancelled = true;
+      activeController?.abort();
       clearInterval(interval);
     };
   }, [apiBase]);
