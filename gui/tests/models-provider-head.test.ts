@@ -1,0 +1,27 @@
+import { expect, test } from "bun:test";
+
+test("Models provider headers use wrap-safe classes and stop collapse on action clicks", async () => {
+  const src = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
+  expect(src).toContain("models-provider-head");
+  expect(src).toContain("models-provider-actions");
+  // Actions live in their own stopPropagation wrapper so All On / caps do not toggle collapse.
+  expect(src).toMatch(/className="row models-provider-actions"\s+onClick=\{e => e\.stopPropagation\(\)\}/);
+  // Both Classic and Workspace share renderGroup — no duplicate unclassed group-head for providers.
+  const providerHeads = src.match(/models-provider-head/g) ?? [];
+  expect(providerHeads.length).toBeGreaterThanOrEqual(1);
+  expect(src).toContain("models.allOn");
+  expect(src).toContain("models.allOff");
+});
+
+test("Models workspace stacks via content-width container query before mobile drawer", async () => {
+  const css = await Bun.file(new URL("../src/styles-models-workspace.css", import.meta.url)).text();
+  expect(css).toContain("container-name: models-workspace");
+  expect(css).toContain("container-type: inline-size");
+  expect(css).toContain("@container models-workspace (max-width: 720px)");
+  expect(css).toContain(".models-provider-head");
+  expect(css).toContain(".models-provider-actions");
+  expect(css).toMatch(/\.models-provider-head\s*\{[^}]*flex-wrap:\s*wrap/s);
+  expect(css).toMatch(/\.models-provider-actions\s*\{[^}]*flex-wrap:\s*wrap/s);
+  // Mobile media rule retained for drawer layouts.
+  expect(css).toContain("@media (max-width: 768px)");
+});

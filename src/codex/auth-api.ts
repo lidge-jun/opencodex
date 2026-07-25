@@ -9,13 +9,13 @@ import {
   CodexCredentialRefreshLockTimeoutError,
   TokenRefreshError,
 } from "./account-store";
-import { deleteCodexAccount } from "./account-lifecycle";
-import {
-  appendDefaultCodexAccountNamespace,
-  codexAccountPickerIsEnabled,
-  isMainCodexAccountTarget,
-} from "./account-namespaces";
-import { checkAccountIdCollision, readCodexTokens } from "./auth-collision";
+ import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+ import {
+   appendDefaultCodexAccountNamespace,
+   codexAccountPickerIsEnabled,
+   isMainCodexAccountTarget,
+ } from "./account-namespaces";
+ import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -39,6 +39,13 @@ export {
 } from "./quota";
 import { extractAccountId, decodeJwtPayload } from "../oauth/chatgpt";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
+import {
+  clearMainAccountInfoCache,
+  getMainAccountInfoCache,
+  setMainAccountInfoCache,
+  type MainAccountInfo,
+} from "./main-account-cache";
+export { clearMainAccountInfoCache } from "./main-account-cache";
 import { maskEmail } from "../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
@@ -192,7 +199,6 @@ function expireCodexAuthFlow(flowId: string | null, error = "Login cancelled"): 
   }
 }
 
-let mainAccountCache: { email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null; ts: number } | null = null;
 const MAIN_CACHE_TTL = 5 * 60_000;
 const POOL_CACHE_TTL = 5 * 60_000;
 const POOL_QUOTA_REFRESH_CONCURRENCY = 4;
@@ -258,15 +264,42 @@ async function isTerminalMainAuthResponse(resp: Response): Promise<boolean> {
   }
 }
 
-export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ email: string | null; plan: string | null; quota: Omit<StoredAccountQuota, "updatedAt"> | null }> {
-  const tokens = readCodexTokens();
-  if (!tokens) {
-    mainAccountCache = null;
-    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    return { email: null, plan: null, quota: null };
+export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAccountInfo> {
+  return fetchMainAccountInfoAttempt(forceRefresh, 1);
+}
+
+const EMPTY_MAIN_ACCOUNT_INFO: MainAccountInfo = { email: null, plan: null, quota: null };
+
+async function retryMainAccountInfoIfIdentityChanged(
+  requestAccountId: string | null,
+  retriesRemaining: number,
+): Promise<MainAccountInfo | null> {
+  const currentAccountId = getMainChatgptAccountId();
+  if (currentAccountId === null || currentAccountId === requestAccountId) return null;
+  reconcileMainCodexAccountRuntimeState();
+  return retriesRemaining > 0
+    ? fetchMainAccountInfoAttempt(true, retriesRemaining - 1)
+    : EMPTY_MAIN_ACCOUNT_INFO;
+}
+
+async function fetchMainAccountInfoAttempt(forceRefresh: boolean, retriesRemaining: number): Promise<MainAccountInfo> {
+  reconcileMainCodexAccountRuntimeState();
+  const tokenRead = readCodexTokensResult();
+  if (tokenRead.status !== "ok") {
+    // A local read failure is NOT proof of sign-out: a missing file can be a non-atomic rewrite
+    // gap, and malformed JSON can be a half-written file. Clearing the cache and marking the
+    // account for reauth here destroyed healthy email/plan/quota state and pinned a working
+    // account as unusable. Preserve what we already know and let the caller retry; request
+    // routing stays fail-closed because getMainAccountToken() re-reads the file itself, and the
+    // account DTO still reports hasCredential=false while the file is unreadable.
+    const preserved = getMainAccountInfoCache();
+    return preserved ?? EMPTY_MAIN_ACCOUNT_INFO;
   }
-  if (!forceRefresh && mainAccountCache && Date.now() - mainAccountCache.ts < MAIN_CACHE_TTL) {
-    return mainAccountCache;
+  const tokens = tokenRead.tokens;
+  const requestAccountId = extractAccountId(tokens.id_token, tokens.access_token) ?? (tokens.account_id || null);
+  const cached = getMainAccountInfoCache();
+  if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
+    return cached;
   }
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
@@ -274,20 +307,25 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
       signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) {
-      if (await isTerminalMainAuthResponse(resp)) {
-        mainAccountCache = null;
+      const terminalAuthFailure = await isTerminalMainAuthResponse(resp);
+      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+      if (retried) return retried;
+      if (terminalAuthFailure) {
+        clearMainAccountInfoCache();
         markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
       }
-      return { email: null, plan: null, quota: null };
+      return EMPTY_MAIN_ACCOUNT_INFO;
     }
     const data = (await resp.json()) as WhamUsageResponse;
+    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+    if (retried) return retried;
     const result = {
       email: data.email ?? null,
       plan: data.plan_type ?? null,
       quota: parseUsageQuota(data),
       ts: Date.now(),
     };
-    mainAccountCache = result;
+    setMainAccountInfoCache(result);
     clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     // Mirror main quota + plan into the shared stores so the rotation engine can
     // score and auto-switch the main account exactly like a pool account (Option A).
@@ -297,7 +335,8 @@ export async function fetchMainAccountInfo(forceRefresh = false): Promise<{ emai
     }
     return result;
   } catch {
-    return { email: null, plan: null, quota: null };
+    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining);
+    return retried ?? EMPTY_MAIN_ACCOUNT_INFO;
   }
 }
 
@@ -368,6 +407,10 @@ export async function primeCodexPoolQuotas(config: OcxConfig, reason: string): P
     || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
   if (primeInFlight) return primeInFlight;
+  // Seed the observed physical main identity before startup/lazy priming can populate quota or
+  // plan state. Otherwise the first post-startup account switch sees no previous identity and
+  // skips the purge that protects the stable __main__ alias.
+  reconcileMainCodexAccountRuntimeState();
   primeInFlight = (async () => {
     const runtimeConfig = getRuntimeConfig(config);
     const pool = (runtimeConfig.codexAccounts ?? []).filter(a => !a.isMain);

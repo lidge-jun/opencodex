@@ -9,10 +9,14 @@
  * The payload is scalar-only (numbers, enum strings): no paths, no tokens, no
  * account identifiers. `jscHeap` (bun:jsc heapStats) is the js-vs-native
  * discriminator: a flat JS heap under a growing RSS points at native runtime
- * memory (the #314 shape), not an app-level JS leak.
+ * memory (the #314 shape), not an app-level JS leak. `responseState` attributes
+ * JS-heap growth further: it is the proxy's previous_response_id continuation
+ * store, so a growing responseState.totalBytes under a growing heap points the
+ * finger at conversation retention rather than the runtime allocator.
  */
 import { decideEagerRelay } from "../../lib/bun-stream-caps";
 import { getActiveMemoryWatchdog } from "../memory-watchdog";
+import { responseStateMetrics } from "../../responses/state";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
@@ -56,6 +60,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       heapUsed: usage.heapUsed,
       heapTotal: usage.heapTotal,
       jscHeap,
+      responseState: responseStateMetrics(),
       streamMode,
       eagerRelay: process.platform === "win32" ? decideEagerRelay(streamMode) : null,
       watchdog,

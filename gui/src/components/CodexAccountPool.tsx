@@ -1,20 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useT, type TFn } from "../i18n";
 import { IconLock, IconPlus, IconX, IconAlert, IconRefresh, IconTicket } from "../icons";
 import { Notice, EmptyState } from "../ui";
 import AddCodexAccountModal from "./AddCodexAccountModal";
-import type { AccountQuota } from "../codex-quota-utils";
+import { useCodexAccountPool, type CodexAccountPoolController, type CodexAccountEntry } from "../hooks/useCodexAccountPool";
 import QuotaBars from "./QuotaBars";
 import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import CodexAutoSwitchSetting from "./CodexAutoSwitchSetting";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 
-export interface CodexAccountEntry {
-  id: string; alias?: string; email: string; plan?: string; isMain: boolean;
-  hasCredential: boolean; quota: AccountQuota | null;
-  needsReauth?: boolean;
-}
+// Single definition lives with the controller that owns this data (WP3).
+export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
 
 /**
  * Global ChatGPT / Codex account pool (main + extras), extracted from the Codex
@@ -23,12 +20,18 @@ export interface CodexAccountEntry {
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * chrome — currently a no-op stub reserved for the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange }: {
+export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController }: {
   apiBase: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
   embedded?: boolean;
   onActiveNeedsReauthChange?: (needs: boolean) => void;
+  /**
+   * WP3: when Providers owns the controller, every surface shares one instance so a
+   * mutation on Overview is immediately visible on the Accounts tab. The standalone
+   * Codex Auth page passes nothing and gets its own.
+   */
+  controller?: CodexAccountPoolController;
 }) {
   const t = useT();
   const autoSwitch = useCodexAutoSwitch(apiBase, {
@@ -36,9 +39,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
     invalid: t("codexAuth.autoSwitchThresholdInvalid"),
   });
-  const { beginServerRead, acceptServerRead, rejectServerRead } = autoSwitch;
-  const [accounts, setAccounts] = useState<CodexAccountEntry[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const { beginServerRead, acceptServerRead, rejectServerRead, hydrateServerValue } = autoSwitch;
+  // A hook cannot be called conditionally, so the fallback instance is always created
+  // but stays inert (no load, no polling) whenever a shared controller was injected.
+  const ownController = useCodexAccountPool(apiBase, !injectedController);
+  const controller = injectedController ?? ownController;
+  const { accounts, activeId, loadState, switchingId, activeNeedsReauth, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -50,70 +56,37 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [switchingId, setSwitchingId] = useState<string | null>(null);
-  const loadGenerationRef = useRef(0);
 
-  const load = useCallback(async (refreshQuota = false) => {
-    const generation = ++loadGenerationRef.current;
-    const autoSwitchReadRevision = beginServerRead();
-    if (!refreshQuota) setLoadState("loading");
-    const accountsTask = (async (): Promise<boolean> => {
-      try {
-        const response = await fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`);
-        if (!response.ok) throw new Error("account load failed");
-        const accts = await response.json();
-        if (loadGenerationRef.current === generation) setAccounts(accts.accounts ?? []);
-        return true;
-      } catch {
-        return false;
-      }
-    })();
-    const activeTask = (async (): Promise<boolean> => {
-      try {
-        const response = await fetch(`${apiBase}/api/codex-auth/active`);
-        if (!response.ok) throw new Error("active account load failed");
-        const active = await response.json();
-        if (loadGenerationRef.current === generation) {
-          setActiveId(active.activeCodexAccountId ?? null);
-          acceptServerRead(active.autoSwitchThreshold, autoSwitchReadRevision);
-        }
-        return true;
-      } catch {
-        if (loadGenerationRef.current === generation) rejectServerRead();
-        return false;
-      }
-    })();
-    const [accountsOk, activeOk] = await Promise.all([accountsTask, activeTask]);
-    if (loadGenerationRef.current !== generation) return false;
-    setLoadState(accountsOk && activeOk ? "ready" : "error");
-    return accountsOk && activeOk;
-  }, [acceptServerRead, apiBase, beginServerRead, rejectServerRead]);
+  // The controller owns loading and polling. This surface only feeds the auto-switch
+  // threshold observer and leases a pause while an OAuth modal is open.
+  // Depend on the stable subscribe callback, not the controller object: the hook
+  // returns a fresh object every render, which would resubscribe on every render.
+  const { subscribeLoadObserver, readLastThreshold } = controller;
+
+  useEffect(() => subscribeLoadObserver({
+    beginActiveRead: beginServerRead,
+    acceptActiveRead: acceptServerRead,
+    rejectActiveRead: rejectServerRead,
+  }), [subscribeLoadObserver, beginServerRead, acceptServerRead, rejectServerRead]);
+
+  // Seed from a value an earlier load already fetched. Tabs mount and unmount their
+  // panels, so a panel appearing after that load would otherwise show "Loading" until
+  // the next poll. Hydration applies only while uninitialized, so it cannot disturb a
+  // draft or a pending save.
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      void load();
-    }, 0);
-    // Pause background refresh while an add/reauth modal is open so unstable
-    // parent re-renders cannot stack with a live OAuth flow.
-    if (showAdd) {
-      return () => window.clearTimeout(timeout);
-    }
-    const iv = window.setInterval(() => {
-      void load();
-    }, 30_000);
-    return () => {
-      window.clearTimeout(timeout);
-      window.clearInterval(iv);
-    };
-  }, [load, showAdd]);
+    const cached = readLastThreshold();
+    if (cached !== undefined) hydrateServerValue(cached);
+  }, [readLastThreshold, hydrateServerValue]);
+
+  useEffect(() => {
+    if (!showAdd) return;
+    const token = controller.pauseRefresh();
+    return () => controller.resumeRefresh(token);
+  }, [controller, showAdd]);
 
   const activePoolAccount = activeId && activeId !== "__main__"
     ? accounts.find(a => a.id === activeId)
     : null;
-  const mainAccount = accounts.find(a => a.isMain);
-  const activeNeedsReauth = activePoolAccount
-    ? Boolean(activePoolAccount.needsReauth)
-    : Boolean(mainAccount?.needsReauth);
 
   useEffect(() => {
     onActiveNeedsReauthChange?.(activeNeedsReauth);
@@ -130,70 +103,47 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   }, []);
 
   const handleAccountAdded = useCallback(() => {
-    void load();
+    void controller.syncAfterAccountAdded();
     setToast(t("codexAuth.accountAdded"));
     setToastError(false);
     setTimeout(() => setToast(""), 5000);
     closeAddModal();
-  }, [closeAddModal, load, t]);
+  }, [closeAddModal, controller, t]);
 
   const setActive = async (id: string | null) => {
-    if (switchingId) return;
-    setSwitchingId(id ?? "__main__");
-    try {
-      const response = await fetch(`${apiBase}/api/codex-auth/active`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: id }),
-      });
-      if (!response.ok) throw new Error("account switch failed");
-      const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
-      const selectedId = result.activeCodexAccountId ?? id;
-      setActiveId(selectedId);
-      setConfirm(null);
-      await load();
-      const label = selectedId && selectedId !== "__main__"
-        ? accounts.find(account => account.id === selectedId)?.email ?? t("pws.accountOrdinal", { count: "1" })
-        : t("codexAuth.mainAccount");
-      setToast(accountModeState === "direct"
-        ? t("codexAuth.poolPreparedToast", { email: label })
-        : t("codexAuth.switched", { email: label }));
-      setToastError(false);
-      setTimeout(() => setToast(""), 5000);
-    } catch {
+    const result = await controller.switchAccount(id);
+    if (!result.ok) {
+      if (result.reason === "busy") return;
       setToast(t("codexAuth.switchFailed"));
       setToastError(true);
       setTimeout(() => setToast(""), 5000);
-    } finally {
-      setSwitchingId(null);
+      return;
     }
+    setConfirm(null);
+    const selectedId = result.activeId;
+    const label = selectedId && selectedId !== "__main__"
+      ? accounts.find(account => account.id === selectedId)?.email ?? t("pws.accountOrdinal", { count: "1" })
+      : t("codexAuth.mainAccount");
+    setToast(accountModeState === "direct"
+      ? t("codexAuth.poolPreparedToast", { email: label })
+      : t("codexAuth.switched", { email: label }));
+    setToastError(false);
+    setTimeout(() => setToast(""), 5000);
   };
 
   const editAlias = async (account: CodexAccountEntry) => {
     const entered = window.prompt(t("prov.aliasPrompt"), account.alias ?? "");
     if (entered === null) return;
-    const response = await fetch(`${apiBase}/api/codex-auth/accounts/alias`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: account.id, alias: entered.trim() }),
-    });
-    if (!response.ok) {
-      setToastError(true);
-      setToast(t("prov.aliasSaveFailed"));
-      return;
-    }
-    await load();
-    setToastError(false);
-    setToast(t("prov.aliasSaved"));
+    const result = await controller.saveAlias(account.id, entered);
+    setToastError(!result.ok);
+    setToast(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"));
   };
 
   const remove = async (id: string) => {
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!window.confirm(t("codexAuth.removeConfirm", { id: label }))) return;
-    try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!response.ok) throw new Error(String(response.status));
-      await load();
-    } catch {
+    const result = await controller.removeAccount(id);
+    if (!result.ok) {
       setToast(t("codexAuth.removeFailed"));
       setToastError(true);
       setTimeout(() => setToast(""), 5000);

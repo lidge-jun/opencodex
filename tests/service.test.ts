@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -252,6 +252,112 @@ describe("Windows service task", () => {
     ]) expect(windowsTaskRegistrationHealthy(mutated, wscript, launcher)).toBe(false);
   });
 
+  // --- #432: Task Scheduler omits schema defaults when exporting ---------------
+
+  test("accepts canonicalized scheduler XML with omitted defaults", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // Windows drops elements equal to their schema default when it exports a task:
+    // Trigger/Settings Enabled default to true and RunLevel defaults to LeastPrivilege.
+    const canonical = xml
+      .replace("<LogonTrigger>\n      <Enabled>true</Enabled>\n    </LogonTrigger>", "<LogonTrigger />")
+      .replace("    <RunLevel>LeastPrivilege</RunLevel>\n", "")
+      .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Hidden>");
+    expect(canonical).toContain("<LogonTrigger />");
+    expect(canonical).not.toContain("RunLevel");
+
+    expect(windowsTaskRegistrationHealthy(canonical, wscript, launcher)).toBe(true);
+    expect(readWindowsSchedulerXmlState(canonical, wscript, launcher)).toMatchObject({
+      installed: true,
+      enabled: true,
+      registrationHealthy: true,
+    });
+  });
+
+  test("rejects explicit unsafe values even though defaults may be omitted", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+
+    // Trigger disabled explicitly.
+    expect(windowsTaskRegistrationHealthy(
+      xml.replace("<LogonTrigger>\n      <Enabled>true</Enabled>", "<LogonTrigger>\n      <Enabled>false</Enabled>"),
+      wscript,
+      launcher,
+    )).toBe(false);
+    // Settings disabled explicitly.
+    const settingsDisabled = xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>");
+    expect(windowsTaskRegistrationHealthy(settingsDisabled, wscript, launcher)).toBe(false);
+    expect(readWindowsSchedulerXmlState(settingsDisabled, wscript, launcher).enabled).toBe(false);
+  });
+
+  test("a decoy trigger outside Triggers does not satisfy the logon requirement", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    const bootOnly = xml.replace("<LogonTrigger>\n      <Enabled>true</Enabled>\n    </LogonTrigger>", "<BootTrigger />");
+
+    // The schema allows arbitrary XML under Task/Data, and comments could smuggle a
+    // decoy too — neither may stand in for a real logon trigger.
+    for (const decoyed of [
+      bootOnly.replace("<Triggers>", "<Data><LogonTrigger /></Data>\n  <Triggers>"),
+      bootOnly.replace("<Triggers>", "<!-- <LogonTrigger /> -->\n  <Triggers>"),
+    ]) expect(windowsTaskRegistrationHealthy(decoyed, wscript, launcher)).toBe(false);
+  });
+
+  test("namespace-prefixed values are not mistaken for omissions", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+
+    // A prefixed element carries a real value; reading it as "absent, use the
+    // default" would turn an explicitly disabled or elevated task into a healthy one.
+    for (const prefixed of [
+      xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <t:Enabled>false</t:Enabled>\n    <Hidden>"),
+      xml.replace("<RunLevel>LeastPrivilege</RunLevel>", "<t:RunLevel>HighestAvailable</t:RunLevel>"),
+    ]) expect(windowsTaskRegistrationHealthy(prefixed, wscript, launcher)).toBe(false);
+  });
+
+  test("a Data block disqualifies the registration", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // taskXmlSection() takes the first match, so a Data block placed ahead of the
+    // real sections could shadow them. We never emit Data, prefixed or not.
+    const shadowedSettings = xml
+      .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>")
+      .replace("<Triggers>", "<Data><Settings><Enabled>true</Enabled></Settings></Data>\n  <Triggers>");
+    const shadowedPrincipal = xml
+      .replace("LeastPrivilege", "HighestAvailable")
+      .replace("<Triggers>", "<Data><Principal><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Data>\n  <Triggers>");
+    const prefixedData = xml
+      .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>")
+      .replace("<Triggers>", "<t:Data><Settings><Enabled>true</Enabled></Settings></t:Data>\n  <Triggers>");
+
+    for (const shadowed of [shadowedSettings, shadowedPrincipal, prefixedData]) {
+      expect(windowsTaskRegistrationHealthy(shadowed, wscript, launcher)).toBe(false);
+      expect(readWindowsSchedulerXmlState(shadowed, wscript, launcher).enabled).toBe(false);
+    }
+  });
+
+  test("duplicate elements are not trusted", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    const duplicated = xml.replace(
+      "    <Enabled>true</Enabled>\n    <Hidden>",
+      "    <Enabled>true</Enabled>\n    <Enabled>false</Enabled>\n    <Hidden>",
+    );
+    expect(windowsTaskRegistrationHealthy(duplicated, wscript, launcher)).toBe(false);
+  });
+
   test("hidden launcher VBS stays resident and escapes quotes in the wrapper path", () => {
     const vbs = buildWindowsLauncherVbs('C:\\Users\\quo"te\\.opencodex\\opencodex-service.cmd');
 
@@ -491,22 +597,32 @@ describe("service lifecycle cleanup ordering", () => {
 });
 
 describe("service diagnostics", () => {
+  // deriveWindowsServiceDiagnostic now reads the registration XML itself, so these
+  // helpers express the old boolean fixtures as the documents that produce them.
+  // buildWindowsTaskXml() emits exactly the Command/Arguments the validator expects
+  // when both use the same defaults, so the fixture leaves the launcher default alone.
+  const healthyTaskXml = () => buildWindowsTaskXml();
+  /** Registered but reporting an explicitly disabled task. */
+  const disabledTaskXml = () => healthyTaskXml()
+    .replace("<Enabled>true</Enabled>\n    <Hidden>", "<Enabled>false</Enabled>\n    <Hidden>");
+
   const base = {
-    schedulerInstalled: false,
-    schedulerEnabled: false,
-    schedulerAssetsHealthy: true,
+    schedulerXml: "",
+    schedulerAssetsPresent: true,
     nativeStatus: "nonexistent" as const,
     recordedBackend: null,
     staleBakedPaths: false,
     nativeRepairAssetsOnly: false,
     diagnostics: "logs: test",
   };
+  const installedEnabled = { schedulerXml: healthyTaskXml() };
+  const installedDisabled = { schedulerXml: disabledTaskXml() };
 
   test("fails closed for disabled, stale, conflicting, stopped, and ghost Windows services", () => {
-    expect(deriveWindowsServiceDiagnostic({ ...base, schedulerInstalled: true, schedulerEnabled: true, recordedBackend: "scheduler" })).toMatchObject({ viable: true, backend: "scheduler" });
-    expect(deriveWindowsServiceDiagnostic({ ...base, schedulerInstalled: true })).toMatchObject({ viable: false, enabled: false });
-    expect(deriveWindowsServiceDiagnostic({ ...base, schedulerInstalled: true, schedulerEnabled: true, staleBakedPaths: true })).toMatchObject({ viable: false, stale: true });
-    expect(deriveWindowsServiceDiagnostic({ ...base, schedulerInstalled: true, schedulerEnabled: true, nativeStatus: "started" })).toMatchObject({ viable: false, conflict: true });
+    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, recordedBackend: "scheduler" })).toMatchObject({ viable: true, backend: "scheduler" });
+    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedDisabled })).toMatchObject({ viable: false, enabled: false });
+    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, staleBakedPaths: true })).toMatchObject({ viable: false, stale: true });
+    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, nativeStatus: "started" })).toMatchObject({ viable: false, conflict: true });
     expect(deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "stopped" })).toMatchObject({ installed: true, viable: false, startable: false, stale: true, running: false });
     expect(deriveWindowsServiceDiagnostic({ ...base, nativeRepairAssetsOnly: true })).toMatchObject({ installed: false, viable: false, stale: true });
   });
@@ -517,12 +633,11 @@ describe("service diagnostics", () => {
     expect(serviceStartableFromTray({ ...stoppedNative, stale: true })).toBe(false);
     expect(serviceStartableFromTray({ ...stoppedNative, conflict: true })).toBe(false);
     expect(serviceStartableFromTray(deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "unknown" }))).toBe(false);
-    const disabledScheduler = deriveWindowsServiceDiagnostic({ ...base, schedulerInstalled: true, schedulerEnabled: false });
+    const disabledScheduler = deriveWindowsServiceDiagnostic({ ...base, ...installedDisabled });
     expect(serviceStartableFromTray(disabledScheduler)).toBe(false);
     const mismatchedScheduler = deriveWindowsServiceDiagnostic({
       ...base,
-      schedulerInstalled: true,
-      schedulerEnabled: true,
+      ...installedEnabled,
       recordedBackend: "native",
     });
     expect(mismatchedScheduler).toMatchObject({ backend: "scheduler", stale: true, viable: false, startable: false });

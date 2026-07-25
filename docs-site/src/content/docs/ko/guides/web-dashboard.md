@@ -41,8 +41,16 @@ bun run dev:gui
 | **Usage / Debug** | 토큰 사용량의 측정 범위와 추이를 보거나, 선택적 프로바이더 전송/사용량 추출 진단을 켭니다. |
 | **Stop** | 프록시와 설치된 백그라운드 서비스를 정상 종료하고 네이티브 Codex를 복원한 뒤 끝냅니다(`POST /api/stop`). |
 
+### 섹션으로 바로 가기
+
+레이아웃은 하나뿐이라 전환할 설정이 없습니다. 대신 Dashboard의 섹션마다 주소가 있습니다. `#dashboard`는 Overview, `#dashboard/providers`와 `#dashboard/models`는 나머지 두 섹션입니다. 새로고침하거나 북마크해도, 뒤로 가도 보던 섹션이 그대로 유지됩니다. **Logs**도 `#logs`와 `#logs/debug`로 똑같이 동작합니다. 예전 `#providers/workspace` 북마크는 `#providers`로 넘어갑니다.
+
 **Logs**와 **Usage**의 비용 값은 보고된 토큰으로 계산한 API 정가 환산치입니다. 결제 영수증이나
 실제 청구 증거가 아니며, 구독 사용량 또는 프로바이더 크레딧이 대신 적용될 수 있습니다.
+
+## 모델 노출
+
+**Models** 스위치는 Codex의 최종 노출 상태를 나타냅니다. 라우팅 모델은 프로바이더 allowlist에 포함되거나 allowlist가 없고, 동시에 비활성화되지 않았을 때만 켜집니다. 모델을 켜면 두 필터를 원자적으로 조정하며, **모두 활성화**는 allowlist를 해제해 새로 발견되는 모델도 켭니다.
 
 ## 위임 선택기와 스폰 라우팅의 차이
 
@@ -94,6 +102,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 | `GET` / `PUT /api/v2` | 서피스 모드, Codex 기능 플래그, v2 thread 상한을 읽거나 바꿉니다. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | 프로바이더 목록 조회, 추가/교체, 활성화/비활성화, 제거. |
 | `GET /api/models` · `PUT /api/disabled-models` | 네이티브/라우팅 모델 행을 조회하고 공용 disabled model 목록을 갱신합니다. |
+| `GET /api/selected-models` · `PUT /api/model-visibility` | 프로바이더 allowlist를 읽고 개별 모델 또는 프로바이더 그룹의 최종 노출 상태를 원자적으로 변경합니다. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | API key 및 OAuth 프로바이더 카탈로그를 읽습니다. |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | 프로바이더 OAuth 로그인을 시작하고 완료 여부를 확인합니다. |
 | `GET /api/codex-auth/accounts?refresh=1` | main 및 pool 계정을 조회하고 할당량을 강제로 갱신하며 main 계정의 `hasCredential` / terminal `needsReauth` 상태를 표시합니다. |

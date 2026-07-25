@@ -17,6 +17,7 @@ export interface CodexAutoSwitchController {
   feedback: AutoSwitchFeedback;
   beginServerRead(): number;
   acceptServerRead(value: unknown, startedRevision: number): void;
+  hydrateServerValue(value: unknown): void;
   rejectServerRead(): void;
   setDraft(value: string): void;
   setEditing(editing: boolean): void;
@@ -116,6 +117,19 @@ export function useCodexAutoSwitch(
       queueOrApply(normalizeAutoSwitchThreshold(value));
     }
   }, [queueOrApply]);
+
+  /**
+   * Seed the threshold from a value another surface already fetched. Applies ONLY while
+   * uninitialized, so it can never disturb a draft, a pending save, or a newer read.
+   * Needed because tabs mount and unmount their panels: a panel that appears after the
+   * controller's load finished would otherwise render "Loading" until the next poll.
+   */
+  const hydrateServerValue = useCallback((value: unknown) => {
+    if (thresholdRef.current !== null) return;
+    if (editingRef.current || savingRef.current) return;
+    setLoadError(false);
+    apply(normalizeAutoSwitchThreshold(value));
+  }, [apply]);
 
   const rejectServerRead = useCallback(() => {
     if (thresholdRef.current === null) setLoadError(true);
@@ -222,6 +236,7 @@ export function useCodexAutoSwitch(
     feedback,
     beginServerRead,
     acceptServerRead,
+    hydrateServerValue,
     rejectServerRead,
     setDraft,
     setEditing,

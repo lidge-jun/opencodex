@@ -547,6 +547,81 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("modelAdapters accepts only allowed wires on eligible providers (#404)", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "grok-4.5": "openai-responses" },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    for (const invalid of [
+      [],
+      { "grok-4.5": true },
+      { "": "openai-chat" },
+      // Provider-specific adapters carry their own credential semantics.
+      { "grok-4.5": "cursor" },
+      { "grok-4.5": "anthropic" },
+    ]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-chat",
+            baseUrl: "https://example.test/v1",
+            modelAdapters: invalid,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelAdapters");
+    }
+  });
+
+  test("modelAdapters rejects wire-pinned models rather than ignoring them (#404)", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "minimax-m3": "openai-chat" },
+        },
+      },
+      defaultProvider: "opencode-go",
+    });
+
+    // The resolver would silently ignore this; failing load tells the user why.
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("modelAdapters");
+  });
+
+  test("modelAdapters is rejected on the canonical forward provider (#404)", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          modelAdapters: { "gpt-5.5": "openai-chat" },
+        },
+      },
+      defaultProvider: "openai",
+    });
+
+    // Switching that provider to the chat wire would drop the forwarded credential.
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("modelAdapters");
+  });
+
   test("output token defaults accept only positive finite integers", () => {
     expect(positiveIntegerConfigError(128_000, "defaultMaxOutputTokens")).toBeNull();
     for (const invalid of [null, [], {}, 0, -1, 1.5, "128000", Number.POSITIVE_INFINITY]) {

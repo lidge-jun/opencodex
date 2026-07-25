@@ -68,7 +68,7 @@ async function providerDto(
   return providers[0] ?? {};
 }
 
-test("Models page keeps the discovery-failure badge visible with fallback rows", async () => {
+test("Models page combines final visibility, atomic actions, discovery status, and serialized polling", async () => {
   const domGlobals = ["document", "window", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previousDescriptors = Object.fromEntries(
     domGlobals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
@@ -77,6 +77,11 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
   const container = testWindow.document.createElement("div");
   testWindow.document.body.append(container);
   let root: Root | undefined;
+  let poll: (() => void) | undefined;
+  Object.defineProperty(testWindow, "setInterval", {
+    configurable: true,
+    value: (handler: () => void) => { poll = handler; return 1; },
+  });
 
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -84,26 +89,47 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
     localStorage: { configurable: true, value: testWindow.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
-  globalThis.fetch = (async (input) => {
+  const provider = "fallback-provider";
+  const ids = ["claude-opus", "claude-sonnet", "gemini-pro", "gemini-flash", "gpt-oss"];
+  let selected = ["gemini-pro", "gemini-flash"];
+  const disabled = new Set(["gpt-oss"]);
+  const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  let failNext = false;
+  let modelFetches = 0;
+  let resolveModels!: (response: Response) => void;
+  const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
+  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: disabled.has(id) }));
+  globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.endsWith("/api/models")) {
-      return Response.json([{
-        provider: "fallback-provider",
-        id: "configured-fallback",
-        namespaced: "fallback-provider/configured-fallback",
-        disabled: false,
-      }]);
+      modelFetches += 1;
+      return modelFetches === 1 ? firstModels : Response.json(rows());
     }
     if (url.endsWith("/api/providers")) {
       return Response.json([{
-        name: "fallback-provider",
+        name: provider,
         liveModels: true,
-        models: ["configured-fallback"],
+        models: ids,
         discovery: { status: "failed", reason: "http", httpStatus: 401 },
       }]);
     }
+    if (url.endsWith("/api/selected-models")) return Response.json({ selected: { [provider]: selected }, available: { [provider]: ids } });
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
-    if (url.endsWith("/api/combos")) return Response.json([]);
+    if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
+    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: true, model: `${provider}/gemini-pro` });
+    if (url.endsWith("/api/model-visibility") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as (typeof visibilityBodies)[number];
+      visibilityBodies.push(body);
+      if (failNext) { failNext = false; return Response.json({ error: "failed" }, { status: 500 }); }
+      if (body.scope === "provider") {
+        if (body.enabled) { selected = []; disabled.clear(); }
+        else for (const target of body.targets) disabled.add(target.id);
+      } else for (const target of body.targets) {
+        if (body.enabled) { if (selected.length > 0 && !selected.includes(target.id)) selected.push(target.id); disabled.delete(target.id); }
+        else disabled.add(target.id);
+      }
+      return Response.json({ ok: true });
+    }
     return new Response(null, { status: 404 });
   }) as typeof fetch;
 
@@ -121,10 +147,44 @@ test("Models page keeps the discovery-failure badge visible with fallback rows",
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
       await Promise.resolve();
     });
+    poll?.();
+    expect(modelFetches).toBe(1);
+    await act(async () => {
+      resolveModels(Response.json(rows()));
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
 
-    expect(container.textContent).toContain("fallback-provider/configured-fallback");
+    const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/${id}"]`)!;
+    const buttonText = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
+    expect(container.textContent).toContain("2/5 active");
+    expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
+    expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
-    expect(container.textContent).not.toContain("No models were discovered");
+    expect(container.textContent).not.toContain("Not selected");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
+    // The workspace Select portals its listbox to document.body, so the options are not inside
+    // `container`. Query the document instead of the mount node.
+    const shadowOptions = [...testWindow.document.querySelectorAll('[role="option"]')].map(option => option.textContent);
+    expect(shadowOptions).toContain(`${provider}/gemini-pro`);
+    expect(shadowOptions).not.toContain(`${provider}/claude-opus`);
+
+    await act(async () => { switchFor("claude-sonnet").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "models", targets: [{ id: "claude-sonnet" }], enabled: true });
+    expect(container.textContent).toContain("3/5 active");
+
+    failNext = true;
+    await act(async () => { switchFor("claude-opus").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(switchFor("claude-opus").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).toContain("Save failed");
+
+    await act(async () => { buttonText("All on").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: true });
+    expect(container.textContent).toContain("5/5 active");
+    await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
+    expect(container.textContent).toContain("0/5 active");
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -406,4 +466,110 @@ test("empty static provider explains that live discovery is disabled", () => {
   expect(html).toContain("Live model discovery is off");
   expect(html).toContain('role="status"');
   expect(html).not.toContain("Discovery failed");
+});
+
+// The generation guard only matters when a poll that started BEFORE a forced refresh finishes
+// AFTER it. The single-flight test above never reaches that ordering, so a regression in
+// shouldApplyLoadGeneration() would still pass. Drive the real order here: initial load settles,
+// a poll fetch is held pending, a toggle's forced refresh completes, and only then does the stale
+// poll resolve with outdated rows.
+test("a poll that resolves after a forced refresh cannot overwrite newer models", async () => {
+  // Snapshot the globals this test swaps out: leaking a torn-down happy-dom document breaks every
+  // later DOM test in the suite.
+  const priorGlobals = {
+    document: Object.getOwnPropertyDescriptor(globalThis, "document"),
+    window: Object.getOwnPropertyDescriptor(globalThis, "window"),
+    localStorage: Object.getOwnPropertyDescriptor(globalThis, "localStorage"),
+    actEnv: Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT"),
+  };
+  const testWindow = new Window({ url: "http://localhost/" });
+  const container = testWindow.document.createElement("div");
+  testWindow.document.body.appendChild(container);
+  let root: Root | undefined;
+  let poll: (() => void) | undefined;
+  Object.defineProperty(testWindow, "setInterval", {
+    configurable: true,
+    value: (handler: () => void) => { poll = handler; return 1; },
+  });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+  });
+
+  const provider = "gen-provider";
+  const staleIds = ["stale-a", "stale-b"];
+  const freshIds = ["fresh-a", "fresh-b", "fresh-c"];
+  const rowsFor = (ids: string[]) => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: false }));
+  let modelFetches = 0;
+  let releaseStalePoll!: () => void;
+  const stalePollBody = new Promise<void>(resolve => { releaseStalePoll = resolve; });
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/models")) {
+      modelFetches += 1;
+      // 1st: initial load. 2nd: the poll we hold open. 3rd+: the forced refresh after the toggle.
+      if (modelFetches === 2) {
+        await stalePollBody;
+        return Response.json(rowsFor(staleIds));
+      }
+      return Response.json(rowsFor(modelFetches === 1 ? staleIds : freshIds));
+    }
+    if (url.endsWith("/api/providers")) return Response.json([{ name: provider, liveModels: false, models: freshIds }]);
+    if (url.endsWith("/api/selected-models")) {
+      const ids = modelFetches <= 1 ? staleIds : freshIds;
+      return Response.json({ selected: { [provider]: ids }, available: { [provider]: ids } });
+    }
+    if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
+    if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
+    if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: false, model: "" });
+    if (url.endsWith("/api/model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <LanguageProvider>
+          <Models apiBase="http://localhost" />
+        </LanguageProvider>,
+      );
+    });
+    await act(async () => { await new Promise(resolve => testWindow.setTimeout(resolve, 0)); await Promise.resolve(); });
+    expect(container.textContent).toContain("stale-a");
+
+    // Start the poll and leave its /api/models response pending.
+    await act(async () => { poll?.(); await Promise.resolve(); });
+    expect(modelFetches).toBe(2);
+
+    // A forced refresh finishes while that poll is still in flight and brings the newer catalog.
+    const toggle = container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/stale-a"]`);
+    await act(async () => { toggle?.click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(container.textContent).toContain("fresh-a");
+
+    // Now let the stale poll land. Its generation is older, so it must be discarded.
+    await act(async () => {
+      releaseStalePoll();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("fresh-a");
+    expect(container.textContent).not.toContain("stale-b");
+  } finally {
+    await act(async () => { root?.unmount(); });
+    container.remove();
+    for (const [key, descriptor] of [
+      ["document", priorGlobals.document],
+      ["window", priorGlobals.window],
+      ["localStorage", priorGlobals.localStorage],
+      ["IS_REACT_ACT_ENVIRONMENT", priorGlobals.actEnv],
+    ] as const) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
 });

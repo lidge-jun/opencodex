@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconPlus, IconX, IconCheck } from "../icons";
 import { useI18n, LOCALES } from "../i18n/shared";
 
@@ -23,6 +23,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const creatingRef = useRef(false);
 
   const fetchKeys = useCallback(async () => {
     try {
@@ -44,21 +45,28 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
 
   const responseEndpoint = endpoint || "http://127.0.0.1:10100/v1/responses";
 
-  const handleCreate = async () => {
+  const handleCreate = async (name?: string): Promise<boolean> => {
+    if (creatingRef.current) return false;
+    creatingRef.current = true;
     setCreating(true);
     try {
+      const effectiveName = name ?? newName;
       const res = await fetch(`${apiBase}/api/keys`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName || "default" }),
+        body: JSON.stringify({ name: effectiveName || "default" }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setNewKey(data.key);
-        setNewName("");
-        fetchKeys();
-      }
+      if (!res.ok) return false;
+      const data = await res.json() as { key?: unknown };
+      if (typeof data.key !== "string" || data.key.length === 0) return false;
+      setNewKey(data.key);
+      setNewName("");
+      void fetchKeys();
+      return true;
+    } catch {
+      return false;
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
@@ -131,7 +139,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
             onChange={e => setNewName(e.target.value)}
             className="input"
           />
-          <button type="button" className="btn btn-primary" onClick={handleCreate} disabled={creating}>
+          <button type="button" className="btn btn-primary" onClick={() => { void handleCreate(); }} disabled={creating}>
             <IconPlus /> {creating ? t("api.generating") : t("api.generate")}
           </button>
         </div>
@@ -178,7 +186,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
-    "input": "Hello, world!"
+    "input": ${JSON.stringify(t("api.usageSampleInput"))}
   }'`}</pre>
       </div>
     </section>

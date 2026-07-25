@@ -457,85 +457,114 @@ function UsageModelsTable({
   t: TFn;
 }) {
   const searchLabel = t("usage.search.models");
+  const sectionLabel = t("usage.section.models");
+  const titleId = "usage-models-title";
+  const searchInput = (
+    <input
+      className="input"
+      aria-label={searchLabel}
+      placeholder={searchLabel}
+      value={modelQuery}
+      onChange={event => onModelQuery(event.target.value)}
+    />
+  );
+  const table = (
+    <div className="tbl-wrap usage-scroll">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>{t("logs.col.model")}</th>
+            <th>{t("logs.col.provider")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.tokens")}</th>
+            <th>{t("usage.col.share")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {models.map(model => (
+            <tr key={`${model.provider}/${model.model}`}>
+              <td className="mono">{modelLabel(model.model)}</td>
+              <td className="muted">{model.provider}</td>
+              <td className="num">{model.requests}</td>
+              <td className="num">{model.measuredRequests}</td>
+              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-models-title">
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
       <div className="panel-head">
-        <h3 id="usage-models-title" className="panel-title">{t("usage.section.models")}</h3>
-        <input
-          className="input"
-          aria-label={searchLabel}
-          placeholder={searchLabel}
-          value={modelQuery}
-          onChange={event => onModelQuery(event.target.value)}
-        />
+        <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+        {searchInput}
       </div>
-      <div className="tbl-wrap usage-scroll">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>{t("logs.col.model")}</th>
-              <th>{t("logs.col.provider")}</th>
-              <th className="num">{t("usage.col.requests")}</th>
-              <th className="num">{t("usage.col.measured")}</th>
-              <th className="num">{t("usage.col.tokens")}</th>
-              <th>{t("usage.col.share")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {models.map(model => (
-              <tr key={`${model.provider}/${model.model}`}>
-                <td className="mono">{modelLabel(model.model)}</td>
-                <td className="muted">{model.provider}</td>
-                <td className="num">{model.requests}</td>
-                <td className="num">{model.measuredRequests}</td>
-                <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
-                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {table}
     </section>
   );
 }
 
-function UsageProvidersTable({ providers, locale, t }: { providers: UsageProvider[]; locale: Locale; t: TFn }) {
-  return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-providers-title">
-      <h3 id="usage-providers-title" className="panel-title">{t("usage.section.providers")}</h3>
-      <div className="tbl-wrap usage-scroll">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>{t("logs.col.provider")}</th>
-              <th className="num">{t("usage.col.requests")}</th>
-              <th className="num">{t("usage.col.measured")}</th>
-              <th className="num">{t("usage.col.tokens")}</th>
-              <th>{t("usage.col.share")}</th>
+function UsageProvidersTable({
+  providers,
+  locale,
+  t,
+}: {
+  providers: UsageProvider[];
+  locale: Locale;
+  t: TFn;
+}) {
+  const sectionLabel = t("usage.section.providers");
+  const titleId = "usage-providers-title";
+  const table = (
+    <div className="tbl-wrap usage-scroll">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>{t("logs.col.provider")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.tokens")}</th>
+            <th>{t("usage.col.share")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {providers.map(provider => (
+            <tr key={provider.provider}>
+              <td className="mono">{provider.provider}</td>
+              <td className="num">{provider.requests}</td>
+              <td className="num">{provider.measuredRequests}</td>
+              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
-          </thead>
-          <tbody>
-            {providers.map(provider => (
-              <tr key={provider.provider}>
-                <td className="mono">{provider.provider}</td>
-                <td className="num">{provider.requests}</td>
-                <td className="num">{provider.measuredRequests}</td>
-                <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
-                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+      {table}
     </section>
   );
 }
 
-function UsageCoveragePanel({ summary, t }: { summary: UsageSummaryTotals; t: TFn }) {
-  return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-coverage-title">
-      <h3 id="usage-coverage-title" className="panel-title">{t("usage.section.coverage")}</h3>
+function UsageCoveragePanel({
+  summary,
+  t,
+}: {
+  summary: UsageSummaryTotals;
+  t: TFn;
+}) {
+  const sectionLabel = t("usage.section.coverage");
+  const titleId = "usage-coverage-title";
+  const body = (
+    <>
       <div className="usage-cards usage-cards-3x2">
         <div className="stat"><div className="muted">{t("usage.coverage.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
         <div className="stat"><div className="muted">{t("usage.coverage.reported")}</div><div className="stat-value">{summary.reportedRequests}</div></div>
@@ -544,6 +573,13 @@ function UsageCoveragePanel({ summary, t }: { summary: UsageSummaryTotals; t: TF
         <div className="stat"><div className="muted">{t("logs.tokens.unsupported")}</div><div className="stat-value">{summary.unsupportedRequests}</div></div>
       </div>
       <p className="muted text-control" style={{ marginTop: 12 }}>{t("usage.coverage.note")}</p>
+    </>
+  );
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+      {body}
     </section>
   );
 }

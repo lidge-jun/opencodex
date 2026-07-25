@@ -26,6 +26,7 @@ import {
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex/auth-api";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   recordCodexUpstreamOutcome,
@@ -301,6 +302,55 @@ describe("Codex auth context", () => {
 
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
       .rejects.toBeInstanceOf(CodexAccountCooldownError);
+  });
+
+  test("reset-derived cooldown admits one probe and clears on its success (#433)", async () => {
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    // Keep the credential valid against the frozen clock, not the wall clock —
+    // otherwise the probe path tries a real token refresh.
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: now + 24 * 60 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    const headers = new Headers({ authorization: "Bearer main_token" });
+    try {
+      // Upstream announces a reset four days out; the account actually recovers early.
+      const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+      Date.now = () => now;
+      recordCodexUpstreamOutcome(config(), "pool-a", 429, { resetAt, now });
+
+      // Before the probe interval the account is still short-circuited locally.
+      Date.now = () => now + 1_000;
+      await expect(resolveCodexAuthContext(headers, config(), "pool"))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+
+      // After the interval exactly one request is admitted, carrying the lease.
+      const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      Date.now = () => probeAt;
+      const probeCtx = await resolveCodexAuthContext(headers, config(), "pool");
+      expect(probeCtx).toMatchObject({ kind: "pool", accountId: "pool-a" });
+      const probeLeaseId = (probeCtx as { probeLeaseId?: string }).probeLeaseId;
+      expect(probeLeaseId).toBeTruthy();
+      // The admitted request must not be blocked again downstream.
+      expect(() => assertCodexAuthContextNotCooled(probeCtx)).not.toThrow();
+
+      // A second concurrent request still gets the cooldown.
+      await expect(resolveCodexAuthContext(headers, config(), "pool"))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+
+      // The probe succeeds: the account is proven healthy and routes normally again.
+      recordCodexUpstreamOutcome(config(), "pool-a", 200, { now: probeAt + 500, probeLeaseId });
+      Date.now = () => probeAt + 500;
+      await expect(resolveCodexAuthContext(headers, config(), "pool")).resolves.toMatchObject({
+        kind: "pool",
+        accountId: "pool-a",
+      });
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   test("expired thread affinity fails closed instead of falling back to main auth", async () => {

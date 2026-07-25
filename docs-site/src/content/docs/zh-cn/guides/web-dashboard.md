@@ -40,8 +40,16 @@ bun run dev:gui
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Stop** | 优雅地停止代理和已安装的后台服务，恢复原生 Codex 并退出（`POST /api/stop`）。 |
 
+### 链接到某个部分
+
+布局只有一种，无需切换。Dashboard 的各个部分都有自己的地址：`#dashboard` 打开 Overview，`#dashboard/providers` 与 `#dashboard/models` 打开另外两个。刷新、收藏和后退都会保留当前所在的部分。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。旧的 `#providers/workspace` 书签现在会跳转到 `#providers`。
+
 **Logs** 和 **Usage** 中的费用是根据已报告 token 计算的 API 标价折算值，不是账单，也不能证明
 实际发生了扣费；实际可能计入订阅用量或消耗服务商额度。
+
+## 模型可见性
+
+**Models** 开关表示 Codex 中的最终可见状态。路由模型只有在 provider allowlist 中（或未设置 allowlist）且未被禁用时才会开启。开启模型会原子地协调两个过滤条件；**全部开启** 会清除 allowlist，因此以后新发现的模型也会开启。
 
 ## 委派选择器与生成路由的区别
 
@@ -89,6 +97,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `GET` / `PUT /api/v2` | 读取或设置界面模式、Codex feature flag 和 v2 thread 上限。 |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | 列出、添加/替换、启用/禁用或删除 provider。 |
 | `GET /api/models` · `PUT /api/disabled-models` | 列出原生/路由模型，并更新共享的 disabled-model 集合。 |
+| `GET /api/selected-models` · `PUT /api/model-visibility` | 读取 provider allowlist，并原子地更改单个模型或 provider 分组的最终可见状态。 |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | 读取 API key 和 OAuth provider 目录。 |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | 启动 provider OAuth 流程并轮询完成状态。 |
 | `GET /api/codex-auth/accounts?refresh=1` | 列出主账号与池账号、强制刷新配额，并返回主账号的 `hasCredential` / terminal `needsReauth` 状态。 |

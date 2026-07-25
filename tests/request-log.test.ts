@@ -22,7 +22,13 @@ import {
   sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "../src/server/request-log";
+import { bridgeToResponsesSSE } from "../src/bridge";
+import type { AdapterEvent } from "../src/types";
 import type { PersistedUsageEntry } from "../src/usage/log";
+
+async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
+  for (const event of events) yield event;
+}
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {
@@ -743,6 +749,36 @@ describe("request log metadata", () => {
       usageStatus: "estimated",
       totalTokens: 240_004,
       usage: { inputTokens: 240_000, outputTokens: 4, estimated: true },
+    });
+  });
+
+  test("deferred logging preserves a bridged Kiro absolute context checkpoint", async () => {
+    const entries: RequestLogEntry[] = [];
+    const body = bridgeToResponsesSSE(replayAdapterEvents([{
+      type: "done",
+      usage: {
+        inputTokens: 58,
+        outputTokens: 100,
+        contextTotalTokens: 50_000,
+        estimated: true,
+      },
+    }]), "kiro/claude-opus-5");
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-kiro-context-checkpoint",
+      Date.now(),
+      { model: "kiro/claude-opus-5", provider: "kiro-p9d8524", usageLogInputTokens: 200 },
+      entry => entries.push(entry),
+    );
+
+    const text = await response.text();
+    expect(text).toContain('"input_tokens":49900');
+    expect(text).toContain('"total_tokens":50000');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      usageStatus: "estimated",
+      totalTokens: 50_000,
+      usage: { inputTokens: 49_900, outputTokens: 100, totalTokens: 50_000, estimated: true },
     });
   });
 

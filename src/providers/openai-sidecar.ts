@@ -95,7 +95,14 @@ export async function resolveFirstUsableOpenAiSidecar(
       authContext,
       headers: headersForCodexAuthContext(incomingHeaders, authContext),
       ...(authContext.kind === "pool" || authContext.kind === "main-pool"
-        ? { recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(config, authContext.accountId, outcome) }
+        ? {
+          recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
+            config,
+            authContext.accountId,
+            outcome,
+            { probeLeaseId: authContext.probeLeaseId },
+          ),
+        }
         : {}),
     };
   }

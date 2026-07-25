@@ -7,7 +7,9 @@ import {
   CURSOR_EXTERNAL_ROOT_BLOB_LIMIT,
   CURSOR_ROUTING_LEVEL_PARAMETER_ID,
   encodeCursorRunRequest,
+  prepareCursorRunRequest,
 } from "../src/adapters/cursor/protobuf-request";
+import { estimateTokens } from "../src/lib/token-estimate";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
@@ -325,7 +327,7 @@ describe("Cursor blob handshake", () => {
     expect(JSON.stringify(roots)).toContain("Shell commands use");
     expect(JSON.stringify(roots)).toContain("exec_command");
     expect(actionText(bytes)).toContain("Run: echo OCX via your shell tool, report stdout.");
-    expect(actionText(bytes)).toContain("Use exec_command for this shell command.");
+    expect(actionText(bytes)).toContain("Use the Codex shell bridge tool listed this turn");
   });
 
   test("adds generic exec_command guidance for active tool-count demo prompts", () => {
@@ -347,18 +349,18 @@ describe("Cursor blob handshake", () => {
     const text = actionText(bytes);
     expect(text).toContain("아무 tool 10개 써봐");
     expect(text).toContain("This turn requests 10 tool uses");
-    expect(text).toContain("exactly 10 separate `exec_command` function calls/results");
-    expect(text).toContain("One `exec_command` containing chained commands counts as 1 tool call, not 10");
+    expect(text).toContain("exactly 10 separate Codex shell bridge function calls/results");
+    expect(text).toContain("One shell-bridge call containing chained commands counts as 1 tool call, not 10");
     expect(text).toContain("one parallel tool-call batch containing all 10");
-    expect(text).toContain("repeated `exec_command` calls");
-    expect(text).toContain("Codex Responses bridge exec tool");
+    expect(text).toContain("repeated Codex shell bridge calls");
+    expect(text).toContain("Codex Responses shell bridge");
     expect(text).toContain("external MCP server tool");
     expect(text).toContain("bridge may suspend");
     expect(text).toContain("Do not use `run_shell`");
     expect(text).toContain("Do not use `tool_search`, external MCP, or resource discovery just to pad the count");
     expect(text).toContain("neighboring-agent tools");
     expect(text).toContain("unless this turn's catalog lists those exact names");
-    expect(text).not.toContain("Use exec_command for this shell command.");
+    expect(text).not.toContain("Use the Codex shell bridge tool listed this turn");
     const roots = JSON.stringify(decodeRootMessages(bytes));
     expect(roots).toContain("available tool names are exactly `exec_command`");
     expect(roots).not.toContain("available tool names are exactly `exec_command`, `tool_search`");
@@ -576,5 +578,81 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
       tools: [{ name: "js", namespace: "mcp__node_repl", description: "Run JS", parameters: {} }],
     });
     expect(mcpToolNames(bytes)).toBeUndefined();
+  });
+});
+
+// --- #373: the estimate must be derived from the payload that is actually sent,
+// not from the original request — that was the defect that blocked PR #376. -------
+describe("prepared request estimate (#373)", () => {
+  const baseRequest = (overrides: Record<string, unknown> = {}) => ({
+    modelId: "gpt-5.6-sol-xhigh",
+    conversationId: "c-373",
+    system: ["system prompt"],
+    messages: [{ role: "user" as const, content: "current turn" }],
+    rawMessages: [{ role: "user" as const, content: "current turn", timestamp: 1 }],
+    ...overrides,
+  });
+
+  test("the estimate matches a recomputation from the bytes actually sent", () => {
+    const prepared = prepareCursorRunRequest(baseRequest(), { estimateInputTokens: true });
+    expect(prepared.estimatedInputTokens).toBeGreaterThan(0);
+
+    // Re-derive from the wire: decoded root blobs + the action text the model sees.
+    const roots = decodeRootMessages(prepared.bytes).map(root => JSON.stringify(root));
+    const text = actionText(prepared.bytes) ?? "";
+    const recomputed = estimateTokens([...roots, text].join("\n"), "gpt-5.6-sol-xhigh");
+
+    expect(prepared.estimatedInputTokens).toBe(recomputed);
+  });
+
+  test("history dropped by the pruner does not inflate the estimate", () => {
+    // Enough history that the oldest entries fall outside the root blob budget. Only
+    // the very first pair is bloated, so anything that survives pruning is identical
+    // between the two requests.
+    const tail = Array.from({ length: 400 }, (_, i) => ([
+      { role: "user" as const, content: `turn ${i} ${"x".repeat(400)}`, timestamp: i + 1 },
+      { role: "assistant" as const, content: `reply ${i}`, timestamp: i + 1 },
+    ])).flat();
+    const withOldest = (oldest: string) => prepareCursorRunRequest(
+      baseRequest({
+        rawMessages: [
+          { role: "user", content: oldest, timestamp: 0 },
+          ...tail,
+          { role: "user", content: "current turn", timestamp: 999 },
+        ],
+      }),
+      { estimateInputTokens: true },
+    );
+
+    const small = withOldest("oldest entry");
+    const bloated = withOldest(`oldest entry ${"z".repeat(50_000)}`);
+
+    // The bloated entry is pruned away, so it must not move the estimate — the exact
+    // failure mode that blocked PR #376 (estimating from the pre-pruning request).
+    expect(decodeRootMessages(bloated.bytes).length).toBe(decodeRootMessages(small.bytes).length);
+    expect(JSON.stringify(decodeRootMessages(bloated.bytes))).not.toContain("zzzz");
+    expect(bloated.estimatedInputTokens).toBe(small.estimatedInputTokens);
+  });
+
+  test("no estimate is computed unless the caller asks for one", () => {
+    expect(prepareCursorRunRequest(baseRequest()).estimatedInputTokens).toBeUndefined();
+  });
+
+  test("the estimate honors the shared CJK ratio clamp", () => {
+    const korean = "한국어로 작성된 아주 긴 대화 내용입니다. ".repeat(60);
+    const prepared = prepareCursorRunRequest(
+      baseRequest({
+        messages: [{ role: "user", content: korean }],
+        rawMessages: [{ role: "user", content: korean, timestamp: 1 }],
+      }),
+      { estimateInputTokens: true },
+    );
+
+    const roots = decodeRootMessages(prepared.bytes).map(root => JSON.stringify(root));
+    const text = actionText(prepared.bytes) ?? "";
+    // A Cursor-local ratio override would diverge here and under-count Korean prompts.
+    expect(prepared.estimatedInputTokens).toBe(
+      estimateTokens([...roots, text].join("\n"), "gpt-5.6-sol-xhigh"),
+    );
   });
 });

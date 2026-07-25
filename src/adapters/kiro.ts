@@ -32,6 +32,7 @@ import type {
 import type { ProviderAdapter } from "./base";
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { extractKiroImages, normalizeKiroImages, type KiroImage } from "./kiro-images";
+import { sniffImageDimensions } from "./anthropic-image-guard";
 import { fetchKiroWithRetry } from "./kiro-retry";
 import { convertKiroToolContext } from "./kiro-tools";
 import { neutralizeIdentity } from "./identity";
@@ -134,6 +135,52 @@ function messageLogText(msg: OcxMessage): string {
   }).filter(Boolean).join("\n");
 }
 
+function estimateKiroImageTokens(image: KiroImage): number {
+  const dimensions = sniffImageDimensions(image.source.bytes);
+  if (dimensions) {
+    return Math.max(256, Math.ceil(dimensions.width * dimensions.height / 750));
+  }
+  const decodedBytes = Math.floor(image.source.bytes.length * 3 / 4);
+  return Math.max(256, Math.ceil(decodedBytes / 512));
+}
+
+function estimateKiroTokens(text: string, modelId?: string): number {
+  return estimateTokens(text, modelId ? `kiro/${modelId}` : "kiro");
+}
+
+function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelId: string): number {
+  const conversationState = (payload as {
+    conversationState?: {
+      history?: KiroHistoryEntry[];
+      currentMessage?: KiroHistoryEntry;
+    };
+  }).conversationState;
+  if (!conversationState) return 0;
+
+  const parts: string[] = [];
+  let imageTokens = 0;
+  const entries = [
+    ...(conversationState.history ?? []),
+    ...(conversationState.currentMessage ? [conversationState.currentMessage] : []),
+  ];
+  for (const entry of entries) {
+    const user = entry.userInputMessage;
+    if (user) {
+      if (user.content) parts.push(user.content);
+      for (const image of user.images ?? []) imageTokens += estimateKiroImageTokens(image);
+      const context = user.userInputMessageContext;
+      if (context?.tools?.length) parts.push(serializeForUsage(context.tools));
+      if (context?.toolResults?.length) parts.push(serializeForUsage(context.toolResults));
+    }
+    const assistant = entry.assistantResponseMessage;
+    if (assistant) {
+      if (assistant.content) parts.push(assistant.content);
+      if (assistant.toolUses?.length) parts.push(serializeForUsage(assistant.toolUses));
+    }
+  }
+  return estimateKiroTokens(parts.join("\n"), modelId) + imageTokens;
+}
+
 function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
   return !parsed.previousResponseId && !parsed.context.messages.some(m => m.role === "assistant");
 }
@@ -148,25 +195,21 @@ function estimateKiroInputTokens(parsed: OcxParsedRequest): number {
     if (parsed.context.tools?.length) parts.push(serializeForUsage(parsed.context.tools));
   }
 
-  return estimateTokens(parts.join("\n"), parsed.modelId);
+  return estimateKiroTokens(parts.join("\n"), parsed.modelId);
 }
 
 function estimateKiroLogInputTokens(parsed: OcxParsedRequest): number {
   const parts = parsed.context.messages.map(messageLogText).filter(Boolean);
   if (parsed.context.systemPrompt?.length) parts.push(...parsed.context.systemPrompt);
   if (parsed.context.tools?.length) parts.push(serializeForUsage(parsed.context.tools));
-  return Math.max(estimateKiroInputTokens(parsed), estimateTokens(parts.join("\n"), parsed.modelId));
+  return Math.max(estimateKiroInputTokens(parsed), estimateKiroTokens(parts.join("\n"), parsed.modelId));
 }
 
-function configuredKiroContextWindow(provider: OcxProviderConfig, modelId: string | undefined): number | undefined {
+function kiroUpstreamContextWindow(modelId: string | undefined): number | undefined {
   if (!modelId) return undefined;
   const normalizedModelId = normalizeKiroModelId(modelId);
   if (normalizedModelId === "auto") return undefined;
-  const window =
-    modelRecordValue(provider.modelContextWindows, modelId)
-    ?? modelRecordValue(provider.modelContextWindows, normalizedModelId)
-    ?? provider.contextWindow
-    ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
+  const window = modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
     ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalizedModelId);
   return typeof window === "number" && Number.isFinite(window) && window > 0 ? window : undefined;
 }
@@ -465,8 +508,13 @@ interface KiroAttemptResult {
 interface KiroFallbackAttempt {
   response: Response;
   inputTokens: number;
+  contextInputEstimate: number;
   nameMap: Map<string, string>;
   conversationId: string;
+}
+
+interface KiroContextWindowState {
+  value?: number;
 }
 
 type KiroFallbackFactory = (
@@ -475,7 +523,11 @@ type KiroFallbackFactory = (
   sawReasoning: boolean,
 ) => Promise<KiroFallbackAttempt>;
 
-function mergeKiroUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
+function mergeKiroUsage(
+  first: OcxUsage | undefined,
+  second: OcxUsage | undefined,
+  preserveFirstContextGrowth = false,
+): OcxUsage | undefined {
   if (!first) return second;
   if (!second) return first;
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
@@ -488,9 +540,23 @@ function mergeKiroUsage(first: OcxUsage | undefined, second: OcxUsage | undefine
   const totalTokens = typeof first.totalTokens === "number" && typeof second.totalTokens === "number"
     ? first.totalTokens + second.totalTokens
     : undefined;
+  const carriedContextTotal = preserveFirstContextGrowth && typeof first.contextTotalTokens === "number"
+    ? first.contextTotalTokens + second.outputTokens
+    : undefined;
+  const combinedOutputTokens = first.outputTokens + second.outputTokens;
   return {
     inputTokens: first.inputTokens + second.inputTokens,
-    outputTokens: first.outputTokens + second.outputTokens,
+    outputTokens: combinedOutputTokens,
+    ...(typeof first.contextTotalTokens === "number" || typeof second.contextTotalTokens === "number"
+      ? {
+          contextTotalTokens: Math.max(
+            first.contextTotalTokens ?? 0,
+            second.contextTotalTokens ?? 0,
+            carriedContextTotal ?? 0,
+            combinedOutputTokens,
+          ),
+        }
+      : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(sumOptional("cachedInputTokens") !== undefined ? { cachedInputTokens: sumOptional("cachedInputTokens") } : {}),
     ...(sumOptional("cacheReadInputTokens") !== undefined ? { cacheReadInputTokens: sumOptional("cacheReadInputTokens") } : {}),
@@ -530,10 +596,11 @@ async function* parseKiroAttempt(
   mode: KiroCompletionMode,
   modelId: string | undefined,
   inputTokens: number,
-  contextWindow: number | undefined,
+  contextWindowState: KiroContextWindowState,
   nameMap: Map<string, string> | undefined,
   conversationId: string | undefined,
   previousAssistantText?: string,
+  contextInputEstimate?: number,
 ): AsyncGenerator<AdapterEvent, KiroAttemptResult> {
   const emptyResult = (): KiroAttemptResult => ({ assistantText: "", sawReasoning: false });
   if (!response.body) {
@@ -560,11 +627,28 @@ async function* parseKiroAttempt(
   const providerState = (): { kiro: { conversationId: string } } | undefined =>
     returnedConversationId ? { kiro: { conversationId: returnedConversationId } } : undefined;
 
-  const usage = (): OcxUsage => authoritativeUsage ?? ({
+  const contextUsageTotalFloor = (): number | undefined => {
+    if (contextUsagePercentage === undefined || !contextWindowState.value) return undefined;
+    const floor = Math.ceil(contextWindowState.value * Math.min(contextUsagePercentage, 100) / 100);
+    return Number.isFinite(floor) && floor > 0 ? floor : undefined;
+  };
+  const usage = (): OcxUsage => {
+    const base = authoritativeUsage ?? {
       inputTokens,
-      outputTokens: estimateTokens(outputChars, modelId),
+      outputTokens: estimateKiroTokens(outputChars, modelId),
       estimated: true,
-    });
+    };
+    const estimatedContextTotal = contextInputEstimate !== undefined
+      ? contextInputEstimate + base.outputTokens
+      : undefined;
+    const authoritativeTurnTotal = base.inputTokens + base.outputTokens;
+    const contextTotal = Math.max(
+      estimatedContextTotal ?? 0,
+      contextUsageTotalFloor() ?? 0,
+      authoritativeTurnTotal,
+    );
+    return contextTotal > 0 ? { ...base, contextTotalTokens: contextTotal } : base;
+  };
 
   const classifiedTerminal = (failure: KiroErrorClassification): AdapterEvent => ({
     type: "error",
@@ -743,6 +827,9 @@ async function* parseKiroAttempt(
           if (isValidKiroConversationId(ev.conversationId)) returnedConversationId = ev.conversationId;
           break;
         case "content":
+          if (ev.modelId) {
+            contextWindowState.value = kiroUpstreamContextWindow(ev.modelId) ?? contextWindowState.value;
+          }
           if (open) {
             open = null;
             return { assistantText, sawReasoning, terminal: protocolTerminal(kiroTruncationErrorMessage("content arrived before tool stop")) };
@@ -843,7 +930,7 @@ async function* parseKiroAttempt(
     if (contextUsagePercentage !== undefined) {
       debugProviderDiagnostic("kiro", "context_usage", {
         contextUsagePercentage,
-        ...(contextWindow ? { configuredContextWindow: contextWindow } : {}),
+        ...(contextWindowState.value ? { upstreamContextWindow: contextWindowState.value } : {}),
       });
     }
     debugProviderDiagnostic("kiro", "attempt_complete", {
@@ -970,15 +1057,19 @@ export async function* parseKiroStream(
   conversationId?: string,
   completionMode: KiroCompletionMode = "disabled",
   fallbackFactory?: KiroFallbackFactory,
+  contextInputEstimate?: number,
 ): AsyncGenerator<AdapterEvent> {
+  const contextWindowState: KiroContextWindowState = { value: contextWindow };
   const first = parseKiroAttempt(
     response,
     completionMode,
     modelId,
     inputTokens,
-    contextWindow,
+    contextWindowState,
     nameMap,
     conversationId,
+    undefined,
+    contextInputEstimate,
   );
   let firstNext = await first.next();
   while (!firstNext.done) {
@@ -1039,10 +1130,11 @@ export async function* parseKiroStream(
     "text_fallback",
     modelId,
     fallback.inputTokens,
-    contextWindow,
+    contextWindowState,
     fallback.nameMap,
     fallback.conversationId,
     firstResult.assistantText,
+    fallback.contextInputEstimate,
   );
   let secondNext = await second.next();
   while (!secondNext.done) {
@@ -1054,7 +1146,8 @@ export async function* parseKiroStream(
     yield retryableKiroIncomplete(
       "empty_kiro_fallback",
       "Kiro's bounded completion retry ended without a terminal result",
-      mergeKiroUsage(firstResult.usage, secondResult.usage) ?? { inputTokens, outputTokens: 0, estimated: true },
+      mergeKiroUsage(firstResult.usage, secondResult.usage, Boolean(firstResult.assistantText))
+        ?? { inputTokens, outputTokens: 0, estimated: true },
       secondResult.providerState ?? firstResult.providerState,
     );
     return;
@@ -1062,7 +1155,7 @@ export async function* parseKiroStream(
   if (secondResult.terminal.type === "done" || secondResult.terminal.type === "incomplete") {
     yield {
       ...secondResult.terminal,
-      usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage),
+      usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, Boolean(firstResult.assistantText)),
       providerState: secondResult.terminal.providerState ?? firstResult.providerState,
     };
     return;
@@ -1070,7 +1163,7 @@ export async function* parseKiroStream(
   yield {
     ...secondResult.terminal,
     ...(secondResult.terminal.type === "error"
-      ? { usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage) }
+      ? { usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, Boolean(firstResult.assistantText)) }
       : {}),
   };
 }
@@ -1080,6 +1173,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   // Per-request closure (resolveAdapter builds a fresh adapter per request — server.ts:440 — so this
   // is race-free) carrying the heuristic input-token estimate from buildRequest into the stream.
   let inputTokens = 0;
+  let contextInputEstimate = 0;
   let modelId: string | undefined;
   let contextWindow: number | undefined;
   let toolNameMap: Map<string, string> | undefined;
@@ -1097,6 +1191,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     conversationId: string;
     completionMode: KiroCompletionMode;
     inputTokens: number;
+    contextInputEstimate: number;
   }> => {
     if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
       throw new Error("kiro token missing — run ocx login kiro");
@@ -1118,6 +1213,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     if (profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
     const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode);
     await normalizeKiroImages(built.payload);
+    const contextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
     const body = JSON.stringify(built.payload);
     debugProviderDiagnostic("kiro", "request", {
       region,
@@ -1141,6 +1237,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       conversationId: built.conversationId,
       completionMode: built.completionMode,
       inputTokens: estimateKiroInputTokens(parsed),
+      contextInputEstimate,
     };
   };
 
@@ -1179,6 +1276,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     return {
       response,
       inputTokens: retry.inputTokens,
+      contextInputEstimate: retry.contextInputEstimate,
       nameMap: retry.nameMap,
       conversationId: retry.conversationId,
     };
@@ -1189,8 +1287,9 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     async buildRequest(parsed: OcxParsedRequest, incoming) {
       const built = await build(parsed);
       modelId = parsed.modelId;
-      contextWindow = configuredKiroContextWindow(provider, parsed.modelId);
+      contextWindow = kiroUpstreamContextWindow(parsed.modelId);
       inputTokens = built.inputTokens;
+      contextInputEstimate = built.contextInputEstimate;
       toolNameMap = built.nameMap;
       conversationId = built.conversationId;
       completionMode = built.completionMode;
@@ -1209,6 +1308,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         conversationId,
         completionMode,
         completionMode === "required" ? fallbackFactory : undefined,
+        contextInputEstimate,
       );
     },
 
@@ -1239,6 +1339,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         conversationId,
         completionMode,
         completionMode === "required" ? fallbackFactory : undefined,
+        contextInputEstimate,
       )) events.push(e);
       return events;
     },

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_FAILURE_WINDOW_MS,
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_THREAD_AFFINITY_MAX_ENTRIES,
@@ -23,6 +24,7 @@ import {
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
+  tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
@@ -326,6 +328,187 @@ describe("codex routing", () => {
 
     expect(getCodexAccountCooldownUntil("a", now + 1_000)).toBe(now + 120_000);
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 0, cooldownUntil: now + 120_000 });
+  });
+
+  // --- #433: quota cooldown must not pin a recovered account -------------------
+
+  test("far-future resetAt is capped well below the 24h ceiling", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const fourDaysOut = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt: fourDaysOut, now });
+
+    const cooldownUntil = getCodexAccountCooldownUntil("a", now)!;
+    // Before the fix this clamped to the 24h Retry-After ceiling.
+    expect(cooldownUntil - now).toBeLessThanOrEqual(15 * 60_000);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "reset-derived" });
+  });
+
+  test("Retry-After keeps honoring long explicit delays", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    expect(getCodexAccountCooldownUntil("a", now)).toBe(now + 7_200_000);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "retry-after" });
+  });
+
+  test("retry-after cooldown is never probed", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    // An explicit Retry-After is a literal retry directive, not a window hint.
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS + 1)).toBeNull();
+    expect(tryAcquireCodexQuotaProbeLease("a", now + 60 * 60_000)).toBeNull();
+  });
+
+  test("probe lease is granted at most once per interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    expect(tryAcquireCodexQuotaProbeLease("a", now)).toBeNull();
+    const lease = tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS);
+    expect(lease).toBeTruthy();
+    // Only one probe may be in flight at a time.
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeNull();
+  });
+
+  test("leased probe success clears the hard cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 500, probeLeaseId });
+
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(isCodexAccountInCooldown("a", probeAt + 500)).toBe(false);
+  });
+
+  test("unleased 2xx preserves the hard cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    // A request that started before the 429 landed must not be mistaken for a probe.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(true);
+  });
+
+  test("mismatched lease id does not consume the probe", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // Another in-flight request fails; it must not kill the live probe.
+    recordCodexUpstreamOutcome(config, "a", 503, { now: probeAt + 100, probeLeaseId: "someone-else" });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
+  });
+
+  test("failed probe releases the lease and restarts the interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now: probeAt + 100, probeLeaseId });
+
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBeUndefined();
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 200)).toBeNull();
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 100 + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeTruthy();
+  });
+
+  test("stale-generation lease cannot clear a newer cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // A different in-flight request receives an explicit Retry-After.
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now: probeAt + 50 });
+    // Now the original probe finally succeeds. It must NOT erase the new directive.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 100, probeLeaseId });
+
+    const health = getCodexUpstreamHealth("a");
+    expect(isCodexAccountInCooldown("a", probeAt + 100)).toBe(true);
+    expect(health).toMatchObject({ cooldownSource: "retry-after" });
+    // The finished probe still hands its lease back (it is no longer in flight).
+    expect(health?.probeLeaseId).toBeUndefined();
+    // ...but a retry-after cooldown is never probed again.
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 100 + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeNull();
+  });
+
+  test("credential failure ends the probe", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // Reauth quarantine supersedes quota state entirely.
+    recordCodexUpstreamOutcome(config, "a", 401, { now: probeAt + 100, probeLeaseId });
+
+    const health = getCodexUpstreamHealth("a");
+    expect(health?.probeLeaseId).toBeUndefined();
+    expect(health?.cooldownUntil).toBeUndefined();
+  });
+
+  test("unowned outcome preserves retry-after source", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2_000 });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "retry-after" });
+    expect(tryAcquireCodexQuotaProbeLease("a", now + 60 * 60_000)).toBeNull();
+  });
+
+  test("unowned outcome keeps a reset-derived cooldown probeable", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    // A late unrelated response must not wipe the probe bookkeeping.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2_000 });
+
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS + 1)).toBeTruthy();
+  });
+
+  test("in-flight lease survives an unowned outcome", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 100 });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: probeAt + 200 });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
   });
 
   test("stale transient failure streaks expire before failover thresholding", () => {

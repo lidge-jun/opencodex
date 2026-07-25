@@ -87,6 +87,35 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
   return parts;
 }
 
+/**
+ * Antigravity translates these Gemini `contents` into Anthropic `messages` for Claude models, and
+ * Anthropic rejects a text block whose `text` is empty or absent. An empty Gemini text part reaches
+ * that upstream as `{"type":"text"}` — a proto3 empty string is omitted from the translated JSON —
+ * and 400s with `messages.N.content.M.text.text: Field required` (issue #420). An empty `parts: []`
+ * model turn fails the same way. Gemini itself accepts both shapes, which is why this only ever
+ * surfaced on Claude-on-Antigravity; the guard lives here because this is where the parts are
+ * built. Mirrors the Anthropic adapter's own empty-block guard (src/adapters/anthropic.ts).
+ */
+const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
+const GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER = "(empty tool output)";
+
+/** A Gemini text part, or undefined when the value cannot form a valid non-empty text block. */
+function geminiTextPart(text: unknown): { text: string } | undefined {
+  return typeof text === "string" && text.length > 0 ? { text } : undefined;
+}
+
+/**
+ * Text for `functionResponse.response.result`. `contentPartsToText` collapses an empty array — or one
+ * holding only empty text — to its "[image]" marker, which would claim an image the turn does not
+ * actually carry (`toolResultImageParts` adds none). Fall back to the placeholder unless the content
+ * has something representable.
+ */
+function geminiToolResultText(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+  const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
+  return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+}
+
 function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -105,18 +134,22 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
       case "user":
       case "developer": {
         if (typeof msg.content === "string") {
-          contents.push({ role: "user", parts: [{ text: msg.content }] });
+          contents.push({ role: "user", parts: [{ text: msg.content || GEMINI_EMPTY_PLACEHOLDER }] });
         } else {
-          const parts = (msg.content as OcxContentPart[]).map(p => {
+          const parts: unknown[] = [];
+          for (const p of msg.content as OcxContentPart[]) {
             if (p.type === "image") {
               const data = parseDataUrl(p.imageUrl);
               // Gemini takes base64 via inline_data; a remote URL needs a mime type we don't have, so
               // fall back to a short marker rather than inlining the URL as a huge text blob.
-              return data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[image: ${p.imageUrl}]` };
+              parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[image: ${p.imageUrl}]` });
+              continue;
             }
-            return { text: p.text };
-          });
-          contents.push({ role: "user", parts });
+            // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
+            const textPart = geminiTextPart(p.text);
+            if (textPart) parts.push(textPart);
+          }
+          contents.push({ role: "user", parts: parts.length > 0 ? parts : [{ text: GEMINI_EMPTY_PLACEHOLDER }] });
         }
         break;
       }
@@ -124,8 +157,10 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         for (const p of aMsg.content) {
-          if (p.type === "text") parts.push({ text: (p as OcxTextContent).text });
-          else if (p.type === "toolCall") {
+          if (p.type === "text") {
+            const textPart = geminiTextPart((p as OcxTextContent).text);
+            if (textPart) parts.push(textPart);
+          } else if (p.type === "toolCall") {
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
@@ -142,6 +177,10 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
             parts.push(part);
           }
         }
+        // A turn with nothing Gemini can represent (e.g. thinking-only) would serialize as
+        // `parts: []`, which the Anthropic translation rejects. Skip it, as the Anthropic
+        // adapter does for its own empty assistant content.
+        if (parts.length === 0) break;
         contents.push({ role: "model", parts });
         break;
       }
@@ -151,7 +190,7 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         // tool-result screenshots (e.g. Computer Use) ride along as inline_data instead of being
         // flattened to a "[image]" marker the model can't actually see.
         const responseId = geminiToolCallId(msg.toolCallId);
-        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: contentPartsToText(msg.content) } };
+        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: geminiToolResultText(msg.content) } };
         // Mirror the matching functionCall id so Claude-on-Antigravity can pair this result with its
         // `tool_use` block (-> Anthropic `tool_result.tool_use_id`).
         if (responseId !== undefined) functionResponse.id = responseId;

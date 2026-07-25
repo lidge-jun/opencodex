@@ -2,7 +2,7 @@ import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
 import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
-import { activePromptText, encodeCursorRunRequest } from "./protobuf-request";
+import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -10,6 +10,7 @@ import {
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
   reportableContextTokens,
+  resolvedTurnUsage,
   usageFromContextTokens,
 } from "./protobuf-events";
 import {
@@ -50,7 +51,7 @@ import {
   buildCursorToolDefinitions,
   cursorRequestAdvertisesApplyPatch,
   cursorRequestHasShellAlias,
-  cursorToolInputSchema,
+  cursorToolArgNormalizeSchema,
   cursorToolWireName,
   cursorToolsForActivePrompt,
   isGenericToolUseCountDemoPrompt,
@@ -506,21 +507,33 @@ class LiveCursorTransport implements CursorTransport {
     const cursorToolNameMap = new Map<string, string>();
     for (const tool of cursorVisibleTools ?? []) {
       const cursorWireName = cursorToolWireName(tool);
-      toolSchemas.set(cursorWireName, cursorToolInputSchema(tool));
+      // Normalize against Responses/Codex field names, not the Cursor advertisement schema.
+      // Advertising `cmd` while also storing that schema here left `cmd` unmapped and Codex
+      // rejected shell_command with "missing field `command`" (#399).
+      toolSchemas.set(cursorWireName, cursorToolArgNormalizeSchema(tool));
       cursorToolNameMap.set(cursorWireName, namespacedToolName(tool.namespace, tool.name));
     }
+    const contextUsage = cursorContextUsageTracker.controlsForConversation(request.conversationId, {
+      clearPrior: request.contextUsageReset === true,
+      storeCheckpoints: request.contextUsageStoreCheckpoints !== false,
+    });
+    // Build the payload once. The estimate is only worth deriving when there is no
+    // carry-forward to fall back on — with a carry present it would never be used (#373).
+    const prepared = prepareCursorRunRequest(request, {
+      estimateInputTokens: contextUsage.carryForwardTokens === undefined,
+    });
     state = createCursorProtobufEventState({
       clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name),
       parallelToolCalls: request.parallelToolCalls,
       toolSchemas,
       cursorToolNameMap,
-      contextUsage: cursorContextUsageTracker.controlsForConversation(request.conversationId, {
-        clearPrior: request.contextUsageReset === true,
-        storeCheckpoints: request.contextUsageStoreCheckpoints !== false,
-      }),
+      contextUsage,
+      ...(prepared.estimatedInputTokens !== undefined
+        ? { estimatedInputTokens: prepared.estimatedInputTokens }
+        : {}),
     });
 
-    this.open(request, signal, state, push, err => {
+    this.open(prepared.bytes, signal, state, push, err => {
       failure = err;
       wake();
     }, () => {
@@ -629,7 +642,7 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   private open(
-    request: CursorRunRequest,
+    encodedRequest: Uint8Array,
     signal: AbortSignal | undefined,
     state: ReturnType<typeof createCursorProtobufEventState>,
     push: (message: CursorServerMessage) => void,
@@ -795,7 +808,7 @@ class LiveCursorTransport implements CursorTransport {
       failAndClear(new Error("Cursor request was aborted"));
     }, { once: true });
 
-    this.stream.write(encodeConnectFrame(encodeCursorRunRequest(request)));
+    this.stream.write(encodeConnectFrame(encodedRequest));
     this.heartbeat = setInterval(() => {
       this.stream?.write(encodeClientMessage({
         message: { case: "clientHeartbeat", value: create(ClientHeartbeatSchema, {}) },
@@ -885,10 +898,9 @@ export function partialUsageFromEventState(state: ReturnType<typeof createCursor
   // usage math after this turn emits output, but cannot by itself prove that a first-frame failure
   // consumed anything.
   if (!hasCurrentCheckpoint && !hasCurrentOutput) return undefined;
-  const ctx = reportableContextTokens(state);
-  return ctx !== undefined
-    ? { ...usageFromContextTokens(state, ctx), estimated: true }
-    : { ...state.usage, estimated: true };
+  // Same resolution order as a clean turn, so a failed turn does not silently drop
+  // back to inputTokens=0 when only the request-local estimate is available (#373).
+  return { ...resolvedTurnUsage(state), estimated: true };
 }
 
 /**

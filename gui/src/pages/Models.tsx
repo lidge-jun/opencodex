@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Switch, Notice, EmptyState, Select } from "../ui";
+import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
 import { IconChevron, IconBoxes, IconInfo, IconShuffle } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
@@ -9,7 +9,17 @@ import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
   type ProviderDiscoverySummary,
+  type ProviderModelGroup,
 } from "../models-groups";
+import {
+  fetchSelectedModels,
+  modelVisible,
+  putModelVisibility,
+  shouldApplyLoadGeneration,
+  type ProviderModelMap,
+  type ModelVisibilityScope,
+  type ModelVisibilityTarget,
+} from "../model-visibility";
 
 interface ModelRow {
   provider: string;
@@ -65,10 +75,15 @@ function collectDisabledNamespaced(rows: ModelRow[]): Set<string> {
   return next;
 }
 
-function activeModelOptions(models: ModelRow[], disabled: Set<string>): { value: string; label: string }[] {
+function activeModelOptions(
+  models: ModelRow[],
+  disabled: Set<string>,
+  selected: ProviderModelMap,
+): { value: string; label: string }[] {
   const options: { value: string; label: string }[] = [];
   for (const m of models) {
-    if (!disabled.has(m.id) && !disabled.has(m.namespaced)) {
+    const blocked = disabled.has(m.id) || disabled.has(m.namespaced);
+    if (modelVisible(selected, m.provider, m.id, m.native === true, blocked)) {
       options.push({ value: m.namespaced, label: m.namespaced });
     }
   }
@@ -80,6 +95,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [models, setModels] = useState<ModelRow[]>([]);
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>([]);
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(null);
   const [search, setSearch] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>({});
@@ -97,6 +113,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const loadGenerationRef = useRef(0);
+  const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
   const [v2Busy, setV2Busy] = useState(false);
@@ -128,6 +146,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
     try { return localStorage.getItem("ocx-models-combos-open") === "1"; } catch { return false; }
   });
 
+  // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const toggleCombosOpen = () => {
     setCombosOpen(prev => {
       const next = !prev;
@@ -150,8 +170,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   }, []);
 
   const shadowModelOptions = useMemo(
-    () => activeModelOptions(models, disabled),
-    [models, disabled],
+    () => activeModelOptions(models, disabled, selectedModels ?? {}),
+    [models, disabled, selectedModels],
   );
 
   const loadShadowCall = useCallback(async () => {
@@ -181,28 +201,48 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false): Promise<boolean> => {
+    if (loadPendingRef.current && !force) return false;
+    loadPendingRef.current = true;
+    const generation = ++loadGenerationRef.current;
     try {
       const [data, capsData] = await Promise.all([
-        fetch(`${apiBase}/api/models`).then(r => r.json()) as Promise<ModelRow[]>,
-        fetch(`${apiBase}/api/provider-context-caps`).then(r => r.json()) as Promise<ProviderContextCapsResponse>,
+        fetch(`${apiBase}/api/models`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ModelRow[]>,
+        fetch(`${apiBase}/api/provider-context-caps`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ProviderContextCapsResponse>,
       ]);
-      const providerData = await fetch(`${apiBase}/api/providers`)
-        .then(r => r.json()) as ConfiguredProviderSummary[];
+      const [providerData, selectionData] = await Promise.all([
+        fetch(`${apiBase}/api/providers`).then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status)))) as Promise<ConfiguredProviderSummary[]>,
+        fetchSelectedModels(apiBase),
+      ]);
+      if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
       void loadV2(); // best-effort, independent of the models fetch
       void loadShadowCall();
+      const nextGroups = buildProviderModelGroups(data, providerData);
+      setSelectedProvider(prev => (
+        prev !== null && !nextGroups.some(group => group.provider === prev)
+          ? null
+          : prev
+      ));
       setModels(data);
       setProviders(providerData);
       setDisabled(collectDisabledNamespaced(data));
+      setSelectedModels(selectionData);
       const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
         ? capsData.value
         : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
       if (value !== undefined) setContextCapValue(value);
       setContextCaps(capsData.caps ?? {});
+      return true;
     } catch {
-      setOk(false); setStatus(t("models.loadFail"));
+      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
+        setOk(false); setStatus(t("models.loadFail"));
+      }
+      return false;
     } finally {
-      setLoading(false);
+      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
+        loadPendingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [apiBase, loadShadowCall, loadV2, t]);
   useEffect(() => {
@@ -228,30 +268,45 @@ export default function Models({ apiBase }: { apiBase: string }) {
     [models, providers],
   );
 
-  const apply = async (next: Set<string>) => {
+  const effectiveVisibleCount = useMemo(() => {
+    if (!selectedModels) return 0;
+    return models.filter(model => modelVisible(
+      selectedModels,
+      model.provider,
+      model.id,
+      model.native === true,
+      disabled.has(model.namespaced),
+    )).length;
+  }, [disabled, models, selectedModels]);
+
+  const applyVisibility = async (
+    scope: ModelVisibilityScope,
+    provider: string,
+    targets: ModelVisibilityTarget[],
+    enabled: boolean,
+  ) => {
+    ++loadGenerationRef.current;
     setBusy(true);
     busyRef.current = true;
     setStatus("");
+    let errorKey: "models.saveFailed" | "models.networkError" | null = null;
     try {
-      const r = await fetch(`${apiBase}/api/disabled-models`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models: [...next] }),
-      });
-      if (r.ok) { setDisabled(next); setOk(true); setStatus(t("models.applied")); }
-      else { setOk(false); setStatus(t("models.saveFailed")); }
+      const response = await putModelVisibility(apiBase, scope, provider, targets, enabled);
+      if (!response.ok) errorKey = "models.saveFailed";
     } catch {
-      setOk(false); setStatus(t("models.networkError"));
+      errorKey = "models.networkError";
     } finally {
+      const refreshed = await load(true);
+      if (errorKey) {
+        setOk(false);
+        setStatus(t(errorKey));
+      } else if (refreshed) {
+        setOk(true);
+        setStatus(t("models.applied"));
+      }
       setBusy(false);
       busyRef.current = false;
     }
-  };
-
-  const toggle = (ns: string) => {
-    const next = new Set(disabled);
-    if (next.has(ns)) next.delete(ns); else next.add(ns);
-    apply(next);
   };
 
   const toggleProviderCap = async (provider: string) => {
@@ -270,7 +325,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setContextCaps(data.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.capSaveFailed"));
@@ -286,6 +341,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
     setCollapsed(prev => {
       const n = new Set(prev);
       if (n.has(p)) n.delete(p); else n.add(p);
+      try { localStorage.setItem("ocx-models-collapsed", JSON.stringify([...n])); } catch { /* quota */ }
+      return n;
+    });
+  };
+  const setAllCollapsed = (collapse: boolean) => {
+    setCollapsed(() => {
+      const n = collapse ? new Set(groups.map(group => group.provider)) : new Set<string>();
       try { localStorage.setItem("ocx-models-collapsed", JSON.stringify([...n])); } catch { /* quota */ }
       return n;
     });
@@ -307,7 +369,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setContextCaps(data.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.capSaveFailed"));
@@ -481,7 +543,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setCustomModalOpen(false);
         setOk(true);
         setStatus(t("models.customAdded"));
-        await load();
+        await load(true);
       } else {
         const data = await r.json().catch(() => null) as { error?: string } | null;
         setCustomError(data?.error ?? t("models.customSaveFailed"));
@@ -506,7 +568,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setCustomModalOpen(false);
         setOk(true);
         setStatus(t("models.customUpdated"));
-        await load();
+        await load(true);
       } else {
         const data = await r.json().catch(() => null) as { error?: string } | null;
         setCustomError(data?.error ?? t("models.customSaveFailed"));
@@ -524,7 +586,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       if (r.ok) {
         setOk(true);
         setStatus(t("models.customDeleted"));
-        await load();
+        await load(true);
       } else {
         setOk(false);
         setStatus(t("models.customSaveFailed"));
@@ -536,56 +598,289 @@ export default function Models({ apiBase }: { apiBase: string }) {
   };
 
   if (loading) return <div className="row muted"><span className="spin" /> {t("models.loading")}</div>;
+  if (!selectedModels) {
+    return <Notice tone="err">{t("models.loadFail")}</Notice>;
+  }
 
 
-  return (
+  const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
+    const { provider, rows, native, liveModels, discovery } = group;
+    const isCollapsed = collapsed.has(provider);
+    // Final visibility, not just the disable flag: a model is visible to Codex only when the
+    // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
+    // switches disagree with what the picker actually offers.
+    const isVisible = (model: ModelRow) => modelVisible(
+      selectedModels,
+      provider,
+      model.id,
+      model.native === true,
+      disabled.has(model.namespaced),
+    );
+    const activeCount = rows.filter(isVisible).length;
+    const capOn = contextCaps[provider] === contextCapValue;
+    const isNative = native;
+    const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
+    const q = (search[provider] ?? "").trim().toLowerCase();
+    const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
+    // Display-only: enabled models float to the top of each provider group so they
+    // stay findable in long lists. The sort is stable, so the server order is kept
+    // inside each partition, and this does not affect the picker order above
+    // (visibility toggles still only filter).
+    const sorted = [...filtered].sort((a, b) => Number(!isVisible(a)) - Number(!isVisible(b)));
+    const shown = limit[provider] ?? PAGE;
+    const visible = sorted.slice(0, shown);
+    const remaining = filtered.length - visible.length;
+     // An empty provider has nothing to send: keep both bulk buttons inert so we never PUT an
+     // empty target list (the management API rejects it with 400).
+     const hasRows = rows.length > 0;
+     const allOn = !hasRows || rows.every(isVisible);
+     const allOff = !hasRows || rows.every(m => !isVisible(m));
+     const bulkToggle = (enable: boolean) => {
+       if (!hasRows) return;
+       void applyVisibility(
+         "provider",
+         provider,
+         rows.map(m => ({ id: m.id, native: m.native === true })),
+         enable,
+       );
+     };
+    return (
+      <div key={provider} className="card models-provider-card" style={{ marginBottom: 8, overflow: "hidden" }}>
+       <div onClick={() => toggleCollapse(provider)}
+          className={`row group-head models-provider-head${isCollapsed ? "" : " open"}`}>
+          <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
+          <span className="text-body font-semibold">{provider}</span>
+          {isNative && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.nativeGroupLabel")}</span>}
+         {discoveryFailure && (
+           <span
+             className="badge badge-amber"
+             role="status"
+             title={discoveryFailureReason(t, discoveryFailure)}
+           >
+             {t("models.discoveryFailedBadge")}
+           </span>
+         )}
+          <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
+           <div className="row models-provider-actions" onClick={e => e.stopPropagation()}>
+             {!isNative && (
+               <button
+                 type="button"
+                 className="btn btn-ghost btn-sm text-caption"
+                 style={{ padding: "2px 8px" }}
+                 onClick={(e) => {
+                   e.stopPropagation();
+                   setCustomModalMode("add");
+                   setCustomModalProvider(provider);
+                   setCustomModalId("");
+                   setCustomFormModelId("");
+                   setCustomFormDisplayName("");
+                   setCustomFormContextWindow("");
+                   setCustomFormShowCustomCtx(false);
+                   setCustomFormModalities(["text"]);
+                   setCustomError("");
+                   setCustomModalOpen(true);
+                 }}
+                 aria-label={t("models.customAdd")}
+                 aria-haspopup="dialog"
+               >+</button>
+             )}
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
+             {!isNative && <>
+               <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
+               <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
+             </>}
+           </div>
+        </div>
+        {!isCollapsed && (
+          <div style={{ padding: "6px 12px" }}>
+            {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
+            {rows.length === 0 && (
+              <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
+            )}
+            {rows.length > PAGE / 2 && (
+              <input
+                className="input"
+                style={{ width: "100%", marginBottom: 6 }}
+                placeholder={t("models.search")}
+                value={search[provider] ?? ""}
+                onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
+                aria-label={t("models.search")}
+              />
+            )}
+             {visible.map(m => {
+               // The row reflects the same final-visibility answer as the count and the picker.
+               const off = !isVisible(m);
+               return (
+                 <div
+                   key={m.namespaced}
+                   className="model-row-wrap"
+                   onMouseEnter={(e) => onRowEnter(m.namespaced, e.currentTarget)}
+                   onMouseLeave={onRowLeave}
+                   onFocus={(e) => onRowFocus(m.namespaced, e.currentTarget)}
+                   onBlur={(e) => {
+                     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoveredModel(null);
+                   }}
+                 >
+                   <div className="row" style={{ padding: "5px 0" }}>
+                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                     <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                     {m.custom && (
+                       <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
+                         {t("models.customBadge")}
+                       </span>
+                     )}
+                     {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                   </div>
+                   {hoveredModel?.namespaced === m.namespaced && (() => {
+                     const r = hoveredModel.rect;
+                     const tipTop = r.bottom + 4;
+                     const flipUp = tipTop + 360 > window.innerHeight;
+                     return (
+                       <div
+                         className={`model-tip${m.custom ? " has-actions" : ""}${flipUp ? " flip-up" : ""}`}
+                         role="tooltip"
+                         style={{
+                           position: "fixed",
+                           left: r.left + 24,
+                           ...(flipUp
+                             ? { bottom: window.innerHeight - r.top + 4 }
+                             : { top: tipTop }),
+                         }}
+                         onMouseEnter={keepRowTipOpen}
+                         onMouseLeave={onRowLeave}
+                       >
+                         <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
+                         {m.displayName && <div className="model-tip-display">{m.displayName}</div>}
+                         {m.custom && (
+                           <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", display: "inline-block", marginBottom: 4 }}>
+                             {t("models.customBadge")}
+                           </span>
+                         )}
+                         <div className="model-tip-grid">
+                           <span className="model-tip-key">{t("models.tipProvider")}</span>
+                           <span className="model-tip-val">{m.provider}</span>
+                           {(m.contextWindow || m.contextCap) && (
+                             <>
+                               <span className="model-tip-key">{t("models.tipContext")}</span>
+                               <span className="model-tip-val">{fmtK(m.contextWindow ?? m.contextCap ?? 0)}</span>
+                             </>
+                           )}
+                           {m.inputModalities && m.inputModalities.length > 0 && (
+                             <>
+                               <span className="model-tip-key">{t("models.tipModalities")}</span>
+                               <span className="model-tip-val">{m.inputModalities.join(", ")}</span>
+                             </>
+                           )}
+                           <span className="model-tip-key">{t("models.tipStatus")}</span>
+                           <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
+                         </div>
+                         {m.custom && m.customId && (
+                           <div className="model-tip-actions">
+                             <button
+                               type="button"
+                               className="btn btn-ghost btn-sm text-caption"
+                               onClick={() => {
+                                 setCustomModalMode("edit");
+                                 setCustomModalProvider(m.provider);
+                                 setCustomModalId(m.customId!);
+                                 setCustomFormModelId(m.id);
+                                 setCustomFormDisplayName(m.displayName ?? "");
+                                 setCustomFormContextWindow(m.contextWindow ? String(m.contextWindow) : "");
+                                 setCustomFormShowCustomCtx(false);
+                                 setCustomFormModalities(m.inputModalities ?? ["text"]);
+                                 setCustomError("");
+                                 setCustomModalOpen(true);
+                                 setHoveredModel(null);
+                               }}
+                             >{t("models.customEdit")}</button>
+                             <button
+                               type="button"
+                               className="btn btn-ghost btn-sm text-caption"
+                               style={{ color: "var(--red)" }}
+                               onClick={() => {
+                                 if (window.confirm(t("models.customDeleteConfirm", { name: m.displayName ?? m.id }))) {
+                                   void deleteCustomModel(m.customId!);
+                                 }
+                                 setHoveredModel(null);
+                               }}
+                             >{t("models.customDelete")}</button>
+                           </div>
+                         )}
+                       </div>
+                     );
+                   })()}
+                 </div>
+               );
+             })}
+             {remaining > 0 && (
+               <button
+                 type="button"
+                 onClick={() => setLimit(prev => ({ ...prev, [provider]: shown + PAGE }))}
+                 className="btn btn-ghost btn-sm"
+                 style={{ marginTop: 4 }}
+               >{t("models.showMore", { n: remaining })}</button>
+             )}
+           </div>
+         )}
+       </div>
+     );
+  };
+
+  const visibleGroups = selectedProvider
+    ? groups.filter(group => group.provider === selectedProvider)
+    : groups;
+
+  const controlsBlock = (
     <>
-      <div className="page-head">
-        <h2>{t("nav.models")}</h2>
-        <span className="muted mono text-label">{t("models.active", { active: models.length - disabled.size, total: models.length })}</span>
-      </div>
-      <p className="page-sub">{t("models.subtitle")}</p>
-      {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
-
-      <div className="row muted text-control" style={{ gap: 6, marginBottom: 8, alignItems: "center" }}>
-        <span title={t("models.shadowCallInterceptHint")} style={{ cursor: "help" }}>{t("models.shadowCallIntercept")} ⓘ</span>
-        <code className="text-caption" style={{ opacity: 0.6 }}>⚠ 5.4-mini →</code>
-        <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-        <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-      </div>
-
-      {v2 && (
-        <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="muted text-control">{t("models.v2Label")}</span>
-          <div className="segmented" role="radiogroup" aria-label={t("models.v2Label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
-            {(["v1", "default", "v2"] as const).map(mode => (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={(v2.multiAgentMode ?? "default") === mode}
-                className={`btn btn-sm${(v2.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
-                disabled={v2Busy}
-                onClick={() => void setMultiAgentMode(mode)}
-              >
-                {t(`models.v2Mode_${mode}` as TKey)}
-              </button>
-            ))}
+      <div className="models-control-top-row">
+        <div className="models-shadow-row row muted text-control">
+          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
+          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
+          <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
+          <div className="models-shadow-model-slot">
+            <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
           </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-            onClick={() => setV2HelpOpen(true)}
-            aria-label={t("models.v2Label")}
-            aria-haspopup="dialog"
-          >
-            <IconInfo width={14} height={14} aria-hidden="true" />
-          </button>
+        </div>
+
+        {v2 && (
+          <div className="models-v2-mode-row row">
+            <span className="muted text-control">{t("models.v2Label")}</span>
+            <div className="segmented" role="radiogroup" aria-label={t("models.v2Label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+              {(["v1", "default", "v2"] as const).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={(v2.multiAgentMode ?? "default") === mode}
+                  className={`btn btn-sm${(v2.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
+                  style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
+                  disabled={v2Busy}
+                  onClick={() => void setMultiAgentMode(mode)}
+                >
+                  {t(`models.v2Mode_${mode}` as TKey)}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
+              onClick={() => setV2HelpOpen(true)}
+              aria-label={t("models.v2Label")}
+              aria-haspopup="dialog"
+            >
+              <IconInfo width={14} height={14} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {v2 && (v2.enabled || v2.agentsMaxThreadsConflict || v2Note) && (
+        <div className="models-v2-detail-row row">
           {v2.enabled && (
             <>
-              <span className="muted text-control" style={{ marginLeft: 8 }}>{t("models.v2ThreadsLabel")}</span>
+              <span className="muted text-control">{t("models.v2ThreadsLabel")}</span>
               <Select
                 value={showThreadsCustom
                   ? CUSTOM_OPTION
@@ -662,9 +957,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
             <button type="button" onClick={applyCustomCap} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
           </>
         )}
-        <div style={{ flex: 1 }} />
         <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
-        <span className="muted mono text-label">{t("models.setAll")}</span>
+        <span className="muted text-label leading-body">{t("models.setAllHint", { value: fmtK(contextCapValue) })}</span>
       </div>
 
       {(() => {
@@ -683,7 +977,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
         <span>{t("models.orderHint")}</span>
       </div>
+    </>
+  );
 
+  const combosBlock = (
+    <>
      {combos !== null && !combosError && combos.length === 0 && (
        <div className="card models-combos-card" style={{ marginBottom: 10 }}>
          <div className="row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 8 }}>
@@ -728,221 +1026,32 @@ export default function Models({ apiBase }: { apiBase: string }) {
          )}
        </div>
      )}
+    </>
+  );
 
-     {
-       // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
-       groups.map(({ provider, rows, native: isNative, liveModels, discovery }) => {
-       const isCollapsed = collapsed.has(provider);
-       const activeCount = rows.filter(m => !disabled.has(m.namespaced)).length;
-       const capOn = contextCaps[provider] === contextCapValue;
-       const q = (search[provider] ?? "").trim().toLowerCase();
-       const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
-       // Display-only: enabled models float to the top of each provider group so they
-       // stay findable in long lists. The sort is stable, so the server order is kept
-       // inside each partition, and this does not affect the picker order above
-       // (visibility toggles still only filter).
-       const sorted = [...filtered].sort((a, b) => Number(disabled.has(a.namespaced)) - Number(disabled.has(b.namespaced)));
-       const shown = limit[provider] ?? PAGE;
-       const visible = sorted.slice(0, shown);
-       const remaining = filtered.length - visible.length;
-        const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
-        const allOn = rows.length > 0 && rows.every(m => !disabled.has(m.namespaced));
-        const allOff = rows.length > 0 && rows.every(m => disabled.has(m.namespaced));
-        const bulkToggle = (enable: boolean) => {
-          const next = new Set(disabled);
-          for (const m of rows) { if (enable) next.delete(m.namespaced); else next.add(m.namespaced); }
-          apply(next);
-        };
-       return (
-         <div key={provider} className="card" style={{ marginBottom: 8, overflow: "hidden" }}>
-          <div onClick={() => toggleCollapse(provider)}
-             className={`row group-head${isCollapsed ? "" : " open"}`}>
-             <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
-             <span className="text-body font-semibold">{provider}</span>
-             {isNative && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.nativeGroupLabel")}</span>}
-             {discoveryFailure && (
-               <span
-                 className="badge badge-amber"
-                 role="status"
-                 title={discoveryFailureReason(t, discoveryFailure)}
-               >
-                 {t("models.discoveryFailedBadge")}
-               </span>
-             )}
-             <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
-             <div style={{ flex: 1 }} />
-              <div className="row" onClick={e => e.stopPropagation()} style={{ gap: 6 }}>
-                {!isNative && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm text-caption"
-                    style={{ padding: "2px 8px" }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCustomModalMode("add");
-                      setCustomModalProvider(provider);
-                      setCustomModalId("");
-                      setCustomFormModelId("");
-                      setCustomFormDisplayName("");
-                      setCustomFormContextWindow("");
-                      setCustomFormShowCustomCtx(false);
-                      setCustomFormModalities(["text"]);
-                      setCustomError("");
-                      setCustomModalOpen(true);
-                    }}
-                    aria-label={t("models.customAdd")}
-                    aria-haspopup="dialog"
-                  >+</button>
-                )}
-                {rows.length > 0 && <>
-                  <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
-                  <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
-                </>}
-                {!isNative && rows.length > 0 && <>
-                  <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
-                  <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
-                </>}
-              </div>
-           </div>
-           {!isCollapsed && (
-             <div style={{ padding: "6px 12px" }}>
-               {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
-               {rows.length === 0 && (
-                 <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
-               )}
-               {rows.length > PAGE / 2 && (
-                 <input
-                   className="input"
-                   style={{ width: "100%", marginBottom: 6 }}
-                   placeholder={t("models.search")}
-                   value={search[provider] ?? ""}
-                   onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
-                   aria-label={t("models.search")}
-                 />
-               )}
-                {visible.map(m => {
-                  const off = disabled.has(m.namespaced);
-                  return (
-                    <div
-                      key={m.namespaced}
-                      className="model-row-wrap"
-                      onMouseEnter={(e) => onRowEnter(m.namespaced, e.currentTarget)}
-                      onMouseLeave={onRowLeave}
-                      onFocus={(e) => onRowFocus(m.namespaced, e.currentTarget)}
-                      onBlur={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoveredModel(null);
-                      }}
-                    >
-                      <div className="row" style={{ padding: "5px 0" }}>
-                        <Switch on={!off} onClick={() => toggle(m.namespaced)} disabled={busy} label={m.native ? m.id : m.namespaced} />
-                        <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
-                        {m.custom && (
-                          <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
-                            {t("models.customBadge")}
-                          </span>
-                        )}
-                        {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
-                      </div>
-                      {hoveredModel?.namespaced === m.namespaced && (() => {
-                        const r = hoveredModel.rect;
-                        const tipTop = r.bottom + 4;
-                        const flipUp = tipTop + 360 > window.innerHeight;
-                        return (
-                          <div
-                            className={`model-tip${m.custom ? " has-actions" : ""}${flipUp ? " flip-up" : ""}`}
-                            role="tooltip"
-                            style={{
-                              position: "fixed",
-                              left: r.left + 24,
-                              ...(flipUp
-                                ? { bottom: window.innerHeight - r.top + 4 }
-                                : { top: tipTop }),
-                            }}
-                            onMouseEnter={keepRowTipOpen}
-                            onMouseLeave={onRowLeave}
-                          >
-                            <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
-                            {m.displayName && <div className="model-tip-display">{m.displayName}</div>}
-                            {m.custom && (
-                              <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", display: "inline-block", marginBottom: 4 }}>
-                                {t("models.customBadge")}
-                              </span>
-                            )}
-                            <div className="model-tip-grid">
-                              <span className="model-tip-key">{t("models.tipProvider")}</span>
-                              <span className="model-tip-val">{m.provider}</span>
-                              {(m.contextWindow || m.contextCap) && (
-                                <>
-                                  <span className="model-tip-key">{t("models.tipContext")}</span>
-                                  <span className="model-tip-val">{fmtK(m.contextWindow ?? m.contextCap ?? 0)}</span>
-                                </>
-                              )}
-                              {m.inputModalities && m.inputModalities.length > 0 && (
-                                <>
-                                  <span className="model-tip-key">{t("models.tipModalities")}</span>
-                                  <span className="model-tip-val">{m.inputModalities.join(", ")}</span>
-                                </>
-                              )}
-                              <span className="model-tip-key">{t("models.tipStatus")}</span>
-                              <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
-                            </div>
-                            {m.custom && m.customId && (
-                              <div className="model-tip-actions">
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm text-caption"
-                                  onClick={() => {
-                                    setCustomModalMode("edit");
-                                    setCustomModalProvider(m.provider);
-                                    setCustomModalId(m.customId!);
-                                    setCustomFormModelId(m.id);
-                                    setCustomFormDisplayName(m.displayName ?? "");
-                                    setCustomFormContextWindow(m.contextWindow ? String(m.contextWindow) : "");
-                                    setCustomFormShowCustomCtx(false);
-                                    setCustomFormModalities(m.inputModalities ?? ["text"]);
-                                    setCustomError("");
-                                    setCustomModalOpen(true);
-                                    setHoveredModel(null);
-                                  }}
-                                >{t("models.customEdit")}</button>
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm text-caption"
-                                  style={{ color: "var(--red)" }}
-                                  onClick={() => {
-                                    if (window.confirm(t("models.customDeleteConfirm", { name: m.displayName ?? m.id }))) {
-                                      void deleteCustomModel(m.customId!);
-                                    }
-                                    setHoveredModel(null);
-                                  }}
-                                >{t("models.customDelete")}</button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  );
-                })}
-                {remaining > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setLimit(prev => ({ ...prev, [provider]: shown + PAGE }))}
-                    className="btn btn-ghost btn-sm"
-                    style={{ marginTop: 4 }}
-                  >{t("models.showMore", { n: remaining })}</button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+  const collapseControls = (
+    <div className="row" style={{ gap: 6, margin: "2px 0 10px" }}>
+      <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
+        <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
+      </button>
+      <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(false)} disabled={busy}>
+        <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: "rotate(90deg)" }} /> {t("models.expandAll")}
+      </button>
+    </div>
+  );
+
+  const emptyStateBlock = (
+    <>
       {groups.length === 0 && (
         <EmptyState icon={<IconBoxes />} title={t("models.noRouted")}>
           {t("models.noRoutedHint")}
         </EmptyState>
       )}
+    </>
+  );
 
+  const modalsBlock = (
+    <>
       {v2HelpOpen && (
         <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("models.v2Label")} onClick={() => setV2HelpOpen(false)} onKeyDown={e => { if (e.key === "Escape") setV2HelpOpen(false); }}>
           <div className="modal-card" onClick={e => e.stopPropagation()}>
@@ -1123,6 +1232,73 @@ export default function Models({ apiBase }: { apiBase: string }) {
       )}
     </>
   );
+
+  return (
+    <div className="models-workspace-shell">
+      <div className="page-head">
+        <h2>{t("nav.models")}</h2>
+        <div className="row">
+          <span className="muted mono text-label">{t("models.active", { active: effectiveVisibleCount, total: models.length })}</span>
+        </div>
+      </div>
+      <p className="page-sub">{t("models.subtitle")}</p>
+      {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
+      <div className="models-workspace-root">
+        <aside className="models-workspace-rail" aria-label={t("nav.models")}>
+          <div className="models-workspace-rail-header">
+            <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>
+            <span className="models-workspace-rail-count">{groups.length}</span>
+          </div>
+          <div className="models-workspace-rail-list">
+            <button
+              type="button"
+              className={`models-workspace-rail-row${selectedProvider === null ? " models-workspace-rail-row--selected" : ""}`}
+              onClick={() => setSelectedProvider(null)}
+              aria-current={selectedProvider === null ? "true" : undefined}
+            >
+              <span className="models-workspace-rail-name">{t("models.workspace.allProviders")}</span>
+              <span className="models-workspace-rail-meta">{t("models.active", { active: effectiveVisibleCount, total: models.length })}</span>
+            </button>
+            {groups.map(group => {
+              const { provider, rows } = group;
+              // Same final-visibility rule as the provider card, so the rail never disagrees with it.
+              const activeCount = rows.filter(m => modelVisible(
+                selectedModels,
+                provider,
+                m.id,
+                m.native === true,
+                disabled.has(m.namespaced),
+              )).length;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  className={`models-workspace-rail-row${selectedProvider === provider ? " models-workspace-rail-row--selected" : ""}`}
+                  onClick={() => setSelectedProvider(provider)}
+                  aria-current={selectedProvider === provider ? "true" : undefined}
+                >
+                  <span className="models-workspace-rail-name">{provider}</span>
+                  <span className="models-workspace-rail-meta">{t("models.active", { active: activeCount, total: rows.length })}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+        <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
+          {controlsBlock}
+          {combosBlock}
+          {collapseControls}
+          {
+            // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
+            visibleGroups.map(group => renderGroup(group))
+          }
+          {groups.length === 0 && emptyStateBlock}
+        </section>
+      </div>
+      {modalsBlock}
+    </div>
+  );
+
 }
 
 function discoveryFailureReason(

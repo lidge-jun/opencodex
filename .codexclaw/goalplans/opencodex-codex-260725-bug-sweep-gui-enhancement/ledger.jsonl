@@ -1,0 +1,12 @@
+{"ts":"2026-07-25T08:12:13.027Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"created","detail":"init objective=\"opencodex 워크트리 codex/260725-bug-sweep에서 GUI·enhancement 제외 미해결 버그(#433 quota cooldown 고착, #432 Windows 서비스 stale 오탐, #422 remote compaction v2 fatal, #404 Grok per-model adapter, #373 Cursor 재시작 context 0)를 다중 PABCD 사이클로 직접 수정하고 각 work-phase를 로컬 커밋으로 쌓는다. WP0는 docs-only 로드맵 사이클.\" criteria=0"}
+{"ts":"2026-07-25T10:25:10.974Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp1"}
+{"ts":"2026-07-25T10:25:10.974Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_started","detail":"started wp2"}
+{"ts":"2026-07-25T10:52:31.760Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp2"}
+{"ts":"2026-07-25T10:52:31.760Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_started","detail":"started wp3"}
+{"ts":"2026-07-25T11:24:06.677Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp3"}
+{"ts":"2026-07-25T11:24:06.677Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_started","detail":"started wp4"}
+{"ts":"2026-07-25T12:12:21.536Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp4"}
+{"ts":"2026-07-25T12:12:21.537Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_started","detail":"started wp5"}
+{"ts":"2026-07-25T12:48:30.899Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp5"}
+{"ts":"2026-07-25T12:48:30.899Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_started","detail":"started wp6"}
+{"ts":"2026-07-25T12:50:38.598Z","slug":"opencodex-codex-260725-bug-sweep-gui-enhancement","event":"workphase_done","detail":"closed wp6"}

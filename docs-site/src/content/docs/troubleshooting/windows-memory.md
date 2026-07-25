@@ -37,7 +37,17 @@ runtime the leak itself remains an upstream problem:
   tells you whether growth looks native-side (the upstream issue) or JS-side
   (an opencodex bug you should report).
 - **`GET /api/system/memory`** — the same data over the authenticated
-  management API for dashboards or scripts.
+  management API for dashboards or scripts. Alongside the RSS/heap numbers it
+  reports a scalar `responseState` block (entry count, total/largest serialized
+  bytes, oldest-entry age) for the proxy's in-memory `previous_response_id`
+  continuation store. This further attributes *JS-heap* growth: a rising
+  `responseState.totalBytes` under a rising heap points at conversation
+  retention (long `store:false` chains re-expanding each turn), whereas a flat
+  `responseState` under a rising RSS points back at the native runtime. The
+  values are scalar-only — no request bodies, tokens, paths, or account
+  identifiers — and the read is side-effect free (it never prunes or evicts).
+  The dashboard's read-only **Memory observability** card renders the same
+  fields.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the unbounded buffering shape entirely. It becomes the default
   automatically once a bundled Bun release verifiably carries the #32111 fix;

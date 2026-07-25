@@ -277,18 +277,22 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     else if (e.key === "ArrowRight" || e.key === "End") { e.preventDefault(); selectTab("debug"); document.getElementById("logs-tab-debug")?.focus(); }
   };
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchLogs = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    // Silent polls must not clear an existing error or toggle loading — otherwise
+    // failures flicker between the error banner, empty state, and stale table.
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/logs`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
       setLogs(await res.json());
+      setError(null);
     } catch (cause) {
+      if (silent) return;
       const detail = cause instanceof Error ? cause.message : "";
       setError(detail ? `${t("logs.loadError")} ${detail}` : t("logs.loadError"));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [apiBase, t]);
 
@@ -296,7 +300,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     if (tab !== "logs") return;
     void fetchLogs();
     if (!autoRefresh) return;
-    const interval = setInterval(() => void fetchLogs(), 2000);
+    const interval = setInterval(() => void fetchLogs({ silent: true }), 2000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs, tab]);
 
@@ -402,7 +406,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <EmptyState title={t("logs.noRequests")} />
       ) : (
         <>
-        {loading && <div className="row muted" role="status"><span className="spin" /> {t("common.loading")}</div>}
         <div ref={scrollContainerRef} className="tbl-wrap" style={{ overflowY: "auto", maxHeight: "calc(100vh - 260px)" }}>
           <table className="tbl logs-table">
             <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--surface)" }}>

@@ -25,28 +25,54 @@ type InputBlock =
   | { type: "input_text"; text: string }
   | { type: "text"; text: string }
   | { type: "input_image"; image_url?: string; file_id?: string; detail?: string }
-  | { type: "input_file"; file_id?: string; filename?: string };
+  | { type: "input_file"; file_id?: string; filename?: string; file_data?: string };
 
-function inputContentParts(blocks: unknown[] | string | undefined): string | OcxContentPart[] {
+/** A usable reference string, or undefined. Empty strings and non-strings are not references. */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function inputContentParts(blocks: unknown): string | OcxContentPart[] {
   if (typeof blocks === "string") return blocks;
-  if (!blocks) return [];
+  // The catch-all can also hand back a non-array `content` (an object, a number), which would
+  // throw at the loop below before any per-block guard runs.
+  if (!Array.isArray(blocks)) return [];
   const parts: OcxContentPart[] = [];
   for (const raw of blocks) {
+    // A malformed message item fails its strict schema and falls through to inputItemSchema's
+    // permissive catch-all, so blocks reaching here are NOT guaranteed to match the declared
+    // shape. Validate each field before use, as outputToToolResultContent already does.
+    if (!isObj(raw)) continue;
     const block = raw as InputBlock;
     if (block.type === "input_text" || block.type === "text") {
-      parts.push({ type: "text", text: (block as { text: string }).text });
+      if (typeof raw.text === "string") parts.push({ type: "text", text: raw.text });
     } else if (block.type === "input_image") {
       const b = block as { image_url?: string; file_id?: string; detail?: string };
-      if (b.image_url) {
+      const imageUrl = nonEmptyString(b.image_url);
+      const fileId = nonEmptyString(b.file_id);
+      const detail = nonEmptyString(b.detail);
+      if (imageUrl) {
         // Preserve the image as a structured part — adapters send it as a native image block.
         // NEVER inline the (often base64 data-URL) image_url as text: that explodes the token count.
-        parts.push({ type: "image", imageUrl: b.image_url, ...(b.detail ? { detail: normalizeImageDetail(b.detail) } : {}) });
-      } else {
-        parts.push({ type: "text", text: `[image: ${b.file_id ?? "?"}]` }); // file_id ref → no inline data
+        parts.push({ type: "image", imageUrl, ...(detail ? { detail: normalizeImageDetail(detail) } : {}) });
+      } else if (fileId) {
+        parts.push({ type: "text", text: `[image: ${fileId}]` }); // file_id ref → no inline data
       }
+      // No usable reference: omit the block. A "[image: ?]" marker would claim an attachment
+      // the request never carried, which is worse than dropping malformed input.
     } else if (block.type === "input_file") {
-      const ref = (block as { file_id?: string; filename?: string }).file_id ?? (block as { filename?: string }).filename ?? "?";
-      parts.push({ type: "text", text: `[file: ${ref}]` });
+      const b = block as { file_id?: string; filename?: string; file_data?: string };
+      const fileId = nonEmptyString(b.file_id);
+      const fileData = nonEmptyString(b.file_data);
+      const filename = nonEmptyString(b.filename);
+      if (fileId) {
+        parts.push({ type: "text", text: `[file: ${fileId}]` });
+      } else if (fileData) {
+        // Inline file_data is often large base64. Preserve only its presence and name, never bytes.
+        parts.push({ type: "text", text: filename ? `[file: ${filename}]` : "[file: inline data]" });
+      }
+      // A bare filename is not a file resource in the Responses schema, so omit it rather than
+      // fabricating a "[file: ...]" marker for an attachment that was never sent.
     }
   }
   // Collapse to a plain string only for a single TEXT part; images must stay structured.
@@ -56,14 +82,19 @@ function inputContentParts(blocks: unknown[] | string | undefined): string | Ocx
 
 type OutputBlock = { type: "output_text"; text: string } | { type: "text"; text: string } | { type: "refusal"; refusal: string };
 
-function outputTextOf(blocks: unknown[] | string | undefined): OcxTextContent[] {
+function outputTextOf(blocks: unknown): OcxTextContent[] {
   if (typeof blocks === "string") return blocks.length > 0 ? [{ type: "text", text: blocks }] : [];
-  if (!blocks) return [];
+  if (!Array.isArray(blocks)) return [];
   const out: OcxTextContent[] = [];
   for (const raw of blocks) {
+    // Same catch-all caveat as inputContentParts: validate before use.
+    if (!isObj(raw)) continue;
     const b = raw as OutputBlock;
-    if (b.type === "output_text" || b.type === "text") out.push({ type: "text", text: (b as { text: string }).text });
-    else if (b.type === "refusal") out.push({ type: "text", text: `[refusal: ${(b as { refusal: string }).refusal}]` });
+    if (b.type === "output_text" || b.type === "text") {
+      if (typeof raw.text === "string") out.push({ type: "text", text: raw.text });
+    } else if (b.type === "refusal") {
+      if (typeof raw.refusal === "string") out.push({ type: "text", text: `[refusal: ${raw.refusal}]` });
+    }
   }
   return out;
 }
@@ -311,9 +342,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           content?: unknown;
         };
 
-        const content = inputContentParts(
-          agentMessage.content as unknown[] | string | undefined,
-        );
+        const content = inputContentParts(agentMessage.content);
 
         const hasContent =
           typeof content === "string"
@@ -338,7 +367,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         switch (msg.role) {
           case "system": {
             pendingReasoning.length = 0;
-            const text = inputContentParts(msg.content as unknown[] | string | undefined);
+            const text = inputContentParts(msg.content);
             const flat = typeof text === "string" ? text : text.map(p => (p.type === "text" ? p.text : "")).join("");
             if (flat.length > 0) systemPrompt.push(flat);
             break;
@@ -346,12 +375,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           case "user":
           case "developer": {
             pendingReasoning.length = 0;
-            const content = inputContentParts(msg.content as unknown[] | string | undefined);
+            const content = inputContentParts(msg.content);
             messages.push({ role: msg.role, content, timestamp: now });
             break;
           }
           case "assistant": {
-            const parts = outputTextOf(msg.content as unknown[] | string | undefined);
+            const parts = outputTextOf(msg.content);
             messages.push({
               role: "assistant",
               content: pendingReasoning.length > 0

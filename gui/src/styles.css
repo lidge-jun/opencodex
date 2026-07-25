@@ -13,6 +13,8 @@
 @import "./styles/provider-workspace-settings.css";
 @import "./styles/provider-overview-dashboard.css";
 @import "./styles-combos-workspace.css";
+@import "./styles-models-workspace.css";
+@import "./styles-dashboard-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -364,8 +366,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .page-sub { color: var(--muted); font-size: var(--text-body); margin: 4px 0 22px; max-width: 70ch; }
 
 /* Page-level underline tabs (Logs & Debug). Distinct from pill .segmented filters. */
-.page-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 14px; }
-.page-tab { appearance: none; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); cursor: pointer; font: inherit; font-size: var(--text-control); }
+/* Shared by Logs and Dashboard. Tabs never wrap: the strip scrolls horizontally so a
+   narrow viewport cannot push them onto a second row or squash their labels (Q7). */
+.page-tabs { display: flex; flex-wrap: nowrap; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 14px; overflow-x: auto; scrollbar-width: thin; }
+.page-tab { flex: 0 0 auto; white-space: nowrap; appearance: none; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); cursor: pointer; font: inherit; font-size: var(--text-control); }
 .page-tab:hover { color: var(--text); }
 .page-tab--active { color: var(--text); border-bottom-color: var(--accent); font-weight: var(--weight-semibold); }
 .page-tab:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
@@ -511,6 +515,36 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .startup-health-bar:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .startup-health-bar__summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.startup-health-slot {
+  min-height: var(--control-lg);
+}
+
+.startup-health-bar--pending {
+  pointer-events: none;
+  color: var(--faint);
+}
+
+.dash-stat-coverage {
+  margin-top: 2px;
+  min-height: 1.25em;
+  line-height: 1.25;
+}
+
+.dash-overview-head {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+.dash-overview-head .stat-row {
+  margin-bottom: 0;
+}
+
+.dash-overview-head .startup-health-bar,
+.dash-overview-head .startup-health-bar--pending {
+  margin: var(--space-4) 0 0;
+}
+
 /* ---- dashboard model grid (grouped by provider) ---- */
 .model-group-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: var(--text-control); font-weight: var(--weight-semibold); color: var(--text); }
 .model-group-head .count { font-family: var(--font-code); font-weight: var(--weight-medium); color: var(--faint); font-size: var(--text-label); }
@@ -612,19 +646,36 @@ select.input { appearance: none; }
   border: 1px solid var(--border); border-radius: var(--radius);
   padding: 4px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.16);
 }
-.select-dropdown-portal { position: fixed; }
-.select-dropdown-portal { z-index: 60; }
+.select-dropdown-portal {
+  /* Position (top/bottom/left/right/maxHeight) comes from computeSelectMenuStyle. */
+  position: fixed;
+  top: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+}
 .select-dropdown-right { left: auto !important; right: 0; }
 .select-dropdown-beside { top: 0; left: calc(100% + 6px); right: auto; min-width: 10rem; }
 .select-option {
   display: block; width: 100%; text-align: left;
   padding: 7px 12px; border: none; border-radius: var(--radius-sm);
   background: transparent; color: var(--text); font: inherit; font-size: var(--text-control); line-height: var(--leading-ui);
-  cursor: pointer; transition: background var(--motion-fast);
+  cursor: pointer; transition: background var(--motion-fast), box-shadow var(--motion-fast);
   white-space: nowrap;
 }
-.select-option:hover { background: var(--hover); }
+/* Pointer hover alone — softer than keyboard focus so the two cues stay distinct. */
+.select-option:hover:not(.select-option-active) { background: var(--hover); }
+/* Selected value (committed). */
 .select-option.active { background: var(--accent-soft); color: var(--accent); font-weight: var(--weight-semibold); }
+/* Keyboard / aria-activedescendant focus — visible without relying on :hover. */
+.select-option-active {
+  background: var(--hover);
+}
+/* Selected + keyboard-highlighted: full inset ring (not a left stripe). */
+.select-option.active.select-option-active {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 
 /* ---- switch ---- */
 .switch {
@@ -764,7 +815,7 @@ dialog.modal-overlay::backdrop {
 .bar-amber { background: linear-gradient(90deg, var(--green), var(--amber)); }
 .toggle { width: var(--toggle-w); height: var(--toggle-h); border-radius: var(--radius-pill); background: var(--toggle-off-bg); border: 1px solid var(--border); cursor: pointer; position: relative; transition: background var(--motion-normal), border-color var(--motion-normal); flex-shrink: 0; }
 .toggle.on { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
-.toggle-knob { width: 16px; height: 16px; background: light-dark(#ffffff, #ececec); border-radius: var(--radius-round); position: absolute; top: 1px; left: 1px; transition: left var(--motion-normal), background var(--motion-normal); }
+.toggle-knob { width: 16px; height: 16px; background: light-dark(#ffffff, #ececec); border-radius: var(--radius-round); position: absolute; top: 50%; left: 1px; transform: translateY(-50%); transition: left var(--motion-normal), background var(--motion-normal); }
 .toggle.on .toggle-knob { left: 17px; background: var(--toggle-dot-color); }
 .toggle:disabled { cursor: not-allowed; opacity: 0.55; }
 .codex-auto-switch-card { gap: 16px; flex-wrap: wrap; }
@@ -1116,15 +1167,22 @@ button.prov-account-row.active { cursor: default; }
 .toggle { position: relative; display: inline-block; width: var(--toggle-w); height: var(--toggle-h); flex-shrink: 0; }
 .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
 .toggle .slider { position: absolute; inset: 0; background: var(--toggle-off-bg); border-radius: var(--radius-pill); cursor: pointer; transition: background var(--motion-normal) ease; }
-.toggle .slider::after { content: ""; position: absolute; top: 3px; left: 3px; width: var(--toggle-dot); height: var(--toggle-dot); background: var(--toggle-dot-color); border-radius: var(--radius-round); transition: transform var(--motion-normal) ease; }
+.toggle .slider::after { content: ""; position: absolute; top: 50%; left: 3px; width: var(--toggle-dot); height: var(--toggle-dot); background: var(--toggle-dot-color); border-radius: var(--radius-round); transform: translateY(-50%); transition: transform var(--motion-normal) ease; }
 .toggle input:checked + .slider { background: var(--toggle-on-bg); }
-.toggle input:checked + .slider::after { transform: translateX(calc(var(--toggle-w) - var(--toggle-dot) - 6px)); }
+.toggle input:checked + .slider::after { transform: translate(calc(var(--toggle-w) - var(--toggle-dot) - 6px), -50%); }
 .toggle input:focus-visible + .slider { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .toggle input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Setting row (label left, control right) ── */
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; gap: 16px; }
 .setting-row + .setting-row { border-top: 1px solid var(--border-soft); }
+.dash-subagent-guidance-row {
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-label .title { font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .setting-label .desc { font-size: var(--text-label); color: var(--muted); line-height: var(--leading-body); }
@@ -1154,3 +1212,31 @@ button.prov-account-row.active { cursor: default; }
 .model-tip-key { color: var(--muted); }
 .model-tip-val { color: var(--text); font-family: var(--mono); font-size: var(--text-label); }
 .model-tip-actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
+
+/* ---- hover tooltip (styled replacement for native title) ---- */
+.ocx-tooltip { position: relative; display: inline-flex; align-items: center; }
+.ocx-tooltip-bubble {
+  position: absolute; z-index: var(--z-popover);
+  width: max-content;
+  background: color-mix(in oklab, canvas 84%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.16);
+  color: var(--text);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  white-space: normal;
+  pointer-events: none;
+  animation: ocx-tooltip-in var(--motion-fast) ease-out;
+}
+.ocx-tooltip-bubble--top { bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+.ocx-tooltip-bubble--bottom { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+.ocx-tooltip-bubble--left { right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+.ocx-tooltip-bubble--right { left: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+@keyframes ocx-tooltip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

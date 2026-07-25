@@ -9,11 +9,13 @@ import { IconLock, IconExternal, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import CodexAccountPool from "../CodexAccountPool";
+import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = [], keys = [], accountLoadState = "ready",
   switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
+  codexController,
 }: {
   item: WorkspaceItem;
   apiBase: string;
@@ -26,6 +28,8 @@ export default function ProviderAuthPanel({
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
+  /** Shared Codex account state owned by Providers (WP3). */
+  codexController?: CodexAccountPoolController;
 }) {
   const t = useT();
   const [addingKey, setAddingKey] = useState(false);
@@ -42,7 +46,12 @@ export default function ProviderAuthPanel({
       <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
         <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
         <div className="pwi-auth-body">
-          <CodexAccountPool apiBase={apiBase} embedded onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange} />
+          <CodexAccountPool
+            apiBase={apiBase}
+            embedded
+            controller={codexController}
+            onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
+          />
         </div>
       </section>
     );

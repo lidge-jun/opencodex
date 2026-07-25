@@ -38,6 +38,7 @@ describe("install scripts", () => {
     expect(pkg.scripts?.prepack).toBe("bun run prepare:package");
     expect(pkg.files).toContain("assets/banner.png");
     expect(pkg.files).toContain("assets/architecture.png");
+    expect(pkg.files).toContain("assets/claude-code-models.gif");
     expect(pkg.files).toContain("assets/codex-app-picker.png");
   });
 

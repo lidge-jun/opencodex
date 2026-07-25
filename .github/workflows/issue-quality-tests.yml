@@ -6,6 +6,10 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/issue-translation.cjs"
+      - ".github/scripts/issue-translation.test.cjs"
+      - ".github/scripts/parse-issue-translation-response.cjs"
+      - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
       - ".github/workflows/issue-quality-tests.yml"
   push:
@@ -13,6 +17,10 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/issue-translation.cjs"
+      - ".github/scripts/issue-translation.test.cjs"
+      - ".github/scripts/parse-issue-translation-response.cjs"
+      - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
       - ".github/workflows/issue-quality-tests.yml"
 
@@ -30,7 +38,10 @@ jobs:
           persist-credentials: false
 
       - name: Run validator tests
-        run: node --test .github/scripts/issue-quality.test.cjs
+        run: |
+          node --test .github/scripts/issue-quality.test.cjs
+          node --test .github/scripts/issue-translation.test.cjs
+          node --test .github/scripts/parse-issue-translation-response.test.cjs
 
       - name: Validate issue-form YAML
         run: |

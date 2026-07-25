@@ -8,7 +8,14 @@ import { comboConfigIssues } from "./combos/types";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
-import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "./types";
+import {
+  isWirePinnedModel,
+  MODEL_ADAPTER_OVERRIDE_ALLOWED,
+  OPENAI_PROVIDER_TIER_VERSION,
+  type OcxConfig,
+  type OcxProviderConfig,
+} from "./types";
+import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
 
 let _atomicSeq = 0;
 
@@ -435,6 +442,41 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   return null;
 }
 
+/**
+ * Validate a provider's per-model wire override map (#404).
+ *
+ * Rejects, rather than silently ignoring, configurations the resolver would refuse:
+ * a value outside the allowed wires, a model the upstream pins to one wire, and any
+ * override on a canonical forward provider (where switching wires would drop the
+ * caller's forwarded credential). Silently dropping them would leave the user
+ * believing an override is in effect.
+ */
+export function modelAdapterRecordConfigError(
+  value: unknown,
+  field: string,
+  providerName: string,
+  provider: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  for (const [key, entry] of entries) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (typeof entry !== "string" || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(entry)) {
+      return `${field}.${key} must be one of: ${[...MODEL_ADAPTER_OVERRIDE_ALLOWED].join(", ")}`;
+    }
+    if (isWirePinnedModel(providerName, key.trim())) {
+      return `${field}.${key} cannot be overridden: the upstream only speaks one wire for this model`;
+    }
+  }
+  return null;
+}
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   providers: z.record(z.string(), providerConfigSchema),
@@ -552,6 +594,19 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "headers"],
         message: headersError,
+      });
+    }
+    const modelAdaptersError = modelAdapterRecordConfigError(
+      (provider as { modelAdapters?: unknown }).modelAdapters,
+      "modelAdapters",
+      name,
+      provider,
+    );
+    if (modelAdaptersError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelAdapters"],
+        message: modelAdaptersError,
       });
     }
     const maxInputError = positiveIntegerRecordConfigError(

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { saveConfig } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
@@ -31,6 +32,29 @@ type CodexUpstreamHealth = {
   lastFailureAt?: number;
   /** Hard cooldown (quota 429). Survives a later 2xx; blocks auth + selection. */
   cooldownUntil?: number;
+  /** When the current cooldown was recorded; origin of the probe interval clock. */
+  cooldownSince?: number;
+  /**
+   * What produced the cooldown. An explicit Retry-After is a literal retry
+   * directive and is never probed; a quota resetAt only announces a window
+   * refresh, so it may be probed early (#433).
+   */
+  cooldownSource?: CodexCooldownSource;
+  /**
+   * Bumped on every cooldown write. A probe lease records the generation it was
+   * issued for so a lease cannot clear a cooldown that a later 429 replaced.
+   */
+  cooldownGeneration?: number;
+  /**
+   * Identity of the in-flight probe. A cooled-down account sends no traffic, so
+   * no organic 2xx can prove recovery; only the outcome carrying this id may
+   * clear the cooldown.
+   */
+  probeLeaseId?: string;
+  /** Cooldown generation at the moment the lease was granted. */
+  probeLeaseGeneration?: number;
+  /** Last probe grant or conclusion; paces the probe interval. */
+  lastProbeAt?: number;
   /**
    * Soft avoid after connect_error / timeout / transient 5xx. Cleared on 2xx.
    * Blocks pool selection + thread affinity reuse so a sticky session can leave a
@@ -41,6 +65,15 @@ type CodexUpstreamHealth = {
 
 const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
 const CODEX_MAX_QUOTA_COOLDOWN_MS = 24 * 60 * 60_000;
+/**
+ * A weekly/monthly quota `resetAt` announces when the window refreshes; it is not
+ * a "come back after this" directive like Retry-After. Plan quota routinely frees
+ * up long before the advertised reset, so cap reset-derived cooldowns far below
+ * the Retry-After ceiling (#433).
+ */
+const CODEX_MAX_RESET_DERIVED_COOLDOWN_MS = 15 * 60_000;
+/** Minimum gap between probe leases for one cooled-down account. */
+export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
@@ -60,6 +93,7 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
 
 export type CodexUpstreamOutcome = number | "connect_error" | "timeout";
 export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "unknown";
+export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 export type CodexUpstreamOutcomeMeta = {
   retryAfter?: string | null;
   resetAt?: unknown | unknown[];
@@ -68,6 +102,12 @@ export type CodexUpstreamOutcomeMeta = {
   threadId?: string | null;
   /** Suppress active-account and affinity changes for an account-qualified request. */
   fixedAccount?: boolean;
+  /**
+   * Probe lease held by this request, when it was admitted through an active
+   * quota cooldown. Only the outcome carrying the current lease may clear the
+   * cooldown (#433).
+   */
+  probeLeaseId?: string;
 };
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
@@ -161,17 +201,104 @@ export function parseResetCooldownMs(resetAt: unknown | unknown[] | undefined, n
     if (timestamp === undefined) continue;
     const delay = timestamp - now;
     if (delay <= 0) continue;
-    const clamped = clampCooldownMs(delay);
+    // A far-future reset must not pin the account for the full Retry-After
+    // ceiling: quota usually frees up well before the advertised window (#433).
+    const clamped = Math.min(clampCooldownMs(delay), CODEX_MAX_RESET_DERIVED_COOLDOWN_MS);
     if (best === undefined || clamped < best) best = clamped;
   }
   return best;
 }
 
-export function computeQuotaCooldownUntil(meta: CodexUpstreamOutcomeMeta = {}): number {
+export function computeQuotaCooldown(meta: CodexUpstreamOutcomeMeta = {}): {
+  until: number;
+  source: CodexCooldownSource;
+} {
   const now = meta.now ?? Date.now();
   const retryAfterMs = parseRetryAfterMs(meta.retryAfter, now);
-  const resetCooldownMs = retryAfterMs === undefined ? parseResetCooldownMs(meta.resetAt, now) : undefined;
-  return now + (retryAfterMs ?? resetCooldownMs ?? CODEX_DEFAULT_QUOTA_COOLDOWN_MS);
+  if (retryAfterMs !== undefined) return { until: now + retryAfterMs, source: "retry-after" };
+  const resetCooldownMs = parseResetCooldownMs(meta.resetAt, now);
+  if (resetCooldownMs !== undefined) return { until: now + resetCooldownMs, source: "reset-derived" };
+  return { until: now + CODEX_DEFAULT_QUOTA_COOLDOWN_MS, source: "default" };
+}
+
+export function computeQuotaCooldownUntil(meta: CodexUpstreamOutcomeMeta = {}): number {
+  return computeQuotaCooldown(meta).until;
+}
+
+/**
+ * Grant at most one probe lease per interval for a cooled-down account.
+ *
+ * A cooled-down account is short-circuited locally, so it never sends traffic and
+ * no organic 2xx can prove that upstream quota recovered — the cooldown can only
+ * end by expiry or a proxy restart (#433). Releasing a single probe breaks that
+ * deadlock. Explicit Retry-After cooldowns are excluded: those are literal retry
+ * directives, not window announcements.
+ *
+ * Returns the lease id, or null when no probe may go out right now.
+ */
+export function tryAcquireCodexQuotaProbeLease(accountId: string, now = Date.now()): string | null {
+  const health = upstreamHealth.get(accountId);
+  if (!health) return null;
+  const cooldownUntil = health.cooldownUntil;
+  if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return null;
+  if (health.cooldownSource === "retry-after") return null;
+  if (health.probeLeaseId !== undefined) return null;
+  const origin = health.lastProbeAt ?? health.cooldownSince ?? cooldownUntil;
+  if (now - origin < CODEX_QUOTA_PROBE_INTERVAL_MS) return null;
+  const probeLeaseId = randomUUID();
+  upstreamHealth.set(accountId, {
+    ...health,
+    probeLeaseId,
+    probeLeaseGeneration: health.cooldownGeneration ?? 0,
+    lastProbeAt: now,
+  });
+  return probeLeaseId;
+}
+
+/**
+ * Hand a probe lease back without recording an upstream outcome. Used by paths
+ * that take a lease and then fail before any request reaches upstream.
+ */
+export function releaseCodexQuotaProbeLease(accountId: string, leaseId: string, now = Date.now()): void {
+  const health = upstreamHealth.get(accountId);
+  if (!health || health.probeLeaseId !== leaseId) return;
+  upstreamHealth.set(accountId, withProbeLeaseReleased(health, now));
+}
+
+/**
+ * True when this outcome belongs to the account's in-flight probe. The
+ * undefined-id guard matters: without it an outcome carrying no lease would match
+ * an account holding no lease and be mistaken for the probe owner.
+ */
+function ownsProbeLease(health: CodexUpstreamHealth | undefined, meta: CodexUpstreamOutcomeMeta): boolean {
+  return meta.probeLeaseId !== undefined && meta.probeLeaseId === health?.probeLeaseId;
+}
+
+/**
+ * True when the owning probe may still clear the cooldown. A later 429 bumps the
+ * generation, so a probe that started under an older cooldown must not erase the
+ * newer restriction (which may carry an explicit Retry-After).
+ */
+function probeMayClearCooldown(health: CodexUpstreamHealth | undefined, meta: CodexUpstreamOutcomeMeta): boolean {
+  return ownsProbeLease(health, meta)
+    && (health!.probeLeaseGeneration ?? 0) === (health!.cooldownGeneration ?? 0);
+}
+
+/** Strip the in-flight lease while preserving every hard-cooldown field. */
+function withProbeLeaseReleased(health: CodexUpstreamHealth, now: number): CodexUpstreamHealth {
+  const { probeLeaseId: _id, probeLeaseGeneration: _gen, ...rest } = health;
+  return { ...rest, lastProbeAt: now };
+}
+
+/**
+ * Hard-cooldown bookkeeping that ordinary success/transient transitions rebuild
+ * their health object from. Dropping these would let one late unrelated response
+ * erase a Retry-After source, a cooldown generation, or someone else's live probe.
+ */
+function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Partial<CodexUpstreamHealth> {
+  if (!health) return {};
+  const { consecutiveFailures: _f, consecutiveSuccesses: _s, lastFailureStatus: _st, lastFailureAt: _at, softAvoidUntil: _sa, ...cooldownFields } = health;
+  return cooldownFields;
 }
 
 export function getCodexAccountCooldownUntil(accountId: string, now = Date.now()): number | null {
@@ -461,28 +588,49 @@ export function recordCodexUpstreamOutcome(
   if (outcomeClass === "success") {
     const current = upstreamHealth.get(accountId);
     const cooldownUntil = getCodexAccountCooldownUntil(accountId, now);
+    // A leased probe that is still on its own cooldown generation proves the
+    // account recovered: clear the hard cooldown outright (#433).
+    if (cooldownUntil && probeMayClearCooldown(current, meta)) {
+      upstreamHealth.delete(accountId);
+      return;
+    }
+    // Owning probe on a stale generation: the lease is done, but a newer 429
+    // replaced the cooldown in the meantime, so only give the lease back.
+    // Non-owners keep every hard-cooldown field, including someone else's live lease.
+    const base = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;
+    const preserved = preservedCooldownFields(base);
     const failoverEnabled = (config.upstreamFailoverThreshold ?? 3) > 0;
     if (failoverEnabled && current && current.consecutiveFailures >= 2) {
       const consecutiveSuccesses = (current.consecutiveSuccesses ?? 0) + 1;
       if (consecutiveSuccesses < 2) {
         upstreamHealth.set(accountId, {
-          ...current,
+          ...base!,
+          ...preserved,
           consecutiveSuccesses,
-          ...(cooldownUntil ? { cooldownUntil } : {}),
         });
         return;
       }
     }
     // Level 1 clears immediately; escalated accounts need two consecutive healthy terminals.
     // Hard quota cooldown intentionally survives either recovery path.
-    if (cooldownUntil) upstreamHealth.set(accountId, { consecutiveFailures: 0, cooldownUntil });
+    if (cooldownUntil) upstreamHealth.set(accountId, { consecutiveFailures: 0, ...preserved });
     else upstreamHealth.delete(accountId);
     return;
   }
-  if (outcomeClass === "caller") return;
+  if (outcomeClass === "caller") {
+    // A 4xx does not change account health, but it does conclude an in-flight
+    // probe — otherwise the lease would never be handed back.
+    const current = upstreamHealth.get(accountId);
+    if (ownsProbeLease(current, meta)) {
+      upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
+    }
+    return;
+  }
 
   const lastFailureStatus = typeof outcome === "number" ? outcome : 0;
   if (outcomeClass === "credential") {
+    // 401/403 quarantines the account for reauth. That supersedes quota state
+    // entirely: a cooldown (and any probe lease) on an unusable account is moot.
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,
       lastFailureStatus,
@@ -494,11 +642,28 @@ export function recordCodexUpstreamOutcome(
   }
 
   if (outcomeClass === "quota") {
+    const prior = upstreamHealth.get(accountId);
+    const { until, source } = computeQuotaCooldown(meta);
+    // Every cooldown write bumps the generation so a probe issued against the
+    // previous cooldown can no longer clear this one (#433).
+    const cooldownGeneration = (prior?.cooldownGeneration ?? 0) + 1;
+    // A failed probe concludes its lease; an unrelated 429 leaves the live probe alone.
+    const ownsLease = ownsProbeLease(prior, meta);
     upstreamHealth.set(accountId, {
       consecutiveFailures: 0,
       lastFailureStatus,
       lastFailureAt: now,
-      cooldownUntil: computeQuotaCooldownUntil(meta),
+      cooldownUntil: until,
+      cooldownSince: now,
+      cooldownSource: source,
+      cooldownGeneration,
+      ...(ownsLease
+        ? { lastProbeAt: now }
+        : {
+          ...(prior?.probeLeaseId !== undefined ? { probeLeaseId: prior.probeLeaseId } : {}),
+          ...(prior?.probeLeaseGeneration !== undefined ? { probeLeaseGeneration: prior.probeLeaseGeneration } : {}),
+          ...(prior?.lastProbeAt !== undefined ? { lastProbeAt: prior.lastProbeAt } : {}),
+        }),
     });
     if (!meta.fixedAccount) clearThreadAccountMapForAccount(accountId);
     if (!meta.fixedAccount && config.activeCodexAccountId === accountId) {
@@ -510,6 +675,9 @@ export function recordCodexUpstreamOutcome(
 
   // transient (connect_error / timeout / 5xx)
   const current = upstreamHealth.get(accountId);
+  // A transient failure concludes an owning probe; an unrelated 5xx must not
+  // consume someone else's live lease or drop hard-cooldown bookkeeping (#433).
+  const transientBase = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;
   const stale = current?.lastFailureAt ? now - current.lastFailureAt > CODEX_FAILURE_WINDOW_MS : false;
   const hardCooldownUntil = getCodexAccountCooldownUntil(accountId, now) ?? undefined;
   // Soft avoid + affinity clears are part of failover. When threshold is 0, leave
@@ -526,6 +694,7 @@ export function recordCodexUpstreamOutcome(
     )
     : undefined;
   upstreamHealth.set(accountId, {
+    ...preservedCooldownFields(transientBase),
     consecutiveFailures,
     lastFailureStatus,
     lastFailureAt: now,

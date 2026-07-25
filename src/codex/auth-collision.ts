@@ -1,25 +1,69 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
 import { resolveCodexHomeDir } from "./home";
 import { extractAccountId } from "../oauth/chatgpt";
 
-export function readCodexTokens(): { access_token: string; account_id: string; id_token?: string } | null {
+export interface CodexTokens {
+  access_token: string;
+  account_id: string;
+  id_token?: string;
+}
+
+/**
+ * Why a read *outcome* and not just `Tokens | null`: callers need to tell a real sign-out apart
+ * from a transient read failure. A single null collapsed "file absent", "malformed JSON", and
+ * "read error" into one answer, so a half-written `auth.json` looked exactly like a logout and
+ * callers destroyed healthy cached account state because of it.
+ */
+export type CodexTokenReadResult =
+  | { status: "ok"; tokens: CodexTokens }
+  | { status: "missing" | "invalid" | "unreadable" };
+
+function hasErrnoCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && (error as { code?: unknown }).code === code;
+}
+
+/**
+ * Reads the Codex CLI credential file and classifies the outcome. Reads once instead of doing an
+ * `existsSync` pre-check, so a file replaced between check and read cannot be misread as absent.
+ * Never returns or logs the raw error or any token material.
+ */
+export function readCodexTokensResult(): CodexTokenReadResult {
+  let raw: string;
   try {
-    const codexHome = resolveCodexHomeDir();
-    const authPath = join(codexHome, "auth.json");
-    if (!existsSync(authPath)) return null;
-    const j = JSON.parse(readFileSync(authPath, "utf-8")) as {
+    raw = readFileSync(join(resolveCodexHomeDir(), "auth.json"), "utf-8");
+  } catch (error) {
+    return { status: hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable" };
+  }
+  try {
+    const j = JSON.parse(raw) as {
       tokens?: { access_token?: string; account_id?: string; id_token?: string };
     };
-    if (!j?.tokens?.access_token) return null;
+    if (!j?.tokens?.access_token) return { status: "invalid" };
     return {
-      access_token: j.tokens.access_token,
-      account_id: j.tokens.account_id ?? "",
-      id_token: j.tokens.id_token,
+      status: "ok",
+      tokens: {
+        access_token: j.tokens.access_token,
+        account_id: j.tokens.account_id ?? "",
+        id_token: j.tokens.id_token,
+      },
     };
-  } catch { return null; }
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+/**
+ * Compatibility wrapper: any usable-token check keeps the original null contract, which keeps
+ * request routing fail-closed. Only callers that must distinguish the failure reason should use
+ * `readCodexTokensResult()`.
+ */
+export function readCodexTokens(): CodexTokens | null {
+  const result = readCodexTokensResult();
+  return result.status === "ok" ? result.tokens : null;
 }
 
 export function getMainChatgptAccountId(): string | null {

@@ -79,7 +79,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <div className="page-head"><h2>{t("nav.subagents")}</h2></div>
+      <div className="page-head">
+        <h2>{t("nav.subagents")}</h2>
+      </div>
       <p className="page-sub"><Trans k="sub.subtitle" cmd="spawn_agent" /></p>
 
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}

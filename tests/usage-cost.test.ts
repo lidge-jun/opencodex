@@ -103,6 +103,27 @@ describe("normalizeCostTokens", () => {
 });
 
 describe("resolveMatchedPrice", () => {
+  // WP7: claude-opus-5 is exposed by three providers but missing from the jawcode
+  // bundle, so it resolved to null and Logs rendered an em dash instead of a cost.
+  // The model-level vendor fallback only searches jawcode metadata, never overlays,
+  // so each exposing provider needs its own row.
+  test("claude-opus-5 resolves to the user-derived Opus 4.6 price on every exposing provider", () => {
+    for (const provider of ["anthropic", "cursor", "kiro"]) {
+      const price = resolveMatchedPrice(provider, "claude-opus-5");
+      expect(price).not.toBeNull();
+      expect(price).toMatchObject({
+        provider,
+        modelId: "claude-opus-5",
+        cost4: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        source: "expected",
+        status: "verified-derived",
+      });
+      // Provenance must stay honest: derived from the maintainer's confirmation,
+      // not from a published Opus 5 price page.
+      expect(price?.sourceRef).toContain("user-confirmed");
+    }
+  });
+
   test("17. model-level fallback: kiro's claude opus follows the anthropic price", () => {
     const price = resolveMatchedPrice("kiro", "claude-opus-4.6");
     expect(price).not.toBeNull();
@@ -191,11 +212,14 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 43 keys, including Gemini 3.6 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(45);
+  test("16. shipped overlay membership: 48 keys, including Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(48);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
+      "anthropic/claude-opus-5",
+      "cursor/claude-opus-5",
+      "kiro/claude-opus-5",
       "minimax/MiniMax-M2.1-highspeed",
       "minimax-cn/MiniMax-M2.1-highspeed",
       "deepseek/deepseek-chat",

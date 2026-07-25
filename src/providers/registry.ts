@@ -644,6 +644,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
     note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
   },
+  {
+    // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are
+    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
+    // Live-verified 2026-07-24: /v1/chat/completions accepts the `tools` field and
+    // streams, and GET /v1/models returns the per-API-key allowed catalog in the
+    // OpenAI list shape, so live model discovery narrows to what the key can use.
+    id: "bizrouter", label: "BizRouter", adapter: "openai-chat", baseUrl: "https://api.bizrouter.ai/v1",
+    authKind: "key", dashboardUrl: "https://bizrouter.ai/settings/keys",
+    defaultModel: "openai/gpt-5.6-sol",
+    models: ["openai/gpt-5.6-sol", "anthropic/claude-sonnet-5", "google/gemini-3.5-flash"],
+    note: "Korean enterprise LLM gateway. Per-key allowed models are discovered live from /v1/models. Full catalog: https://bizrouter.ai/models",
+  },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
   // 2026-07-10 Gemini API refresh: Tier-2 ai.google.dev evidence recorded in
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.

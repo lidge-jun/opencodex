@@ -47,13 +47,23 @@ export const MODELS_FETCH_FAILURE_COOLDOWN_MS = 30_000;
 
 const failureAt = new Map<string, number>();
 const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
+/**
+ * How many models the last successful discovery actually returned, before any configured-alias
+ * augmentation or custom-model merge. Consumers cannot recover this by subtracting known custom
+ * ids: a custom id that later also appears upstream would make a real live catalog look
+ * custom-only, and the provider's configured fallback would wrongly stay authoritative.
+ */
+const liveModelCounts = new Map<string, number>();
 
 export function markModelsFetchFailure(provider: string, now = Date.now()): void {
   failureAt.set(provider, now);
 }
 
-export function markProviderDiscoveryOk(provider: string): void {
+/** `liveModelCount` is required so a caller that forgets to pass it fails typecheck instead of
+ * silently recording zero and misclassifying the provider as having no live catalog. */
+export function markProviderDiscoveryOk(provider: string, liveModelCount: number): void {
   discoveryStatus.set(provider, { status: "ok" });
+  liveModelCounts.set(provider, Math.max(0, Math.floor(liveModelCount)));
 }
 
 export function markProviderDiscoveryFailed(
@@ -88,10 +98,17 @@ export function shouldLogDiscoveryFailure(
 
 export function clearProviderDiscoveryStatus(provider: string): void {
   discoveryStatus.delete(provider);
+  liveModelCounts.delete(provider);
 }
 
 export function getProviderDiscoveryStatus(provider: string): ProviderModelDiscoveryStatus | undefined {
   return discoveryStatus.get(provider);
+}
+
+/** Undefined when discovery has never succeeded for this provider. A failed refresh keeps the
+ * last successful count so a stale catalog is still recognised as live-origin. */
+export function getProviderLiveModelCount(provider: string): number | undefined {
+  return liveModelCounts.get(provider);
 }
 
 export function isModelsFetchCoolingDown(provider: string, cooldownMs = MODELS_FETCH_FAILURE_COOLDOWN_MS, now = Date.now()): boolean {
@@ -121,9 +138,11 @@ export function clearModelCache(provider?: string): void {
     cache.delete(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
+    liveModelCounts.delete(provider);
   } else {
     cache.clear();
     failureAt.clear();
     discoveryStatus.clear();
+    liveModelCounts.clear();
   }
 }

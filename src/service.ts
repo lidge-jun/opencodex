@@ -472,24 +472,101 @@ function taskXmlSection(xml: string, tag: string): string {
   return new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i").exec(xml)?.[1] ?? "";
 }
 
+/** Drop comments and CDATA so a commented-out decoy cannot satisfy any check. */
+function taskXmlWithoutCommentsAndCdata(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->/g, "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+}
+
+/**
+ * Count occurrences of an unprefixed tag, including the self-closing form. The
+ * element boundary matters: `<EnabledExtra>` must not count as `Enabled`.
+ */
+function taskXmlElementCount(xml: string, tag: string): number {
+  return xml.match(new RegExp(`<${tag}(?:\\s[^>]*?)?\\s*\\/?>`, "gi"))?.length ?? 0;
+}
+
+/**
+ * True when a namespace-prefixed form of the tag appears. A prefixed element bound
+ * to the task namespace carries a real value, but this module parses by regex and
+ * cannot resolve prefixes — so it fails closed instead of reading the element as
+ * absent (which would silently apply the schema default).
+ */
+function taskXmlHasPrefixedTag(xml: string, tag: string): boolean {
+  return new RegExp(`<[A-Za-z_][\\w.-]*:${tag}(?:[\\s/>])`, "i").test(xml);
+}
+
+/**
+ * Compare an element that Task Scheduler may omit when exporting a registered task.
+ * Absence means the documented schema default (#432); a present element must still
+ * match exactly, so a malformed or explicitly unsafe value never reads as healthy.
+ */
+function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
+  // Check the prefixed form first: treating `<t:Enabled>false</t:Enabled>` as an
+  // omission would turn an explicitly disabled task into a healthy one.
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  const count = taskXmlElementCount(xml, tag);
+  if (count === 0) return true;
+  if (count > 1) return false;
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/${tag}>`, "i").exec(xml)?.[1];
+  return value?.trim().toLowerCase() === expected.toLowerCase();
+}
+
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
 export function windowsTaskRegistrationHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
 ): boolean {
-  const trigger = taskXmlSection(xml, "LogonTrigger");
-  const principal = taskXmlSection(xml, "Principal");
-  const settings = taskXmlSection(xml, "Settings");
-  const action = taskXmlSection(xml, "Exec");
-  return /<Enabled>\s*true\s*<\/Enabled>/i.test(trigger)
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
+  // Task/Data, so a Data block placed before the real sections could shadow them.
+  // We never emit Data, so its presence alone disqualifies the registration. Both
+  // forms are rejected because taskXmlElementCount() ignores prefixed tags.
+  if (taskXmlElementCount(scrubbed, "Data") > 0 || taskXmlHasPrefixedTag(scrubbed, "Data")) return false;
+  const triggers = taskXmlSection(scrubbed, "Triggers");
+  const trigger = taskXmlSection(triggers, "LogonTrigger");
+  const principal = taskXmlSection(scrubbed, "Principal");
+  const settings = taskXmlSection(scrubbed, "Settings");
+  const action = taskXmlSection(scrubbed, "Exec");
+  // A self-closing <LogonTrigger /> leaves an empty section, so look for the element
+  // itself — scoped to <Triggers> so a decoy elsewhere cannot satisfy it.
+  return taskXmlElementCount(triggers, "LogonTrigger") > 0
+    && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
-    && /<RunLevel>\s*LeastPrivilege\s*<\/RunLevel>/i.test(principal)
-    && /<Enabled>\s*true\s*<\/Enabled>/i.test(settings)
+    && taskXmlOptionalValueEquals(principal, "RunLevel", "LeastPrivilege")
+    && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
     && action.includes(`<Command>${taskXmlString(wscript)}</Command>`)
     && action.includes(`<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`);
+}
+
+export interface WindowsSchedulerXmlState {
+  installed: boolean;
+  enabled: boolean;
+  registrationHealthy: boolean;
+}
+
+/**
+ * Single source of truth for reading a registered task's XML. Both the status
+ * diagnostic and its tests go through here, so a partial fix cannot leave one
+ * caller on an older, stricter reading of the same document (#432).
+ */
+export function readWindowsSchedulerXmlState(
+  xml: string,
+  wscript?: string,
+  launcher?: string,
+): WindowsSchedulerXmlState {
+  const installed = xml.length > 0;
+  if (!installed) return { installed: false, enabled: false, registrationHealthy: false };
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  const hasData = taskXmlElementCount(scrubbed, "Data") > 0 || taskXmlHasPrefixedTag(scrubbed, "Data");
+  const settings = hasData ? "" : taskXmlSection(scrubbed, "Settings");
+  return {
+    installed: true,
+    enabled: !hasData && taskXmlOptionalValueEquals(settings, "Enabled", "true"),
+    registrationHealthy: windowsTaskRegistrationHealthy(xml, wscript, launcher),
+  };
 }
 
 // ── macOS (launchd) ──
@@ -878,9 +955,15 @@ export function serviceStartableFromTray(service: ServiceDiagnostic): boolean {
 }
 
 export interface WindowsServiceDiagnosticInputs {
-  schedulerInstalled: boolean;
-  schedulerEnabled: boolean;
-  schedulerAssetsHealthy: boolean;
+  /**
+   * Raw `schtasks /query /xml` output; empty when no task is registered. Passed as
+   * XML rather than pre-computed booleans so every caller reads the document through
+   * readWindowsSchedulerXmlState() — a second, stricter reading elsewhere would
+   * silently reintroduce the stale-status false positive (#432).
+   */
+  schedulerXml: string;
+  /** Whether the on-disk service assets exist. A filesystem concern, not an XML one. */
+  schedulerAssetsPresent: boolean;
   nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
   recordedBackend: ServiceBackend | null;
   staleBakedPaths: boolean;
@@ -889,37 +972,41 @@ export interface WindowsServiceDiagnosticInputs {
 }
 
 export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticInputs): ServiceDiagnostic {
+  const schedulerState = readWindowsSchedulerXmlState(inputs.schedulerXml);
+  const schedulerInstalled = schedulerState.installed;
+  const schedulerEnabled = schedulerState.enabled;
+  const schedulerAssetsHealthy = inputs.schedulerAssetsPresent && schedulerState.registrationHealthy;
   const nativeInstalled = inputs.nativeStatus !== "nonexistent";
-  const conflict = inputs.schedulerInstalled && nativeInstalled;
-  const backendStateMismatch = inputs.schedulerInstalled
+  const conflict = schedulerInstalled && nativeInstalled;
+  const backendStateMismatch = schedulerInstalled
     ? inputs.recordedBackend !== "scheduler"
     : nativeInstalled && inputs.recordedBackend !== "native";
   const stale = inputs.staleBakedPaths
-    || (inputs.schedulerInstalled && !inputs.schedulerAssetsHealthy)
+    || (schedulerInstalled && !schedulerAssetsHealthy)
     || backendStateMismatch
     || (inputs.nativeStatus === "nonexistent" && inputs.nativeRepairAssetsOnly);
-  const backend = inputs.schedulerInstalled ? "scheduler" : nativeInstalled ? "native" : null;
-  const enabled = inputs.schedulerInstalled ? inputs.schedulerEnabled : inputs.nativeStatus === "started";
-  const running = nativeInstalled ? inputs.nativeStatus === "started" : inputs.schedulerInstalled && inputs.schedulerEnabled;
+  const backend = schedulerInstalled ? "scheduler" : nativeInstalled ? "native" : null;
+  const enabled = schedulerInstalled ? schedulerEnabled : inputs.nativeStatus === "started";
+  const running = nativeInstalled ? inputs.nativeStatus === "started" : schedulerInstalled && schedulerEnabled;
   const viable = !conflict && !stale
-    && (inputs.schedulerInstalled ? inputs.schedulerEnabled && inputs.schedulerAssetsHealthy : inputs.nativeStatus === "started");
+    && (schedulerInstalled ? schedulerEnabled && schedulerAssetsHealthy : inputs.nativeStatus === "started");
   const startable = !conflict && !stale
-    && (inputs.schedulerInstalled
-      ? inputs.schedulerEnabled && inputs.schedulerAssetsHealthy
+    && (schedulerInstalled
+      ? schedulerEnabled && schedulerAssetsHealthy
       : inputs.nativeStatus === "started" || inputs.nativeStatus === "stopped");
   const detail = conflict
     ? "CONFLICT: Task Scheduler and native WinSW are both present — run 'ocx service uninstall' then reinstall one"
     : stale
       ? "stale or missing service assets — run 'ocx service install' to repair"
-      : inputs.schedulerInstalled
-        ? inputs.schedulerEnabled ? "Task Scheduler enabled" : "Task Scheduler disabled"
+      : schedulerInstalled
+        ? schedulerEnabled ? "Task Scheduler enabled" : "Task Scheduler disabled"
         : nativeInstalled
           ? `native (WinSW ${WINSW_VERSION}): ${inputs.nativeStatus}`
           : "not installed";
   const summary = backend ? `installed, ${detail} (${inputs.diagnostics})` : `not installed (${inputs.diagnostics})`;
   return {
     supported: true,
-    installed: inputs.schedulerInstalled || nativeInstalled,
+    installed: schedulerInstalled || nativeInstalled,
     enabled,
     running,
     viable,
@@ -951,20 +1038,16 @@ export function diagnoseService(): ServiceDiagnostic {
   }
   if (process.platform === "win32") {
     const schedulerXml = statusWindowsXml();
-    const schedulerInstalled = schedulerXml.length > 0;
-    const schedulerSettings = taskXmlSection(schedulerXml, "Settings");
-    const schedulerEnabled = schedulerInstalled && /<Enabled>\s*true\s*<\/Enabled>/i.test(schedulerSettings);
-    const schedulerAssets = [windowsServiceScriptPath(), windowsLauncherVbsPath(), windowsTaskXmlPath()].every(existsSync)
-      && windowsTaskRegistrationHealthy(schedulerXml);
+    const schedulerAssetsPresent = [windowsServiceScriptPath(), windowsLauncherVbsPath(), windowsTaskXmlPath()]
+      .every(existsSync);
     const nativeStatus = statusWinswRaw();
     const installState = readServiceInstallState();
     const recordedBackend: ServiceBackend | null = !installState
       ? null
       : installState.backend === "native" ? "native" : "scheduler";
     return deriveWindowsServiceDiagnostic({
-      schedulerInstalled,
-      schedulerEnabled,
-      schedulerAssetsHealthy: schedulerAssets,
+      schedulerXml,
+      schedulerAssetsPresent,
       nativeStatus,
       recordedBackend,
       staleBakedPaths: bakedServicePathsDiagnostic() !== null,

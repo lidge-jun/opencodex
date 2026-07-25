@@ -1,0 +1,166 @@
+/* ============================================================================
+   dashboard-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: dashboard-workspace-  |  widgets: dbw-
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.dashboard-workspace-shell) {
+  max-width: 1200px;
+}
+
+.dashboard-workspace-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.dashboard-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* List sections (Active providers, Available models): keep them compact in
+   workspace view. Rows scroll inside the pane with a pinned header instead of
+   pushing the whole page down. Classic view keeps natural page scroll. */
+.dashboard-workspace-main .tbl-wrap {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.dashboard-workspace-main .tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* Overview stack: uniform vertical rhythm between every box (shared by
+   classic + workspace views). Gap matches the sidecar grid gap. */
+.dash-overview-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Sidecar settings: two panels side by side, gap matches --space-4.
+   auto-fit collapses to one column before two columns get too narrow for the
+   title + model select row (~21rem per card), so the select never overlaps or
+   overflows the card between the old 768px breakpoint and desktop widths. */
+.dash-sidecar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* Title + select on one row; hint gets the full card width underneath so
+   it stays a stable 2-line block (no clamp / no cutoff when the select grows). */
+.dash-sidecar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dash-sidecar-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dash-sidecar-card__row .font-semibold {
+  min-width: 0;
+}
+
+.dash-sidecar-card__row .custom-select {
+  /* Reserve baseline space to prevent row reflow, but keep the trigger
+     compact instead of forcing a permanently wide fixed width. */
+  flex: 0 1 auto;
+  width: auto;
+  min-width: clamp(10rem, 24vw, 11.5rem);
+  max-width: min(100%, 14rem);
+}
+
+.dash-sidecar-card__row .select-trigger {
+  width: 100%;
+  max-width: 100%;
+  justify-content: space-between;
+}
+
+.dash-sidecar-card__row .select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.dash-sidecar-card .setting-hint {
+  margin-top: 0;
+}
+
+/* Available models: search + per-provider accordion with model chips */
+.dash-model-acc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dash-model-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.dash-model-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  transition: background var(--motion-fast);
+}
+
+.dash-model-head:hover {
+  background: var(--hover);
+}
+
+.dash-model-head .count {
+  font-family: var(--font-code);
+  font-weight: var(--weight-medium);
+  color: var(--faint);
+  font-size: var(--text-label);
+}
+
+.dash-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+
+.dash-model-chip {
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  white-space: nowrap;
+}

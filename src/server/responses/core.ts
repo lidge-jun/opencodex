@@ -49,6 +49,8 @@ import {
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  codexProbeLeaseId,
+  releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
 } from "../../codex/auth-context";
@@ -123,6 +125,7 @@ export function sidecarOutcomeRecorder(
     ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
         threadId,
         fixedAccount: authCtx.fixedAccount,
+        probeLeaseId: authCtx.probeLeaseId,
       })
     : undefined;
 }
@@ -210,10 +213,11 @@ export function codexForwardTerminalOutcomeRecorder(
       // Normal limit/content-filter/stall terminal — the account served the
       // request. Don't penalize account health; record success to clear any
       // prior soft-avoid so a healthy account isn't stuck avoided.
-      recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
-        threadId,
-        fixedAccount: authCtx.fixedAccount,
-      });
+        recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
+          threadId,
+          fixedAccount: authCtx.fixedAccount,
+          probeLeaseId: codexProbeLeaseId(authCtx),
+        });
       return;
     }
     // status === "completed" or "failed": use the semantic HTTP status derived
@@ -228,10 +232,11 @@ export function codexForwardTerminalOutcomeRecorder(
     const outcome = status === "completed"
       ? 200
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
-    recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-      threadId,
-      fixedAccount: authCtx.fixedAccount,
-    });
+      recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+        threadId,
+        fixedAccount: authCtx.fixedAccount,
+        probeLeaseId: codexProbeLeaseId(authCtx),
+      });
   };
 }
 
@@ -730,6 +735,10 @@ export async function handleResponses(
     }
     parsed.modelId = route.modelId;
   }
+  // Settle the wire once, right after the native model id is known, so logging,
+  // fast-mode injection, auth, and sidecar decisions all read the adapter this
+  // request will actually use rather than the provider-wide default (#404).
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
@@ -869,6 +878,8 @@ export async function handleResponses(
     throw err;
   }
   if (!isCodexAuthContextUsable(authCtx, config)) {
+    // Nothing reaches upstream on this path, so give the probe back.
+    releaseCodexAuthContextProbeLease(authCtx);
     return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -993,7 +1004,12 @@ export async function handleResponses(
   // one `{type:"compaction"}` output item (codex-rs compact_remote_v2.rs). Passthrough handles it
   // natively upstream; here we run the routed model as a plain summarizer — no tools, no web-search
   // sidecar — and the bridge appends the synthetic compaction item (src/responses/compaction.ts).
-  const routedCompaction = parsed._compactionRequest === true && !("passthrough" in adapter && adapter.passthrough);
+  // A Responses-shaped wire does not imply support for Codex's private
+  // `compaction_trigger` item — only the canonical ChatGPT backend speaks that
+  // contract. An API-key gateway would receive the trigger, answer with an ordinary
+  // message, and leave Codex fataling on a missing compaction item (#422).
+  const routedCompaction = parsed._compactionRequest === true
+    && !isCanonicalOpenAiForwardProvider(route.provider);
   if (routedCompaction) {
     delete parsed.context.tools;
     delete parsed._webSearch;
@@ -1002,7 +1018,7 @@ export async function handleResponses(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
-  if ("passthrough" in adapter && adapter.passthrough) {
+  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -1043,10 +1059,11 @@ export async function handleResponses(
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
-        recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-          threadId: req.headers.get("x-codex-parent-thread-id"),
-          fixedAccount: authCtx.fixedAccount,
-        });
+          recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+            threadId: req.headers.get("x-codex-parent-thread-id"),
+            fixedAccount: authCtx.fixedAccount,
+            probeLeaseId: codexProbeLeaseId(authCtx),
+          });
       }
       const msg = outcome === "timeout"
         ? `Provider connect timeout after ${connectMs}ms`
@@ -1101,6 +1118,7 @@ export async function handleResponses(
       if (retryAuthCtx?.kind === "pool" || retryAuthCtx?.kind === "main-pool") {
         recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, 400, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          probeLeaseId: codexProbeLeaseId(firstAuthCtx),
         });
 
         const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
@@ -1184,9 +1202,10 @@ export async function handleResponses(
            upstreamResponse.headers.get("x-codex-primary-reset-at"),
            upstreamResponse.headers.get("x-codex-secondary-reset-at"),
            upstreamResponse.headers.get("x-codex-tertiary-reset-at"),
-         ].filter(Boolean),
-         threadId: req.headers.get("x-codex-parent-thread-id"),
-         fixedAccount: authCtx.fixedAccount,
+          ].filter(Boolean),
+          threadId: req.headers.get("x-codex-parent-thread-id"),
+          fixedAccount: authCtx.fixedAccount,
+          probeLeaseId: codexProbeLeaseId(authCtx),
         });
       }
     }

@@ -312,6 +312,78 @@ describe("kiro adapter — parseStream", () => {
     });
   });
 
+  test("bounded fallback uses its rebuilt context estimate for the final absolute checkpoint", async () => {
+    const firstText = "p".repeat(7000);
+    const finalText = "f".repeat(3500);
+    globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: finalText })))) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    const request = await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+    const initialContextEstimate = request.usageLog?.inputTokens ?? 0;
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: firstText }),
+    ))));
+    const done = events.at(-1);
+    expect(done?.type).toBe("done");
+    const usage = done?.type === "done" ? done.usage : undefined;
+    expect(usage?.outputTokens).toBe(estimateTokens(firstText, "claude-sonnet-4.5") + estimateTokens(finalText, "claude-sonnet-4.5"));
+    expect(usage?.contextTotalTokens).toBeGreaterThan(
+      initialContextEstimate + Math.max(
+        estimateTokens(firstText, "claude-sonnet-4.5"),
+        estimateTokens(finalText, "claude-sonnet-4.5"),
+      ),
+    );
+  });
+
+  // The assertion above is satisfied by mergeKiroUsage()'s
+  // `first.contextTotalTokens + second.outputTokens` floor alone, so it would still pass if the
+  // rebuilt payload estimate regressed to the stale initial estimate. Compare two runs that differ
+  // only in how much visible assistant progress the first attempt produced: a larger progress means
+  // a larger rebuilt payload for the retry, so the absolute checkpoint must grow with it. A stale
+  // estimate makes the two checkpoints converge, which fails this test.
+  test("a larger first-attempt progress produces a larger rebuilt fallback checkpoint", async () => {
+    const finalText = "f".repeat(500);
+    const checkpointFor = async (progress: string): Promise<number> => {
+      globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: finalText })))) as typeof fetch;
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+      const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+        eventFrame({ content: progress }),
+      ))));
+      const done = events.at(-1);
+      expect(done?.type).toBe("done");
+      const usage = done?.type === "done" ? done.usage : undefined;
+      return usage?.contextTotalTokens ?? 0;
+    };
+
+    const smallProgress = await checkpointFor("p".repeat(2000));
+    const largeProgress = await checkpointFor("p".repeat(40000));
+
+    // The retry payload carries the first attempt's progress, so the rebuilt estimate must reflect it.
+    expect(largeProgress).toBeGreaterThan(smallProgress);
+    // And the extra pressure must be on the order of the extra progress, not a rounding artefact.
+    expect(largeProgress - smallProgress).toBeGreaterThan(
+      estimateTokens("p".repeat(20000), "claude-sonnet-4.5"),
+    );
+  });
+
+  test("bounded fallback preserves definite growth after an upstream context checkpoint", async () => {
+    const finalText = "f".repeat(3500);
+    const finalOutputTokens = estimateTokens(finalText, "claude-sonnet-4.5");
+    globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: finalText })))) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "I am checking." }),
+      eventFrame({ contextUsagePercentage: 25 }),
+    ))));
+    const done = events.at(-1);
+
+    expect(done?.type).toBe("done");
+    if (done?.type === "done") expect(done.usage?.contextTotalTokens).toBe(50_000 + finalOutputTokens);
+  });
+
   test("keeps a private-completion fallback after reasoning-only output as the final answer", async () => {
     globalThis.fetch = (async () => new Response(streamOf(...completionFrames("Done.")))) as typeof fetch;
     const adapter = createKiroAdapter(provider);
@@ -346,6 +418,24 @@ describe("kiro adapter — parseStream", () => {
       type: "text_delta", text: "Reasoning checked; done.", phase: "final_answer",
     });
     expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("reasoning-only fallback keeps absolute context above combined output", async () => {
+    const reasoning = "r".repeat(14_000);
+    const finalText = "f".repeat(14_000);
+    globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: finalText })))) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "solve" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: `<thinking>${reasoning}</thinking>` }),
+    ))));
+    const done = events.at(-1);
+
+    expect(done?.type).toBe("done");
+    if (done?.type === "done") {
+      expect(done.usage?.contextTotalTokens).toBeGreaterThanOrEqual(done.usage?.outputTokens ?? 0);
+    }
   });
 
   test("normal Responses cancellation aborts the adapter-owned fallback without another replay", async () => {
@@ -777,12 +867,33 @@ describe("kiro adapter — parseStream", () => {
     );
     expect(done).toEqual({
       inputTokens: 15,
+      contextTotalTokens: 204,
       cachedInputTokens: 3,
       cacheReadInputTokens: 3,
       cacheCreationInputTokens: 2,
       outputTokens: 4,
       totalTokens: 19,
     });
+  });
+
+  test("authoritative turn usage floors a smaller payload context estimate", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "hi" }]));
+    const done = await doneUsage(
+      adapter,
+      eventFrame({ content: "answer" }),
+      eventFrame({
+        tokenUsage: {
+          uncachedInputTokens: 500,
+          outputTokens: 4,
+          totalTokens: 504,
+        },
+      }, "metadataEvent"),
+    );
+
+    expect(done.inputTokens).toBe(500);
+    expect(done.outputTokens).toBe(4);
+    expect(done.contextTotalTokens).toBe(504);
   });
 
   test("invalid provider token usage is rejected instead of replacing estimates", async () => {
@@ -823,7 +934,7 @@ describe("kiro adapter — parseStream", () => {
     expect((events[0] as { message: string }).message).toContain("Compact or reduce the history");
   });
 
-  test("Kiro contextUsagePercentage remains diagnostic and does not override totals", async () => {
+  test("Kiro contextUsagePercentage drives context pressure without overriding turn totals", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(700) }]));
     const done = await doneUsage(
@@ -836,6 +947,15 @@ describe("kiro adapter — parseStream", () => {
     expect(done.outputTokens).toBe(100);
     expect(done.totalTokens).toBeUndefined();
     expect(done.estimated).toBe(true);
+    expect(done.contextTotalTokens).toBe(50_000);
+  });
+
+  test("Kiro context percentage uses the native model window instead of a configured client cap", async () => {
+    const adapter = createKiroAdapter({ ...provider, contextWindow: 1_000_000 });
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "hi" }], undefined, "claude-sonnet-4.5"));
+    const done = await doneUsage(adapter, eventFrame({ content: "ok" }), eventFrame({ contextUsagePercentage: 25 }));
+
+    expect(done.contextTotalTokens).toBe(50_000);
   });
 
   test("Kiro auto ignores provider-level context window and falls back to heuristic totals", async () => {
@@ -850,6 +970,29 @@ describe("kiro adapter — parseStream", () => {
     expect(done.inputTokens).toBe(200);
     expect(done.outputTokens).toBe(100);
     expect(done.totalTokens).toBeUndefined();
+    expect(done.contextTotalTokens).toBe(300);
+  });
+
+  test("Kiro auto uses the concrete response model to decode context percentage", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "hi" }], undefined, "kiro-auto"));
+    const done = await doneUsage(
+      adapter,
+      eventFrame({ content: "ok", modelId: "claude-sonnet-4.5" }),
+      eventFrame({ contextUsagePercentage: 25 }),
+    );
+
+    expect(done.contextTotalTokens).toBe(50_000);
+  });
+
+  test("Kiro GPT routes use the Kiro token ratio without context percentage", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(3500) }], undefined, "gpt-5.6-sol"));
+    const done = await doneUsage(adapter, eventFrame({ content: "y".repeat(3500) }));
+
+    expect(done.inputTokens).toBe(1000);
+    expect(done.outputTokens).toBe(1000);
+    expect(done.contextTotalTokens).toBe(2000);
   });
 
   test("fresh payload includes history while usage counts only the current turn", async () => {
@@ -875,6 +1018,37 @@ describe("kiro adapter — parseStream", () => {
     expect(longBody.length).toBeGreaterThan(shortBody.length + 10_000);
     expect(longUsage.inputTokens).toBe(shortUsage.inputTokens);
     expect(longUsage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
+    expect(longUsage.contextTotalTokens).toBeGreaterThan(shortUsage.contextTotalTokens ?? 0);
+  });
+
+  test("context pressure follows the normalized Kiro payload while logs retain dropped reasoning", async () => {
+    const privateReasoning = "private-plan-".repeat(1000);
+    const adapter = createKiroAdapter(provider);
+    const request = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "old question" },
+      { role: "assistant", content: [{ type: "thinking", thinking: privateReasoning }] },
+      { role: "user", content: "latest question" },
+    ]));
+    const usage = await doneUsage(adapter, eventFrame({ content: "ok" }));
+
+    expect(request.body).not.toContain(privateReasoning);
+    expect(request.usageLog?.inputTokens).toBeGreaterThan((usage.contextTotalTokens ?? 0) + 1000);
+    expect(usage.contextTotalTokens).toBeLessThan(1000);
+  });
+
+  test("normalized images contribute conservative context tokens", async () => {
+    const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", imageUrl: `data:image/png;base64,${onePixelPng}` },
+      ],
+    }]));
+    const usage = await doneUsage(adapter, eventFrame({ content: "ok" }));
+
+    expect(usage.contextTotalTokens).toBeGreaterThanOrEqual(256 + usage.outputTokens);
   });
 
   test("request log usage estimates the full Codex context while SSE usage stays current-turn", async () => {
@@ -891,6 +1065,7 @@ describe("kiro adapter — parseStream", () => {
     expect(usage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
     expect(request.usageLog?.estimated).toBe(true);
     expect(request.usageLog?.inputTokens).toBeGreaterThan(usage.inputTokens + 4000);
+    expect(usage.contextTotalTokens).toBe((request.usageLog?.inputTokens ?? 0) + usage.outputTokens);
   });
 
   test("resumed payload preserves the complete locally expanded history", async () => {
@@ -1001,5 +1176,31 @@ describe("kiro adapter — parseResponse (web-search sidecar non-streaming path)
     ]);
     const start = events.find(e => e.type === "tool_call_start") as { id: string; name: string };
     expect(start).toMatchObject({ id: "t1", name: "bash" });
+  });
+
+  // The parity test above never calls buildRequest(), so the contextInputEstimate closure that
+  // buildRequest() installs is never activated on the non-streaming path. Build a long-history
+  // request first, then assert the terminal usage carries the absolute checkpoint rather than only
+  // this attempt's output.
+  test("carries the absolute context checkpoint from a built long-history request", async () => {
+    const adapter = createKiroAdapter(provider);
+    const longHistory = [
+      { role: "user" as const, content: "h".repeat(60000) },
+      { role: "assistant" as const, content: [{ type: "text" as const, text: "ack" }] },
+      { role: "user" as const, content: "continue" },
+    ];
+    // No tools: a text-only reply must not trigger the structural fallback fetch here.
+    const request = await adapter.buildRequest(parsedWith(longHistory));
+    const builtEstimate = request.usageLog?.inputTokens ?? 0;
+    expect(builtEstimate).toBeGreaterThan(0);
+
+    const events = await adapter.parseResponse!(new Response(streamOf(eventFrame({ content: "ok" }))));
+    const done = events.at(-1);
+    expect(done?.type).toBe("done");
+    const usage = done?.type === "done" ? done.usage : undefined;
+
+    // The absolute checkpoint reflects the whole conversation, not just this attempt's output.
+    expect(usage?.contextTotalTokens).toBeGreaterThan(usage?.outputTokens ?? 0);
+    expect(usage?.contextTotalTokens).toBeGreaterThanOrEqual(builtEstimate);
   });
 });

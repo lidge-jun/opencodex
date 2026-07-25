@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useT } from "../../i18n";
-import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey } from "../../icons";
+import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTrash } from "../../icons";
 import {
   applyActiveAccountReauth,
   buildProviderWorkspace,
@@ -19,7 +19,7 @@ import {
   type WorkspaceSections,
 } from "../../provider-workspace/catalog";
 import { providerKind } from "../../provider-workspace/kind";
-import { countAvailableModels, parseAvailableModels, parseSelectedModels, type ProviderAvailableModels, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
+import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
@@ -35,6 +35,8 @@ export interface DetailSlotData {
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   availableModels: string[];
+  /** Did the last successful discovery return rows? Server-reported, never inferred. */
+  hasLiveModels: boolean;
   selectedModels: string[];
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
@@ -55,6 +57,7 @@ export default function ProviderWorkspaceShell({
   defaultProvider,
   selectedName,
   onSelect,
+  onRemoveProvider,
   onAddProvider,
   onEditConfig,
   jsonEditor,
@@ -68,6 +71,8 @@ export default function ProviderWorkspaceShell({
   defaultProvider: string;
   selectedName: string | null;
   onSelect: (name: string | null) => void;
+  /** WP4: mouse accelerator for deleting a provider straight from the rail. */
+  onRemoveProvider?: (name: string) => void;
   onAddProvider: (intent?: AddProviderIntent) => void;
   onEditConfig?: () => void;
   jsonEditor?: JsonEditorState;
@@ -88,6 +93,7 @@ export default function ProviderWorkspaceShell({
   const [railFocusName, setRailFocusName] = useState<string | null>(null);
   const [modelCounts, setModelCounts] = useState<ProviderModelCounts>({});
   const [availableModels, setAvailableModels] = useState<ProviderAvailableModels>({});
+  const [liveModelCounts, setLiveModelCounts] = useState<ProviderLiveModelCounts>({});
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
@@ -118,6 +124,7 @@ export default function ProviderWorkspaceShell({
           if (cancelled) return;
           setModelCounts(countAvailableModels(data));
           setAvailableModels(parseAvailableModels(data));
+          setLiveModelCounts(parseLiveModelCounts(data));
           setSelectedModels(parseSelectedModels(data));
           setModelsLoadFailed(false);
           setModelsLoading(false);
@@ -415,17 +422,44 @@ export default function ProviderWorkspaceShell({
                   <span className="pws-rail-group-count">{count}</span>
                 </div>
                 {items.map(item => (
-                  <RailRow
-                    key={item.name}
-                    item={item}
-                    selected={selectedName === item.name}
-                    tabbable={railTabbableName === item.name}
-                    modelCount={modelCounts[item.name]}
-                    isDefault={defaultProvider === item.name}
-                    showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name))}
-                    onClick={() => onSelect(item.name)}
-                    onFocus={() => setRailFocusName(item.name)}
-                  />
+                  // The wrapper exists so the delete control can be a SIBLING of the row.
+                  // The row is a <button role="option">, so nesting an interactive child
+                  // inside it would be invalid HTML, break listbox focus tracking
+                  // (el.contains(active) would treat the trash button as the option), and
+                  // let one click both select and delete.
+                  <div key={item.name} className="pws-rail-row-wrap">
+                    <RailRow
+                      item={item}
+                      selected={selectedName === item.name}
+                      tabbable={railTabbableName === item.name}
+                      modelCount={modelCounts[item.name]}
+                      isDefault={defaultProvider === item.name}
+                      showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name))}
+                      onClick={() => onSelect(item.name)}
+                      onFocus={() => setRailFocusName(item.name)}
+                    />
+                    {onRemoveProvider && (
+                      <button
+                        type="button"
+                        className="pws-rail-row-remove"
+                        // Mouse accelerator only. Keyboard and screen-reader users already
+                        // have the labelled delete control in the provider detail header,
+                        // and adding this to the tab order would disturb option roving.
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        onClick={event => {
+                          // Defensive only: as a sibling this never reaches the row's
+                          // handler, but it keeps the intent explicit if the wrapper ever
+                          // gains a click handler of its own.
+                          event.stopPropagation();
+                          onRemoveProvider(item.name);
+                        }}
+                        title={t("pws.removeConfirmTitle")}
+                      >
+                        <IconTrash width={14} height={14} />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             );
@@ -446,6 +480,7 @@ export default function ProviderWorkspaceShell({
             modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
             availableModels: availableModels[selectedItem.name] ?? [],
+            hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
             selectedModels: selectedModels[selectedItem.name] ?? [],
             modelsLoading,
             modelsLoadFailed,

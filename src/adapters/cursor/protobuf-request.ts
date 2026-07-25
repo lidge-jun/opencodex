@@ -1,4 +1,4 @@
-import { create, toBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary, toJson } from "@bufbuild/protobuf";
 import { fromJson, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { OcxAssistantContentPart, OcxMessage, OcxToolResultMessage } from "../../types";
@@ -7,6 +7,7 @@ import type { CursorRunRequest } from "./types";
 import { isCursorExternalWireModel } from "./discovery";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { storeCursorBlob } from "./native-exec";
+import { estimateTokens } from "../../lib/token-estimate";
 import {
   AgentClientMessageSchema,
   AgentConversationTurnStructureSchema,
@@ -23,6 +24,7 @@ import {
   McpToolResultContentItemSchema,
   McpToolResultSchema,
   McpToolsSchema,
+  type McpToolDefinition,
   ModelDetailsSchema,
   RequestedModelSchema,
   RequestedModel_ModelParameterbytesSchema,
@@ -76,13 +78,20 @@ function buildRequestContext() {
   });
 }
 
-function jsonBlob(value: unknown): Uint8Array {
-  return encoder.encode(JSON.stringify(value));
+function jsonBlob(value: unknown): { data: Uint8Array; serialized: string } {
+  const serialized = JSON.stringify(value);
+  return { data: encoder.encode(serialized), serialized };
 }
 
 type StoredRootBlob = {
   id: Uint8Array;
   byteLength: number;
+  /**
+   * The exact JSON handed to storeCursorBlob(). Retained so a token estimate can read
+   * what the wire actually carries without re-serializing — and without drifting from
+   * it after pruning or truncation (#373).
+   */
+  serialized: string;
   role: "system" | "user" | "assistant" | "toolResult";
   messageIndex?: number;
   /** Original JSON text payload used when an active tool result must be truncated to fit. */
@@ -94,10 +103,11 @@ function storedRootBlob(
   role: StoredRootBlob["role"],
   opts?: { messageIndex?: number; text?: string },
 ): StoredRootBlob {
-  const data = jsonBlob(value);
+  const { data, serialized } = jsonBlob(value);
   return {
     id: storeCursorBlob(data),
     byteLength: data.byteLength,
+    serialized,
     role,
     ...(opts?.messageIndex !== undefined ? { messageIndex: opts.messageIndex } : {}),
     ...(opts?.text !== undefined ? { text: opts.text } : {}),
@@ -164,6 +174,8 @@ function rootPromptMessages(request: CursorRunRequest): {
   ids: Uint8Array[];
   byteLength: number;
   historyMessageStart: number;
+  /** Serialized text of the roots that survived pruning, in wire order. */
+  serialized: string[];
 } {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
@@ -173,6 +185,7 @@ function rootPromptMessages(request: CursorRunRequest): {
       ids: entries.map(entry => entry.id),
       byteLength: entries.reduce((sum, entry) => sum + entry.byteLength, 0),
       historyMessageStart: 0,
+      serialized: entries.map(entry => entry.serialized),
     };
   }
 
@@ -289,6 +302,7 @@ function rootPromptMessages(request: CursorRunRequest): {
     ids: selected.map(entry => entry.id),
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
     historyMessageStart,
+    serialized: selected.map(entry => entry.serialized),
   };
 }
 
@@ -503,7 +517,46 @@ export function activePromptText(request: CursorRunRequest): string {
   return last?.role === "tool" ? last.content : "";
 }
 
-export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
+/**
+ * The model-visible text of one finalized tool definition. The schema travels as
+ * packed protobuf bytes, so it is decoded back to JSON to be counted the way the
+ * model reads it.
+ */
+function modelVisibleToolText(definition: McpToolDefinition): string {
+  let inputSchema: unknown;
+  try {
+    inputSchema = toJson(ValueSchema, fromBinary(ValueSchema, definition.inputSchema));
+  } catch {
+    inputSchema = undefined;
+  }
+  return JSON.stringify({
+    name: definition.toolName || definition.name,
+    description: definition.description,
+    ...(inputSchema !== undefined ? { inputSchema } : {}),
+  });
+}
+
+export interface PreparedCursorRunRequest {
+  bytes: Uint8Array;
+  /** Only present when the caller asked for it; see prepareCursorRunRequest(). */
+  estimatedInputTokens?: number;
+}
+
+/**
+ * Build the wire payload once, and optionally derive a token estimate from the very
+ * same roots, action text, and tool definitions that produced it.
+ *
+ * Cursor only reports absolute context size in checkpoint frames, which live in a
+ * process-local map — so after a restart a turn with no checkpoint reports
+ * inputTokens=0 and Codex sees an almost-empty context (#373). The estimate fills
+ * that gap. Deriving it here, rather than from the original request, is what keeps
+ * it honest: history the pruner dropped and tools the filter removed are already
+ * gone by this point.
+ */
+export function prepareCursorRunRequest(
+  request: CursorRunRequest,
+  options?: { estimateInputTokens?: boolean },
+): PreparedCursorRunRequest {
   const rawText = activePromptText(request);
   const lastRole = request.messages.at(-1)?.role;
   const text = lastRole === "user" || lastRole === "developer"
@@ -536,6 +589,10 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
   const rootPromptMessagesState = rootPromptMessages(request);
   const rootPromptMessageIds = rootPromptMessagesState.ids;
   const turnIds = conversationTurns(request, rootPromptMessagesState.historyMessageStart);
+  // Hoisted out of the mcp_tools spread below so the estimate can read the same
+  // filtered definitions the wire carries. Both helpers are pure.
+  const visibleTools = cursorToolsForActivePrompt(request.tools, rawText, request.toolChoice);
+  const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice);
   debugProviderDiagnostic("cursor", "run-request", {
     wireModel: request.modelId,
     action: actionCase,
@@ -598,15 +655,29 @@ export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
     // the event-state `clientToolNames` use (live-transport.ts). Advertising the raw `request.tools`
     // here would let mcp_tools expose a tool that the event state does not recognize for a generic
     // tool-count prompt, so a call to it would be rejected as an unknown Responses tool.
-    ...(() => {
-      const visibleTools = cursorToolsForActivePrompt(request.tools, activePromptText(request), request.toolChoice);
-      const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice);
-      return mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }) } : {};
-    })(),
+    ...(mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }) } : {}),
   });
 
   const message = create(AgentClientMessageSchema, {
     message: { case: "runRequest", value: runRequest },
   });
-  return toBinary(AgentClientMessageSchema, message);
+  const bytes = toBinary(AgentClientMessageSchema, message);
+  if (!options?.estimateInputTokens) return { bytes };
+
+  // Same instances that produced `bytes`, so the estimate cannot count history or
+  // tools the payload dropped — the defect that blocked PR #376.
+  const modelVisibleParts = [
+    ...rootPromptMessagesState.serialized,
+    ...(actionCase === "userMessageAction" ? [text] : []),
+    ...mcpToolDefs.map(modelVisibleToolText),
+  ];
+  return {
+    bytes,
+    estimatedInputTokens: estimateTokens(modelVisibleParts.join("\n"), request.modelId),
+  };
+}
+
+/** Back-compat wrapper: callers that only need the wire bytes. */
+export function encodeCursorRunRequest(request: CursorRunRequest): Uint8Array {
+  return prepareCursorRunRequest(request).bytes;
 }

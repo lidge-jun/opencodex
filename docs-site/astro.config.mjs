@@ -63,7 +63,7 @@ export default defineConfig({
         dark: "./src/assets/logo-dark.png",
         replacesTitle: false,
       },
-      favicon: "/favicon.png",
+      favicon: "/favicon.ico",
       customCss: [
         "@fontsource-variable/geist",
         "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css",
@@ -74,6 +74,8 @@ export default defineConfig({
         PageTitle: "./src/components/PageTitle.astro",
       },
       head: [
+        // Google favicon guidelines: PNG at a multiple of 48px, exposed via rel="icon".
+        { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon.png" } },
         { tag: "meta", attrs: { property: "og:image", content: `${SITE_URL}/og.png` } },
         { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
         { tag: "meta", attrs: { property: "og:image:height", content: "630" } },

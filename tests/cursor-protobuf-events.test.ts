@@ -428,6 +428,53 @@ describe("Cursor protobuf tool-call events", () => {
     expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ path: "a.txt" });
   });
 
+  test("rewrites shell_command cmd args to command for Codex Responses validation", () => {
+    const toolSchemas = new Map<string, unknown>([
+      ["shell_command", { type: "object", properties: { command: { type: "string" }, workdir: { type: "string" } }, required: ["command"] }],
+    ]);
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["shell_command"],
+      toolSchemas,
+      cursorToolNameMap: new Map([["shell_command", "shell_command"]]),
+    });
+    const toolCall = mcpToolCall("shell_command", { cmd: "git status", workdir: "C:/repo" });
+    const events = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state);
+    const delta = events.find(e => e.type === "tool_call_delta");
+    expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({
+      command: "git status",
+      workdir: "C:/repo",
+    });
+  });
+
+  test("completed shell payload with both command and cmd keeps only canonical command", () => {
+    const toolSchemas = new Map<string, unknown>([
+      ["shell_command", { type: "object", properties: { command: { type: "string" }, workdir: { type: "string" } }, required: ["command"] }],
+    ]);
+    for (const [index, args] of [
+      { command: "safe command", cmd: "different command", workdir: "C:/repo" },
+      { cmd: "different command", command: "safe command", workdir: "C:/repo" },
+    ].entries()) {
+      const state = createCursorProtobufEventState({
+        clientToolNames: ["shell_command"],
+        toolSchemas,
+        cursorToolNameMap: new Map([["shell_command", "shell_command"]]),
+      });
+      const toolCall = mcpToolCall("shell_command", args);
+      const events = mapCursorProtobufServerMessage(interaction({
+        case: "toolCallCompleted",
+        value: create(ToolCallCompletedUpdateSchema, { callId: `call_${index}`, modelCallId: `model_${index}`, toolCall }),
+      }), state);
+      const delta = events.find(e => e.type === "tool_call_delta");
+      expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({
+        command: "safe command",
+        workdir: "C:/repo",
+      });
+    }
+  });
+
   test("normalizes mis-keyed args that arrived only via streamed text (no completed map)", () => {
     // The P1 audit case: model streamed `{"filepath":"a.txt"}` complete and the completion has no
     // map bytes. Buffered text must still be schema-normalized to `path` before reaching Codex.
@@ -628,5 +675,88 @@ describe("Cursor MCP display-name alias", () => {
       value: create(ToolCallStartedUpdateSchema, { callId: "call_a2", modelCallId: "m2", toolCall }),
     }), state);
     expect(events.some(e => e.type === "error")).toBe(true);
+  });
+
+  test("accepts exec_command when only shell_command was advertised", () => {
+    const toolSchemas = new Map<string, unknown>([
+      ["shell_command", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }],
+    ]);
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["shell_command"],
+      toolSchemas,
+      cursorToolNameMap: new Map([["shell_command", "shell_command"]]),
+    });
+    const toolCall = mcpToolCall("exec_command", { cmd: "echo ok" });
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_alias", modelCallId: "m3", toolCall }),
+    }), state)).toEqual([]);
+
+    const events = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_alias", modelCallId: "m3", toolCall }),
+    }), state);
+    const start = events.find(e => e.type === "tool_call_start");
+    const delta = events.find(e => e.type === "tool_call_delta");
+    expect(start && start.type === "tool_call_start" ? start.name : undefined).toBe("shell_command");
+    expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ command: "echo ok" });
+  });
+});
+
+// --- #373: a restart clears the checkpoint tracker, so a turn with no checkpoint
+// must not report inputTokens=0 and make Codex see an almost-empty context. -------
+describe("request-local input estimate (#373)", () => {
+  test("restart without checkpoint reports the prepared estimate", () => {
+    // A fresh tracker stands in for the post-restart state: no carry-forward exists.
+    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_234 });
+    state.usage.outputTokens = 7;
+
+    const [done] = finalizeTurnEvents(state);
+
+    expect(done?.type).toBe("done");
+    const usage = done?.type === "done" ? done.usage : undefined;
+    expect(usage?.inputTokens).toBe(1_234);
+    expect(usage?.totalTokens).toBe(1_241);
+    expect(usage?.estimated).toBe(true);
+  });
+
+  test("a checkpoint observed this turn outranks the estimate", () => {
+    const state = createCursorProtobufEventState({ estimatedInputTokens: 1_234 });
+    state.usage.outputTokens = 7;
+    state.contextTokens = 10_300;
+
+    const [done] = finalizeTurnEvents(state);
+    const usage = done?.type === "done" ? done.usage : undefined;
+
+    expect(usage?.totalTokens).toBe(10_300);
+    expect(usage?.inputTokens).not.toBe(1_234);
+  });
+
+  test("carry-forward outranks the estimate and the estimate never reaches the tracker", () => {
+    const tracker = createCursorContextUsageTracker();
+    const controls = tracker.controlsForConversation("conv-373");
+    const state = createCursorProtobufEventState({
+      contextUsage: { ...controls, carryForwardTokens: 18_000 },
+      estimatedInputTokens: 1_234,
+    });
+    state.usage.outputTokens = 7;
+
+    const [done] = finalizeTurnEvents(state);
+    const usage = done?.type === "done" ? done.usage : undefined;
+
+    expect(usage?.totalTokens).toBe(18_000);
+    // Only real checkpoints seed the tracker; an estimate must never be promoted.
+    expect(tracker.controlsForConversation("conv-373").carryForwardTokens).toBeUndefined();
+  });
+
+  test("without a checkpoint, a carry, or an estimate the old zero behavior stands", () => {
+    const state = createCursorProtobufEventState();
+    state.usage.outputTokens = 7;
+
+    const [done] = finalizeTurnEvents(state);
+    const usage = done?.type === "done" ? done.usage : undefined;
+
+    expect(usage?.inputTokens).toBe(0);
   });
 });

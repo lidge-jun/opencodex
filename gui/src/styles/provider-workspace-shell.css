@@ -235,6 +235,61 @@
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
+/* WP4: hover accelerator for deleting a provider.
+   The control is a SIBLING of the row, not a child: the row is a
+   <button role="option">, so an interactive descendant would be invalid HTML and
+   would break the listbox's focus tracking. The wrapper supplies the positioning
+   context; the row keeps `overflow: hidden` and is unaffected. */
+.pws-rail-row-wrap {
+  position: relative;
+}
+
+.pws-rail-row-remove {
+  position: absolute;
+  right: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  /* Opaque so the status dot underneath does not show through. */
+  background: var(--surface);
+  color: var(--red);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast), background var(--motion-fast);
+}
+
+.pws-rail-row-wrap:hover .pws-rail-row-remove,
+.pws-rail-row-wrap:focus-within .pws-rail-row-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Keep it legible above the selected row's tinted background. */
+.pws-rail-row-wrap:hover .providers-workspace-rail-row--selected ~ .pws-rail-row-remove {
+  background: var(--raised);
+}
+
+.pws-rail-row-remove:hover {
+  background: var(--raised);
+}
+
+@media (hover: none) {
+  /* Touch devices have no hover state, so this accelerator would either never appear
+     or appear permanently. Those users take the detail-header delete control. */
+  .pws-rail-row-remove {
+    display: none;
+  }
+}
+
 .providers-workspace-rail-icon {
   width: var(--icon-lg);
   height: var(--icon-lg);
@@ -821,6 +876,21 @@
 .pws-model-search {
   width: 100%;
   margin-bottom: 18px;
+}
+
+.pws-custom-model-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.pws-custom-model-row {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pws-custom-model-row .input {
+  flex: 1;
+  min-width: 0;
 }
 
 .pws-model-list {

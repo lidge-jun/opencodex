@@ -29,7 +29,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
+  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
@@ -754,5 +754,34 @@ describe("provider registry parity", () => {
     expect(entry?.context_window).toBe(500_000);
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "max", "ultra"]);
+  });
+
+  // The id-list assertion above only proves the preset exists. Pin the contract a user actually
+  // depends on: which endpoint the key is sent to, which adapter parses the stream, and that the
+  // vendor-namespaced seed models survive into a real catalog entry.
+  test("the BizRouter preset seeds a usable OpenAI-compatible provider", () => {
+    const bizrouter = PROVIDER_REGISTRY.find(entry => entry.id === "bizrouter");
+    expect(bizrouter).toBeTruthy();
+    expect(bizrouter?.adapter).toBe("openai-chat");
+    expect(bizrouter?.authKind).toBe("key");
+    expect(bizrouter?.baseUrl).toBe("https://api.bizrouter.ai/v1");
+    // A default the picker can actually route to, and it must be one of the seeded ids.
+    expect(bizrouter?.models).toContain(bizrouter?.defaultModel);
+
+    const seed = providerConfigSeed(bizrouter!);
+    expect(seed.baseUrl).toBe("https://api.bizrouter.ai/v1");
+    expect(seed.adapter).toBe("openai-chat");
+
+    // Vendor-namespaced ids pass through unchanged: rewriting them would break upstream routing.
+    const model = applyProviderConfigHints("bizrouter", seed, {
+      id: "openai/gpt-5.6-sol",
+      provider: "bizrouter",
+    });
+    expect(model.id).toBe("openai/gpt-5.6-sol");
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    // The catalog slug flattens the vendor separator, but the routed model id itself is untouched,
+    // so the request still reaches BizRouter as `openai/gpt-5.6-sol`.
+    expect(entries.find(e => e.slug === "bizrouter/openai-gpt-5.6-sol")).toBeTruthy();
   });
 });

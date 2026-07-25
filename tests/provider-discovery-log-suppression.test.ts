@@ -36,7 +36,7 @@ describe("shouldLogDiscoveryFailure (#395 log flood)", () => {
   test("a recovery (ok) resets suppression so the next failure logs", () => {
     markProviderDiscoveryFailed(P, { reason: "http", httpStatus: 404 });
     expect(shouldLogDiscoveryFailure(P, { reason: "http", httpStatus: 404 })).toBe(false);
-    markProviderDiscoveryOk(P);
+    markProviderDiscoveryOk(P, 0);
     expect(shouldLogDiscoveryFailure(P, { reason: "http", httpStatus: 404 })).toBe(true);
   });
 

@@ -23,6 +23,7 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
+import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
@@ -570,6 +571,9 @@ export async function handleClaudeMessages(
   let nativeRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string);
+    // Settle the wire once so the sampling decision below reads the effective
+    // adapter rather than the provider-wide default (#404).
+    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
       delete internalBody.max_output_tokens;

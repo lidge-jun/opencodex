@@ -241,6 +241,46 @@ export function previousResponseProviderState(responseId: string | undefined): O
   return providers ? structuredClone(providers) : undefined;
 }
 
+export interface ResponseStateMetrics {
+  /** Number of retained continuation entries currently in RAM. */
+  count: number;
+  /** Sum of serialized item bytes across all entries (the running in-memory byte accounting).
+   * Because expanded previous_response_id chains share prefix item references, this is an UPPER
+   * bound on true heap (it re-counts shared history), never an under-count — safe as a
+   * memory-pressure signal. */
+  totalBytes: number;
+  /** Serialized item bytes of the single largest entry (a long chain's head, or an image-heavy turn). */
+  largestBytes: number;
+  /** Age of the oldest retained entry, in ms (0 when the store is empty). */
+  oldestAgeMs: number;
+}
+
+/**
+ * Observe-only snapshot of the in-RAM continuation store, surfaced via GET /api/system/memory.
+ * Additive and side-effect free — it does NOT lazy-load the disk snapshot, prune, or evict — so a
+ * diagnostics probe can sample it without perturbing request handling. `totalBytes` reads the
+ * running byte counter and `largestBytes` reads each entry's cached `sizeBytes`, so a probe never
+ * re-serializes the whole store (a large transient allocation that would fire exactly when memory
+ * is already under pressure). This is the seam for deciding whether RAM growth originates in this
+ * store (JS heap) or in the runtime allocator (native).
+ */
+export function responseStateMetrics(): ResponseStateMetrics {
+  const at = now();
+  let largestBytes = 0;
+  let oldestCreatedAt = at;
+  for (const state of states.values()) {
+    const bytes = state.sizeBytes ?? 0;
+    if (bytes > largestBytes) largestBytes = bytes;
+    if (state.createdAt < oldestCreatedAt) oldestCreatedAt = state.createdAt;
+  }
+  return {
+    count: states.size,
+    totalBytes: storedResponseBytes,
+    largestBytes,
+    oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
+  };
+}
+
 /**
  * Cache completed output and max_output_tokens partial output for previous_response_id replay.
  * Content-filtered incomplete and failed output are not authoritative replay history.

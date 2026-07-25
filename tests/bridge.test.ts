@@ -129,6 +129,43 @@ describe("Responses bridge reasoning and usage parity", () => {
     });
   });
 
+  test("absolute context total drives Responses compaction without double-counting output", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      {
+        type: "done",
+        usage: {
+          inputTokens: 58,
+          contextTotalTokens: 226_000,
+          outputTokens: 12,
+          estimated: true,
+        },
+      },
+    ]), "kiro/claude-opus-5"));
+
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toEqual({
+      input_tokens: 225_988,
+      output_tokens: 12,
+      total_tokens: 226_000,
+    });
+  });
+
+  test("consecutive context checkpoints remain absolute instead of accumulating in the bridge", async () => {
+    const totals: number[] = [];
+    for (const [contextTotalTokens, outputTokens] of [[10_000, 42], [10_300, 20]] as const) {
+      const frames = await collectSse(bridgeToResponsesSSE(replay([{
+        type: "done",
+        usage: { inputTokens: 1, contextTotalTokens, outputTokens, estimated: true },
+      }]), "kiro/claude-opus-5"));
+      const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+      const usage = completed.usage as Record<string, number>;
+      expect(usage.input_tokens).toBe(contextTotalTokens - outputTokens);
+      expect(usage.total_tokens).toBe(contextTotalTokens);
+      totals.push(usage.total_tokens);
+    }
+    expect(totals).toEqual([10_000, 10_300]);
+  });
+
   test("Anthropic cache read and write tokens pass through Responses usage without re-adding", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       {
@@ -150,6 +187,28 @@ describe("Responses bridge reasoning and usage parity", () => {
       input_tokens_details: { cached_tokens: 77_000, cache_write_tokens: 1_000 },
       output_tokens: 20,
       total_tokens: 78_620,
+    });
+  });
+
+  test("absolute context projection keeps cache details within derived input", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([{
+      type: "done",
+      usage: {
+        inputTokens: 200,
+        outputTokens: 10,
+        contextTotalTokens: 100,
+        cachedInputTokens: 150,
+        cacheReadInputTokens: 150,
+        cacheCreationInputTokens: 50,
+      },
+    }]), "kiro/claude-opus-5"));
+
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toMatchObject({
+      input_tokens: 90,
+      output_tokens: 10,
+      total_tokens: 100,
+      input_tokens_details: { cached_tokens: 90, cache_write_tokens: 0 },
     });
   });
 

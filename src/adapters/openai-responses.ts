@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
-import { decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
+import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
+import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 
@@ -518,6 +520,81 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
 
+/** Replace every `input_image` part under a routed-compaction body with a short marker. */
+function stripInputImagesDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripInputImagesDeep);
+  if (!isPlainObject(value)) return value;
+  if (value.type === "input_image") {
+    return { type: "input_text", text: "[image omitted for compaction]" };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) out[key] = stripInputImagesDeep(entry);
+  return out;
+}
+
+/**
+ * Rewrite a compaction turn for an upstream that does not speak Codex's private
+ * `compaction_trigger` item: drop the trigger and the whole tool surface, and ask
+ * for the handoff summary in plain terms instead (#422).
+ *
+ * The adapter builds from `parsed._rawBody`, so the summarizer prompt that
+ * handleResponses() pushed onto `parsed.context` never reaches the wire — it has to
+ * be applied here. Images go too: a summary needs no pixels, and a text-only
+ * gateway would reject them.
+ */
+function buildRoutedCompactionBody(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, ...rest } = body;
+  const input = Array.isArray(body.input) ? body.input : [];
+  const kept = input.filter(item => !isPlainObject(item)
+    // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
+    // leaving it in would break the no-tools invariant even with `tools` removed.
+    || (item.type !== "compaction_trigger" && item.type !== "additional_tools"));
+  return {
+    ...rest,
+    input: [
+      ...(stripInputImagesDeep(kept) as unknown[]),
+      { type: "message", role: "user", content: [{ type: "input_text", text: COMPACT_PROMPT }] },
+    ],
+  };
+}
+
+/** Read the Responses `usage` block, if the gateway sent one. */
+function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
+  if (!isPlainObject(payload) || !isPlainObject(payload.usage)) return undefined;
+  const usage = payload.usage;
+  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  if (inputTokens === 0 && outputTokens === 0) return undefined;
+  return {
+    inputTokens,
+    outputTokens,
+    ...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
+  };
+}
+
+function responsesPayloadText(response: unknown): string {
+  if (!isPlainObject(response) || !Array.isArray(response.output)) return "";
+  return response.output
+    .filter(item => isPlainObject(item) && item.type === "message")
+    .flatMap(item => (Array.isArray((item as Record<string, unknown>).content)
+      ? (item as { content: unknown[] }).content
+      : []))
+    .filter(part => isPlainObject(part) && part.type === "output_text")
+    .map(part => String((part as { text?: unknown }).text ?? ""))
+    .join("");
+}
+
+function responsesErrorMessage(payload: unknown): string {
+  if (!isPlainObject(payload)) return "upstream compaction failed";
+  const err = payload.error;
+  if (typeof err === "string") return err;
+  if (isPlainObject(err) && typeof err.message === "string") return err.message;
+  const incomplete = payload.incomplete_details;
+  if (isPlainObject(incomplete) && typeof incomplete.reason === "string") return incomplete.reason;
+  return "upstream compaction failed";
+}
+
 export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
   return {
     name: "openai-responses",
@@ -573,6 +650,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      // Same predicate as the routedCompaction gate in handleResponses(): an
+      // authMode check would let a noncanonical custom forward provider skip this
+      // rewrite while the server still routes it as a summarizer turn (#422).
+      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = buildRoutedCompactionBody(outBody);
+      }
       return {
         url,
         method: "POST",
@@ -585,8 +668,71 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       };
     },
 
-    async *parseStream(): AsyncGenerator<AdapterEvent> {
-      yield { type: "error", message: "passthrough adapter should not parse stream" };
+    // The passthrough normally relays the upstream stream verbatim and never parses.
+    // The exception is a routed compaction turn: the server drives this adapter like
+    // an ordinary one so the bridge can build the single compaction item (#422).
+    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+      if (!response.body) {
+        yield { type: "error", message: "passthrough adapter received no response body" };
+        return;
+      }
+      let deltas = "";
+      let doneText = "";
+      let snapshot = "";
+      let usage: OcxUsage | undefined;
+      for await (const event of decodeServerSentEvents(response.body)) {
+        let payload: unknown;
+        try { payload = JSON.parse(event.data); } catch { continue; }
+        if (!isPlainObject(payload)) continue;
+        switch (payload.type) {
+          case "response.output_text.delta":
+            if (typeof payload.delta === "string") deltas += payload.delta;
+            break;
+          case "response.output_text.done":
+            if (typeof payload.text === "string") doneText += payload.text;
+            break;
+          case "response.failed":
+          case "error":
+            yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
+            return;
+          case "response.incomplete":
+            yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
+            return;
+          case "response.completed":
+            snapshot = responsesPayloadText(payload.response);
+            usage = usageFromResponsesPayload(payload.response);
+            break;
+        }
+      }
+      // Gateways differ in which of these they emit; prefer the authoritative
+      // completed snapshot so text is never double-counted.
+      const text = snapshot || doneText || deltas;
+      if (text) yield { type: "text_delta", text };
+      yield { type: "done", ...(usage ? { usage } : {}) };
+    },
+
+    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+      let payload: unknown;
+      try { payload = await response.json(); } catch {
+        return [{ type: "error", message: "malformed upstream compaction response" }];
+      }
+      if (!isPlainObject(payload)) {
+        return [{ type: "error", message: "malformed upstream compaction response" }];
+      }
+      if (payload.error || payload.status === "failed") {
+        return [{ type: "error", message: responsesErrorMessage(payload) }];
+      }
+      if (payload.status === "incomplete") {
+        return [{ type: "incomplete", reason: responsesErrorMessage(payload) }];
+      }
+      const text = responsesPayloadText(payload);
+      if (!text) {
+        // A completed turn with no usable text cannot become a summary; saying so is
+        // better than installing an empty compaction as replacement history.
+        return [{ type: "error", message: "upstream compaction returned no summary text" }];
+      }
+      const usage = usageFromResponsesPayload(payload);
+      return [{ type: "text_delta", text }, { type: "done", ...(usage ? { usage } : {}) }];
     },
   };
 }

@@ -267,7 +267,8 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;
-      markProviderDiscoveryOk(name);
+      // Count what discovery actually returned, not the configured rows we fall back to.
+      markProviderDiscoveryOk(name, liveResult.models.length);
       setCached(name, result);
       return result;
     }
@@ -384,6 +385,9 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       ...catalogHintsFromModelsApiItem(name, m),
     }, contextCap))
       .filter(m => shouldExposeProviderModel(name, m.id));
+    // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
+    // `live`; otherwise configured entries would be reported as discovered ones.
+    const liveModelCount = live.length;
     const liveIds = new Set(live.map(m => m.id));
     // Dated-release aliases (Anthropic pattern): older models may appear in the live catalog
     // ONLY under their dated id (claude-haiku-4-5-20251001) while the config names the
@@ -412,7 +416,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       && !QUIET_AUTHORITATIVE_CATALOG_PROVIDERS.has(name)) {
       warnDroppedConfiguredIdsOnce(name, droppedConfiguredIds);
     }
-    markProviderDiscoveryOk(name);
+    markProviderDiscoveryOk(name, liveModelCount);
     setCached(name, live);
     return live;
   } catch (error) {

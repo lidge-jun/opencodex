@@ -84,13 +84,13 @@ export function finalGatePlan(root: string, evidenceDir: string, unitRoot = dirn
     {
       name: "stale-contract-scan",
       command: ["rg", "-n", staleContractPattern,
-        "src", "gui/src", "tests", "scripts", "README.md", "README.ko.md", "README.zh-CN.md",
+        "src", "gui/src", "tests", "scripts", "README.md", "readme/README.ko.md", "readme/README.zh-CN.md",
         "structure", "docs-site/src/content/docs"],
       cwd: root,
     },
     {
       name: "scoped-diff-check",
-      command: ["git", "diff", "--check", "--", "README.md", "README.ko.md", "README.zh-CN.md", "structure",
+      command: ["git", "diff", "--check", "--", "README.md", "readme/README.ko.md", "readme/README.zh-CN.md", "structure",
         "docs-site/src/content/docs", "devlog/_chase/_model", "tests/openai-provider-option-e2e.test.ts",
         "tests/openai-provider-option-tooling.test.ts", "tests/fixtures/openai-provider-option-migration-child.ts",
         "scripts/openai-provider-option-runtime-child.ts", "scripts/openai-provider-option-runtime-smoke.ts",

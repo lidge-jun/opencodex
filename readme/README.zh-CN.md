@@ -1,33 +1,40 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>面向 OpenAI Codex 与 Claude Code 的通用 provider 代理</b> —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。</p>
-<p align="center"><code>npm install -g @bitkyc08/opencodex</code> · <code>ocx start</code> · <b>localhost:10100</b></p>
+<p align="center"><b>面向 OpenAI Codex 与 Claude Code 的通用 provider 代理</b><br>
+两条命令，Codex 和 Claude Code 就能用任何 LLM 跑起来。</p>
 
 <p align="center">
+  <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
 
+```bash
+npm install -g @bitkyc08/opencodex
+ocx start        # 代理 + 仪表盘: localhost:10100
+```
+
 <p align="center">
-  <img src="assets/banner.png" alt="opencodex — 让 Codex 接入任意 LLM" width="820">
+  <img src="../assets/claude-code-models.gif" alt="通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型" width="820"><br>
+  <sub><b>Claude Code 可以用任何模型。</b>选择器是原生 Claude Code，跑起来的模型随你挑。</sub>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
+  <img src="../assets/demo.gif" alt="opencodex 演示 —— 在 Codex 应用中用路由的非 OpenAI 模型执行任务" width="820"><br>
+  <sub><b>Codex 可以用任何模型。</b>选好 provider 直接开跑 —— 同样的 Codex 工作流，换个大脑。</sub>
 </p>
 
 <p align="center">
-  <img src="assets/architecture.png" alt="opencodex 架构 — Codex CLI 通过 opencodex 代理路由到任意 LLM 提供商" width="820">
+  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
+</p>
+
+<p align="center">
+  <img src="../assets/architecture.png" alt="opencodex 架构 — Codex CLI 通过 opencodex 代理路由到任意 LLM 提供商" width="820">
 </p>
 
 在 Codex 中 —— 以及在 **Claude Code** 中 —— 使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任意其他 LLM，无需等待官方添加支持。
 
 opencodex 是一个轻量级本地代理，把 Codex 的 Responses API 翻译成你的 provider 所讲的协议。streaming、tool 调用、reasoning token、图片 —— 全部双向工作。
-
-<p align="center">
-  <img src="assets/demo.gif" alt="opencodex 演示 —— 在 Codex 应用中用路由的非 OpenAI 模型执行任务" width="820">
-</p>
-<p align="center"><sub><b>在 Codex 里运行任意模型。</b>选好 provider 即可 —— 同样的 Codex 工作流，不同的大脑。</sub></p>
 
 它还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，在仪表盘中刷新它们的
 5 小时 / 每周 / 30 天配额，并让新会话自动路由到使用量最低的健康账户。现有 Codex 线程会固定在启动它的
@@ -173,7 +180,7 @@ reasoning 为 `low`。可用性仍受上游
 preview gate 限制；opencodex 只是准备好你的账户/provider 可访问时所需的路由和目录元数据。
 
 <p align="center">
-  <img src="assets/codex-app-picker.png" alt="Codex App 展示 opencodex 路由模型及 reasoning effort 选择器" width="480">
+  <img src="../assets/codex-app-picker.png" alt="Codex App 展示 opencodex 路由模型及 reasoning effort 选择器" width="480">
 </p>
 
 ## OpenAI provider 账户模式
@@ -375,9 +382,9 @@ ocx recover-history --legacy-openai
 
 ## 文档
 
-完整文档——安装、provider 配置、路由、sidecar、Codex 集成、Codex App 模型选择器、CLI/配置参考——由 [`docs-site/`](./docs-site) 目录下的 Astro 站点构建，发布在 **[opencodex.me](https://opencodex.me/zh-cn/)**。
+完整文档——安装、provider 配置、路由、sidecar、Codex 集成、Codex App 模型选择器、CLI/配置参考——由 [`docs-site/`](../docs-site) 目录下的 Astro 站点构建，发布在 **[opencodex.me](https://opencodex.me/zh-cn/)**。
 
-维护者 source of truth 位于 [`structure/`](./structure)，历史调查和诊断笔记保留在 [`docs/`](./docs)。
+维护者 source of truth 位于 [`structure/`](../structure)，历史调查和诊断笔记保留在 [`docs/`](../docs)。
 
 ## 开发
 

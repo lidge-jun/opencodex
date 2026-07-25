@@ -1,0 +1,293 @@
+/* ============================================================================
+   models-workspace layout shell + shared Models controls
+   Namespace: models-workspace- (workspace shell/rail/main)
+   Shared controls: models-control-*, models-shadow-*, models-v2-* (workspace + classic)
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.models-workspace-shell) {
+  max-width: 1200px;
+}
+
+.models-workspace-shell {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: models-workspace;
+}
+
+.models-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  min-height: 480px;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.models-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  min-width: 0;
+}
+
+.models-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.models-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.models-workspace-rail-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.models-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  max-height: 640px;
+  min-height: 0;
+}
+
+.models-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+}
+
+.models-workspace-rail-row:hover {
+  background: var(--surface-2);
+}
+
+.models-workspace-rail-row--selected {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.models-workspace-rail-name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.models-workspace-rail-meta {
+  font-size: var(--text-caption);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.models-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Controls row: shadow call on the left, sub-agent mode pinned right.
+   Right group does not move when the model name length changes. */
+.models-control-top-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: clamp(var(--space-3), 2vw, var(--space-6));
+  row-gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  min-width: 0;
+}
+
+.models-shadow-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.models-shadow-label {
+  white-space: nowrap;
+}
+
+.models-shadow-warning {
+  white-space: nowrap;
+}
+
+.models-shadow-model-slot {
+  flex: 0 1 auto;
+  min-width: 9.5rem;
+  max-width: 12.5rem;
+}
+
+.models-shadow-model-slot .custom-select {
+  width: auto;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.models-shadow-model-slot .select-trigger {
+  width: auto;
+  min-width: 100%;
+  max-width: 100%;
+  justify-content: space-between;
+}
+
+.models-shadow-model-slot .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-v2-mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-self: end;
+}
+
+.models-v2-detail-row {
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Provider group header (Classic + Workspace) ─────── */
+
+.models-provider-head {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+  column-gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.models-provider-head > span.text-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.models-provider-actions {
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+
+@media (max-width: 1160px) {
+  .models-control-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .models-shadow-row {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .models-shadow-model-slot {
+    flex: 1 1 12rem;
+    width: auto;
+    min-width: min(100%, 10rem);
+    max-width: 100%;
+  }
+
+  .models-v2-mode-row {
+    flex-wrap: wrap;
+    justify-self: start;
+  }
+}
+
+/*
+  Stack rail above the main pane when the workspace shell is squeezed —
+  typically by the persistent desktop sidebar at ~900–1024px viewports —
+  not only at the mobile drawer breakpoint.
+*/
+@container models-workspace (max-width: 720px) {
+  .models-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .models-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+
+  .models-workspace-rail-list {
+    max-height: 240px;
+  }
+
+  .models-provider-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+/* Mobile: sidebar is a drawer; still prefer rail-on-top for touch. */
+@media (max-width: 768px) {
+  .models-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .models-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+
+  .models-workspace-rail-list {
+    max-height: 240px;
+  }
+
+  .models-provider-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}

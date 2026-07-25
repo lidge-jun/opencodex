@@ -60,14 +60,20 @@ function schemaPropertyNames(schema: unknown): Set<string> | undefined {
 
 /**
  * Normalize argument keys against the tool's declared schema. Keys not in the schema that have a
- * known alias pointing to a schema-declared key are renamed. Keys already in the schema or with no
- * matching alias are left untouched.
+ * known alias pointing to a schema-declared key are renamed. Explicitly supplied canonical keys
+ * always win over aliases, regardless of object property insertion order — conflicting aliases
+ * are discarded rather than left beside the canonical key.
  *
  * Returns the original object reference if no changes were needed (cheap identity check for callers).
  */
 export function normalizeArgKeys(args: Record<string, unknown>, toolSchema: unknown): Record<string, unknown> {
   const declared = schemaPropertyNames(toolSchema);
   if (!declared || declared.size === 0) return args;
+
+  const suppliedCanonical = new Set<string>();
+  for (const key of Object.keys(args)) {
+    if (declared.has(key)) suppliedCanonical.add(key);
+  }
 
   let changed = false;
   const result: Record<string, unknown> = {};
@@ -77,12 +83,22 @@ export function normalizeArgKeys(args: Record<string, unknown>, toolSchema: unkn
       continue;
     }
     const canonical = KEY_ALIASES.get(key.toLowerCase());
-    if (canonical && declared.has(canonical) && !(canonical in result)) {
-      result[canonical] = value;
-      changed = true;
-    } else {
-      result[key] = value;
+    if (canonical && declared.has(canonical)) {
+      // Canonical was explicitly supplied (any order) — drop the alias entirely.
+      if (suppliedCanonical.has(canonical)) {
+        changed = true;
+        continue;
+      }
+      // First alias fills the canonical slot; later aliases for the same key are discarded.
+      if (!(canonical in result)) {
+        result[canonical] = value;
+        changed = true;
+      } else {
+        changed = true;
+      }
+      continue;
     }
+    result[key] = value;
   }
   return changed ? result : args;
 }

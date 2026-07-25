@@ -15,20 +15,29 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
 
 function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   if (!usage) return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-  // inputTokens is already inclusive of cache read/write (types.ts convention).
-  const inputTokens = usage.inputTokens;
+  // Stateful providers may report an absolute active-context checkpoint separately from their
+  // per-attempt usage. Split that checkpoint into input + output without adding output twice.
+  const inputTokens = usage.contextTotalTokens !== undefined
+    ? Math.max(0, usage.contextTotalTokens - usage.outputTokens)
+    : usage.inputTokens;
   const out: Record<string, unknown> = {
     input_tokens: inputTokens,
     output_tokens: usage.outputTokens,
-    total_tokens: usageDisplayTotalTokens(usage) ?? inputTokens + usage.outputTokens,
+    total_tokens: usage.contextTotalTokens !== undefined
+      ? usage.contextTotalTokens
+      : usageDisplayTotalTokens(usage) ?? inputTokens + usage.outputTokens,
   };
   const inputDetails: Record<string, number> = {};
   if (usage.cachedInputTokens !== undefined) {
     // cached_tokens carries cache READS only, matching OpenAI semantics.
-    inputDetails.cached_tokens = usage.cachedInputTokens;
+    inputDetails.cached_tokens = Math.min(usage.cachedInputTokens, inputTokens);
   }
   if (usage.cacheCreationInputTokens !== undefined) {
-    inputDetails.cache_write_tokens = usage.cacheCreationInputTokens;
+    const cacheRead = inputDetails.cached_tokens ?? 0;
+    inputDetails.cache_write_tokens = Math.min(
+      usage.cacheCreationInputTokens,
+      Math.max(0, inputTokens - cacheRead),
+    );
   }
   if (Object.keys(inputDetails).length > 0) {
     out.input_tokens_details = inputDetails;
@@ -1079,7 +1088,9 @@ export function buildResponseJSON(
   flushSummaryReasoning();
   flushRawReasoning();
   flushToolCall();
-  if (options?.compaction && !errorEvent) {
+  // A truncated turn must never be installed as replacement history: emit the
+  // compaction item only when the turn actually completed (#422).
+  if (options?.compaction && !errorEvent && !incompleteEvent && stopReason !== "max_tokens") {
     output.push({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) });
   }
 

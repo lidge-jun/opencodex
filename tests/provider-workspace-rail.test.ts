@@ -72,11 +72,29 @@ describe("provider rail source contract", () => {
     expect((css.match(/\.providers-workspace-rail-row\s*\{/g) ?? []).length).toBe(1);
   });
 
-  test("preserves only the exact workspace subroute on page synchronization", async () => {
+  test("redirects the legacy workspace subroute and normalizes unknown suffixes", async () => {
+    const { hashBelongsToPage, resolveAppHashChange } = await import("../gui/src/app-routing");
+    // WP5 (Q1): the dual-layout hash is no longer a Providers route. It must not belong,
+    // and it must be passively replaced so an old bookmark still lands somewhere real.
+    expect(hashBelongsToPage("providers/workspace", "providers")).toBe(false);
+    expect(hashBelongsToPage("providers", "providers")).toBe(true);
+    expect(hashBelongsToPage("providers/other", "providers")).toBe(false);
+    expect(hashBelongsToPage("providers/workspace/extra", "providers")).toBe(false);
+
+    const legacy = resolveAppHashChange("providers/workspace");
+    expect(legacy.page).toBe("providers");
+    expect(legacy.replaceTo).toBe("providers");
+    // Unknown suffixes collapse to the bare page rather than 404.
+    expect(resolveAppHashChange("providers/other").replaceTo).toBe("providers");
+
+    const routing = await Bun.file("gui/src/app-routing.ts").text();
+    const routeState = await Bun.file("gui/src/use-app-route-state.ts").text();
     const app = await Bun.file("gui/src/App.tsx").text();
-    expect(app).toContain('rawHash === "providers/workspace"');
-    expect(app).toContain("hashBelongsToPage(rawHash, nextPage)");
-    expect(app).toContain("hashBelongsToPage(rawHash, page)");
-    expect(app).not.toContain("window.location.hash !== nextHash");
+    expect(routing).toContain('rawHash === "providers/workspace"');
+    expect(routing).toContain("hashBelongsToPage(rawHash, nextPage)");
+    expect(routeState).toContain('rawHash === "providers/workspace"');
+    expect(routeState).toContain("hashBelongsToPage(rawHash, page)");
+    expect(app).toContain("useAppRouteState");
+    expect(`${routing}\n${routeState}\n${app}`).not.toContain("window.location.hash !== nextHash");
   });
 });

@@ -16,6 +16,7 @@ import {
 } from "../chat/outbound";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
+import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
@@ -68,6 +69,9 @@ export async function handleChatCompletions(
   let directRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string);
+    // Settle the wire once so every branch below reads the adapter this model will
+    // actually use, not the provider-wide default (#404).
+    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;

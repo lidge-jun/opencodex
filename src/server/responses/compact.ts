@@ -49,6 +49,7 @@ import {
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  codexProbeLeaseId,
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
@@ -59,7 +60,7 @@ import {
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -204,7 +205,10 @@ export async function handleResponsesCompact(
     }
   }
 
-  if (route.provider.adapter === "openai-responses") {
+  // Native /responses/compact exists on the canonical ChatGPT backend and on the
+  // official OpenAI API. Any other Responses-shaped gateway must take the routed
+  // summarizer path below, or compaction fails against an endpoint it never had (#422).
+  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider)) {
     // Native ChatGPT/OpenAI model: forward the compact request verbatim to the real backend.
     // Resolve the SAME pool/thread auth context as /v1/responses — forwarding the caller's raw
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
@@ -256,11 +260,12 @@ export async function handleResponsesCompact(
     const connectMs = config.connectTimeoutMs ?? 200_000;
     const recordCompactPoolOutcome = (outcome: CodexUpstreamOutcome, meta: { retryAfter?: string | null } = {}) => {
       if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
-      recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-        ...meta,
-        threadId: compactThreadId,
-        fixedAccount: authCtx.fixedAccount,
-      });
+        recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+          ...meta,
+          threadId: compactThreadId,
+          fixedAccount: authCtx.fixedAccount,
+          probeLeaseId: codexProbeLeaseId(authCtx),
+        });
     };
     let upstream: Response;
     try {
@@ -327,19 +332,46 @@ export async function handleResponsesCompact(
   });
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal });
   if (!response.ok) return response;
-  let json: { output?: unknown[] };
+  let json: { output?: unknown[]; status?: unknown; error?: unknown };
   try {
-    json = await response.json() as { output?: unknown[] };
+    json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
   } catch {
     return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
   }
-  const compactionItem = (json.output ?? []).find(
+  // The internal turn answers 200 even when it failed or was truncated, so the body
+  // has to be inspected. Reporting a failure beats installing "(no summary
+  // available)" as replacement history and silently losing the conversation (#422).
+  if (json.error) {
+    const message = typeof json.error === "string"
+      ? json.error
+      : (json.error as { message?: unknown })?.message;
+    return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
+  }
+  if (json.status !== "completed") {
+    return formatErrorResponse(
+      502,
+      "upstream_error",
+      `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+    );
+  }
+  const compactionItems = (json.output ?? []).filter(
     (item): item is { type: string; encrypted_content?: string } =>
       !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
   );
-  const summary = compactionItem?.encrypted_content
-    ? decodeCompactionSummary(compactionItem.encrypted_content) ?? ""
-    : "";
+  if (compactionItems.length !== 1) {
+    return formatErrorResponse(
+      502,
+      "invalid_response_error",
+      `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
+    );
+  }
+  const encrypted = compactionItems[0]!.encrypted_content;
+  const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
+  // An empty `ocx1:` envelope decodes to "" rather than null, so length is what matters.
+  if (decoded === null || decoded.trim().length === 0) {
+    return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
+  }
+  const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

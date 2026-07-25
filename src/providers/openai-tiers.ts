@@ -35,6 +35,24 @@ export function isCanonicalOpenAiForwardProvider(provider: OcxProviderConfig): b
     && normalizedBaseUrl(provider.baseUrl) === CODEX_FORWARD_BASE_URL;
 }
 
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+
+/**
+ * Whether this provider can serve `POST /responses/compact`. The canonical ChatGPT
+ * backend can, and so can the official OpenAI API — but an arbitrary gateway that
+ * merely speaks the Responses wire cannot, and calling it there fails compaction
+ * with an unhelpful error instead of falling back to a routed summary (#422).
+ */
+export function supportsNativeResponsesCompactEndpoint(
+  providerName: string,
+  provider: OcxProviderConfig,
+): boolean {
+  if (isCanonicalOpenAiForwardProvider(provider)) return true;
+  return providerName === OPENAI_API_PROVIDER_ID
+    && provider.adapter === "openai-responses"
+    && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
+}
+
 export interface OpenAiTierMigrationProjection {
   config: OcxConfig;
   changed: boolean;

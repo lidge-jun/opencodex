@@ -41,6 +41,11 @@ const QWEN38_ROUTEWAY_TEMPORARY: Cost4 = { input: 1.5, output: 5, cacheRead: 0.1
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+// Opus 5 is priced from the maintainer's confirmation that it matches the previous
+// Opus, not from a published Opus 5 page. Hence `verified-derived`, and a source
+// string that states the provenance instead of pointing at ANTHROPIC_PRICING.
+const CLAUDE_OPUS_5_DERIVED_SOURCE =
+  "user-confirmed: claude-opus-5 matches Claude Opus 4.6; no separate Anthropic Opus 5 price page verified";
 const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing (official; 5m cache-write tier)";
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
@@ -54,6 +59,13 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 const QWEN38_ROUTEWAY_PRICING = "https://routeway.ai/models/qwen3.8-max-preview (temporary reseller proxy; NOT Alibaba Token Plan billing; cacheWrite unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
+  // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
+  // cost resolution returned null and the Logs `~$` column rendered an em dash. The
+  // model-level vendor fallback only searches jawcode metadata, never overlays, so one
+  // anthropic row would not cover cursor/kiro — each exposing provider needs its own.
+  { provider: "anthropic", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: CLAUDE_OPUS_5_DERIVED_SOURCE, verifiedAt: "2026-07-25", status: "verified-derived" },
+  { provider: "cursor", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: CLAUDE_OPUS_5_DERIVED_SOURCE, verifiedAt: "2026-07-25", status: "verified-derived" },
+  { provider: "kiro", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: CLAUDE_OPUS_5_DERIVED_SOURCE, verifiedAt: "2026-07-25", status: "verified-derived" },
   // MiniMax M2.1 highspeed — published PAYG price (verified).
   { provider: "minimax", modelId: "MiniMax-M2.1-highspeed", cost4: MINIMAX_M21_HIGHSPEED, source: MINIMAX_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   { provider: "minimax-cn", modelId: "MiniMax-M2.1-highspeed", cost4: MINIMAX_M21_HIGHSPEED, source: MINIMAX_PRICING, verifiedAt: "2026-07-20", status: "verified" },

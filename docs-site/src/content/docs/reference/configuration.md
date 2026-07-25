@@ -226,6 +226,7 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Model-specific reasoning labels. An empty list hides the effort control for that model. |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | Model-specific reasoning-summary capability. Set a model to `false` to stop advertising summaries and strip summary-delivery fields before an `openai-responses` request. |
+| `modelAdapters?` | `Record<string,string>` | Per-model wire override for a gateway that fronts models speaking different wires. Keys are upstream native model ids; values must be `openai-chat` or `openai-responses`. Useful when one model needs the Responses API for hosted tools such as `web_search` while its siblings are fine on chat completions. Models the upstream pins to a single wire, and the canonical ChatGPT forward provider, reject overrides. |
 | `reasoningEffortMap?` | `Record<string,string>` | Provider-wide wire aliases for reasoning labels. Use only when the upstream expects a different value. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | Model-specific wire aliases for reasoning labels. |
 | `noReasoningModels?` | `string[]` | Models that reject a reasoning/thinking param — the adapter drops `reasoning_effort` for them. |

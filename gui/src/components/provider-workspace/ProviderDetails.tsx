@@ -16,6 +16,7 @@ import ProviderOverview from "./ProviderOverview";
 import ProviderModels from "./ProviderModels";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
+import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
@@ -29,6 +30,7 @@ export default function ProviderDetails({
   modelUsage,
   quotaReport,
   availableModels,
+  hasLiveModels,
   selectedModels,
   modelsLoading,
   modelsLoadFailed,
@@ -45,6 +47,7 @@ export default function ProviderDetails({
   loginHint,
   authHandlers,
   onCodexActiveNeedsReauthChange,
+  codexController,
   onUpdateProvider,
   isDefault,
   onRemoveProvider,
@@ -55,6 +58,8 @@ export default function ProviderDetails({
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   availableModels: string[];
+  /** Server-reported live-catalog provenance; see filterModels(). */
+  hasLiveModels: boolean;
   selectedModels: string[];
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
@@ -71,6 +76,8 @@ export default function ProviderDetails({
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
+  /** Shared Codex account state owned by Providers (WP3). */
+  codexController?: CodexAccountPoolController;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
@@ -199,6 +206,22 @@ export default function ProviderDetails({
       >
         {tab === "overview" && (
           <ProviderOverview
+            accountPanel={authSurface ? (
+              <ProviderAuthPanel
+                item={item}
+                apiBase={apiBase}
+                oauth={oauth}
+                accounts={accounts}
+                keys={keys}
+                accountLoadState={accountLoadState}
+                switchingAccountId={switchingAccountId}
+                busy={busyProvider === item.name}
+                loginHint={loginHint}
+                authHandlers={authHandlers}
+                onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
+                codexController={codexController}
+              />
+            ) : undefined}
             item={item}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
@@ -227,8 +250,11 @@ export default function ProviderDetails({
         )}
         {tab === "models" && (
           <ProviderModels
+            key={item.name}
             item={item}
+            apiBase={apiBase}
             availableModels={availableModels}
+            hasLiveModels={hasLiveModels}
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
@@ -256,6 +282,7 @@ export default function ProviderDetails({
             loginHint={loginHint}
             authHandlers={authHandlers}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
+            codexController={codexController}
           />
         )}
         {tab === "settings" && (

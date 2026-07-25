@@ -70,6 +70,60 @@ async function providerDiscoveryDto(provider: string): Promise<Record<string, un
   return providers[0] ?? {};
 }
 
+/**
+ * Drive the real discovery path (not `markProviderDiscoveryOk` directly) and read the
+ * live-model provenance back out of `/api/selected-models`. Calling the marker by hand would
+ * still pass if a production branch forgot to record the count.
+ */
+async function liveModelCountAfterDiscovery(provider: string, models: string[] | "fail"): Promise<number | undefined> {
+  const config = {
+    port: 10100,
+    defaultProvider: provider,
+    providers: {
+      [provider]: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.example.test/v1",
+        apiKey: "k",
+        liveModels: true,
+        models: ["configured-fallback"],
+      },
+    },
+  } as unknown as Parameters<typeof handleManagementAPI>[2];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (!String(input).includes("/models")) return new Response(null, { status: 404 });
+    if (models === "fail") return new Response("nope", { status: 500 });
+    return Response.json({ data: models.map(id => ({ id })) });
+  }) as typeof fetch;
+
+  await gatherRoutedModels(config);
+
+  const url = new URL("http://127.0.0.1/api/selected-models");
+  const response = await handleManagementAPI(new Request(url), url, config);
+  const body = await response!.json() as { liveModelCounts?: Record<string, number> };
+  return body.liveModelCounts?.[provider];
+}
+
+describe("live model provenance (#448 custom-model misclassification)", () => {
+  afterEach(() => { globalThis.fetch = originalFetch; clearModelCache(); });
+
+  test("a non-empty discovery records how many rows it actually returned", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-live", ["a", "b", "c"])).toBe(3);
+  });
+
+  test("a successful but empty discovery records zero, not 'never discovered'", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-empty", [])).toBe(0);
+  });
+
+  test("a failed refresh keeps the last successful count so a stale catalog stays live-origin", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-stale", ["a", "b"])).toBe(2);
+    expect(await liveModelCountAfterDiscovery("prov-stale", "fail")).toBe(2);
+  });
+});
+
 describe("combo catalog capability intersection", () => {
   const memberA = {
     provider: "a",

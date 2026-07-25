@@ -308,6 +308,12 @@ export interface OcxUrlCitation {
 export interface OcxUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Absolute active-context size after the response. Stateful providers can expose this separately
+   * from their per-attempt usage. Responses serialization derives the input side from
+   * `contextTotalTokens - outputTokens` so output is never added to an absolute checkpoint twice.
+   */
+  contextTotalTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
@@ -731,6 +737,17 @@ export interface ResponsesItemIdRepairConfig {
 
 export interface OcxProviderConfig {
   adapter: string;
+  /**
+   * Per-model wire override, keyed by the upstream native model id (after namespace
+   * and combo resolution). A single gateway can front models that speak different
+   * wires — Grok needs the Responses API for hosted web_search while a sibling model
+   * is fine on chat completions (#404).
+   *
+   * Only OpenAI-shaped wires may be selected; see MODEL_ADAPTER_OVERRIDE_ALLOWED.
+   * Absent or empty means the provider-wide `adapter` applies to everything, exactly
+   * as before.
+   */
+  modelAdapters?: Record<string, string>;
   baseUrl: string;
   /**
    * Optional relative resource path for key-auth openai-responses requests. Must start with `/`
@@ -942,6 +959,45 @@ export interface OcxProviderConfig {
 export type CodexAccountMode = "direct" | "pool";
 
 export const OPENAI_PROVIDER_TIER_VERSION = 2 as const;
+
+/**
+ * Wires that a per-model `modelAdapters` override may select.
+ *
+ * Deliberately narrow: provider-specific adapters (cursor, kiro, google, ...) carry
+ * their own credential and base-URL semantics, so exposing them here would widen the
+ * auth boundary rather than pick a wire. Widening this set needs a per-adapter
+ * credential threat model first (#404).
+ */
+export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
+  "openai-chat",
+  "openai-responses",
+]);
+
+/**
+ * Providers whose listed model ids must be driven over the Anthropic wire even when
+ * the provider's configured adapter says otherwise — the upstream only speaks
+ * Anthropic for these models.
+ */
+const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
+  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3"]),
+};
+
+/**
+ * True when the upstream speaks exactly one wire for this model, so a configured
+ * override must not apply.
+ *
+ * Deliberately independent of the provider's current adapter: the wire resolver runs
+ * more than once per request, and a check phrased as "pin differs from the current
+ * adapter" would pass on the first pass and then let the override win on the second.
+ */
+export function isWirePinnedModel(providerName: string, modelId: string): boolean {
+  return ANTHROPIC_WIRE_MODELS[providerName]?.has(modelId) ?? false;
+}
+
+/** The wire a pinned model must use, or undefined when the model is not pinned. */
+export function pinnedWireAdapter(providerName: string, modelId: string): string | undefined {
+  return isWirePinnedModel(providerName, modelId) ? "anthropic" : undefined;
+}
 
 export interface CodexAccount {
   id: string;

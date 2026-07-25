@@ -15,6 +15,7 @@ import {
   previousResponseConversationId,
   previousResponseProviderState,
   rememberResponseState,
+  responseStateMetrics,
   setResponseStateByteCapForTests,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
@@ -842,5 +843,63 @@ describe("Responses previous_response_id state", () => {
     expect(tracker.controlsForConversation(conversationId, {
       clearPrior: newlyCompactedRequest.contextUsageReset === true,
     }).carryForwardTokens).toBeUndefined();
+  });
+
+  describe("responseStateMetrics (observe-only snapshot)", () => {
+    test("empty store reports all-zeroed metrics", () => {
+      const metrics = responseStateMetrics();
+      expect(metrics).toEqual({ count: 0, totalBytes: 0, largestBytes: 0, oldestAgeMs: 0 });
+    });
+
+    test("largest entry over 200KB is reflected, and total is >= largest", () => {
+      const small = buildResponseJSON([{ type: "text_delta", text: "tiny" }, { type: "done" }], "gpt-5.5");
+      rememberResponseState({ model: "gpt-5.5", input: "small" }, small);
+      const bigText = "x".repeat(250 * 1024); // > 200KB
+      const big = buildResponseJSON([{ type: "text_delta", text: bigText }, { type: "done" }], "gpt-5.5");
+      rememberResponseState({ model: "gpt-5.5", input: "big" }, big);
+
+      const metrics = responseStateMetrics();
+      expect(metrics.count).toBe(2);
+      expect(metrics.largestBytes).toBeGreaterThan(200 * 1024);
+      // totalBytes re-counts every entry, so it can never be under the single largest one.
+      expect(metrics.totalBytes).toBeGreaterThanOrEqual(metrics.largestBytes);
+      // totalBytes equals the running byte accounting the store maintains.
+      expect(metrics.totalBytes).toBe(getStoredResponseBytesForTests());
+    });
+
+    test("oldestAgeMs grows with the oldest entry's age", () => {
+      const realNow = Date.now;
+      try {
+        Date.now = () => realNow() - 5_000; // oldest entry created 5s ago
+        const old = buildResponseJSON([{ type: "text_delta", text: "old" }, { type: "done" }], "gpt-5.5");
+        rememberResponseState({ model: "gpt-5.5", input: "old" }, old);
+        Date.now = realNow;
+        const fresh = buildResponseJSON([{ type: "text_delta", text: "fresh" }, { type: "done" }], "gpt-5.5");
+        rememberResponseState({ model: "gpt-5.5", input: "fresh" }, fresh);
+
+        const metrics = responseStateMetrics();
+        expect(metrics.count).toBe(2);
+        expect(metrics.oldestAgeMs).toBeGreaterThanOrEqual(5_000);
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    test("is side-effect free: it never lazy-loads the disk snapshot, prunes, or evicts", () => {
+      const first = buildResponseJSON([{ type: "text_delta", text: "persisted" }, { type: "done" }], "gpt-5.5");
+      rememberResponseState({ model: "gpt-5.5", input: "persisted turn" }, first);
+      flushResponseState();
+      // Simulated restart: memory wiped, snapshot on disk, `loaded` reset to false.
+      clearResponseStateMemoryForTests();
+
+      // A probe must NOT trigger the lazy disk load — the store still reads empty.
+      expect(responseStateMetrics()).toEqual({ count: 0, totalBytes: 0, largestBytes: 0, oldestAgeMs: 0 });
+
+      // The real request path DOES load; the probe then reflects the loaded entry.
+      expandPreviousResponseInput({ model: "gpt-5.5", previous_response_id: first.id, input: "next" });
+      const metrics = responseStateMetrics();
+      expect(metrics.count).toBe(1);
+      expect(metrics.totalBytes).toBeGreaterThan(0);
+    });
   });
 });

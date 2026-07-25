@@ -56,6 +56,48 @@ function mockChatUpstreamCapturing() {
   return { server, captured };
 }
 
+/**
+ * Serves both wires and records which one each request took (#404). The chat-only
+ * helper above cannot answer "did this model reach the Responses API", which is the
+ * whole question behind the per-model override.
+ */
+function mockDualWireUpstream() {
+  const captured: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      let body: Record<string, unknown> = {};
+      try { body = await req.json() as Record<string, unknown>; } catch { /* keep going */ }
+      captured.push({ pathname: url.pathname, body });
+
+      if (url.pathname.endsWith("/responses")) {
+        const frames = [
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n`,
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: {
+              id: "resp_1",
+              status: "completed",
+              output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+              usage: { input_tokens: 5, output_tokens: 2 },
+            },
+          })}\n\n`,
+        ];
+        return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
+      }
+
+      const frames = [
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 2 } })}\n\n`,
+        "data: [DONE]\n\n",
+      ];
+      return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  return { server, captured };
+}
+
 function mockConfig(baseUrl: string): OcxConfig {
   return {
     port: 0,
@@ -961,4 +1003,104 @@ test("collectChatCompletion throws ChatCompletionsStreamError on a stall incompl
   }
   expect(caught).toBeDefined();
   expect(isChatCompletionsStreamError(caught)).toBe(true);
+});
+
+// --- #404: one gateway, two wires. Without a per-model override the provider-wide
+// adapter wins and Grok's hosted web_search is dropped before it ever goes out. ----
+
+function dualWireConfig(baseUrl: string): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "mock",
+    providers: {
+      mock: {
+        adapter: "openai-chat",
+        baseUrl,
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        modelAdapters: { "grok-4.5": "openai-responses" },
+      },
+    },
+  } as OcxConfig;
+}
+
+test("an overridden model reaches the responses wire with its hosted tool intact (#404)", async () => {
+  const { server: upstream, captured } = mockDualWireUpstream();
+  saveConfig(dualWireConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/grok-4.5",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "search please" }] }],
+        tools: [{ type: "web_search" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(captured.length).toBe(1);
+    // The whole point: this model took the responses wire, not chat completions.
+    expect(captured[0]!.pathname).toContain("/responses");
+    // And the hosted tool survived — the chat translation would have dropped it.
+    expect(JSON.stringify(captured[0]!.body)).toContain("web_search");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("a sibling model on the same provider still takes the chat wire (#404)", async () => {
+  const { server: upstream, captured } = mockDualWireUpstream();
+  saveConfig(dualWireConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/gemini-3-pro",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.pathname).toContain("/chat/completions");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("inbound chat-completions honors the override when stripping sampling (#404)", async () => {
+  const { server: upstream, captured } = mockDualWireUpstream();
+  saveConfig(dualWireConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/grok-4.5",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 256,
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(captured.length).toBe(1);
+    // The inbound path must read the effective adapter, not the provider default.
+    expect(captured[0]!.pathname).toContain("/responses");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
 });

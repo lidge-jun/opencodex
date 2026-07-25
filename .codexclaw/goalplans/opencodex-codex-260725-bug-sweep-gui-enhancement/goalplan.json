@@ -1,0 +1,263 @@
+{
+  "objective": "opencodex 워크트리 codex/260725-bug-sweep에서 GUI·enhancement 제외 미해결 버그(#433 quota cooldown 고착, #432 Windows 서비스 stale 오탐, #422 remote compaction v2 fatal, #404 Grok per-model adapter, #373 Cursor 재시작 context 0)를 다중 PABCD 사이클로 직접 수정하고 각 work-phase를 로컬 커밋으로 쌓는다. WP0는 docs-only 로드맵 사이클.",
+  "slug": "opencodex-codex-260725-bug-sweep-gui-enhancement",
+  "createdAt": "2026-07-25T08:12:13.026Z",
+  "updatedAt": "2026-07-25T12:50:38.598Z",
+  "activeWorkPhaseId": null,
+  "workPhases": [
+    {
+      "id": "wp0",
+      "title": "WP0 docs-only 로드맵 사이클 — 260725_bug_sweep 유닛 + 이슈별 decade 문서 diff-level 작성",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp0-t1",
+          "title": "5개 이슈 근본원인을 코드 대조로 확정 (sol high 4기 병렬 조사)",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t2",
+          "title": "외부 근거 원문 확인 (MS XSD, xAI, OpenAI Compaction, upstream codex)",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t3",
+          "title": "독립 리뷰어 3라운드 감사로 설계 결함 제거",
+          "status": "done"
+        },
+        {
+          "id": "wp0-t4",
+          "title": "통합 유닛 구조가 DIFFLEVEL-ROADMAP-01과 충돌함을 확인, 이슈별 단일 work-phase 유닛으로 재구성 결정",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-roadmap"
+      ]
+    },
+    {
+      "id": "wp-restructure",
+      "title": "P-phase 개정 — 통합 유닛을 이슈별 단일 work-phase 유닛으로 분리 (LOOP-UNIT-CHAIN-01)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wpr-t1",
+          "title": "DIFFLEVEL-ROADMAP-01은 2+ work-phase 유닛에만 적용됨을 규약 원문으로 확인",
+          "status": "done"
+        },
+        {
+          "id": "wpr-t2",
+          "title": "이슈별 독립 유닛 devlog/_plan/260725_issue_<n>/ 구조로 전환",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": []
+    },
+    {
+      "id": "wp1",
+      "title": "WP1 #433 — 먼 미래 resetAt로 인한 quota cooldown 고착 수정",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp1-t1",
+          "title": "260725_issue_433 유닛 P — 실제 파일 열어 정확한 diff 작성",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t2",
+          "title": "cooldown 상한 분리 + probe lease 구현 (lease id 전달 경로 포함)",
+          "status": "done"
+        },
+        {
+          "id": "wp1-t3",
+          "title": "회귀 테스트 추가 + typecheck/test 통과 + 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-433"
+      ]
+    },
+    {
+      "id": "wp2",
+      "title": "WP2 #432 — Windows Task Scheduler XML 기본값 생략 시 stale 오탐 수정",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp2-t1",
+          "title": "260725_issue_432 유닛 P — 실제 파일 열어 정확한 diff 작성",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t2",
+          "title": "생략형 XML을 기본값으로 해석 + diagnoseService wiring 통합",
+          "status": "done"
+        },
+        {
+          "id": "wp2-t3",
+          "title": "회귀 테스트 추가 + typecheck/test 통과 + 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-432"
+      ]
+    },
+    {
+      "id": "wp3",
+      "title": "WP3 #422 — API-key 기반 openai-responses에서 remote compaction v2 fatal 수정",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp3-t1",
+          "title": "030 문서 stale 체크 후 compaction 분기 경로 확정",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t2",
+          "title": "authMode별 compaction 지원 판정 구현",
+          "status": "done"
+        },
+        {
+          "id": "wp3-t3",
+          "title": "회귀 테스트 추가 + typecheck/test 통과 + 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-422"
+      ]
+    },
+    {
+      "id": "wp4",
+      "title": "WP4 #373 — Cursor 재시작 후 context usage 0 보고 수정",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp4-t1",
+          "title": "050 문서 stale 체크 후 checkpoint tracker 경로 확정",
+          "status": "done"
+        },
+        {
+          "id": "wp4-t2",
+          "title": "재시작 시드 복구 또는 request-local 추정 구현",
+          "status": "done"
+        },
+        {
+          "id": "wp4-t3",
+          "title": "회귀 테스트 추가 + typecheck/test 통과 + 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-373"
+      ]
+    },
+    {
+      "id": "wp5",
+      "title": "WP5 #404 — Grok 4.5 per-model adapter override (혼합 게이트웨이 web_search 소실)",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp5-t1",
+          "title": "040 문서 stale 체크 후 adapter-resolve 경로 확정",
+          "status": "done"
+        },
+        {
+          "id": "wp5-t2",
+          "title": "모델별 wire override 구현 또는 BLOCKED 증거 기록",
+          "status": "done"
+        },
+        {
+          "id": "wp5-t3",
+          "title": "회귀 테스트 추가 + typecheck/test 통과 + 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-404"
+      ]
+    },
+    {
+      "id": "wp6",
+      "title": "WP6 최종 통합 검증 — 전체 스위트 회귀 확인",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "wp6-t1",
+          "title": "bun run typecheck 전체 통과",
+          "status": "done"
+        },
+        {
+          "id": "wp6-t2",
+          "title": "bun run test 전체 스위트 실행 및 회귀 없음 확인",
+          "status": "done"
+        },
+        {
+          "id": "wp6-t3",
+          "title": "060 스윕 종료 요약 문서 + 최종 커밋",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "c-suite"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "c-roadmap",
+      "scenario": "5개 이슈의 근본 원인이 파일:라인 코드 대조로 확정되고, 외부 근거가 원문 확인되며, 독립 리뷰어 감사로 설계 결함이 제거된 상태로 조사 산출물이 커밋된다.",
+      "expectedEvidence": "devlog 커밋 SHA + 리뷰어 감사 결과 + 근본원인별 파일:라인",
+      "capturedEvidence": "커밋 cddc86f9(r1), 961fa431(r2), 86de6069(r3). 독립 리뷰어 3라운드 감사(Anscombe 2회, Lagrange 1회)로 근본원인 확정: #433 routing.ts:474 하드 cooldown이 재시작 외 해제 불가(auth-context.ts:132 선차단으로 자기완결 교착), 기존 테스트 codex-routing:312/:806이 2xx 보존을 고정. #432 service.ts:471-493 + 953-958 두 곳 독립 오탐, MS XSD상 생략 Enabled/RunLevel은 true/LeastPrivilege. #422 core.ts:973이 adapter.passthrough만 검사, isCanonicalOpenAiForwardProvider(openai-tiers.ts:32)가 정확한 판정자, core.ts:1828 non-stream 400. #373 protobuf-events.ts:48 tracker가 process-local, protobuf-events.ts:474가 inputTokens:0 복사. #404 adapter-resolve.ts:13 pin에 grok 없음, modelAdapters 성립하나 canonical forward에는 금지 필요. 기준선 typecheck 0 / routing 59 / responses 46 / service 34 / cursor 112 / server-auth 54 / privacy scan 통과.",
+      "status": "met"
+    },
+    {
+      "id": "c-433",
+      "scenario": "먼 미래 resetAt를 받은 계정이 상한을 넘겨 고착되지 않고, 회복된 계정이 다시 라우팅 대상이 된다. 수정 전 실패하고 수정 후 통과하는 회귀 테스트가 이 동작을 고정한다.",
+      "expectedEvidence": "신규 테스트 파일 경로 + bun test 통과 출력 tail + 커밋 SHA",
+      "capturedEvidence": "커밋 c71defc4. tests/codex-routing.test.ts 72 pass/0 fail (신규 13개: far-future resetAt 상한, Retry-After 보존, retry-after 미probe, interval당 lease 1개, leased success 해제, unleased 2xx 보존, 불일치 lease 미소비, 실패 probe interval 재시작, stale-generation 차단, credential 종료, retry-after source 보존, reset-derived probe 가능, in-flight lease 생존). tests/codex-auth-context.test.ts 17 pass/0 fail (통합: 차단→interval 후 probe 허용→성공→정상 복귀). 기존 codex-routing:312/:806 무수정 통과. 전체 bun run test 4093 pass, 기준선 4079 대비 +14, 실패 2건은 양쪽 동일한 GUI react/jsx-dev-runtime 미해결로 무관. typecheck exit 0, privacy scan 통과.",
+      "status": "met"
+    },
+    {
+      "id": "c-432",
+      "scenario": "Enabled/RunLevel이 생략된 Task Scheduler XML을 정상(healthy)으로 판정하고, 실제로 비활성화된 서비스는 여전히 stale로 판정한다.",
+      "expectedEvidence": "신규 테스트 파일 경로 + bun test 통과 출력 tail + 커밋 SHA",
+      "capturedEvidence": "커밋 c00b9c0c. tests/service.test.ts 40 pass/0 fail (기존 34 무회귀 + 신규 6: canonicalized XML 수용, 명시적 unsafe 거부, Data/주석 decoy 거부, prefixed 값 거부, Data shadowing 3종 거부, 중복 요소 거부). 전체 bun run test 4099 pass (기준선 4079 대비 +20). typecheck exit 0, privacy scan 통과. wiring은 WindowsServiceDiagnosticInputs 타입 변경으로 강제.",
+      "status": "met"
+    },
+    {
+      "id": "c-422",
+      "scenario": "authMode=key인 openai-responses provider에서 remote compaction 요청이 fatal 없이 처리되거나 명확히 미지원으로 저하(degrade)된다.",
+      "expectedEvidence": "신규 테스트 파일 경로 + bun test 통과 출력 tail + 커밋 SHA",
+      "capturedEvidence": "커밋 e2626eb6. 신규 tests/responses-compaction-routing.test.ts 10 pass/0 fail (helper matrix, wire rewrite 검사, additional_tools 제거, input_image 재귀 치환, noncanonical forward rewrite, upstream failure, incomplete 차단, output_text.done fallback, completed snapshot fallback). 기존 responses-compaction+passthrough 46 pass 무회귀. 전체 bun run test 4109 pass (기준선 4079 대비 +30). typecheck exit 0, privacy scan 통과.",
+      "status": "met"
+    },
+    {
+      "id": "c-373",
+      "scenario": "프록시 재시작 후 checkpoint 없는 Cursor 요청이 inputTokens=0이 아닌 실제 컨텍스트 규모를 보고한다.",
+      "expectedEvidence": "신규 테스트 파일 경로 + bun test 통과 출력 tail + 커밋 SHA",
+      "capturedEvidence": "커밋 cb22b7ee. 신규 10개 테스트(cursor-blob 4, cursor-protobuf-events 4, cursor-live-transport 2). cursor+token-estimate 7파일 132 pass/0 fail. 뮤테이션 검증: live-transport estimatedInputTokens 배선 제거 시 transport 테스트 2개가 정확히 실패. 전체 bun run test 4119 pass (기준선 4079 대비 +40). typecheck exit 0, privacy scan 통과. 리뷰어는 kimi/k3(Curie) 3라운드 감사 PASS.",
+      "status": "met"
+    },
+    {
+      "id": "c-404",
+      "scenario": "혼합 게이트웨이에서 특정 모델만 responses wire를 쓰도록 override할 수 있거나, 구현 불가 사유가 코드 근거와 함께 문서화된다.",
+      "expectedEvidence": "신규 테스트 파일 경로 + bun test 통과 출력 tail + 커밋 SHA, 또는 BLOCKED 증거 문서 경로",
+      "capturedEvidence": "커밋 359e2ecd. 신규 13개(adapter-resolve 7, config 3, management 1, chat-completions-endpoint 3). 증상 회귀: mock dual-wire upstream으로 grok이 /responses에 web_search를 실은 채 도달, sibling은 /chat/completions, inbound도 effective adapter 사용을 검증. 전체 bun run test 4132 pass (기준선 4079 대비 +53). typecheck 0, privacy scan 통과. 리뷰어 kimi/k3 + gpt-5.6-sol medium priority 4라운드 PASS.",
+      "status": "met"
+    },
+    {
+      "id": "c-suite",
+      "scenario": "모든 수정을 쌓은 최종 트리에서 bun run typecheck와 bun run test가 기존 대비 신규 실패 없이 완료된다.",
+      "expectedEvidence": "bun run typecheck 종료코드 0 + bun run test 요약 출력 tail",
+      "capturedEvidence": "bun run typecheck exit 0. bun run test 4132 pass / 2 fail / 2 errors / 21258 expect() calls. 기준선(변경분 stash 후 동일 명령) 4079 pass / 2 fail / 2 errors — 증가분 +53은 전부 신규 회귀 테스트이고 실패 2건은 gui/src react/jsx-dev-runtime 미해결로 변경 전후 동일. bun run privacy:scan 통과. 교차 영향 직접 실행 확인: canonical forward가 override 후에도 canonical 유지, key 게이트웨이는 canonical 오인 없음, #433 lease가 429->획득->success->해제까지 동작.",
+      "status": "met"
+    }
+  ],
+  "host": {
+    "armed": true,
+    "armedAt": null,
+    "source": "freeze"
+  }
+}

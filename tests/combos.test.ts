@@ -27,6 +27,7 @@ import {
   parseComboModelId,
   parseRetryAfterMs,
   pickComboTarget,
+  preservesPhysicalComboProvider,
   resetComboEffortWarningStateForTests,
   resolveComboId,
   targetKey,
@@ -534,6 +535,12 @@ describe("combo validation and normalization", () => {
         combo: { adapter: "openai-chat", baseUrl: "https://combo.example/v1" },
       },
     };
+    expect(preservesPhysicalComboProvider(config)).toBeTrue();
+    expect(preservesPhysicalComboProvider({ ...config, combos: {} })).toBeTrue();
+    expect(preservesPhysicalComboProvider({ providers: {}, combos: {} })).toBeFalse();
+    expect(preservesPhysicalComboProvider({ ...config, combos: { free: VALID_COMBO } })).toBeFalse();
+    const inheritedProviders = Object.create({ combo: config.providers.combo }) as OcxConfig["providers"];
+    expect(preservesPhysicalComboProvider({ providers: inheritedProviders, combos: {} })).toBeFalse();
     expect(routeModel(config, "combo/model")).toMatchObject({
       providerName: "combo",
       modelId: "model",

@@ -41,9 +41,21 @@ bun run dev:gui
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). |
 
+### Linking to a section
+
+There is a single layout, so there is no layout switch to configure. Dashboard sections are
+addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
+`#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
+on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#providers/workspace`
+bookmark now lands on `#providers`.
+
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
+
+## Model visibility
+
+The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
 
 ## Delegation picker vs spawn routing
 
@@ -98,6 +110,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, or remove providers. |
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
+| `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | Read the API-key and OAuth provider catalogs. |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | Start a provider OAuth flow and poll for completion. |
 | `GET /api/codex-auth/accounts?refresh=1` | List main and pool accounts, force quota refresh, and report main-account `hasCredential` / terminal `needsReauth` state. |

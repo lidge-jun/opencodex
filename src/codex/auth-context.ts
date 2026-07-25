@@ -6,9 +6,12 @@ import {
 } from "./account-store";
 import { markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountUsable } from "./account-usability";
+import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import {
   getCodexAccountCooldownUntil,
+  releaseCodexQuotaProbeLease,
+  tryAcquireCodexQuotaProbeLease,
   pickLowestUsageCodexAccount,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
@@ -24,7 +27,14 @@ export type CodexAuthContext =
       generation: number;
       accessToken: string;
       chatgptAccountId: string;
+      /** Prevent pool affinity or active-account mutation for an exact selector. */
       fixedAccount?: boolean;
+      /**
+       * Set when this request was admitted through an active quota cooldown as
+       * the account's single probe. Must be echoed into the upstream outcome so
+       * only this request can clear the cooldown (#433).
+       */
+      probeLeaseId?: string;
     }
   | {
       // Main Codex account participating in rotation: token injected from ~/.codex/auth.json
@@ -33,8 +43,25 @@ export type CodexAuthContext =
       accountId: string;
       accessToken: string;
       chatgptAccountId: string;
+      /** Prevent pool affinity or active-account mutation for an exact selector. */
       fixedAccount?: boolean;
+      /** See `pool.probeLeaseId`. */
+      probeLeaseId?: string;
     };
+
+/** Probe lease carried by this context, when it holds one. */
+export function codexProbeLeaseId(ctx: CodexAuthContext | undefined): string | undefined {
+  return ctx?.kind === "pool" || ctx?.kind === "main-pool" ? ctx.probeLeaseId : undefined;
+}
+
+/**
+ * Hand back a probe lease for a request that will not reach upstream. Safe to
+ * call with a context that holds no lease.
+ */
+export function releaseCodexAuthContextProbeLease(ctx: CodexAuthContext | undefined): void {
+  const leaseId = codexProbeLeaseId(ctx);
+  if (ctx && leaseId) releaseCodexQuotaProbeLease(ctx.accountId!, leaseId);
+}
 
 export type OcxRuntimeProviderConfig = OcxProviderConfig & {
   _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
@@ -117,6 +144,7 @@ export async function resolveCodexAuthContext(
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     return { kind: "main", accountId: null };
   }
+  reconcileMainCodexAccountRuntimeState();
   const threadId = headers.get("x-codex-parent-thread-id");
   const resolution = options.accountId
     ? { status: "selected" as const, accountId: options.accountId }
@@ -145,18 +173,30 @@ export async function resolveCodexAuthContext(
       .catch(() => {});
   }
   const cooldownUntil = getCodexAccountCooldownUntil(accountId);
-  if (cooldownUntil) throw new CodexAccountCooldownError(accountId, cooldownUntil);
+  // A cooled-down account never sends traffic, so upstream recovery can never be
+  // observed and the cooldown outlives the real limit. Admit one probe per
+  // interval; its outcome decides whether the cooldown ends (#433).
+  let probeLeaseId: string | undefined;
+  if (cooldownUntil) {
+    probeLeaseId = tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
+    if (!probeLeaseId) throw new CodexAccountCooldownError(accountId, cooldownUntil);
+  }
 
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     // Main account in rotation: inject the read-only auth.json token and fail closed if it vanished.
     const token = getMainAccountToken();
-    if (!token) throw new CodexPoolAuthenticationError();
+    if (!token) {
+      // Nothing will reach upstream, so give the probe back instead of burning it.
+      if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
+      throw new CodexPoolAuthenticationError();
+    }
     return {
       kind: "main-pool",
       accountId,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
       ...(options.accountId ? { fixedAccount: true } : {}),
+      ...(probeLeaseId ? { probeLeaseId } : {}),
     };
   }
 
@@ -169,8 +209,10 @@ export async function resolveCodexAuthContext(
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
       ...(options.accountId ? { fixedAccount: true } : {}),
+      ...(probeLeaseId ? { probeLeaseId } : {}),
     };
   } catch (cause) {
+    if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
     if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
       markAccountNeedsReauth(accountId);
     }
@@ -180,6 +222,8 @@ export async function resolveCodexAuthContext(
 
 export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefined): void {
   if (ctx?.kind !== "pool" && ctx?.kind !== "main-pool") return;
+  // A context holding the probe lease was deliberately admitted through the cooldown.
+  if (ctx.probeLeaseId) return;
   const cooldownUntil = getCodexAccountCooldownUntil(ctx.accountId);
   if (cooldownUntil) throw new CodexAccountCooldownError(ctx.accountId, cooldownUntil);
 }
