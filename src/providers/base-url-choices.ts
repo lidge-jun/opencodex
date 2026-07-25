@@ -21,6 +21,23 @@ export const QWEN_CLOUD_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
   { id: "custom", label: "Custom" },
 ];
 
+/**
+ * Alibaba Token Plan OpenAI-compatible endpoint presets.
+ * Beijing is the registry default (Personal Edition); the international
+ * Singapore endpoint (Team Edition) and custom are selectable, so a saved
+ * non-Beijing baseUrl is honored instead of silently overridden.
+ */
+export const ALIBABA_TOKEN_PLAN_BEIJING_BASE_URL =
+  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+export const ALIBABA_TOKEN_PLAN_INTL_BASE_URL =
+  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+
+export const ALIBABA_TOKEN_PLAN_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
+  { id: "beijing", label: "China (Beijing)", baseUrl: ALIBABA_TOKEN_PLAN_BEIJING_BASE_URL },
+  { id: "intl", label: "International (Singapore)", baseUrl: ALIBABA_TOKEN_PLAN_INTL_BASE_URL },
+  { id: "custom", label: "Custom" },
+];
+
 /** Match a saved baseUrl to a known choice id (`custom` when it does not match). */
 export function matchBaseUrlChoice(
   choices: readonly ProviderBaseUrlChoice[],

@@ -2,7 +2,7 @@ import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
-import { QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import { ALIBABA_TOKEN_PLAN_BASE_URL_CHOICES, ALIBABA_TOKEN_PLAN_BEIJING_BASE_URL, QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
@@ -690,9 +690,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
-    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    baseUrl: ALIBABA_TOKEN_PLAN_BEIJING_BASE_URL,
     adapter: "openai-chat",
     authKind: "key",
+    allowBaseUrlOverride: true,
+    baseUrlChoices: ALIBABA_TOKEN_PLAN_BASE_URL_CHOICES,
     dashboardUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=plan",
     defaultModel: "qwen3.8-max-preview",
     models: ALIBABA_TOKEN_PLAN_MODELS,
