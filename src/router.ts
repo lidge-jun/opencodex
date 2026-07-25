@@ -2,6 +2,7 @@ import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } from "./combos";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
+import { redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
 import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
@@ -117,6 +118,38 @@ function mergeStringArrayRecord(
   return out;
 }
 
+/** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
+function isSameEndpoint(a: string, b: string): boolean {
+  return a.trim().replace(/\/+$/, "") === b.trim().replace(/\/+$/, "");
+}
+
+// `routedProviderConfig` runs per request, so warn once per (provider, discarded, effective) triple.
+// Keyed by the URLs too: editing config.json to a different wrong value warns again.
+const discardedBaseUrlWarnings = new Set<string>();
+
+/**
+ * A pinned registry entry — non-template `baseUrl`, no `allowBaseUrlOverride` — outranks a saved
+ * `baseUrl`. Dropping it silently is a footgun: requests go to an endpoint the user never
+ * configured, and a wrong-region or wrong-account URL then surfaces only as a 401 with nothing
+ * pointing back at the discarded setting.
+ *
+ * Warns rather than throws. The effective route is exactly what it was before, so a hard error
+ * here would break configs that route fine today (a stale `baseUrl` left over from an earlier
+ * provider is harmless whenever it names the same endpoint the registry pins).
+ */
+function warnIfBaseUrlDiscarded(providerName: string, userBaseUrl: string, effectiveBaseUrl: string): void {
+  if (isSameEndpoint(userBaseUrl, effectiveBaseUrl)) return;
+  const key = `${providerName} | ${userBaseUrl} | ${effectiveBaseUrl}`;
+  if (discardedBaseUrlWarnings.has(key)) return;
+  discardedBaseUrlWarnings.add(key);
+  console.warn(
+    // A baseUrl can carry credentials in userinfo or query — redact both before logging.
+    `⚠️  config.json provider "${providerName}": configured baseUrl ${redactUrlForLog(userBaseUrl)} is ignored`
+    + ` because this provider's endpoint is fixed at ${redactUrlForLog(effectiveBaseUrl)}. Requests go to the`
+    + ` fixed endpoint and will fail to authenticate if the configured URL was for a different account or region.`,
+  );
+}
+
 function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry) {
@@ -163,6 +196,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const baseUrl = (registryBaseUrlIsTemplate || registryEntry.allowBaseUrlOverride) && userBaseUrlIsResolved
     ? userBaseUrl
     : registryEntry.baseUrl;
+  if (userBaseUrlIsResolved) warnIfBaseUrlDiscarded(providerName, userBaseUrl, baseUrl);
   assertProviderDestinationAllowed(providerName, { baseUrl, allowPrivateNetwork: provider.allowPrivateNetwork });
 
   return {
