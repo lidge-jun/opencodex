@@ -20,7 +20,12 @@ export function accountBoundNativeDisplayName(namespace: string, native: {
   const raw = typeof native.display_name === "string"
     ? native.display_name
     : String(native.slug ?? "");
-  const model = raw.replace(/^gpt-/i, "").replaceAll("-", " ");
+  const model = raw
+    .replace(/^gpt-/i, "")
+    .split("-")
+    .filter(Boolean)
+    .map(part => /^[a-z]/.test(part) ? part.charAt(0).toUpperCase() + part.slice(1) : part)
+    .join(" ");
   return `${codexAccountNamespaceDisplayName(namespace)} / ${model}`;
 }
 

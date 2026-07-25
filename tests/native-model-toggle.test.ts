@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { accountBoundNativeDisplayName } from "../src/codex/account-namespaces";
 import {
   applyNativeVisibility,
   buildCatalogEntries,
@@ -32,6 +33,11 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 describe("native GPT model toggles (bare slugs in disabledModels)", () => {
+  test("account replacement labels title-case synthesized slug words", () => {
+    expect(accountBoundNativeDisplayName("work", { slug: "gpt-5.3-codex-spark" }))
+      .toBe("Work / 5.3 Codex Spark");
+  });
+
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {
     const set = disabledNativeSlugs({ disabledModels: ["gpt-5.4", "kiro/claude-opus-4.6", "gpt-5.6-luna"] });
     expect([...set].sort()).toEqual(["gpt-5.4", "gpt-5.6-luna"]);
