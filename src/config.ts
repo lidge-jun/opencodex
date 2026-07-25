@@ -444,12 +444,22 @@ const configSchema = z.object({
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
   codexShimAutoRestore: z.boolean().optional(),
+  codexAccountNamespacePickerMode: z.enum(["additive", "replace-native"]).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
 }).passthrough().superRefine((config, ctx) => {
   const accountNamespaces = (config as { codexAccountNamespaces?: unknown }).codexAccountNamespaces;
+  if (config.codexAccountNamespacePickerMode === "replace-native"
+    && (!accountNamespaces || typeof accountNamespaces !== "object" || Array.isArray(accountNamespaces)
+      || Object.keys(accountNamespaces).length === 0)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["codexAccountNamespacePickerMode"],
+      message: "replace-native picker mode requires at least one configured Codex account namespace",
+    });
+  }
   if (accountNamespaces !== undefined) {
     if (!accountNamespaces || typeof accountNamespaces !== "object" || Array.isArray(accountNamespaces)) {
       ctx.addIssue({

@@ -1025,6 +1025,8 @@ describe("Codex catalog routed normalization", () => {
     expect(personal?.supported_reasoning_levels).toEqual(native?.supported_reasoning_levels);
     expect(personal?.input_modalities).toEqual(native?.input_modalities);
     expect(personal?.service_tiers).toEqual(native?.service_tiers);
+    expect(personal?.display_name).toBe("personal/gpt-5.5");
+    expect(native?.visibility).toBe("list");
     expect(personal?.priority).toBeGreaterThan(100);
     expect(JSON.stringify(entries)).not.toContain("opaque-account-id");
   });

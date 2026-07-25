@@ -25,6 +25,11 @@ bypass Pool/Direct selection, quota balancing, failure failover, thread affinity
 model account retry. Cooldown, missing credentials, and reauthentication fail closed on the bound
 account and do not mutate the active pool selection.
 
+Picker presentation is independently opt-in. The default `codexAccountNamespacePickerMode` is
+`additive`, which leaves bare native rows visible alongside qualified rows. `replace-native` hides
+only the bare picker rows, uses friendly namespace labels, and orders qualified replacements in the
+native model positions. Bare ids remain routable and keep their Pool/Direct semantics.
+
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
 personal/gpt-5.6-sol                # exact main/Desktop Codex account
@@ -64,6 +69,8 @@ v2 backup blocks migration before save.
   opencodex adds a native model to its supported catalog, the next sync creates its qualified copies
   without another per-namespace model list. Account ids never appear in the catalog or request logs;
   only the user-owned namespace is displayed.
+- Replacement picker mode is an explicit presentation option, not a routing migration. Existing
+  bare model ids stay valid, while bare subagent selections project onto visible qualified rows.
 - Binding follows each request's selected model. Qualified subagent, injection, and shadow-helper
   model settings stay exact; explicit bare child/helper models retain Pool/Direct behavior.
 - Standalone client-side images and alpha-search relays do not reliably carry the selected chat

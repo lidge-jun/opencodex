@@ -5,6 +5,25 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 export const MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET = "main";
 export const CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION = "OpenAI native model bound to a Codex account namespace.";
 
+export function codexAccountNamespaceDisplayName(namespace: string): string {
+  return namespace
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function accountBoundNativeDisplayName(namespace: string, native: {
+  slug?: unknown;
+  display_name?: unknown;
+}): string {
+  const raw = typeof native.display_name === "string"
+    ? native.display_name
+    : String(native.slug ?? "");
+  const model = raw.replace(/^gpt-/i, "").replaceAll("-", " ");
+  return `${codexAccountNamespaceDisplayName(namespace)} / ${model}`;
+}
+
 export function accountBoundNativeCatalogSlug(entry: {
   slug?: unknown;
   description?: unknown;

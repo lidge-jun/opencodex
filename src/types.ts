@@ -583,6 +583,12 @@ export interface OcxConfig {
    * `work/gpt-5.6-sol` fails closed when that account is unavailable and never pool-fails over.
    */
   codexAccountNamespaces?: Record<string, string>;
+  /**
+   * Picker presentation for account-qualified native models. Default "additive" keeps the bare
+   * native rows; "replace-native" hides those rows and shows friendly namespace-qualified rows.
+   * Routing by a bare native slug remains supported in either mode.
+   */
+  codexAccountNamespacePickerMode?: "additive" | "replace-native";
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

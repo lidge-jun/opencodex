@@ -30,6 +30,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import {
+  accountBoundNativeDisplayName,
   accountBoundNativeCatalogSlug,
   CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION,
   codexAccountNamespaceEntries,
@@ -76,6 +77,13 @@ export function configuredCatalogEntry(entries: RawEntry[], configured: string):
     ?? entries.find(entry => typeof entry.slug === "string" && slugsEquivalent(configured, entry.slug));
 }
 
+function configuredSubagentModelMatchesEntry(configured: string, entry: RawEntry): boolean {
+  if (typeof entry.slug !== "string") return false;
+  if (slugsEquivalent(configured, entry.slug)) return true;
+  const nativeSlug = accountBoundNativeCatalogSlug(entry);
+  return !configured.includes("/") && nativeSlug !== undefined && slugsEquivalent(configured, nativeSlug);
+}
+
 export function effectiveSubagentRoster(
   configuredModels: readonly string[],
   surface: SpawnAgentSurface,
@@ -104,10 +112,14 @@ export function effectiveSubagentRoster(
     model: entry.slug as string,
     efforts: catalogEntryEfforts(entry),
   }));
-  const advertised = candidates.filter(candidate =>
-    configured.some(model => slugsEquivalent(model, candidate.model))
-  );
+  const advertised = ordered
+    .filter(({ entry }) => configured.some(model => configuredSubagentModelMatchesEntry(model, entry)))
+    .map(({ entry }) => ({
+      model: entry.slug as string,
+      efforts: catalogEntryEfforts(entry),
+    }));
   const excluded = configured.flatMap((model): SubagentRosterExclusion[] => {
+    if (ordered.some(({ entry }) => configuredSubagentModelMatchesEntry(model, entry))) return [];
     const entry = configuredCatalogEntry(entries, model);
     if (!entry) return [{ configured: model, reason: "missing_catalog_entry" }];
     const catalogModel = entry.slug as string;
@@ -239,6 +251,7 @@ export function buildCatalogEntries(
   multiAgentMode: MultiAgentMode = "default",
   exactComboSlugs: ReadonlySet<string> = new Set(),
   accountNamespaces: Readonly<Record<string, string>> = {},
+  accountNamespacePickerMode: "additive" | "replace-native" = "additive",
 ): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -254,18 +267,29 @@ export function buildCatalogEntries(
   for (const slug of gptSlugs) {
     const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
     if (rank.has(slug)) e.priority = rank.get(slug)!;
+    if (accountNamespacePickerMode === "replace-native" && Object.keys(accountNamespaces).length > 0) {
+      e.visibility = "hide";
+    }
     out.push(e);
     nativeEntries.push(e);
   }
-  for (const namespace of Object.keys(accountNamespaces)) {
+  const namespaceNames = Object.keys(accountNamespaces);
+  for (const [namespaceIndex, namespace] of namespaceNames.entries()) {
     for (const native of nativeEntries) {
       const slug = `${namespace}/${String(native.slug)}`;
       const e = JSON.parse(JSON.stringify(native)) as RawEntry;
       e.slug = slug;
-      e.display_name = slug;
+      e.display_name = accountNamespacePickerMode === "replace-native"
+        ? accountBoundNativeDisplayName(namespace, native)
+        : slug;
       e.description = CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION;
-      e.priority = rank.get(slug)
-        ?? (100 + (typeof native.priority === "number" ? native.priority : 9));
+      const exactRank = rank.get(slug);
+      const inheritedRank = rank.get(String(native.slug));
+      const nativePriority = typeof native.priority === "number" ? native.priority : 9;
+      e.priority = exactRank ?? (accountNamespacePickerMode === "replace-native"
+        ? (inheritedRank ?? nativePriority) + namespaceIndex / (namespaceNames.length + 1)
+        : 100 + nativePriority);
+      e.visibility = "list";
       out.push(e);
     }
   }
@@ -347,6 +371,7 @@ export function mergeCatalogEntriesForSync(
   multiAgentMode: MultiAgentMode = "default",
   exactComboSlugs: ReadonlySet<string> = new Set(),
   hasPhysicalComboProvider = false,
+  accountNamespacePickerMode: "additive" | "replace-native" = "additive",
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = catalogModels
@@ -474,7 +499,11 @@ export function mergeCatalogEntriesForSync(
   });
   // Native enable/disable (single choke point: bare slugs in `disabledModels`). Runs as the
   // LAST pass so the upstream-upgrade branch above can never clobber a hide flag back to list.
-  return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode);
+  return applyMultiAgentMode(applyNativeVisibility(
+    mergedEntries,
+    disabledNative,
+    accountNamespacePickerMode === "replace-native",
+  ), multiAgentMode);
 }
 
 export async function syncCatalogModels(config: OcxConfig): Promise<{ added: number; path: string }> {
@@ -517,6 +546,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
     multiAgentMode,
     exactComboSlugs,
     config.codexAccountNamespaces,
+    config.codexAccountNamespacePickerMode,
   ).filter(entry => accountBoundNativeCatalogSlug(entry) !== undefined);
   const goEntries = [...routedEntries, ...accountBoundEntries];
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
@@ -534,7 +564,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
-  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider);
+  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, config.codexAccountNamespacePickerMode);
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");

@@ -132,13 +132,19 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels">): Arra
   });
 }
 
-export function applyNativeVisibility(entries: RawEntry[], disabledNative: Set<string>): RawEntry[] {
+export function applyNativeVisibility(
+  entries: RawEntry[],
+  disabledNative: Set<string>,
+  hideUnqualifiedNative = false,
+): RawEntry[] {
   for (const entry of entries) {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
     const accountBoundSlug = accountBoundNativeCatalogSlug(entry);
     const nativeSlug = accountBoundSlug ?? slug;
     if (!nativeSlug || (!accountBoundSlug && slug.includes("/")) || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)) continue;
-    entry.visibility = disabledNative.has(nativeSlug) ? "hide" : "list";
+    entry.visibility = disabledNative.has(nativeSlug) || (!accountBoundSlug && hideUnqualifiedNative)
+      ? "hide"
+      : "list";
   }
   return entries;
 }

@@ -716,9 +716,29 @@ describe("opencodex config defaults", () => {
       },
       defaultProvider: "openai",
       codexAccountNamespaces: { personal: "main", work: "work-account-id" },
+      codexAccountNamespacePickerMode: "replace-native",
     });
 
     expect(loadConfig().codexAccountNamespaces).toEqual({ personal: "main", work: "work-account-id" });
+    expect(loadConfig().codexAccountNamespacePickerMode).toBe("replace-native");
+  });
+
+  test("replace-native picker mode requires configured account namespaces", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+      defaultProvider: "openai",
+      codexAccountNamespacePickerMode: "replace-native",
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toEqual(getDefaultConfig());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("requires at least one configured"));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test("Codex account namespaces cannot collide with provider routing", () => {

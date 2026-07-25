@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyNativeVisibility,
+  buildCatalogEntries,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
@@ -118,6 +119,35 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     ];
     applyNativeVisibility(entries, new Set(["gpt-5.6-sol"]));
     expect(entries[0].visibility).toBe("hide");
+  });
+
+  test("replace-native mode hides bare rows and substitutes friendly account-qualified pairs", () => {
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.5"],
+      [],
+      ["gpt-5.5"],
+      false,
+      "default",
+      new Set(),
+      { personal: "main", work: "work-account-id" },
+      "replace-native",
+    );
+    applyNativeVisibility(entries, new Set(), true);
+
+    const bare = entries.find(entry => entry.slug === "gpt-5.5");
+    const personal = entries.find(entry => entry.slug === "personal/gpt-5.5");
+    const work = entries.find(entry => entry.slug === "work/gpt-5.5");
+    expect(bare?.visibility).toBe("hide");
+    expect(personal).toMatchObject({
+      display_name: "Personal / 5.5",
+      visibility: "list",
+      priority: 0,
+    });
+    expect(work?.display_name).toBe("Work / 5.5");
+    expect(work?.visibility).toBe("list");
+    expect(work?.priority).toBeGreaterThan(personal?.priority as number);
+    expect(work?.priority).toBeLessThan(1);
   });
 
   test("catalog sync removes stale account-qualified rows when routed discovery is empty", () => {

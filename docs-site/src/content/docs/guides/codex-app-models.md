@@ -32,6 +32,20 @@ personal/gpt-5.6-sol                # exact main/Desktop account
 work/gpt-5.6-sol                    # exact added work account
 ```
 
+Namespace rows are additive by default. To replace the bare native picker rows with readable
+`Personal / 5.6 Sol` and `Work / 5.6 Sol` rows, opt in explicitly:
+
+```json
+{
+  "codexAccountNamespaces": { "personal": "main", "work": "work-account-id" },
+  "codexAccountNamespacePickerMode": "replace-native"
+}
+```
+
+This changes picker presentation only. Bare `gpt-*` ids remain valid for saved threads and config,
+and continue to use the provider's Pool/Direct behavior. Omitting the setting keeps the existing
+additive behavior.
+
 An account-qualified model never switches accounts. Missing credentials, cooldown, or
 reauthentication fail the request. Bare models retain normal Pool/Direct behavior, and future native
 models added to opencodex's supported catalog automatically receive the configured prefixes on the

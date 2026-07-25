@@ -40,6 +40,7 @@ type CatalogFixtureModel = {
   visibility?: "list" | "hide";
   priority?: number;
   multiAgentVersion?: "v1" | "v2" | null;
+  description?: string;
 };
 
 /** Write an injected-catalog fixture into the active CODEX_HOME. */
@@ -51,6 +52,7 @@ function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
       visibility: model.visibility ?? "list",
       priority: model.priority ?? index,
       multi_agent_version: model.multiAgentVersion === undefined ? "v2" : model.multiAgentVersion,
+      ...(model.description ? { description: model.description } : {}),
       supported_reasoning_levels: (model.efforts ?? [])
         .map(effort => ({ effort, description: effort })),
     })),
@@ -154,6 +156,23 @@ describe("multiAgentGuidanceText", () => {
     for (const advertised of effective.advertised) {
       expect(effective.candidates.map(model => model.model)).toContain(advertised.model);
     }
+  });
+
+  test("bare subagent choices project onto visible account-qualified replacements", () => {
+    const dir = codexHomeFixture(V2_ON);
+    const boundDescription = "OpenAI native model bound to a Codex account namespace.";
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-sol", visibility: "hide", priority: 0, multiAgentVersion: "v2" },
+      { slug: "personal/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2", description: boundDescription },
+      { slug: "work/gpt-5.6-sol", priority: 0.33, multiAgentVersion: "v2", description: boundDescription },
+    ]);
+
+    const effective = effectiveSubagentRoster(["gpt-5.6-sol"], "v2");
+    expect(effective.advertised.map(model => model.model)).toEqual([
+      "personal/gpt-5.6-sol",
+      "work/gpt-5.6-sol",
+    ]);
+    expect(effective.excluded).toEqual([]);
   });
 
   test("effective roster applies alias, visibility, v2 compatibility, stable priority, cap, and diagnostics", async () => {
