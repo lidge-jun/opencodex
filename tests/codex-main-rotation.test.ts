@@ -309,6 +309,38 @@ describe("main account rotation (Option A)", () => {
     }
   });
 
+  test("does not retry an in-flight usage response when the current identity is temporarily unknown", async () => {
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+    const originalFetch = globalThis.fetch;
+    let resolveUsage!: (response: Response) => void;
+    let usageCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      usageCalls++;
+      expect(new Headers(init?.headers).get("ChatGPT-Account-Id")).toBe("main_acct");
+      return new Promise<Response>(resolve => { resolveUsage = resolve; });
+    }) as typeof fetch;
+    try {
+      const infoPromise = fetchMainAccountInfo(true);
+      rmSync(join(CODEX_DIR, "auth.json"));
+      resolveUsage(new Response(JSON.stringify({
+        email: "a@example.test",
+        plan_type: "plus",
+        rate_limit: { primary_window: { used_percent: 23, reset_at: 1_788_000_000 } },
+      }), { status: 200 }));
+
+      await expect(infoPromise).resolves.toMatchObject({
+        email: "a@example.test",
+        plan: "plus",
+        quota: { weeklyPercent: 23 },
+      });
+      expect(usageCalls).toBe(1);
+      expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("no active id selects from main plus added accounts and binds main affinity", async () => {
     const config = makeConfig({ activeCodexAccountId: undefined, autoSwitchThreshold: 0 });
     updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);

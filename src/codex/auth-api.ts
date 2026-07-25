@@ -261,7 +261,8 @@ async function retryMainAccountInfoIfIdentityChanged(
   requestAccountId: string | null,
   retriesRemaining: number,
 ): Promise<MainAccountInfo | null> {
-  if (getMainChatgptAccountId() === requestAccountId) return null;
+  const currentAccountId = getMainChatgptAccountId();
+  if (currentAccountId === null || currentAccountId === requestAccountId) return null;
   reconcileMainCodexAccountRuntimeState();
   return retriesRemaining > 0
     ? fetchMainAccountInfoAttempt(true, retriesRemaining - 1)
