@@ -541,6 +541,8 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
     websocketsEnabled(config),
     multiAgentMode,
     exactComboSlugs,
+    {},
+    config.codexAccountNamespacePickerMode,
   );
   const accountBoundEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
