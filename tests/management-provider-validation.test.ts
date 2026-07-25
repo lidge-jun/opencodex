@@ -443,6 +443,42 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider management rejects names owned by a Codex account namespace", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const cfg = {
+      ...config("127.0.0.1"),
+      codexAccountNamespaces: { work: "work-account-id" },
+    };
+    saveConfig(cfg);
+
+    const requestUrl = new URL("http://127.0.0.1/api/providers");
+    const response = await handleManagementAPI(
+      new Request(requestUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "work",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://work.example.test/v1",
+          },
+        }),
+      }),
+      requestUrl,
+      cfg,
+      { refreshCodexCatalog: async () => {} },
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toEqual({
+      error: "provider name must not collide with a configured Codex account namespace",
+    });
+    expect(cfg.providers.work).toBeUndefined();
+    expect(loadConfig().codexAccountNamespaces).toEqual({ work: "work-account-id" });
+  });
+
   test("provider management rejects base URLs with embedded credentials", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

@@ -66,7 +66,7 @@ export type CodexUpstreamOutcomeMeta = {
   now?: number;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
-  /** Fixed account-qualified models record health without mutating pool selection or affinity. */
+  /** Suppress active-account and affinity changes for an account-qualified request. */
   fixedAccount?: boolean;
 };
 

@@ -543,6 +543,23 @@ describe("3-state multi-agent mode", () => {
     expect(native.multi_agent_version).toBeUndefined();
   });
 
+  test("mode default preserves upstream pins on account-qualified native clones", () => {
+    const entries = buildCatalogEntries(
+      template(),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      [],
+      [],
+      false,
+      "default",
+      new Set(),
+      { work: "work-account-id" },
+    );
+
+    expect(entries.find(entry => entry.slug === "work/gpt-5.6-sol")?.multi_agent_version).toBe("v2");
+    expect(entries.find(entry => entry.slug === "work/gpt-5.6-terra")?.multi_agent_version).toBe("v2");
+    expect(entries.find(entry => entry.slug === "work/gpt-5.6-luna")?.multi_agent_version).toBe("v1");
+  });
+
   test("mode v1 in mergeCatalogEntriesForSync overrides preserved genuine native", () => {
     const diskSol = {
       ...template(),

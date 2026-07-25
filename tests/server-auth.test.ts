@@ -123,7 +123,7 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
 type PoolRetryHarness = {
   config: OcxConfig;
   dispatches: string[];
-  request: (init?: { stream?: boolean; signal?: AbortSignal; model?: string }) => Promise<Response>;
+  request: (init?: { stream?: boolean; signal?: AbortSignal; model?: string; reasoningEffort?: string }) => Promise<Response>;
   server: ReturnType<typeof startServer>;
   upstream: ReturnType<typeof Bun.serve>;
 };
@@ -136,6 +136,7 @@ async function startPoolRetryHarness(
     accountNamespaces?: Record<string, string>;
     activeAccountId?: string;
     accountMode?: "pool" | "direct";
+    websockets?: boolean;
   } = {},
 ): Promise<PoolRetryHarness> {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -176,6 +177,7 @@ async function startPoolRetryHarness(
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
+    ...(options.websockets ? { websockets: true } : {}),
   } as OcxConfig;
   saveConfig(config);
   saveCodexAccountCredential("pool-a", {
@@ -201,12 +203,17 @@ async function startPoolRetryHarness(
     dispatches,
     server,
     upstream,
-    request: ({ stream = false, signal, model = POOL_RETRY_MODEL } = {}) => originalGlobalFetch(
+    request: ({ stream = false, signal, model = POOL_RETRY_MODEL, reasoningEffort } = {}) => originalGlobalFetch(
       new URL("/v1/responses", server.url),
       {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-        body: JSON.stringify({ model, input: "hello", stream }),
+        body: JSON.stringify({
+          model,
+          input: "hello",
+          stream,
+          ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+        }),
         signal,
       },
     ),
@@ -1718,6 +1725,71 @@ describe("server local API auth", () => {
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
       expect(harness.config.activeCodexAccountId).toBe("pool-b");
     } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("account-qualified old native models apply the native max effort clamp", async () => {
+    let upstreamEffort: unknown;
+    const harness = await startPoolRetryHarness(
+      async (_accountId, request) => {
+        const body = await request.json() as { reasoning?: { effort?: unknown } };
+        upstreamEffort = body.reasoning?.effort;
+        return Response.json({ id: "clamped", status: "completed", output: [] });
+      },
+      { accountNamespaces: { work: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+    );
+    try {
+      const response = await harness.request({ model: "work/gpt-5.5", reasoningEffort: "max" });
+      expect(response.status).toBe(200);
+      expect(upstreamEffort).toBe("xhigh");
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("account-qualified WebSocket requests use the exact selected account", async () => {
+    const harness = await startPoolRetryHarness(
+      () => new Response([
+        'event: response.completed\n',
+        'data: {"type":"response.completed","response":{"id":"qualified-ws","status":"completed","output":[]}}\n\n',
+      ].join(""), { headers: { "content-type": "text/event-stream" } }),
+      {
+        accountNamespaces: { work: "pool-a" },
+        activeAccountId: "pool-b",
+        accountMode: "direct",
+        websockets: true,
+      },
+    );
+    const wsUrl = new URL("/v1/responses", harness.server.url);
+    wsUrl.protocol = "ws:";
+    const ws = new WebSocket(wsUrl);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ws.addEventListener("open", () => resolve(), { once: true });
+        ws.addEventListener("error", () => reject(new Error("account-qualified websocket failed to open")), { once: true });
+      });
+      const terminal = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("account-qualified websocket timeout")), 2_000);
+        ws.addEventListener("message", event => {
+          if (typeof event.data !== "string" || !event.data.includes('"type":"response.completed"')) return;
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      ws.send(JSON.stringify({
+        type: "response.create",
+        model: "work/gpt-5.5",
+        input: "hello",
+      }));
+      await terminal;
+
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-b");
+    } finally {
+      ws.close();
       await stopPoolRetryHarness(harness);
     }
   });

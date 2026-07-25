@@ -30,6 +30,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
+import { codexAccountNamespaceForModel } from "../../codex/account-namespace-match";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
@@ -124,6 +125,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const previous = config.combos?.[sourceId];
     const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
     const newPublicModel = comboPublicModelId(id, normalized);
+    if (codexAccountNamespaceForModel(config.codexAccountNamespaces, newPublicModel)) {
+      return jsonResponse({ error: "combo alias must not use a configured Codex account namespace" }, 400);
+    }
     const nextCombos = { ...(config.combos ?? {}) };
     if (renameFrom) delete nextCombos[renameFrom];
     nextCombos[id] = stored;

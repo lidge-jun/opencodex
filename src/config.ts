@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as z from "zod/v4";
+import { codexAccountNamespaceForModel } from "./codex/account-namespace-match";
 import { comboConfigIssues } from "./combos/types";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
@@ -623,9 +624,7 @@ const configSchema = z.object({
           ? (raw as { alias?: unknown }).alias
           : undefined;
         if (typeof alias === "string") {
-          const aliasNamespace = alias.slice(0, alias.indexOf("/"));
-          if (alias.includes("/") && accountNamespaces && typeof accountNamespaces === "object"
-            && !Array.isArray(accountNamespaces) && Object.hasOwn(accountNamespaces, aliasNamespace)) {
+          if (codexAccountNamespaceForModel(accountNamespaces, alias)) {
             ctx.addIssue({
               code: "custom",
               path: ["combos", id, "alias"],

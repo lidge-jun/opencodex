@@ -29,7 +29,11 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
-import { CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION, codexAccountNamespaceEntries } from "../account-namespaces";
+import {
+  accountBoundNativeCatalogSlug,
+  CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION,
+  codexAccountNamespaceEntries,
+} from "../account-namespaces";
 
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogModelSlug, ensureCatalogBackup, ensureStrictCatalogFields, findNativeTemplate, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
@@ -404,11 +408,15 @@ export function mergeCatalogEntriesForSync(
   const preservingExistingRouted = routedEntries.length === 0
     && catalogModels.some(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
   if (preservingExistingRouted) {
-    finalRoutedEntries = catalogModels.filter(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
+    finalRoutedEntries = catalogModels.filter(m =>
+      typeof m.slug === "string"
+      && (m.slug as string).includes("/")
+      && accountBoundNativeCatalogSlug(m) === undefined
+    );
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
       if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
-      if (m.description === CODEX_ACCOUNT_BOUND_CATALOG_DESCRIPTION) return false;
+      if (accountBoundNativeCatalogSlug(m) !== undefined) return false;
       const provider = m.slug.slice(0, m.slug.indexOf("/"));
       return !gatheredProviderNames.has(provider) && !freshSlugs.has(m.slug);
     });
@@ -491,16 +499,26 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
-  const goEntries = buildCatalogEntries(
+  const routedEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
-    nativeOpenAiSlugs(),
+    [],
     orderedGoModels,
     featured,
     websocketsEnabled(config),
     multiAgentMode,
     exactComboSlugs,
+  );
+  const accountBoundEntries = buildCatalogEntries(
+    template ? JSON.parse(JSON.stringify(template)) : null,
+    nativeOpenAiSlugs(),
+    [],
+    featured,
+    websocketsEnabled(config),
+    multiAgentMode,
+    exactComboSlugs,
     config.codexAccountNamespaces,
-  ).filter(entry => typeof entry.slug === "string" && entry.slug.includes("/"));
+  ).filter(entry => accountBoundNativeCatalogSlug(entry) !== undefined);
+  const goEntries = [...routedEntries, ...accountBoundEntries];
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.

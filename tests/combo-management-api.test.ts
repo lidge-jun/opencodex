@@ -294,6 +294,25 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT rejects aliases owned by a Codex account namespace without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ codexAccountNamespaces: { work: "work-account-id" } });
+      saveConfig(config);
+
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "intentional",
+        combo: { ...VALID_COMBO, alias: "work/gpt-5.5" },
+      });
+
+      expect(response?.status).toBe(400);
+      expect(await responseJson(response)).toEqual({
+        error: "combo alias must not use a configured Codex account namespace",
+      });
+      expect(config.combos?.intentional).toBeUndefined();
+      expect(readConfigDiagnostics().config.codexAccountNamespaces).toEqual({ work: "work-account-id" });
+    });
+  });
+
   test("PUT rejects invalid and duplicate aliases without memory or disk mutation", async () => {
     await withTempHome(async () => {
       const config = baseConfig({
@@ -702,6 +721,56 @@ describe("combo management API", () => {
           models: Array<{ slug?: string }>;
         };
         expect(catalog.models.some(model => model.slug === "combo/free")).toBe(false);
+      } finally {
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
+    });
+  }, 15_000);
+
+  test("catalog sync keeps bare combo aliases alongside account-qualified native rows", async () => {
+    await withTempHome(async dir => {
+      const previousCodexHome = process.env.CODEX_HOME;
+      const codexHome = join(dir, "codex-home");
+      mkdirSync(codexHome, { recursive: true });
+      process.env.CODEX_HOME = codexHome;
+      const catalogPath = join(codexHome, "opencodex-catalog.json");
+      writeFileSync(catalogPath, JSON.stringify({ models: [{
+        slug: "gpt-5.5",
+        display_name: "GPT-5.5",
+        visibility: "list",
+        base_instructions: "You are Codex.",
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "xhigh" }],
+        input_modalities: ["text"],
+        context_window: 128_000,
+      }] }));
+      try {
+        const config = baseConfig({
+          providers: {
+            a: {
+              adapter: "openai-chat",
+              baseUrl: "https://a.example/v1",
+              apiKey: "ka",
+              liveModels: false,
+              models: ["m1"],
+              modelContextWindows: { m1: 128_000 },
+              modelInputModalities: { m1: ["text"] },
+              modelReasoningEfforts: { m1: ["low"] },
+            },
+          },
+          combos: {
+            fast: { alias: "fast-chat", targets: [{ provider: "a", model: "m1" }] },
+          },
+          codexAccountNamespaces: { work: "main" },
+        });
+
+        await syncCatalogModels(config);
+        const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+          models: Array<{ slug?: string }>;
+        };
+        const slugs = catalog.models.map(model => model.slug);
+        expect(slugs).toContain("fast-chat");
+        expect(slugs).toContain("work/gpt-5.5");
       } finally {
         if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = previousCodexHome;

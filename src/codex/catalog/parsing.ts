@@ -29,6 +29,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { accountBoundNativeCatalogSlug } from "../account-namespaces";
 
 
 import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES } from "./metadata";
@@ -278,7 +279,8 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode): 
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
-      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      const slug = accountBoundNativeCatalogSlug(entry)
+        ?? (typeof entry.slug === "string" ? entry.slug : "");
       const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
       const upstreamPin = upstream?.multi_agent_version;
       if (typeof upstreamPin === "string") {

@@ -120,6 +120,26 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(entries[0].visibility).toBe("hide");
   });
 
+  test("catalog sync removes stale account-qualified rows when routed discovery is empty", () => {
+    const merged = mergeCatalogEntriesForSync(
+      [
+        nativeTemplate(),
+        {
+          ...nativeTemplate(),
+          slug: "work/gpt-5.5",
+          description: "OpenAI native model bound to a Codex account namespace.",
+        },
+      ],
+      [],
+      new Map(),
+      [],
+      false,
+    );
+
+    expect(merged.some(entry => entry.slug === "work/gpt-5.5")).toBe(false);
+    expect(merged.some(entry => entry.slug === "gpt-5.5")).toBe(true);
+  });
+
   test("management API surfaces: /api/models leads with native rows; subagent available drops disabled bare slugs", async () => {
     const config = makeConfig({ disabledModels: ["gpt-5.6-sol"] });
 

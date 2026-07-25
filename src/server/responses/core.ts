@@ -808,8 +808,12 @@ export async function handleResponses(
   // some third-party providers expose bare `defaultModel` selectors, so route.modelId
   // alone can make a routed model masquerade as an off-snapshot native. Only the
   // canonical built-in ChatGPT forward provider should receive the native clamp.
+  // Account namespaces are routing metadata for that canonical provider, so use
+  // their stripped native id rather than treating the namespace as a provider slug.
   {
-    const requestedModelId = logCtx.requestedModel ?? route.modelId;
+    const requestedModelId = route.codexAccountNamespace
+      ? route.modelId
+      : (logCtx.requestedModel ?? route.modelId);
     const { nativeEffortClamp, shouldApplyNativeEffortClamp } = await import("../../codex/catalog");
     const clamped = shouldApplyNativeEffortClamp(route.providerName, route.provider, requestedModelId)
       ? nativeEffortClamp(route.modelId, parsed.options.reasoning)
