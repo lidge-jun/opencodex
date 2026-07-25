@@ -105,7 +105,9 @@ reroute bare model ids, so saved threads and configuration that use `gpt-*` cont
 configured Pool/Direct behavior. Remove the picker-mode key or set it to `additive` to restore the
 original presentation. When namespaces are configured, the same choice is available on the
 dashboard's **Codex Auth** page as **Bare + accounts** or **Accounts only**; changing it refreshes
-the Codex catalog automatically.
+the Codex catalog automatically. Because Codex exposes a flat picker rather than section metadata,
+replacement mode keeps the account-qualified native pairs together ahead of ordinary routed rows;
+explicitly featured subagent models still retain their higher priority.
 
 These selectors do not change `activeCodexAccountId`. They bypass quota auto-switch, transient-
 failure failover, affinity rebinding, and unsupported-model retry. If the exact account is missing,

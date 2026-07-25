@@ -313,6 +313,11 @@ export function buildCatalogEntries(
     // Featured picks may be stored raw (legacy) or encoded — honor both.
     const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
     if (rankHit !== undefined) e.priority = rankHit;
+    else if (accountNamespacePickerMode === "replace-native") {
+      // Keep the account-qualified native block contiguous in Codex's flat picker. Featured
+      // routed subagent choices retain their explicit rank at the front of the catalog.
+      e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
+    }
     out.push(e);
   }
   // Central capability override (phase 120.4): the advertised flag must match the implemented WS

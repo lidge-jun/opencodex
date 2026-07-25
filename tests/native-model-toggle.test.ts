@@ -131,7 +131,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const entries = buildCatalogEntries(
       nativeTemplate(),
       ["gpt-5.5"],
-      [],
+      [{ provider: "litellm-personal", id: "qwen3.6" }],
       ["gpt-5.5"],
       false,
       "default",
@@ -144,6 +144,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const bare = entries.find(entry => entry.slug === "gpt-5.5");
     const personal = entries.find(entry => entry.slug === "personal/gpt-5.5");
     const work = entries.find(entry => entry.slug === "work/gpt-5.5");
+    const routed = entries.find(entry => entry.slug === "litellm-personal/qwen3.6");
     expect(bare?.visibility).toBe("hide");
     expect(personal).toMatchObject({
       display_name: "Personal / 5.5",
@@ -154,6 +155,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(work?.visibility).toBe("list");
     expect(work?.priority).toBeGreaterThan(personal?.priority as number);
     expect(work?.priority).toBe(1);
+    expect(routed?.priority).toBeGreaterThan(work?.priority as number);
     expect(entries.every(entry => Number.isInteger(entry.priority))).toBe(true);
   });
 
