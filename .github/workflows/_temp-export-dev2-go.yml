@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - dev2-go
+  pull_request:
+    branches:
+      - dev2-go
 
 permissions:
   contents: read
