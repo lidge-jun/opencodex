@@ -205,7 +205,7 @@ keep the configured URL at this stage:
   `cloudflare-ai-gateway`;
 - providers you define yourself, which are not in the registry at all.
 
-Adapters may adjust the resolved URL afterwards. The `kiro` adapter, for example, follows the API
+Adapters may adjust the resolved URL afterward. The `kiro` adapter, for example, follows the API
 region of the imported credential for a canonical `runtime.{region}.kiro.dev` host. See
 [Adapters](/reference/adapters/) for per-adapter rules.
 
