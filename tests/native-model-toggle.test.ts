@@ -153,7 +153,8 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(work?.display_name).toBe("Work / 5.5");
     expect(work?.visibility).toBe("list");
     expect(work?.priority).toBeGreaterThan(personal?.priority as number);
-    expect(work?.priority).toBeLessThan(1);
+    expect(work?.priority).toBe(1);
+    expect(entries.every(entry => Number.isInteger(entry.priority))).toBe(true);
   });
 
   test("catalog sync removes stale account-qualified rows when routed discovery is empty", () => {

@@ -287,7 +287,7 @@ export function buildCatalogEntries(
       const inheritedRank = rank.get(String(native.slug));
       const nativePriority = typeof native.priority === "number" ? native.priority : 9;
       e.priority = exactRank ?? (accountNamespacePickerMode === "replace-native"
-        ? (inheritedRank ?? nativePriority) + namespaceIndex / (namespaceNames.length + 1)
+        ? (inheritedRank ?? nativePriority) * namespaceNames.length + namespaceIndex
         : 100 + nativePriority);
       e.visibility = "list";
       out.push(e);
