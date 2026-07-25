@@ -195,19 +195,26 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 
 ### Fixed provider endpoints
 
-Most built-in providers pin their own endpoint, and that pinned value wins over a `baseUrl` in
-your config. Only two kinds of entry honor a configured URL: the six that opt into an override —
-`ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud` and `alibaba-token-plan-intl` — and
-providers whose registry endpoint is a template you are expected to fill in, such as
-`azure-openai` and `cloudflare-ai-gateway`. Providers you define yourself always use their own
-`baseUrl`.
+Routing resolves a provider's endpoint before any adapter sees it, and for most built-in
+providers the registry's own endpoint wins over a `baseUrl` in your config. Three kinds of entry
+keep the configured URL at this stage:
 
-When a configured `baseUrl` is discarded this way, opencodex logs a warning naming both URLs.
-Credentials in the URL are masked first. If you see it, either drop the `baseUrl` — the pinned
-endpoint is what the provider will use regardless — or switch to the provider whose endpoint
-matches the URL you wanted. Picking the right entry matters when a vendor runs one product in
-several regions: `alibaba-token-plan` is pinned to Beijing, while `alibaba-token-plan-intl`
-covers the international endpoints, and a key issued for one is rejected by the other.
+- providers that opt into an override — `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`
+  and `alibaba-token-plan-intl`;
+- providers whose registry endpoint is a template you fill in, such as `azure-openai` and
+  `cloudflare-ai-gateway`;
+- providers you define yourself, which are not in the registry at all.
+
+Adapters may adjust the resolved URL afterwards. The `kiro` adapter, for example, follows the API
+region of the imported credential for a canonical `runtime.{region}.kiro.dev` host. See
+[Adapters](/reference/adapters/) for per-adapter rules.
+
+When routing discards a configured `baseUrl`, opencodex logs a warning naming both URLs, with any
+credentials in them masked. Either drop the `baseUrl` — the registry endpoint is what routing
+will use regardless — or switch to the provider whose endpoint matches the URL you wanted.
+Picking the right entry matters when a vendor runs one product in several regions:
+`alibaba-token-plan` is pinned to Beijing while `alibaba-token-plan-intl` covers the
+international endpoints, and a key issued for one is rejected by the other.
 
 For broken `openai-responses` compatibility gateways, `responsesItemIdRepair` belongs on the
 provider object itself, for example:

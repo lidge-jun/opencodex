@@ -159,9 +159,11 @@ function warnIfBaseUrlDiscarded(providerName: string, userBaseUrl: string, effec
   if (discardedBaseUrlWarnings.has(key)) return;
   discardedBaseUrlWarnings.add(key);
   console.warn(
+    // Routing is what this warning speaks for: an adapter may adjust the endpoint again
+    // downstream (kiro re-derives the region), so do not promise where the request lands.
     `⚠️  config.json provider "${providerName}": configured baseUrl ${discarded} is ignored`
-    + ` because this provider's endpoint is fixed at ${effective}. Requests go to the`
-    + ` fixed endpoint and will fail to authenticate if the configured URL was for a different account or region.`,
+    + ` because this provider's endpoint is fixed at ${effective}. A URL saved for a different`
+    + ` account or region is a common cause of 401s here — drop it, or use the provider whose endpoint matches.`,
   );
 }
 
