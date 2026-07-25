@@ -116,6 +116,57 @@ describe("google adapter — empty content part guard (#420)", () => {
     });
   });
 
+  test("a tool result with an empty parts array does not claim a phantom image", async () => {
+    // contentPartsToText([]) collapses to its "[image]" marker, but toolResultImageParts()
+    // contributes no image part — the result would assert an image the turn does not carry.
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: {} }], timestamp: 0 },
+      { role: "toolResult", toolCallId: "call_1", toolName: "bash", content: [], isError: false, timestamp: 0 },
+    ]));
+
+    const toolTurn = contents.find(c => c.parts.some(p => "functionResponse" in p));
+    expect(toolTurn!.parts).toEqual([
+      { functionResponse: { name: "bash", response: { result: "(empty tool output)" }, id: "call_1" } },
+    ]);
+  });
+
+  test("a tool result holding only empty text parts uses the placeholder", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: {} }], timestamp: 0 },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "bash",
+        content: [{ type: "text", text: "" }, { type: "text", text: "" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ]));
+
+    const toolTurn = contents.find(c => c.parts.some(p => "functionResponse" in p));
+    const fr = toolTurn!.parts[0] as { functionResponse: { response: { result: string } } };
+    expect(fr.functionResponse.response.result).toBe("(empty tool output)");
+  });
+
+  test("a genuine image-only tool result still reports [image]", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "snap", arguments: {} }], timestamp: 0 },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "snap",
+        content: [{ type: "image", imageUrl: "data:image/png;base64,aGVsbG8=" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ]));
+
+    const toolTurn = contents.find(c => c.parts.some(p => "functionResponse" in p));
+    const fr = toolTurn!.parts[0] as { functionResponse: { response: { result: string } } };
+    expect(fr.functionResponse.response.result).toBe("[image]");
+    expect(toolTurn!.parts[1]).toEqual({ inline_data: { mime_type: "image/png", data: "aGVsbG8=" } });
+  });
+
   test("non-empty content is unchanged", async () => {
     const contents = await geminiContents(parsedWith([
       { role: "user", content: "hello", timestamp: 0 },

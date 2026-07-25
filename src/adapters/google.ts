@@ -104,6 +104,18 @@ function geminiTextPart(text: unknown): { text: string } | undefined {
   return typeof text === "string" && text.length > 0 ? { text } : undefined;
 }
 
+/**
+ * Text for `functionResponse.response.result`. `contentPartsToText` collapses an empty array — or one
+ * holding only empty text — to its "[image]" marker, which would claim an image the turn does not
+ * actually carry (`toolResultImageParts` adds none). Fall back to the placeholder unless the content
+ * has something representable.
+ */
+function geminiToolResultText(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+  const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
+  return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+}
+
 function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -178,7 +190,7 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         // tool-result screenshots (e.g. Computer Use) ride along as inline_data instead of being
         // flattened to a "[image]" marker the model can't actually see.
         const responseId = geminiToolCallId(msg.toolCallId);
-        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: contentPartsToText(msg.content) || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER } };
+        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: geminiToolResultText(msg.content) } };
         // Mirror the matching functionCall id so Claude-on-Antigravity can pair this result with its
         // `tool_use` block (-> Anthropic `tool_result.tool_use_id`).
         if (responseId !== undefined) functionResponse.id = responseId;
