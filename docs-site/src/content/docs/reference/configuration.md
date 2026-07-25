@@ -146,7 +146,7 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
-| `baseUrl` | `string` | Upstream API base URL. |
+| `baseUrl` | `string` | Upstream API base URL. Built-in providers with a fixed endpoint ignore it — see [Fixed provider endpoints](#fixed-provider-endpoints). |
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
@@ -192,6 +192,22 @@ network. Only do this on trusted networks, and always set a strong `OPENCODEX_AP
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor only.** External computer-use/record-screen commands; fields are listed below. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor adapter only.** Legacy compatibility boolean for the Cursor server-driven local `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` executor. Equivalent to `nativeLocalExec: "on"` when `nativeLocalExec` is unset; an explicit `nativeLocalExec` value always wins. Defaults to `false`. Prefer `nativeLocalExec` for new configs. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | **Cursor adapter only.** Native local exec policy for the Cursor server-driven executor. `"off"` (default) rejects it; `"on"` is the trusted-local opt-in; `"codex-sandbox"` is accepted for backwards compatibility but is fail-closed like `"off"`. See [Cursor provider](#cursor-provider-adapter-cursor) below. |
+
+### Fixed provider endpoints
+
+Most built-in providers pin their own endpoint, and that pinned value wins over a `baseUrl` in
+your config. Only two kinds of entry honor a configured URL: the six that opt into an override —
+`ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud` and `alibaba-token-plan-intl` — and
+providers whose registry endpoint is a template you are expected to fill in, such as
+`azure-openai` and `cloudflare-ai-gateway`. Providers you define yourself always use their own
+`baseUrl`.
+
+When a configured `baseUrl` is discarded this way, opencodex logs a warning naming both URLs.
+Credentials in the URL are masked first. If you see it, either drop the `baseUrl` — the pinned
+endpoint is what the provider will use regardless — or switch to the provider whose endpoint
+matches the URL you wanted. Picking the right entry matters when a vendor runs one product in
+several regions: `alibaba-token-plan` is pinned to Beijing, while `alibaba-token-plan-intl`
+covers the international endpoints, and a key issued for one is rejected by the other.
 
 For broken `openai-responses` compatibility gateways, `responsesItemIdRepair` belongs on the
 provider object itself, for example:

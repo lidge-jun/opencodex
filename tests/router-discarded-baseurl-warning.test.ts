@@ -81,6 +81,26 @@ test("redacts credentials in the discarded URL", () => {
   expect(warnings[0]).not.toContain("sk-live-abcdefgh");
 });
 
+test("redacts a token embedded in the URL path, which redactUrlForLog keeps", () => {
+  const warnings = routePinned("https://path-secret.example.test/v1/sk-live-ijklmnop/chat");
+
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("path-secret.example.test");
+  expect(warnings[0]).not.toContain("sk-live-ijklmnop");
+});
+
+test("warns once for URLs that differ only in their credentials", () => {
+  const warnings = [
+    ...routePinned("https://alice:secret-one@shared-endpoint.example.test/v1"),
+    ...routePinned("https://bob:secret-two@shared-endpoint.example.test/v1"),
+  ];
+
+  // Both redact to the same endpoint, so the second is a repeat of a mismatch already reported.
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).not.toContain("secret-one");
+  expect(warnings[0]).not.toContain("secret-two");
+});
+
 for (const [label, baseUrl] of [
   ["an absent baseUrl", undefined],
   ["an empty baseUrl", ""],

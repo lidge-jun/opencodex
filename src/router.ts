@@ -2,7 +2,7 @@ import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } from "./combos";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
-import { redactUrlForLog } from "./lib/redact";
+import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
 import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
@@ -123,6 +123,16 @@ function isSameEndpoint(a: string, b: string): boolean {
   return a.trim().replace(/\/+$/, "") === b.trim().replace(/\/+$/, "");
 }
 
+/**
+ * `redactUrlForLog` drops userinfo, query and fragment but keeps the pathname, and a configured
+ * `baseUrl` may carry a key in a path segment (`https://proxy.example/v1/sk-…`). Layer
+ * `redactSecretString` on top so token-shaped path segments are masked too. The host and the
+ * remaining path stay readable — they are what makes the warning diagnostic.
+ */
+function redactBaseUrlForLog(url: string): string {
+  return redactSecretString(redactUrlForLog(url));
+}
+
 // `routedProviderConfig` runs per request, so warn once per (provider, discarded, effective) triple.
 // Keyed by the URLs too: editing config.json to a different wrong value warns again.
 const discardedBaseUrlWarnings = new Set<string>();
@@ -139,13 +149,18 @@ const discardedBaseUrlWarnings = new Set<string>();
  */
 function warnIfBaseUrlDiscarded(providerName: string, userBaseUrl: string, effectiveBaseUrl: string): void {
   if (isSameEndpoint(userBaseUrl, effectiveBaseUrl)) return;
-  const key = `${providerName} | ${userBaseUrl} | ${effectiveBaseUrl}`;
+  // A baseUrl can carry credentials in userinfo, query, *and* path. redactUrlForLog strips the
+  // first two but keeps the pathname, so run redactSecretString over the result as well.
+  const discarded = redactBaseUrlForLog(userBaseUrl);
+  const effective = redactBaseUrlForLog(effectiveBaseUrl);
+  // Key off the redacted forms: no raw credential is retained for the process lifetime, and
+  // rotating a key embedded in the URL no longer re-warns about the same endpoint mismatch.
+  const key = `${providerName} | ${discarded} | ${effective}`;
   if (discardedBaseUrlWarnings.has(key)) return;
   discardedBaseUrlWarnings.add(key);
   console.warn(
-    // A baseUrl can carry credentials in userinfo or query — redact both before logging.
-    `⚠️  config.json provider "${providerName}": configured baseUrl ${redactUrlForLog(userBaseUrl)} is ignored`
-    + ` because this provider's endpoint is fixed at ${redactUrlForLog(effectiveBaseUrl)}. Requests go to the`
+    `⚠️  config.json provider "${providerName}": configured baseUrl ${discarded} is ignored`
+    + ` because this provider's endpoint is fixed at ${effective}. Requests go to the`
     + ` fixed endpoint and will fail to authenticate if the configured URL was for a different account or region.`,
   );
 }
