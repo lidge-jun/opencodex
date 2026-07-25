@@ -85,6 +85,17 @@ describe("openai-chat stream EOF fail-closed", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
+  test("empty deltas followed by a finish-only chunk complete without phantom output", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"content":"","reasoning_content":""}}]}\n\n',
+      'data: {"choices":[{"delta":{}}]}\n\n',
+      'data: {"choices":[{"finish_reason":"stop"}]}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events).toEqual([{ type: "done", usage: undefined }]);
+  });
+
   test("final frame WITHOUT a trailing newline still emits its content and is accepted as done", async () => {
     // No trailing "\n" — the terminal frame stays in the buffer and is only seen at EOF. Its
     // content must NOT be dropped (regression guard: the EOF flush must run the full delta path).

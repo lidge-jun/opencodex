@@ -71,6 +71,7 @@ export interface ProviderRegistryEntry {
   promptCacheKey?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
@@ -92,7 +93,7 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
 >;
 
@@ -117,6 +118,16 @@ const MINIMAX_MODELS = [
 const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" ? 1_000_000 : 204_800]),
 );
+const MINIMAX_M3_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const MINIMAX_M3_REASONING_EFFORT_MAP: Record<string, string> = {
+  none: "disabled",
+  minimal: "disabled",
+  low: "disabled",
+  medium: "adaptive",
+  high: "adaptive",
+  xhigh: "adaptive",
+  max: "adaptive",
+};
 const OPENAI_GPT56_MODELS = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const OPENAI_GPT56_PRO_MODELS = ["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"];
 const OPENAI_API_GPT56_CONTEXT_WINDOW = 1_050_000;
@@ -920,12 +931,24 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimax.io", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
+    preserveReasoningContentModels: MINIMAX_MODELS,
+    reasoningSplitModels: MINIMAX_MODELS,
+    thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
   },
   {
     id: "minimax-cn", label: "MiniMax — Coding Plan (CN)", baseUrl: "https://api.minimaxi.com/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimaxi.com", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
+    preserveReasoningContentModels: MINIMAX_MODELS,
+    reasoningSplitModels: MINIMAX_MODELS,
+    thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",
   },
   {

@@ -234,6 +234,12 @@ describe("provider registry parity", () => {
       expect(entry?.defaultModel).toBe("MiniMax-M3");
       expect(entry?.models).toEqual(minimaxModels);
       expect(entry?.modelContextWindows?.["MiniMax-M3"]).toBe(1_000_000);
+      expect(entry?.modelReasoningEfforts?.["MiniMax-M3"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3"]).toBe("medium");
+      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({ low: "disabled", medium: "adaptive", high: "adaptive" });
+      expect(entry?.preserveReasoningContentModels).toEqual(minimaxModels);
+      expect(entry?.reasoningSplitModels).toEqual(minimaxModels);
+      expect(entry?.thinkingToggleModels).toEqual(["MiniMax-M3"]);
       for (const modelId of minimaxModels.slice(1)) {
         expect(entry?.modelContextWindows?.[modelId]).toBe(204_800);
       }

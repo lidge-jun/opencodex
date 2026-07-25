@@ -86,6 +86,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     ...(def.noPenaltyModels ? { noPenaltyModels: [...def.noPenaltyModels] } : {}),
     ...(def.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...def.autoToolChoiceOnlyModels] } : {}),
     ...(def.preserveReasoningContentModels ? { preserveReasoningContentModels: [...def.preserveReasoningContentModels] } : {}),
+    ...(def.reasoningSplitModels ? { reasoningSplitModels: [...def.reasoningSplitModels] } : {}),
     ...(def.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: def.escapeBuiltinToolNames } : {}),
   };
 }

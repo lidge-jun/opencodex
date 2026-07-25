@@ -522,6 +522,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
+      if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
       const maxTokens = resolveMaxTokens(provider, parsed);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
       if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
@@ -545,9 +546,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
           if (budget !== undefined) body.thinking_budget = budget;
         } else if (modelInList(provider.thinkingToggleModels, parsed.modelId)) {
-          // Vendor thinking-toggle wire (MiMo v2.x, GLM 5/5.1): the mapped value is the toggle
-          // state, sent as `thinking: {type}` — these models ignore/reject reasoning_effort.
-          if (reasoningEffort === "enabled" || reasoningEffort === "disabled") {
+          // Vendor thinking-toggle wire: the mapped value is sent as `thinking: {type}` because
+          // these models ignore/reject reasoning_effort. Most use enabled/disabled; MiniMax-M3
+          // uses adaptive/disabled.
+          if (reasoningEffort === "enabled" || reasoningEffort === "disabled" || reasoningEffort === "adaptive") {
             body.thinking = { type: reasoningEffort };
           }
         } else {
@@ -679,12 +681,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         const delta = choices[0].delta;
         if (delta) {
-          if (typeof delta.content === "string" && delta.content.length > 0) {
-            yield { type: "text_delta", text: delta.content };
-          }
-
           if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
             yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
+          }
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            yield { type: "text_delta", text: delta.content };
           }
 
           const toolCalls = delta.tool_calls as { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined;
@@ -780,11 +781,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
 
       const msg = choices[0].message;
-      if (typeof msg.content === "string") {
-        events.push({ type: "text_delta", text: msg.content });
-      }
       if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
         events.push({ type: "reasoning_raw_delta", text: msg.reasoning_content });
+      }
+      if (typeof msg.content === "string") {
+        events.push({ type: "text_delta", text: msg.content });
       }
       const toolCalls = msg.tool_calls as { id: string; function: { name: string; arguments: string } }[] | undefined;
       if (toolCalls) {

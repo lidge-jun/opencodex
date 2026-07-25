@@ -18,18 +18,17 @@ describe("adapter reasoning and usage details", () => {
       },
     })));
 
-    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "raw thoughts" });
-    expect(events).toContainEqual({ type: "text_delta", text: "answer" });
-    expect(events?.at(-1)).toEqual({
-      type: "done",
-      usage: { inputTokens: 11, outputTokens: 7, cachedInputTokens: 5, reasoningOutputTokens: 3 },
-    });
+    expect(events).toEqual([
+      { type: "reasoning_raw_delta", text: "raw thoughts" },
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 11, outputTokens: 7, cachedInputTokens: 5, reasoningOutputTokens: 3 } },
+    ]);
   });
 
   test("OpenAI-compatible streaming maps reasoning_content and usage details", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const response = new Response([
-      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"raw stream\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"raw stream\",\"content\":\"answer\"}}]}\n\n",
       "data: {\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2},\"completion_tokens_details\":{\"reasoning_tokens\":1}}}\n\n",
       "data: [DONE]\n\n",
     ].join(""));
@@ -37,11 +36,11 @@ describe("adapter reasoning and usage details", () => {
     const events = [];
     for await (const event of adapter.parseStream(response)) events.push(event);
 
-    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "raw stream" });
-    expect(events.at(-1)).toEqual({
-      type: "done",
-      usage: { inputTokens: 9, outputTokens: 4, cachedInputTokens: 2, reasoningOutputTokens: 1 },
-    });
+    expect(events).toEqual([
+      { type: "reasoning_raw_delta", text: "raw stream" },
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 9, outputTokens: 4, cachedInputTokens: 2, reasoningOutputTokens: 1 } },
+    ]);
   });
 
   test("OpenAI-compatible non-OpenAI providers receive the tool catalog nudge", async () => {

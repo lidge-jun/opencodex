@@ -492,6 +492,7 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "noPenaltyModels",
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
+  "reasoningSplitModels",
 ];
 
 export function reconcileOAuthProviders(config: OcxConfig): boolean {

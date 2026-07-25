@@ -881,7 +881,12 @@ export interface OcxProviderConfig {
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */
   preserveReasoningContentModels?: string[];
   /**
-   * Model ids whose reasoning is a vendor `thinking: {type: enabled|disabled}` toggle on the
+   * Model ids whose OpenAI-compatible chat endpoint accepts `reasoning_split: true` and returns
+   * thinking separately in `reasoning_content` / `reasoning_details` instead of visible content.
+   */
+  reasoningSplitModels?: string[];
+  /**
+   * Model ids whose reasoning is a vendor `thinking: {type}` toggle on the
    * chat-completions wire (MiMo v2.x, GLM 5/5.1 style), NOT an OpenAI `reasoning_effort` ladder.
    * The openai-chat adapter translates the mapped effort into the thinking toggle for these.
    */

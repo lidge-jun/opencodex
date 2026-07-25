@@ -320,6 +320,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "noPenaltyModels",
       "autoToolChoiceOnlyModels",
       "preserveReasoningContentModels",
+      "reasoningSplitModels",
       "escapeBuiltinToolNames",
     ] as const) {
       copyIfDefined(dto, provider, key);
