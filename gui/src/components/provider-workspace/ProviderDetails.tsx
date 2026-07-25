@@ -227,7 +227,9 @@ export default function ProviderDetails({
         )}
         {tab === "models" && (
           <ProviderModels
+            key={item.name}
             item={item}
+            apiBase={apiBase}
             availableModels={availableModels}
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}

@@ -65,12 +65,17 @@ export function filterModels(
   defaultModel: string | undefined,
   query: string,
   configuredModels?: string[],
+  customModels: string[] = [],
 ): string[] {
-  const list = base.length > 0
+  const customSet = new Set(customModels);
+  const hasLiveModels = base.some(modelId => !customSet.has(modelId));
+  const fallback = configuredModels && configuredModels.length > 0
+    ? configuredModels
+    : defaultModel ? [defaultModel] : [];
+  const primary = base.length > 0 && (hasLiveModels || customSet.size === 0)
     ? base
-    : (configuredModels && configuredModels.length > 0)
-      ? configuredModels
-      : defaultModel ? [defaultModel] : [];
+    : fallback;
+  const list = [...new Set([...primary, ...customModels])];
   const q = query.trim().toLowerCase();
   if (!q) return list;
   return list.filter(id => id.toLowerCase().includes(q));

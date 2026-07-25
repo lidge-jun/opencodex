@@ -33,6 +33,23 @@ describe("workspace detail derived states (WP090)", () => {
       expect(filterModels(base, undefined, "  sol  ")).toEqual(["gpt-5.6-sol"]);
       expect(filterModels(base, undefined, "nope")).toEqual([]);
     });
+
+    test("custom-only catalog rows do not suppress configured fallback models", () => {
+      expect(filterModels(
+        ["claude-opus-5.1-custom"],
+        "ignored-default",
+        "",
+        ["claude-opus-5"],
+        ["claude-opus-5.1-custom"],
+      )).toEqual(["claude-opus-5", "claude-opus-5.1-custom"]);
+      expect(filterModels(
+        ["live-model", "claude-opus-5.1-custom"],
+        "ignored-default",
+        "",
+        ["configured-fallback"],
+        ["claude-opus-5.1-custom"],
+      )).toEqual(["live-model", "claude-opus-5.1-custom"]);
+    });
   });
 
   describe("accountQuotaFromReport (quota-unavailable paths)", () => {

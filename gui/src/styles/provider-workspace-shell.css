@@ -823,6 +823,21 @@
   margin-bottom: 18px;
 }
 
+.pws-custom-model-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.pws-custom-model-row {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pws-custom-model-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
 .pws-model-list {
   display: flex;
   flex-wrap: wrap;
