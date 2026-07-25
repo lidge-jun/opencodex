@@ -127,6 +127,18 @@ const helpEntries: Record<string, HelpEntry> = {
       "User-exported ANTHROPIC_* variables always take precedence.",
     ],
   },
+  opencode: {
+    usage: "ocx opencode [opencode args...]",
+    summary: "Launch opencode wired to the proxy (generated provider config).",
+    details: [
+      "Ensures the proxy is running, then execs `opencode` with OPENCODE_CONFIG pointed at a",
+      "generated config in the opencodex config dir. Your own opencode.json is never modified —",
+      "its settings are merged forward into the generated copy, and only the `opencodex`",
+      "provider key is overwritten.",
+      "Routed models appear in the model picker as opencodex/<provider>/<model>.",
+      "Stop using `ocx opencode` and plain `opencode` behaves exactly as before.",
+    ],
+  },
   restart: {
     usage: "ocx restart",
     summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
@@ -192,6 +204,7 @@ Usage:
   ocx account <sub>           Accounts/keys (list|current|use|refresh|auto-switch|remove|add-key)
   ocx models <sub>            List models; manage custom models (add|remove|list-custom)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
+  ocx opencode [args...]      Launch opencode wired to the proxy (generated provider config)
   ocx help [command]          Show help
   ocx --version | -v          Print version
 
