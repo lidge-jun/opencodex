@@ -119,6 +119,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       port: config.port,
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
+      codexAccountPickerEnabled: codexAccountPickerIsEnabled(config),
       startupHealth: await getCachedStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),

@@ -118,6 +118,65 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.5");
   });
 
+  test("empty routed discovery preserves provider rows while account-bound rows refresh independently", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        routedEntry("vendor/stable-model", 5),
+        {
+          ...routedEntry("side/gpt-5.5", 6),
+          display_name: "Stale provider row with a colliding slug",
+        },
+        {
+          ...nativeEntry("retired/gpt-5.5", 7),
+          description: "OpenAI native model bound to a Codex account namespace.",
+        },
+      ],
+    }, null, 2) + "\n");
+
+    const enabledConfig = `{
+      providers: {},
+      codexAccounts: [{ id: "side-account-id", email: "side@example.test", isMain: false }],
+      codexAccountNamespaces: { main: "main", side: "side-account-id" },
+      codexAccountPickerEnabled: true
+    }`;
+    const enabled = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels(${enabledConfig}).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(enabled.status).toBe(0);
+    expect(enabled.stderr).toContain("routed model fetch returned empty; preserving 1 existing routed entry");
+
+    let rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
+      slug: string;
+      display_name?: string;
+      description?: string;
+    }>;
+    expect(rows.some(row => row.slug === "vendor/stable-model")).toBe(true);
+    expect(rows.some(row => row.slug === "retired/gpt-5.5")).toBe(false);
+    expect(rows.filter(row => row.slug === "side/gpt-5.5")).toHaveLength(1);
+    expect(rows.find(row => row.slug === "side/gpt-5.5")?.display_name).toBe("Side / 5.5");
+    expect(rows.find(row => row.slug === "side/gpt-5.5")?.description)
+      .toBe("OpenAI native model bound to a Codex account namespace.");
+    expect(rows.some(row => row.slug === "main/gpt-5.5")).toBe(true);
+
+    const disabled = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({ ...${enabledConfig}, codexAccountPickerEnabled: false })
+        .then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(disabled.status).toBe(0);
+
+    rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
+      slug: string;
+      description?: string;
+    }>;
+    expect(rows.some(row => row.slug === "vendor/stable-model")).toBe(true);
+    expect(rows.some(row => row.description === "OpenAI native model bound to a Codex account namespace.")).toBe(false);
+  });
+
   test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");

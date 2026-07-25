@@ -388,6 +388,7 @@ export function mergeCatalogEntriesForSync(
   exactComboSlugs: ReadonlySet<string> = new Set(),
   hasPhysicalComboProvider = false,
   accountNamespacesEnabled = false,
+  accountBoundEntries: readonly RawEntry[] = [],
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = catalogModels
@@ -446,14 +447,15 @@ export function mergeCatalogEntriesForSync(
     routedEntries.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []),
   );
   let finalRoutedEntries = routedEntries;
+  const existingRoutedEntries = catalogModels.filter(m =>
+    typeof m.slug === "string"
+    && (m.slug as string).includes("/")
+    && accountBoundNativeCatalogSlug(m) === undefined
+  );
   const preservingExistingRouted = routedEntries.length === 0
-    && catalogModels.some(m => typeof m.slug === "string" && (m.slug as string).includes("/"));
+    && existingRoutedEntries.length > 0;
   if (preservingExistingRouted) {
-    finalRoutedEntries = catalogModels.filter(m =>
-      typeof m.slug === "string"
-      && (m.slug as string).includes("/")
-      && accountBoundNativeCatalogSlug(m) === undefined
-    );
+    finalRoutedEntries = existingRoutedEntries;
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
       if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
@@ -480,17 +482,27 @@ export function mergeCatalogEntriesForSync(
   finalRoutedEntries = finalRoutedEntries.filter(entry =>
     typeof entry.slug !== "string" || !isRoutedModelCompatibilityExcluded(entry.slug)
   );
+  // A namespace can legitimately reuse the prefix of a provider that was removed after a prior
+  // sync. In that case an unmarked stale provider row may have the same slug as the new exact-
+  // account row. The current account binding is authoritative; never emit both identities.
+  const accountBoundSlugs = new Set(accountBoundEntries.flatMap(entry =>
+    typeof entry.slug === "string" ? [entry.slug] : []
+  ));
+  finalRoutedEntries = finalRoutedEntries.filter(entry =>
+    typeof entry.slug !== "string" || !accountBoundSlugs.has(entry.slug)
+  );
   if (preservingExistingRouted) {
     console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
   }
 
-  const mergedEntries = [...native, ...finalRoutedEntries].map(m => {
+  const managedEntries = [...finalRoutedEntries, ...accountBoundEntries];
+  const mergedEntries = [...native, ...managedEntries].map(m => {
     const normalized = normalizeServiceTiers(m);
     applyNativeOpenAiContextOverride(normalized);
     const exactCombo = typeof m.slug === "string" && exactComboSlugs.has(m.slug);
     const e = ensureStrictCatalogFields(normalized, {
       preserveExactInputModalities: exactCombo,
-      isRouted: finalRoutedEntries.includes(m),
+      isRouted: managedEntries.includes(m),
     });
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
@@ -564,7 +576,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
     exactComboSlugs,
     visibleCodexAccountNamespaces(config),
   ).filter(entry => accountBoundNativeCatalogSlug(entry) !== undefined);
-  const goEntries = [...routedEntries, ...accountBoundEntries];
+  const addedCount = routedEntries.length + accountBoundEntries.length;
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
@@ -580,11 +592,28 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
-  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, codexAccountPickerHasVisibleRows(config));
+  // Account-bound rows are generated locally, so they must not make an empty routed discovery look
+  // successful. Merge them separately so outage preservation applies only to provider-owned rows.
+  catalog.models = mergeCatalogEntriesForSync(
+    catalog.models ?? [],
+    routedEntries,
+    baseline,
+    featured,
+    wsEnabled,
+    goIds,
+    template,
+    disabledNativeSlugs(config),
+    gatheredProviderNames,
+    multiAgentMode,
+    exactComboSlugs,
+    hasPhysicalComboProvider,
+    codexAccountPickerHasVisibleRows(config),
+    accountBoundEntries,
+  );
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
-  return { added: goEntries.length, path: catalogPath };
+  return { added: addedCount, path: catalogPath };
 }
 
 export function restoreCodexCatalog(): { removed: number; kept: number; path: string } {

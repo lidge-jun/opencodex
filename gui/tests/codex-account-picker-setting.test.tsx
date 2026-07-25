@@ -44,12 +44,16 @@ describe("Codex account picker setting", () => {
 
   test("explains strict binding and compatibility when enabled", () => {
     const html = renderSetting(true);
-    expect(html).toContain("picker label derived from the local ID shown on their card");
-    expect(html).toContain("the built-in login starts with Main");
-    expect(html).toContain("numeric suffix resolves any label collision");
+    expect(html).toContain("Main identifies the built-in login");
+    expect(html).toContain("Each public picker label maps privately to one stored account");
+    expect(html).toContain("user-owned alias");
+    expect(html).toContain("stable privacy-safe pXXXXXX label");
+    expect(html).toContain("stored account IDs and emails are never used");
+    expect(html).toContain("Existing and custom labels remain unchanged");
     expect(html).toContain("pins the conversation to that exact account");
     expect(html).toContain("will not switch or fall back to another account");
     expect(html).toContain("replaces the regular GPT picker entries");
+    expect(html).toContain("custom account labels");
     expect(html).toContain("saved model selections keep their current routing");
     expect(html).toContain("bare GPT model IDs keep their Pool or Direct behavior");
     expect(html).toContain('aria-pressed="true"');

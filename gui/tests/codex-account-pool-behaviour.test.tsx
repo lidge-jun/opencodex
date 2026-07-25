@@ -22,6 +22,7 @@ let calls: string[] = [];
 let originalFetch: typeof globalThis.fetch;
 let accounts: unknown[] = [];
 let threshold = 80;
+let deleteCatalogRefreshPending = false;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -36,12 +37,19 @@ beforeEach(() => {
 
   originalFetch = globalThis.fetch;
   calls = [];
+  deleteCatalogRefreshPending = false;
   accounts = [{ id: "a1", email: "account-one", isMain: true, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       const path = String(url).split("/api/")[1] ?? String(url);
       calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path.startsWith("codex-auth/accounts") && init?.method === "DELETE") {
+        return {
+          ok: true,
+          json: async () => ({ catalogRefreshPending: deleteCatalogRefreshPending }),
+        } as unknown as Response;
+      }
       if (path.startsWith("codex-auth/accounts")) {
         return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
       }
@@ -174,4 +182,15 @@ test("a mutation updates the one shared controller state", async () => {
   expect(seen.current!.activeId).toBe("a2");
   // The reconciliation reload landed on the same controller instance.
   expect(seen.current!.accounts.map(a => a.id)).toEqual(["a1", "a2"]);
+});
+
+test("account removal reports recoverable stale-catalog state to the presentation layer", async () => {
+  const seen = await mountController();
+  deleteCatalogRefreshPending = true;
+
+  let result: Awaited<ReturnType<CodexAccountPoolController["removeAccount"]>> | undefined;
+  await act(async () => { result = await seen.current!.removeAccount("a2"); });
+
+  expect(result).toEqual({ ok: true, catalogRefreshPending: true });
+  expect(calls).toContain("DELETE codex-auth/accounts?id=a2");
 });

@@ -6,6 +6,8 @@ describe("Codex auth modal status feedback", () => {
     expect(source).toContain('useState<"idle" | "submitting" | "waiting">("idle")');
     expect(source).toContain('setStatusNotice(t("codexAuth.oauthCodeSubmitted"))');
     expect(source).toContain('setStatusNotice(t("codexAuth.oauthStatusRetrying"))');
+    expect(source).toContain("catalogRefreshPending?: boolean");
+    expect(source).toContain("onAddedRef.current(st.catalogRefreshPending === true)");
     expect(source).toContain('disabled={manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId}');
     expect(source).toContain('aria-live="polite"');
   });
@@ -24,6 +26,7 @@ describe("Codex auth modal status feedback", () => {
       expect(source).toContain('"codexAuth.oauthSubmittingCode"');
       expect(source).toContain('"codexAuth.oauthCodeSubmitted"');
       expect(source).toContain('"codexAuth.oauthStatusRetrying"');
+      expect(source).toContain('"codexAuth.catalogRefreshPending"');
     }
   });
 });

@@ -737,6 +737,72 @@ describe("codex-auth API", () => {
     expect(warmup.calls()).toBe(1);
   });
 
+  test("enabled picker exposes a privacy-safe selector instead of the stored account id", async () => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
+    const config = makeConfig({
+      codexAccountNamespaces: { main: "main" },
+      codexAccountPickerEnabled: true,
+    });
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockResolvedValue({
+      added: 1,
+      path: join(TEST_CODEX_HOME, "opencodex-catalog.json"),
+      catalogExists: false,
+      cacheSynced: false,
+    });
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id: "private-internal-id" })),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const body = await resp!.json() as { catalogRefreshPending?: boolean };
+      const publicBinding = Object.entries(config.codexAccountNamespaces ?? {})
+        .find(([, accountId]) => accountId === "private-internal-id");
+
+      expect(resp!.status).toBe(200);
+      expect(body.catalogRefreshPending).toBe(false);
+      expect(publicBinding?.[0]).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
+      expect(publicBinding?.[0]).not.toContain("private-internal-id");
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      refreshSpy.mockRestore();
+    }
+  });
+
+  test("catalog refresh failure retries and returns recoverable pending state after persistence", async () => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
+    const config = makeConfig({
+      codexAccountNamespaces: { main: "main" },
+      codexAccountPickerEnabled: true,
+    });
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog")
+      .mockRejectedValue(new Error("private failure details"));
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id: "persisted-despite-refresh" })),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const body = await resp!.json() as { ok?: boolean; catalogRefreshPending?: boolean };
+
+      expect(resp!.status).toBe(200);
+      expect(body).toEqual({ ok: true, catalogRefreshPending: true });
+      expect(config.codexAccounts?.some(account => account.id === "persisted-despite-refresh")).toBe(true);
+      expect(getCodexAccountCredential("persisted-despite-refresh")).not.toBeNull();
+      expect(refreshSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("private failure details");
+    } finally {
+      warnSpy.mockRestore();
+      refreshSpy.mockRestore();
+    }
+  });
+
   test("re-adding a deleted account refreshes its retained picker binding", async () => {
     enableManualImport();
     mockCodexWarmupSuccess();

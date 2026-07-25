@@ -56,7 +56,7 @@ export interface CodexAccountPoolController {
   load(refreshQuota?: boolean): Promise<boolean>;
   switchAccount(id: string | null): Promise<CodexAccountActionResult<{ activeId: string | null }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
-  removeAccount(id: string): Promise<CodexAccountActionResult>;
+  removeAccount(id: string): Promise<CodexAccountActionResult<{ catalogRefreshPending: boolean }>>;
   syncAfterAccountAdded(): Promise<CodexAccountActionResult>;
 
   pauseRefresh(): PauseToken;
@@ -232,8 +232,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         { method: "DELETE" },
       );
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      const result = await response.json().catch(() => ({})) as { catalogRefreshPending?: boolean };
       await load();
-      return { ok: true } as const;
+      return { ok: true, catalogRefreshPending: result.catalogRefreshPending === true } as const;
     } catch {
       return { ok: false, reason: "request" } as const;
     }

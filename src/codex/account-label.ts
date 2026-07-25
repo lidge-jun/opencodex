@@ -16,7 +16,7 @@ export function fallbackCodexAccountLogLabel(accountId: string): string {
   return `p${createHash("sha256").update(accountId).digest("hex").slice(0, 6)}`;
 }
 
-export function codexAccountLogLabel(account: CodexAccount): string {
+export function codexAccountLogLabel(account: Pick<CodexAccount, "id" | "logLabel">): string {
   return CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel ?? "")
     ? account.logLabel!
     : fallbackCodexAccountLogLabel(account.id);

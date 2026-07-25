@@ -34,9 +34,11 @@ main/gpt-5.6-sol                    # exact main/Desktop account
 side/gpt-5.6-sol                    # exact added account
 ```
 
-`main` identifies the built-in Codex login. Every added account derives its selector prefix from its
-user-chosen local OpenCodex ID; a numeric suffix avoids existing provider or combo prefixes. Those
-IDs do not represent built-in account types. The equivalent config is:
+`main` identifies the built-in Codex login. `side` is a public selector that maps privately to one
+stored account; it is not the account's internal ID or an account type. Dashboard-generated
+selectors use the account's explicit user-owned alias, or a stable privacy-safe `pXXXXXX` label when
+no alias is set. They never derive from the stored account ID or email. A numeric suffix avoids
+existing provider or combo prefixes. The equivalent config is:
 
 ```json
 {
@@ -44,17 +46,21 @@ IDs do not represent built-in account types. The equivalent config is:
 }
 ```
 
-Plain `gpt-*` ids remain valid for saved threads and config, and continue to use the provider's
-Pool/Direct behavior. Omitting the map keeps the existing picker unchanged. Turning the dashboard
-setting off hides account-specific rows but preserves their bindings and explicit selectors. The
-**Codex Auth** dashboard refreshes the catalog automatically after changing the toggle.
+The object keys are public selectors; the values are private stored account IDs used only for exact
+routing. Existing and custom selectors are never regenerated. Plain `gpt-*` ids remain valid for
+saved threads and config, and continue to use the provider's Pool/Direct behavior. Omitting the map
+keeps the existing picker unchanged. Turning the dashboard setting off hides account-specific rows
+but preserves their bindings and explicit selectors. The **Codex Auth** dashboard refreshes the
+catalog automatically after changing the toggle.
 Deleting an added account removes its picker rows but retains the selector binding so saved
-conversations fail closed instead of falling through. Re-adding the same local ID restores those rows.
+conversations fail closed instead of falling through. Re-adding the same stored account restores
+those rows.
 
-An account-qualified model never switches accounts. Missing credentials, cooldown, or
-reauthentication fail the request. Bare models retain normal Pool/Direct behavior, and future native
-models added to opencodex's supported catalog automatically receive the configured prefixes on the
-next sync. See the
+An account-qualified native selector still routes through the canonical `openai` provider and pins
+the request to its exact Codex account; it never falls through to Pool/Direct account selection.
+Missing credentials, cooldown, or reauthentication fail the request. Bare models retain normal
+Pool/Direct behavior, and future native models added to opencodex's supported catalog automatically
+receive the configured prefixes on the next sync. See the
 [configuration reference](/reference/configuration/#account-qualified-native-models).
 
 Fresh installs and configs with no saved mode default to Pool. Current configs use marker 2 and

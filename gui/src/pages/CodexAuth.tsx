@@ -38,7 +38,8 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
   }, [loadMode]);
 
   const saveNamespacesEnabled = async (next: boolean) => {
-    if (namespaceSaving || namespacesEnabled === null || namespacesEnabled === next) return;
+    if (namespaceMutationInFlightRef.current || namespaceSaving
+      || namespacesEnabled === null || namespacesEnabled === next) return;
     const previousEnabled = namespacesEnabled;
     namespaceMutationInFlightRef.current = true;
     setNamespaceSaving(true);

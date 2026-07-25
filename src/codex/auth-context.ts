@@ -178,6 +178,9 @@ export async function resolveCodexAuthContext(
   // interval; its outcome decides whether the cooldown ends (#433).
   let probeLeaseId: string | undefined;
   if (cooldownUntil) {
+    // Account-qualified selectors are strict bindings, not pool recovery traffic. They fail
+    // closed while cooled instead of consuming the pool's one recovery probe lease.
+    if (options.accountId) throw new CodexAccountCooldownError(accountId, cooldownUntil);
     probeLeaseId = tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
     if (!probeLeaseId) throw new CodexAccountCooldownError(accountId, cooldownUntil);
   }

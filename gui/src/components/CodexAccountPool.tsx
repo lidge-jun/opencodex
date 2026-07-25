@@ -102,10 +102,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setReauthId(null);
   }, []);
 
-  const handleAccountAdded = useCallback(() => {
+  const handleAccountAdded = useCallback((catalogRefreshPending = false) => {
     void controller.syncAfterAccountAdded();
-    setToast(t("codexAuth.accountAdded"));
-    setToastError(false);
+    setToast(t(catalogRefreshPending ? "codexAuth.catalogRefreshPending" : "codexAuth.accountAdded"));
+    setToastError(catalogRefreshPending);
     setTimeout(() => setToast(""), 5000);
     closeAddModal();
   }, [closeAddModal, controller, t]);
@@ -145,6 +145,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const result = await controller.removeAccount(id);
     if (!result.ok) {
       setToast(t("codexAuth.removeFailed"));
+      setToastError(true);
+      setTimeout(() => setToast(""), 5000);
+    } else if (result.catalogRefreshPending) {
+      setToast(t("codexAuth.catalogRefreshPending"));
       setToastError(true);
       setTimeout(() => setToast(""), 5000);
     }

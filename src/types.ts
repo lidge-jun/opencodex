@@ -1002,7 +1002,7 @@ export function pinnedWireAdapter(providerName: string, modelId: string): string
 export interface CodexAccount {
   id: string;
   email: string;
-  /** User-owned display label; never participates in routing or identity checks. */
+  /** User-owned display label; may seed a new public picker selector but never changes identity. */
   alias?: string;
   plan?: string;
   chatgptAccountId?: string;

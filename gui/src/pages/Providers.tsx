@@ -448,9 +448,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     <AddCodexAccountModal
       apiBase={apiBase}
       onClose={() => setCodexLoginOpen(false)}
-      onAdded={() => {
+      onAdded={(catalogRefreshPending) => {
         setCodexLoginOpen(false);
-        notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }), true);
+        notify(
+          catalogRefreshPending
+            ? t("codexAuth.catalogRefreshPending")
+            : t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }),
+          !catalogRefreshPending,
+        );
         void fetchOauth();
         void fetchProviderQuotas(true);
         bumpModelsRefresh();

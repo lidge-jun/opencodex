@@ -52,7 +52,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
-| `codexAccountNamespaces?` | `Record<string,string>` | `{}` | Optional picker namespace to exact Codex account id map. Use `"main"` for the current Codex Desktop/main login. When picker visibility is enabled and at least one binding is available, account-qualified native rows replace plain GPT rows in the picker and fail closed instead of switching accounts. If no binding is available, plain rows remain visible. Plain model ids remain routable. Namespace keys cannot collide with provider ids. |
+| `codexAccountNamespaces?` | `Record<string,string>` | `{}` | Optional public picker selector to private exact Codex account id map. Use `"main"` for the current Codex Desktop/main login. Keys are catalog- and log-visible; values remain server-side. When picker visibility is enabled and at least one binding is available, account-qualified native rows replace plain GPT rows in the picker and fail closed instead of switching accounts. If no binding is available, plain rows remain visible. Plain model ids remain routable. Selector keys cannot collide with provider ids. |
 | `codexAccountPickerEnabled?` | `boolean` | inferred | Picker-visibility override. A non-empty namespace map is visible when this is omitted. The dashboard writes `false` to hide account-specific rows without deleting their bindings. |
 | `activeCodexAccountId?` | `string` | — | Pool account used for the next new Codex thread. Existing thread affinities keep their original account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. |
@@ -92,23 +92,28 @@ Use `codexAccountNamespaces` when account choice must be visible and intentional
 }
 ```
 
-The added account id is the local `ID` shown by `ocx account list openai`; the namespace is a
-user-owned picker prefix. After `ocx sync`, Codex exposes `main/gpt-*` and `side/gpt-*` copies of every available
-supported native model. When a later opencodex update adds support for another native model, the next
-catalog sync gives it the same prefixes without adding the model separately to this map.
+Each object key is a public, user-owned picker selector; each value is the private stored account ID
+used for exact routing. `side` may be any valid selector chosen by the user. The value can be found
+locally with `ocx account list openai`, but it is never copied into model catalog rows, errors, or
+provider log labels. After `ocx sync`, Codex exposes `main/gpt-*` and `side/gpt-*` copies of every
+available supported native model. When a later opencodex update adds support for another native
+model, the next catalog sync gives it the same selectors without adding the model separately to this
+map.
 
 The dashboard's **Codex Auth** page exposes **Show each Codex account separately in the model
 picker** as the single opt-in. Turning it on creates a prefix based on `main` for the main/Desktop
-login and derives every other prefix from the added account's local ID. A numeric suffix resolves
-provider or combo-prefix collisions. These names identify accounts; they do not represent built-in
-account types. Turning the setting off hides the account-qualified rows while
+login. For an added account, it uses the explicit user-owned display alias when one is set; otherwise
+it generates a stable privacy-safe selector in the form `pXXXXXX`. It never derives a public selector
+from the stored account ID or email. A numeric suffix resolves provider or combo-prefix collisions.
+These names identify accounts; they do not represent built-in account types. Existing and custom
+selectors are never regenerated. Turning the setting off hides the account-qualified rows while
 preserving their configured bindings, so turning it back on restores the same picker identifiers.
-Upstream ChatGPT account IDs and credentials stay server-side. Local picker prefixes stay stable if
-an account's display alias is renamed; accounts added later receive a new prefix automatically while
-the feature remains enabled.
+Stored account IDs, upstream ChatGPT account IDs, emails, and credentials stay server-side. Picker
+selectors stay stable if an account's display alias is renamed; accounts added later receive a new
+privacy-safe selector automatically while the feature remains enabled.
 
 Deleting an added account hides its rows but keeps its namespace binding as a fail-closed marker for
-saved selectors. Re-adding the same local account ID restores the existing prefix instead of creating
+saved selectors. Re-adding the same stored account restores the existing selector instead of creating
 a new one.
 
 When enabled, plain native rows are hidden from the picker and replaced by readable account-labeled
@@ -121,6 +126,9 @@ These selectors do not change `activeCodexAccountId`. They bypass quota auto-swi
 failure failover, affinity rebinding, and unsupported-model retry. If the exact account is missing,
 cooling down, or needs reauthentication, the request fails instead of using another account. Bare
 `gpt-*` models keep the configured Pool/Direct behavior.
+
+Account-qualified native selectors still route through the canonical `openai` provider and pin the
+request to the selected Codex account. They never fall through to Pool/Direct account selection.
 
 Account-qualified ids remain explicitly routable while their picker rows are hidden. This preserves
 saved selections; the visibility toggle controls discovery, not the fail-closed account binding.

@@ -1,4 +1,9 @@
 import type { OcxConfig } from "../types";
+import {
+  CODEX_ACCOUNT_LOG_LABEL_RE,
+  createCodexAccountLogLabel,
+  fallbackCodexAccountLogLabel,
+} from "./account-label";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 
 /** Public config shorthand for the Codex Desktop/main auth.json account. */
@@ -33,8 +38,8 @@ export function codexAccountPickerHasVisibleRows(
   return Object.keys(visibleCodexAccountNamespaces(config)).length > 0;
 }
 
-function generatedNamespace(localId: string): string {
-  const normalized = localId.trim().toLowerCase()
+function generatedNamespace(publicLabel: string): string {
+  const normalized = publicLabel.trim().toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^[._-]+|[._-]+$/g, "");
   return normalized && !RESERVED_NAMESPACE_KEYS.has(normalized) ? normalized : "account";
@@ -48,7 +53,18 @@ function comboAliasNamespaces(config: Pick<OcxConfig, "combos">): string[] {
   });
 }
 
-/** Build the initial UI-managed map from local ids without exposing upstream account identity. */
+function defaultPublicAccountLabel(account: { id: string; alias?: string; logLabel?: string }): string {
+  const alias = account.alias?.trim();
+  if (alias) return alias;
+  if (CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel ?? "")) return account.logLabel!;
+
+  // Legacy or hand-edited account rows may predate persisted random log labels. Generate an
+  // independent public selector and persist it in the namespace map; never expose the stable,
+  // id-derived fallback that exists only to keep old diagnostic logs redacted.
+  return createCodexAccountLogLabel([fallbackCodexAccountLogLabel(account.id)]);
+}
+
+/** Build the initial UI-managed map from public labels without exposing stored account ids. */
 export function defaultCodexAccountNamespaces(
   config: Pick<OcxConfig, "codexAccounts" | "combos" | "providers">,
 ): Record<string, string> {
@@ -70,7 +86,7 @@ export function defaultCodexAccountNamespaces(
   namespaces[claim("main")] = MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET;
   for (const account of config.codexAccounts ?? []) {
     if (account.isMain || isMainCodexAccountTarget(account.id)) continue;
-    namespaces[claim(account.id)] = account.id;
+    namespaces[claim(defaultPublicAccountLabel(account))] = account.id;
   }
   return namespaces;
 }
@@ -78,7 +94,7 @@ export function defaultCodexAccountNamespaces(
 /** Add a newly stored account to an existing UI-managed map without renaming old rows. */
 export function appendDefaultCodexAccountNamespace(
   config: Pick<OcxConfig, "codexAccountNamespaces" | "combos" | "providers">,
-  account: { id: string; isMain: boolean },
+  account: { id: string; alias?: string; logLabel?: string; isMain: boolean },
 ): boolean {
   if (account.isMain
     || isMainCodexAccountTarget(account.id)
@@ -91,7 +107,7 @@ export function appendDefaultCodexAccountNamespace(
     ...Object.keys(config.codexAccountNamespaces),
     ...RESERVED_NAMESPACE_KEYS,
   ]);
-  const base = generatedNamespace(account.id);
+  const base = generatedNamespace(defaultPublicAccountLabel(account));
   let namespace = base;
   let suffix = 2;
   while (used.has(namespace)) namespace = `${base}-${suffix++}`;

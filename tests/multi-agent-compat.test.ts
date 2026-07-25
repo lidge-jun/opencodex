@@ -158,13 +158,14 @@ describe("multiAgentGuidanceText", () => {
     }
   });
 
-  test("bare subagent choices project onto visible account-qualified replacements", () => {
+  test("bare subagent choices project onto visible account-qualified guidance rows only", async () => {
     const dir = codexHomeFixture(V2_ON);
     const boundDescription = "OpenAI native model bound to a Codex account namespace.";
     catalogFixture(dir, [
       { slug: "gpt-5.6-sol", visibility: "hide", priority: 0, multiAgentVersion: "v2" },
-      { slug: "main/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2", description: boundDescription },
-      { slug: "side/gpt-5.6-sol", priority: 0.33, multiAgentVersion: "v2", description: boundDescription },
+      { slug: "vendor/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2" },
+      { slug: "main/gpt-5.6-sol", priority: 1, multiAgentVersion: "v2", description: boundDescription },
+      { slug: "side/gpt-5.6-sol", priority: 2, multiAgentVersion: "v2", description: boundDescription },
     ]);
 
     const effective = effectiveSubagentRoster(["gpt-5.6-sol"], "v2");
@@ -173,6 +174,38 @@ describe("multiAgentGuidanceText", () => {
       "side/gpt-5.6-sol",
     ]);
     expect(effective.excluded).toEqual([]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      { subagentModels: ["gpt-5.6-sol"] },
+    );
+    expect(text).toContain('Available models (valid reasoning_effort): "main/gpt-5.6-sol", "side/gpt-5.6-sol".');
+    expect(text).not.toContain('"vendor/gpt-5.6-sol"');
+  });
+
+  test("bare injection choice projects onto an account-qualified preferred model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const boundDescription = "OpenAI native model bound to a Codex account namespace.";
+    catalogFixture(dir, [
+      { slug: "gpt-5.6-sol", visibility: "hide", priority: 0, multiAgentVersion: "v2" },
+      { slug: "vendor/gpt-5.6-sol", priority: 0, multiAgentVersion: "v2" },
+      {
+        slug: "account-2/gpt-5.6-sol",
+        efforts: ["high", "max"],
+        priority: 1,
+        multiAgentVersion: "v2",
+        description: boundDescription,
+      },
+    ]);
+
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      { injectionModel: "gpt-5.6-sol", injectionEffort: "max" },
+    );
+    expect(text).toContain(
+      'Preferred sub-agent: model "account-2/gpt-5.6-sol", reasoning_effort "max"',
+    );
+    expect(text).not.toContain('Preferred sub-agent: model "vendor/gpt-5.6-sol"');
   });
 
   test("bare choices report an account-qualified replacement outside the display limit", () => {

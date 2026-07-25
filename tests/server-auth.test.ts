@@ -27,6 +27,7 @@ import {
   startServer,
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
+import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -1703,17 +1704,22 @@ describe("server local API auth", () => {
 
   test("account-qualified model preserves the selected account on an allow-listed 400", async () => {
     const body = unsupportedModelBody();
+    clearRequestLogsForTests();
     const harness = await startPoolRetryHarness(
       () => rejectionResponse(body),
-      { accountNamespaces: { side: "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
+      { accountNamespaces: { "public-selector": "pool-a" }, activeAccountId: "pool-b", accountMode: "direct" },
     );
     try {
-      await expectOriginal400(await harness.request({ model: `side/${POOL_RETRY_MODEL}` }), body);
+      await expectOriginal400(await harness.request({ model: `public-selector/${POOL_RETRY_MODEL}` }), body);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
       expect(harness.config.activeCodexAccountId).toBe("pool-b");
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      const latest = getRequestLogEntries().at(-1);
+      expect(latest?.provider).toBe("openai-public-selector");
+      expect(JSON.stringify(latest)).not.toContain("pool-a");
     } finally {
       await stopPoolRetryHarness(harness);
+      clearRequestLogsForTests();
     }
   });
 

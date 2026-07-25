@@ -113,6 +113,20 @@ describe("workspace account integration seam", () => {
     expect(codexPool).toContain('setToast(t("codexAuth.removeFailed"))');
   });
 
+  test("surfaces a saved account whose model catalog still needs refresh", async () => {
+    const [page, pool, modal] = await Promise.all([
+      Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
+      Bun.file("gui/src/components/AddCodexAccountModal.tsx").text(),
+    ]);
+    expect(modal).toContain("onAddedRef.current(st.catalogRefreshPending === true)");
+    expect(page).toContain("onAdded={(catalogRefreshPending) =>");
+    expect(page).toContain('t("codexAuth.catalogRefreshPending")');
+    expect(page).toContain("!catalogRefreshPending");
+    expect(pool).toContain('t(catalogRefreshPending ? "codexAuth.catalogRefreshPending"');
+    expect(pool).toContain("result.catalogRefreshPending");
+  });
+
   test("gives canonical Codex accounts explicit native switch actions", async () => {
     const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
     expect(source).toContain("codex-account-switch");

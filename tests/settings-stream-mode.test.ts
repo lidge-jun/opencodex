@@ -81,6 +81,26 @@ describe("GET /api/settings", () => {
     expect(body.streamMode).toBe("eager-relay");
   });
 
+  test("reports the effective account-picker state", async () => {
+    const visible = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "main" },
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+    const hidden = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "main" },
+      codexAccountPickerEnabled: false,
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+    const empty = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+
+    expect([visible.codexAccountPickerEnabled, hidden.codexAccountPickerEnabled, empty.codexAccountPickerEnabled])
+      .toEqual([true, false, false]);
+  });
+
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
     const { chmodSync } = await import("node:fs");
     const {
@@ -209,7 +229,7 @@ describe("PUT /api/settings", () => {
     const config: OcxConfig = {
       ...baseConfig(),
       codexAccounts: [
-        { id: "side-id", email: "side@example.test", alias: "Side", plan: "business", isMain: false },
+        { id: "side-id", email: "side@example.test", alias: "Side", logLabel: "p111111", plan: "business", isMain: false },
       ],
       combos: {
         primary: {
@@ -217,7 +237,7 @@ describe("PUT /api/settings", () => {
           targets: [{ provider: "openai", model: "gpt-test" }],
         },
         secondary: {
-          alias: "side-id/gpt-5.6-sol",
+          alias: "side/gpt-5.6-sol",
           targets: [{ provider: "openai", model: "gpt-test" }],
         },
       },
@@ -227,15 +247,34 @@ describe("PUT /api/settings", () => {
 
     const enabled = await putSettings(config, { codexAccountPickerEnabled: true }, refresh);
     expect(enabled!.status).toBe(200);
-    expect(config.codexAccountNamespaces).toEqual({ "main-2": "main", "side-id-2": "side-id" });
+    expect(config.codexAccountNamespaces).toEqual({ "main-2": "main", "side-2": "side-id" });
     expect(await enabled!.json()).toMatchObject({
       codexAccountPickerEnabled: true,
     });
     expect(refreshes).toBe(1);
     expect(loadConfig()).toMatchObject({
-      codexAccountNamespaces: { "main-2": "main", "side-id-2": "side-id" },
+      codexAccountNamespaces: { "main-2": "main", "side-2": "side-id" },
       codexAccountPickerEnabled: true,
     });
+  });
+
+  test("an enabled picker with an empty map initializes bindings and refreshes once", async () => {
+    const config: OcxConfig = {
+      ...baseConfig(),
+      codexAccounts: [
+        { id: "private-id", email: "private@example.test", logLabel: "p123456", isMain: false },
+      ],
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    };
+    let refreshes = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, async () => {
+      refreshes += 1;
+    });
+
+    expect(response!.status).toBe(200);
+    expect(config.codexAccountNamespaces).toEqual({ main: "main", p123456: "private-id" });
+    expect(refreshes).toBe(1);
   });
 
   test("account picker toggle preserves a custom ordered selector map exactly", async () => {

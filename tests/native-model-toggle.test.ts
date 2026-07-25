@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CODEX_ACCOUNT_LOG_LABEL_RE,
+  fallbackCodexAccountLogLabel,
+} from "../src/codex/account-label";
+import {
   accountBoundNativeDisplayName,
   appendDefaultCodexAccountNamespace,
   codexAccountPickerHasVisibleRows,
@@ -57,19 +61,46 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     ]);
   });
 
-  test("UI defaults use stable local account ids without exposing aliases or email labels", () => {
+  test("UI defaults use public aliases or privacy-safe labels without exposing stored account ids", () => {
     const namespaces = defaultCodexAccountNamespaces({
       providers: {
-        "side-id": { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+        side: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
       },
       codexAccounts: [
-        { id: "side-id", email: "private@example.test", alias: "Side", isMain: false },
-        { id: "team-id", email: "other@example.test", alias: "Product Team", isMain: false },
+        { id: "private-side-id", email: "private@example.test", alias: "Side", logLabel: "p111111", isMain: false },
+        { id: "private-team-id", email: "other@example.test", logLabel: "p222222", isMain: false },
       ],
     });
-    expect(namespaces).toEqual({ main: "main", "side-id-2": "side-id", "team-id": "team-id" });
-    expect(JSON.stringify(namespaces)).not.toContain("example.test");
-    expect(JSON.stringify(namespaces)).not.toContain("Product Team");
+    expect(namespaces).toEqual({ main: "main", "side-2": "private-side-id", p222222: "private-team-id" });
+    expect(Object.keys(namespaces).join(",")).not.toContain("private-side-id");
+    expect(Object.keys(namespaces).join(",")).not.toContain("private-team-id");
+    expect(Object.keys(namespaces).join(",")).not.toContain("example.test");
+  });
+
+  test("legacy accounts without log labels get independent random public selectors", () => {
+    const internalId = "private-internal-id";
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {},
+      codexAccounts: [
+        { id: internalId, email: "private@example.test", isMain: false },
+      ],
+    });
+    const selector = Object.entries(namespaces)
+      .find(([, accountId]) => accountId === internalId)?.[0];
+
+    expect(selector).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
+    expect(selector).not.toBe(fallbackCodexAccountLogLabel(internalId));
+    expect(selector).not.toContain(internalId);
+
+    const enabled = {
+      providers: {},
+      codexAccountNamespaces: { main: "main" } as Record<string, string>,
+    };
+    expect(appendDefaultCodexAccountNamespace(enabled, { id: internalId, isMain: false })).toBe(true);
+    const appendedSelector = Object.entries(enabled.codexAccountNamespaces)
+      .find(([, accountId]) => accountId === internalId)?.[0];
+    expect(appendedSelector).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
+    expect(appendedSelector).not.toBe(fallbackCodexAccountLogLabel(internalId));
   });
 
   test("UI defaults avoid prefixes already owned by combo aliases", () => {
@@ -77,13 +108,13 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       providers: {},
       combos: {
         primary: { alias: "main/gpt-5.5", targets: [{ provider: "openai", model: "gpt-5.5" }] },
-        secondary: { alias: "side-id/gpt-5.6-sol", targets: [{ provider: "openai", model: "gpt-5.6-sol" }] },
+        secondary: { alias: "side/gpt-5.6-sol", targets: [{ provider: "openai", model: "gpt-5.6-sol" }] },
       },
       codexAccounts: [
-        { id: "side-id", email: "side@example.test", isMain: false },
+        { id: "private-side-id", email: "side@example.test", alias: "Side", logLabel: "p111111", isMain: false },
       ],
     });
-    expect(namespaces).toEqual({ "main-2": "main", "side-id-2": "side-id" });
+    expect(namespaces).toEqual({ "main-2": "main", "side-2": "private-side-id" });
   });
 
   test("new accounts append to an enabled map without renaming existing prefixes", () => {
@@ -93,15 +124,19 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     };
     expect(appendDefaultCodexAccountNamespace(config, {
       id: "side-id",
+      alias: "Side",
+      logLabel: "p111111",
       isMain: false,
     })).toBe(true);
     expect(config.codexAccountNamespaces).toEqual({
       main: "main",
       legacy: "legacy-id",
-      "side-id-2": "side-id",
+      side: "side-id",
     });
     expect(appendDefaultCodexAccountNamespace(config, {
       id: "side-id",
+      alias: "Side",
+      logLabel: "p111111",
       isMain: false,
     })).toBe(false);
   });
@@ -116,10 +151,10 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       codexAccounts: [
         { id: "main", email: "reserved-one@example.test", isMain: false },
         { id: "__main__", email: "reserved-two@example.test", isMain: false },
-        { id: "side", email: "side@example.test", isMain: false },
+        { id: "side", email: "side@example.test", logLabel: "p333333", isMain: false },
       ],
     });
-    expect(namespaces).toEqual({ main: "main", side: "side" });
+    expect(namespaces).toEqual({ main: "main", p333333: "side" });
   });
 
   test("picker visibility defaults on for legacy maps and preserves dormant mappings", () => {
@@ -134,8 +169,12 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     };
     expect(codexAccountPickerIsEnabled(dormant)).toBe(false);
     expect(visibleCodexAccountNamespaces(dormant)).toEqual({});
-    expect(appendDefaultCodexAccountNamespace(dormant, { id: "side", isMain: false })).toBe(true);
-    expect(dormant.codexAccountNamespaces).toEqual({ main: "main", side: "side" });
+    expect(appendDefaultCodexAccountNamespace(dormant, {
+      id: "side",
+      logLabel: "p444444",
+      isMain: false,
+    })).toBe(true);
+    expect(dormant.codexAccountNamespaces).toEqual({ main: "main", p444444: "side" });
     expect(codexAccountPickerIsEnabled(dormant)).toBe(false);
   });
 

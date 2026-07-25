@@ -7,7 +7,7 @@ export default function AddCodexAccountModal({
 }: {
   apiBase: string;
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (catalogRefreshPending?: boolean) => void;
   reauthAccountId?: string;
 }) {
   const t = useT();
@@ -160,7 +160,11 @@ export default function AddCodexAccountModal({
           : `${apiBase}/api/codex-auth/login-status`;
         pollRef.current = setInterval(async () => {
           try {
-            const st = await fetch(statusUrl).then(r => r.json()) as { status: string; error?: string };
+            const st = await fetch(statusUrl).then(r => r.json()) as {
+              status: string;
+              error?: string;
+              catalogRefreshPending?: boolean;
+            };
             if (!aliveRef.current) return;
             setPollErrorStreak(0);
             if (manualCodeStateRef.current === "waiting") {
@@ -176,7 +180,7 @@ export default function AddCodexAccountModal({
               flowRef.current = null;
               setFlowId(null);
               if (!aliveRef.current) return;
-              onAddedRef.current();
+              onAddedRef.current(st.catalogRefreshPending === true);
               onCloseRef.current();
             } else if (st.status === "error" || st.status === "expired") {
               stopPolling();

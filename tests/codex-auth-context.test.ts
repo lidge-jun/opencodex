@@ -263,6 +263,38 @@ describe("Codex auth context", () => {
     expect(cfg.activeCodexAccountId).toBe("pool-a");
   });
 
+  test("fixed account never consumes a reset-derived cooldown probe", async () => {
+    const cfg = config();
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    try {
+      Date.now = () => now;
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool_a_token",
+        refreshToken: "pool_a_refresh",
+        expiresAt: now + 24 * 60 * 60_000,
+        chatgptAccountId: "pool_a_acc",
+      });
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        resetAt: Math.floor((now + 60 * 60_000) / 1000),
+        now,
+        fixedAccount: true,
+      });
+
+      // At this point an ordinary pool request is eligible for the one probe
+      // lease. An exact-account request must fail without consuming it.
+      Date.now = () => now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: "pool-a" }))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+
+      const ordinaryPoolProbe = await resolveCodexAuthContext(new Headers(), cfg, "pool");
+      expect(ordinaryPoolProbe.kind).toBe("pool");
+      expect(ordinaryPoolProbe.kind === "pool" ? ordinaryPoolProbe.probeLeaseId : undefined).toBeTruthy();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   test("selected pool headers replace inbound main auth", () => {
     const headers = headersForCodexAuthContext(
       new Headers({ authorization: "Bearer main_token", "chatgpt-account-id": "main_acc", "openai-beta": "responses=experimental" }),

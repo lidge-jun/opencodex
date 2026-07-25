@@ -9,13 +9,13 @@ import {
   CodexCredentialRefreshLockTimeoutError,
   TokenRefreshError,
 } from "./account-store";
- import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
- import {
-   appendDefaultCodexAccountNamespace,
-   codexAccountPickerIsEnabled,
-   isMainCodexAccountTarget,
- } from "./account-namespaces";
- import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
+import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  appendDefaultCodexAccountNamespace,
+  codexAccountPickerIsEnabled,
+  isMainCodexAccountTarget,
+} from "./account-namespaces";
+import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -64,7 +64,14 @@ function jsonResponse(data: unknown, status = 200): Response {
 const ACCOUNT_ID_RE = /^[a-zA-Z0-9._-]{1,64}$/;
 const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 
-const codexAuthLoginState = new Map<string, { status: string; accountId?: string; email?: string; error?: string; doneAt?: number }>();
+const codexAuthLoginState = new Map<string, {
+  status: string;
+  accountId?: string;
+  email?: string;
+  error?: string;
+  catalogRefreshPending?: boolean;
+  doneAt?: number;
+}>();
 
 function configuredPoolAccount(config: OcxConfig, accountId: string): CodexAccount | null {
   if (!ACCOUNT_ID_RE.test(accountId)) return null;
@@ -467,14 +474,22 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
   return [main, ...withQuota];
 }
 
-async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<void> {
-  if (!changed || !codexAccountPickerIsEnabled(config)) return;
-  try {
-    const { refreshCodexModelCatalog } = await import("./refresh");
-    await refreshCodexModelCatalog(config);
-  } catch {
-    // Account persistence succeeds even when no Codex catalog has been injected yet.
+async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<boolean> {
+  if (!changed || !codexAccountPickerIsEnabled(config)) return false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // Keep module loading inside the recoverable boundary too: the account mutation is already
+      // durable, so a packaging/load failure must report stale catalog state rather than a 500.
+      const { refreshCodexModelCatalog } = await import("./refresh");
+      await refreshCodexModelCatalog(config);
+      return false;
+    } catch {
+      // Retry once before reporting recoverable stale-catalog state. The account mutation is
+      // already durable, so rolling it back would be more misleading than exposing the retry.
+    }
   }
+  console.warn("[codex-auth] Account picker catalog refresh failed after retry; run `ocx sync` to retry.");
+  return true;
 }
 
 export async function handleCodexAuthAPI(
@@ -536,8 +551,11 @@ export async function handleCodexAuthAPI(
     runtimeConfig.codexAccounts = accounts;
     const namespaceAdded = appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
     saveRuntimeConfig(config, runtimeConfig);
-    await refreshAccountNamespaceCatalog(runtimeConfig, namespaceAdded || retainedPickerBindingRestored);
-    return jsonResponse({ ok: true });
+    const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+      runtimeConfig,
+      namespaceAdded || retainedPickerBindingRestored,
+    );
+    return jsonResponse({ ok: true, catalogRefreshPending });
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {
@@ -546,8 +564,8 @@ export async function handleCodexAuthAPI(
     const runtimeConfig = getRuntimeConfig(config);
     const pickerChanged = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
-    await refreshAccountNamespaceCatalog(runtimeConfig, pickerChanged);
-    return jsonResponse({ ok: true });
+    const catalogRefreshPending = await refreshAccountNamespaceCatalog(runtimeConfig, pickerChanged);
+    return jsonResponse({ ok: true, catalogRefreshPending });
   }
 
   if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
@@ -842,6 +860,7 @@ export async function handleCodexAuthAPI(
               const latestConfig = getRuntimeConfig(config);
               const accounts = latestConfig.codexAccounts ?? [];
               const existingIdx = accounts.findIndex(a => a.id === accountId);
+              let catalogRefreshPending = false;
               if (existingIdx >= 0) {
                 // Keep the pool id stable; refresh display metadata after a successful login/reauth.
                 accounts[existingIdx] = withCodexAccountLogLabel({
@@ -860,9 +879,18 @@ export async function handleCodexAuthAPI(
                 latestConfig.codexAccounts = accounts;
                 const namespaceAdded = appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
                 saveRuntimeConfig(config, latestConfig);
-                await refreshAccountNamespaceCatalog(latestConfig, namespaceAdded || retainedPickerBindingRestored);
+                catalogRefreshPending = await refreshAccountNamespaceCatalog(
+                  latestConfig,
+                  namespaceAdded || retainedPickerBindingRestored,
+                );
               }
-              codexAuthLoginState.set(flowId, { status: "done", accountId, email, doneAt: Date.now() });
+              codexAuthLoginState.set(flowId, {
+                status: "done",
+                accountId,
+                email,
+                ...(catalogRefreshPending ? { catalogRefreshPending: true } : {}),
+                doneAt: Date.now(),
+              });
               completed = true;
             }
             break;

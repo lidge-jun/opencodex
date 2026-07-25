@@ -60,7 +60,6 @@ import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -95,7 +94,7 @@ import {
   sanitizePassthroughHeaders,
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
-import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import type { EffectiveSubagentModel, EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 
 export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
@@ -209,13 +208,31 @@ export async function multiAgentGuidanceText(
     ];
     const resolveRoster = deps.resolveEffectiveSubagentRoster ?? resolveEffectiveSubagentRoster;
     const effective = await resolveRoster(configuredForGuidance, "v2");
-    const rosterModels = effective.advertised.filter(candidate =>
-      (subagentModels ?? []).some(model => slugsEquivalent(model, candidate.model))
-    );
+    // `effective.candidates` is the one global spawn_agent priority window. Resolve each
+    // configured role separately only to retain the catalog's account-aware association:
+    // bare native ids may project onto marked account-bound clones, while an arbitrary
+    // provider slug such as provider/gpt-* must not. Intersect those associations back
+    // into the original window so role-specific resolution can never widen it.
+    const candidateModels = new Set(effective.candidates.map(candidate => candidate.model));
+    const withinCandidateWindow = (candidate: EffectiveSubagentModel): boolean =>
+      candidateModels.has(candidate.model);
+    const configuredSubagents = subagentModels ?? [];
+    const hasConfiguredSubagents = configuredSubagents.length > 0;
+    let subagentEffective: EffectiveSubagentRoster | undefined;
+    let preferredEffective: EffectiveSubagentRoster | undefined;
+    if (hasConfiguredSubagents) {
+      subagentEffective = injectionModel
+        ? await resolveRoster(configuredSubagents, "v2")
+        : effective;
+    }
+    if (injectionModel) {
+      preferredEffective = hasConfiguredSubagents
+        ? await resolveRoster([injectionModel], "v2")
+        : effective;
+    }
+    const rosterModels = (subagentEffective?.advertised ?? []).filter(withinCandidateWindow);
     const roster = subagentRosterText(rosterModels);
-    const preferred = injectionModel
-      ? effective.candidates.find(candidate => slugsEquivalent(injectionModel, candidate.model))
-      : undefined;
+    const preferred = preferredEffective?.advertised.find(withinCandidateWindow);
 
     if (isInjectionDebugEnabled() && effective.excluded.length > 0) {
       injectionDebugLog(`[opencodex] multi-agent guidance excluded: ${effective.excluded
@@ -314,4 +331,3 @@ export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): 
     }
   }
 }
-
