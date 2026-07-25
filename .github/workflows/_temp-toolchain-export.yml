@@ -1,4 +1,4 @@
-name: Temporary Go toolchain export
+name: Temporary Go verification export
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  export-toolchain:
+  export-verification-inputs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch
@@ -19,12 +19,13 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
-      - name: Prepare toolchain and vendor archives
+      - name: Prepare toolchain, vendor, and TypeScript reference archives
         shell: bash
         run: |
           set -euo pipefail
           goroot="$(go env GOROOT)"
           tar -C "$(dirname "$goroot")" -czf /tmp/go-toolchain.tar.gz "$(basename "$goroot")"
+          tar -czf /tmp/ts-reference.tar.gz src package.json tsconfig.json 2>/dev/null || tar -czf /tmp/ts-reference.tar.gz src package.json
           cd go
           go mod vendor
           tar -czf /tmp/go-vendor.tar.gz vendor
@@ -37,5 +38,6 @@ jobs:
             /tmp/go-toolchain.tar.gz
             /tmp/go-vendor.tar.gz
             /tmp/go-version.txt
+            /tmp/ts-reference.tar.gz
           if-no-files-found: error
           retention-days: 1
