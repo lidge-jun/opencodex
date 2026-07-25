@@ -13,6 +13,7 @@ import {
   safeKiroHttpErrorMessage,
   type KiroErrorClassification,
 } from "./kiro-errors";
+import { isKiroRestatement } from "./kiro-restatement";
 import { KiroThinkingParser } from "./kiro-thinking";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "./kiro-truncation";
 import { createKiroToolNameRegistry, fallbackToolUseId, fingerprint, invocationId, isValidKiroConversationId, mapModelId, normalizeToolId, osTag, stableConversationId } from "./kiro-wire";
@@ -227,8 +228,22 @@ function kiroRuntimeEndpoint(provider: OcxProviderConfig, region: string): strin
 
 export type KiroReasoningMode = "native" | "emulated";
 
+// Kiro takes a verified native effort field for these models, and each model family names it
+// differently: the Sol-only `reasoning.effort` versus the Claude-specific `output_config.effort`.
+// Models absent from this table fall back to emulated thinking instructions.
+const KIRO_NATIVE_EFFORT_FIELDS: Record<string, "reasoning" | "output_config"> = {
+  "gpt-5.6-sol": "reasoning",
+  "claude-opus-5": "output_config",
+};
+
+const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+function kiroNativeEffortField(modelId: string): "reasoning" | "output_config" | undefined {
+  return KIRO_NATIVE_EFFORT_FIELDS[normalizeKiroModelId(modelId)];
+}
+
 export function kiroReasoningMode(modelId: string): KiroReasoningMode {
-  return normalizeKiroModelId(modelId) === "gpt-5.6-sol" ? "native" : "emulated";
+  return kiroNativeEffortField(modelId) ? "native" : "emulated";
 }
 
 function kiroThinkingBudget(parsed: OcxParsedRequest): number | undefined {
@@ -482,11 +497,12 @@ export function buildKiroPayload(
     },
   };
   const effort = parsed.options.reasoning;
-  if (kiroReasoningMode(parsed.modelId) === "native" && effort && effort !== "none") {
-    if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) {
-      throw new Error(`Kiro gpt-5.6-sol does not support reasoning effort ${JSON.stringify(effort)}`);
+  const effortField = kiroNativeEffortField(parsed.modelId);
+  if (effortField && effort && effort !== "none") {
+    if (!KIRO_NATIVE_EFFORTS.includes(effort)) {
+      throw new Error(`Kiro ${normalizeKiroModelId(parsed.modelId)} does not support reasoning effort ${JSON.stringify(effort)}`);
     }
-    payload.additionalModelRequestFields = { reasoning: { effort } };
+    payload.additionalModelRequestFields = { [effortField]: { effort } };
   }
   if (profileArn) payload.profileArn = profileArn;
   return { payload, nameMap, conversationId, completionMode };
@@ -583,13 +599,15 @@ function retryableKiroIncomplete(
   };
 }
 
-function normalizedKiroAnswer(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
+function isRepeatedKiroAnswer(text: string, previous?: string): boolean {
+  return isKiroRestatement(previous ?? "", text);
 }
 
-function isRepeatedKiroAnswer(text: string, previous?: string): boolean {
-  return normalizedKiroAnswer(text) === normalizedKiroAnswer(previous ?? "");
-}
+/**
+ * Kiro's native stop reason for a turn the model considers finished. Only this value is
+ * authoritative; `TOOL_USE` and an absent reason both leave the turn incomplete.
+ */
+const KIRO_END_TURN_STOP_REASON = "END_TURN";
 
 async function* parseKiroAttempt(
   response: Response,
@@ -599,6 +617,44 @@ async function* parseKiroAttempt(
   contextWindowState: KiroContextWindowState,
   nameMap: Map<string, string> | undefined,
   conversationId: string | undefined,
+  previousAssistantText?: string,
+  contextInputEstimate?: number,
+): AsyncGenerator<AdapterEvent, KiroAttemptResult> {
+  // `required` mode holds staged commentary here so a terminal END_TURN can relabel it as the final
+  // answer instead of paying for another inference request. Anything the inner parser leaves behind
+  // — every early error return — is flushed before the terminal event so partial output is never
+  // silently dropped.
+  const deferred: AdapterEvent[] = [];
+  const attempt = parseKiroAttemptEvents(
+    response,
+    mode,
+    modelId,
+    inputTokens,
+    contextWindowState,
+    nameMap,
+    conversationId,
+    deferred,
+    previousAssistantText,
+    contextInputEstimate,
+  );
+  let next = await attempt.next();
+  while (!next.done) {
+    yield next.value;
+    next = await attempt.next();
+  }
+  for (const event of deferred.splice(0)) yield event;
+  return next.value;
+}
+
+async function* parseKiroAttemptEvents(
+  response: Response,
+  mode: KiroCompletionMode,
+  modelId: string | undefined,
+  inputTokens: number,
+  contextWindowState: KiroContextWindowState,
+  nameMap: Map<string, string> | undefined,
+  conversationId: string | undefined,
+  deferred: AdapterEvent[],
   previousAssistantText?: string,
   contextInputEstimate?: number,
 ): AsyncGenerator<AdapterEvent, KiroAttemptResult> {
@@ -621,6 +677,7 @@ async function* parseKiroAttempt(
   let completionAnswer: string | undefined;
   let completionCalls = 0;
   let authoritativeUsage: OcxUsage | undefined;
+  let stopReason: string | undefined;
   const fallbackEvents: AdapterEvent[] = [];
   const thinking = new KiroThinkingParser();
 
@@ -711,6 +768,17 @@ async function* parseKiroAttempt(
     return terminal ? { terminal } : { tool: next };
   };
 
+  // In `required` mode Kiro's stop reason only arrives on the terminal metadata event, so staged
+  // commentary is held until either a real tool call proves the turn continues (flush as
+  // commentary) or the stream ends (relabel as the final answer when END_TURN says so). A heartbeat
+  // stands in for each held event so the bridge's stall watchdog stays armed.
+  const defer = (event: AdapterEvent): AdapterEvent[] => {
+    if (sawRealTool) return [...deferred.splice(0), event];
+    if (event.type !== "text_delta" && deferred.length === 0) return [event];
+    deferred.push(event);
+    return [{ type: "heartbeat" }];
+  };
+
   const stage = (event: AdapterEvent): AdapterEvent[] => {
     if (event.type === "text_delta") {
       assistantText += event.text;
@@ -723,7 +791,7 @@ async function* parseKiroAttempt(
         fallbackEvents.push(phased);
         return [];
       }
-      return [phased];
+      return mode === "required" ? defer(phased) : [phased];
     }
     if (event.type === "reasoning_raw_delta" || event.type === "thinking_delta") {
       const text = event.type === "reasoning_raw_delta" ? event.text : event.thinking;
@@ -734,7 +802,7 @@ async function* parseKiroAttempt(
       fallbackEvents.push(event);
       return [];
     }
-    return [event];
+    return mode === "required" ? defer(event) : [event];
   };
 
   const parseCompletion = (chunks: string[]): string | Error => {
@@ -822,6 +890,7 @@ async function* parseKiroAttempt(
           if (ev.contextUsagePercentage !== undefined && ev.contextUsagePercentage > 0) {
             contextUsagePercentage = ev.contextUsagePercentage;
           }
+          if (ev.stopReason !== undefined) stopReason = ev.stopReason;
           break;
         case "message_metadata":
           if (isValidKiroConversationId(ev.conversationId)) returnedConversationId = ev.conversationId;
@@ -933,14 +1002,38 @@ async function* parseKiroAttempt(
         ...(contextWindowState.value ? { upstreamContextWindow: contextWindowState.value } : {}),
       });
     }
+    // Kiro's own end-of-turn verdict, trusted only when it is unambiguous: plain assistant text,
+    // with neither a real tool call nor a private completion call to arbitrate against it.
+    const nativeEndTurn = stopReason === KIRO_END_TURN_STOP_REASON
+      && sawText
+      && !sawRealTool
+      && completionAnswer === undefined
+      && completionCalls === 0;
+
     debugProviderDiagnostic("kiro", "attempt_complete", {
       mode,
       sawText,
       sawReasoning,
       sawRealTool,
       completionCalls,
+      nativeEndTurn,
+      ...(stopReason !== undefined ? { stopReason } : {}),
       assistantChars: assistantText.length,
     });
+
+    if (mode === "required") {
+      if (nativeEndTurn) {
+        for (const event of deferred.splice(0)) {
+          yield event.type === "text_delta" ? { ...event, phase: "final_answer" } : event;
+        }
+        return {
+          assistantText,
+          sawReasoning,
+          terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
+        };
+      }
+      for (const event of deferred.splice(0)) yield event;
+    }
 
     if (mode === "text_fallback") {
       if (completionAnswer !== undefined) {

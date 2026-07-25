@@ -101,24 +101,36 @@ streams the response back **untranslated**.
 
 ### Completion semantics
 
-Kiro text events do not carry a dependable end-turn phase. When an ordinary client tool is present,
-opencodex therefore adds a private `codex_kiro_final_answer` tool to the upstream request. Progress
-text streams as commentary and cannot terminate the turn. The adapter consumes the private call,
-emits its answer as final text, and never exposes the private tool to Codex or Claude Code.
-When the web-search sidecar is active, this commentary still streams immediately; only the events
-needed to decide whether the model requested a synthetic search remain buffered.
+Kiro assistant text carries no dependable end-turn phase of its own. Its terminal `metadataEvent`
+can, however, carry a native `stopReason`. An `END_TURN` response holding plain assistant text with
+no client tool call ends the turn directly, with that text emitted as the final answer and no extra
+model round trip.
 
-If Kiro emits progress without calling the completion tool, the adapter makes one continuation. That
-single retry may finish with a validated private completion or plain final text. It cannot recurse:
-an empty or reasoning-only retry is returned as retryable incomplete, while a real client tool call
-keeps the turn open. If the retry only repeats the preceding commentary after whitespace
-normalization, the duplicate output is suppressed while the turn still completes. Tool-free
+When the stop reason is absent or is anything other than `END_TURN`, the compatibility path applies.
+If an ordinary client tool is present, opencodex adds a private `codex_kiro_final_answer` tool to
+the upstream request; progress text streams as commentary and cannot terminate the turn. The adapter
+consumes the private call, emits its answer as final text, and never exposes the private tool to
+Codex or Claude Code. Because the stop reason only arrives at the end of the stream, assistant text
+in a tool-enabled turn is held until either a real tool call starts (released as commentary) or the
+stream ends (released as the final answer on `END_TURN`, otherwise as commentary). When the
+web-search sidecar is active, released commentary still streams ahead of the terminal event; only
+the events needed to decide whether the model requested a synthetic search remain buffered.
+
+If Kiro emits progress without an `END_TURN` stop reason and without calling the completion tool,
+the adapter makes one continuation. That single retry may finish with a validated private completion
+or plain final text. It cannot recurse: an empty or reasoning-only retry is returned as retryable
+incomplete, while a real client tool call keeps the turn open. If the retry only restates the
+preceding commentary, the duplicate output is suppressed while the turn still completes.
+Restatement is judged by shared in-order word sequence, ignoring whitespace, punctuation, and case,
+so a reworded repeat is caught while a retry that appends real new content is kept. Tool-free
 requests retain normal text completion behavior.
 
 ### Reasoning effort
 
-`gpt-5.6-sol` has verified native effort support. Its selected `low`, `medium`, `high`, `xhigh`, or
-`max` value is sent as `additionalModelRequestFields.reasoning.effort`. Other Kiro models currently
+`gpt-5.6-sol` and `claude-opus-5` have verified native effort support, and each model family names
+the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
+as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
+`additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
 use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
 the user content because their native effort field has not been verified. Do not interpret an
 advertised effort control on those models as proof of upstream-native reasoning support.

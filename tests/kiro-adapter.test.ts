@@ -709,6 +709,26 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
     expect(emulatedBody.additionalModelRequestFields).toBeUndefined();
     expect(emulatedBody.conversationState.currentMessage.userInputMessage.content).toContain("<max_thinking_length>800</max_thinking_length>");
   });
+
+  test("claude-opus-5 sends native effort through the Claude-specific output_config field", async () => {
+    const body = JSON.parse((await createKiroAdapter(provider).buildRequest({
+      ...parsedWith([{ role: "user", content: "solve" }], undefined, "claude-opus-5"),
+      options: { reasoning: "max", maxOutputTokens: 1000 },
+    })).body);
+
+    expect(body.additionalModelRequestFields).toEqual({ output_config: { effort: "max" } });
+    // Native effort replaces the emulated thinking-tag prompt entirely.
+    expect(body.conversationState.currentMessage.userInputMessage.content).toBe("solve");
+  });
+
+  test("native-effort models reject efforts Kiro does not accept", async () => {
+    for (const modelId of ["gpt-5.6-sol", "claude-opus-5"]) {
+      await expect(createKiroAdapter(provider).buildRequest({
+        ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
+        options: { reasoning: "minimal" },
+      })).rejects.toThrow(`Kiro ${modelId} does not support reasoning effort "minimal"`);
+    }
+  });
 });
 
 describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", () => {

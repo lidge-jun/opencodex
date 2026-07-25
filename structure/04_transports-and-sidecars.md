@@ -109,7 +109,14 @@ The web-search loop requests `stream: true` for every routed-model iteration, bu
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
 progress visible. A Kiro stream EOF after user-facing text or reasoning gets one bounded completion
-retry, because the upstream text event does not distinguish progress from a final answer. Synthetic search calls, real tool calls,
+retry, because the upstream text event does not distinguish progress from a final answer — unless
+the terminal `metadataEvent` carries the native `stopReason: "END_TURN"`, which is authoritative and
+ends the turn with that text as the final answer. Since the stop reason arrives only at the end of
+the stream, `required`-mode assistant text is held inside the adapter until a real tool call starts
+(released as `commentary`) or the stream ends (released as `final_answer` on `END_TURN`, otherwise
+as `commentary`). Each held event yields a `heartbeat` in its place so the stall watchdog stays
+armed. This trades token-by-token rendering of a tool-enabled turn's answer for removing the extra
+inference request that the same turn previously always paid. Synthetic search calls, real tool calls,
 and terminal events remain buffered until the iteration validates. Only the first iteration's final
 response headers/status and any 429 key rotations are handled eagerly. A failure before downstream
 SSE starts returns non-2xx JSON; once headers have started the final response, a generation failure

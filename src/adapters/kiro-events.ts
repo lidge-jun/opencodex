@@ -6,7 +6,7 @@ export type ParsedKiroEvent =
   | { type: "reasoning"; data?: string }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
-  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number }
+  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
   | { type: "message_metadata"; conversationId?: string }
   | { type: "invalid_state"; message?: string }
   | { type: "error"; reason?: string; message?: string };
@@ -141,12 +141,14 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
       ) {
         return malformed(eventType, "contextUsagePercentage must be a finite number");
       }
+      const stopReason = optionalString(eventType, parsed, "stopReason");
       return {
         type: "metadata",
         ...(parseTokenUsage(eventType, parsed.tokenUsage) !== undefined
           ? { usage: parseTokenUsage(eventType, parsed.tokenUsage) }
           : {}),
         ...(typeof contextUsagePercentage === "number" ? { contextUsagePercentage } : {}),
+        ...(stopReason !== undefined ? { stopReason } : {}),
       };
     }
     case "invalidStateEvent":

@@ -110,6 +110,16 @@ describe("kiro adapter — parseStream", () => {
     });
   });
 
+  test("Kiro event parser surfaces the native stop reason and rejects a non-string one", async () => {
+    expect(parseKiroEvent("metadataEvent", enc.encode(JSON.stringify({ stopReason: "END_TURN" })))).toEqual({
+      type: "metadata",
+      stopReason: "END_TURN",
+    });
+    expect(() => parseKiroEvent("metadataEvent", enc.encode(JSON.stringify({ stopReason: 7 })))).toThrow(
+      "invalid Kiro metadataEvent payload: stopReason must be a string",
+    );
+  });
+
   test("unknown event types are ignored without parsing their payload", async () => {
     const unknown = encodeMessage(
       { ":message-type": "event", ":event-type": "futureEvent" },
@@ -436,6 +446,106 @@ describe("kiro adapter — parseStream", () => {
     if (done?.type === "done") {
       expect(done.usage?.contextTotalTokens).toBeGreaterThanOrEqual(done.usage?.outputTokens ?? 0);
     }
+  });
+
+  test("native END_TURN metadata finishes a tool-enabled turn without a second request", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches++;
+      return new Response(streamOf(eventFrame({ content: "should never run" })));
+    }) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "The file has " }),
+      eventFrame({ content: "three lines." }),
+      eventFrame({ stopReason: "END_TURN" }, "metadataEvent"),
+    ))));
+
+    expect(fetches).toBe(0);
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "The file has ", phase: "final_answer" },
+      { type: "text_delta", text: "three lines.", phase: "final_answer" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("a non-END_TURN stop reason still requires the bounded completion fallback", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches++;
+      return new Response(streamOf(...completionFrames("Really done.")));
+    }) as typeof fetch;
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "Still working." }),
+      eventFrame({ stopReason: "TOOL_USE" }, "metadataEvent"),
+    ))));
+
+    expect(fetches).toBe(1);
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "Still working.", phase: "commentary" },
+      { type: "text_delta", text: "Really done.", phase: "final_answer" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("held commentary is released as commentary the moment a real tool call starts", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const ordered: string[] = [];
+    for await (const event of adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "Let me look." }),
+      eventFrame({ name: "bash", toolUseId: "t1" }),
+      eventFrame({ input: '{"command":"pwd"}', name: "bash", toolUseId: "t1" }),
+      eventFrame({ name: "bash", stop: true, toolUseId: "t1" }),
+      eventFrame({ stopReason: "END_TURN" }, "metadataEvent"),
+    )))) {
+      if (event.type === "text_delta") ordered.push(`text:${event.phase}`);
+      else if (event.type !== "heartbeat") ordered.push(event.type);
+    }
+
+    // END_TURN alongside a real tool call is not authoritative: the tool result must come back.
+    expect(ordered).toEqual(["text:commentary", "tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
+  });
+
+  test("END_TURN does not promote a private completion answer's commentary", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "Checking the result." }),
+      ...completionFrames("Task complete."),
+      eventFrame({ stopReason: "END_TURN" }, "metadataEvent"),
+    ))));
+
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "Checking the result.", phase: "commentary" },
+      { type: "text_delta", text: "Task complete.", phase: "final_answer" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("held commentary is still delivered when the stream fails before its terminal event", async () => {
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+
+    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+      eventFrame({ content: "Partial progress." }),
+      encodeMessage(
+        { ":message-type": "exception", ":exception-type": "ThrottlingException" },
+        enc.encode(JSON.stringify({ message: "Too many requests." })),
+      ),
+    ))));
+
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "Partial progress.", phase: "commentary" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 429, retryable: true });
   });
 
   test("normal Responses cancellation aborts the adapter-owned fallback without another replay", async () => {
