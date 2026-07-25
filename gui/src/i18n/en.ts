@@ -23,6 +23,7 @@ export const en = {
   "app.logoAria": "opencodex logo",
   "app.claudeOn": "Claude ON",
   "app.claudeOff": "Claude OFF",
+  "app.viewMode": "View",
   "theme.label": "Theme",
   "theme.light": "Light",
   "theme.dark": "Dark",
@@ -113,6 +114,8 @@ export const en = {
 
   // dashboard
   "dash.subtitle": "Live status of the local opencodex proxy, its providers, and the models routed into Codex.",
+  "dash.workspace.overview": "Overview",
+  "dash.workspace.sections": "Sections",
   "dash.status": "Status",
   "dash.online": "Online",
   "dash.offline": "Offline",
@@ -146,6 +149,7 @@ export const en = {
   "dash.col.adapter": "Adapter",
   "dash.col.baseUrl": "Base URL",
   "dash.col.model": "Model",
+  "dash.modelsNoResults": "No models match your search.",
   "dash.availableModels": "Available models",
   "dash.noModels": "No models found. Check provider API keys.",
   "dash.cannotConnect": "Cannot connect to proxy. Is it running?",

@@ -41,6 +41,10 @@ bun run dev:gui
 | **Usage / Debug** | 토큰 사용량의 측정 범위와 추이를 보거나, 선택적 프로바이더 전송/사용량 추출 진단을 켭니다. |
 | **Stop** | 프록시와 설치된 백그라운드 서비스를 정상 종료하고 네이티브 Codex를 복원한 뒤 끝냅니다(`POST /api/stop`). |
 
+### Classic / Workspace
+
+사이드바의 **Workspace / Classic** 컨트롤로 Dashboard와 Providers 레이아웃을 전환합니다. 설정은 브라우저에 저장되며 이 페이지들 사이에서 맞춰집니다. Providers에서는 URL도 모드를 반영합니다(`#providers` vs `#providers/workspace`).
+
 **Logs**와 **Usage**의 비용 값은 보고된 토큰으로 계산한 API 정가 환산치입니다. 결제 영수증이나
 실제 청구 증거가 아니며, 구독 사용량 또는 프로바이더 크레딧이 대신 적용될 수 있습니다.
 

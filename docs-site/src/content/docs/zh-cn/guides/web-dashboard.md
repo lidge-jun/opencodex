@@ -40,6 +40,10 @@ bun run dev:gui
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Stop** | 优雅地停止代理和已安装的后台服务，恢复原生 Codex 并退出（`POST /api/stop`）。 |
 
+### Classic / Workspace
+
+侧边栏的 **Workspace / Classic** 控件切换 Dashboard 与 Providers 的布局。偏好保存在浏览器中，并在这些页面间保持一致。Providers 页面的 URL 也会反映模式（`#providers` 与 `#providers/workspace`）。
+
 **Logs** 和 **Usage** 中的费用是根据已报告 token 计算的 API 标价折算值，不是账单，也不能证明
 实际发生了扣费；实际可能计入订阅用量或消耗服务商额度。
 

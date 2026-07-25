@@ -108,6 +108,8 @@ export const ko: Record<TKey, string> = {
 
   // dashboard
   "dash.subtitle": "로컬 opencodex 프록시와 프로바이더, 그리고 Codex로 라우팅되는 모델의 실시간 상태입니다.",
+  "dash.workspace.overview": "개요",
+  "dash.workspace.sections": "섹션",
   "dash.status": "상태",
   "dash.online": "온라인",
   "dash.offline": "오프라인",
@@ -140,6 +142,7 @@ export const ko: Record<TKey, string> = {
   "dash.col.adapter": "어댑터",
   "dash.col.baseUrl": "Base URL",
   "dash.col.model": "모델",
+  "dash.modelsNoResults": "검색과 일치하는 모델이 없습니다.",
   "dash.availableModels": "사용 가능한 모델",
   "dash.noModels": "모델을 찾을 수 없습니다. 프로바이더 API 키를 확인하세요.",
   "dash.cannotConnect": "프록시에 연결할 수 없습니다. 실행 중인가요?",
@@ -794,6 +797,7 @@ export const ko: Record<TKey, string> = {
   "app.logoAria": "opencodex 로고",
   "app.claudeOn": "Claude ON",
   "app.claudeOff": "Claude OFF",
+  "app.viewMode": "보기",
   "usage.dayMon": "월",
   "usage.dayWed": "수",
   "usage.dayFri": "금",

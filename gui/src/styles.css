@@ -13,6 +13,7 @@
 @import "./styles/provider-workspace-settings.css";
 @import "./styles/provider-overview-dashboard.css";
 @import "./styles-combos-workspace.css";
+@import "./styles-dashboard-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -511,6 +512,36 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .startup-health-bar:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .startup-health-bar__summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.startup-health-slot {
+  min-height: var(--control-lg);
+}
+
+.startup-health-bar--pending {
+  pointer-events: none;
+  color: var(--faint);
+}
+
+.dash-stat-coverage {
+  margin-top: 2px;
+  min-height: 1.25em;
+  line-height: 1.25;
+}
+
+.dash-overview-head {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+.dash-overview-head .stat-row {
+  margin-bottom: 0;
+}
+
+.dash-overview-head .startup-health-bar,
+.dash-overview-head .startup-health-bar--pending {
+  margin: var(--space-4) 0 0;
+}
+
 /* ---- dashboard model grid (grouped by provider) ---- */
 .model-group-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: var(--text-control); font-weight: var(--weight-semibold); color: var(--text); }
 .model-group-head .count { font-family: var(--font-code); font-weight: var(--weight-medium); color: var(--faint); font-size: var(--text-label); }
@@ -612,19 +643,36 @@ select.input { appearance: none; }
   border: 1px solid var(--border); border-radius: var(--radius);
   padding: 4px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.16);
 }
-.select-dropdown-portal { position: fixed; }
-.select-dropdown-portal { z-index: 60; }
+.select-dropdown-portal {
+  /* Position (top/bottom/left/right/maxHeight) comes from computeSelectMenuStyle. */
+  position: fixed;
+  top: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+}
 .select-dropdown-right { left: auto !important; right: 0; }
 .select-dropdown-beside { top: 0; left: calc(100% + 6px); right: auto; min-width: 10rem; }
 .select-option {
   display: block; width: 100%; text-align: left;
   padding: 7px 12px; border: none; border-radius: var(--radius-sm);
   background: transparent; color: var(--text); font: inherit; font-size: var(--text-control); line-height: var(--leading-ui);
-  cursor: pointer; transition: background var(--motion-fast);
+  cursor: pointer; transition: background var(--motion-fast), box-shadow var(--motion-fast);
   white-space: nowrap;
 }
-.select-option:hover { background: var(--hover); }
+/* Pointer hover alone — softer than keyboard focus so the two cues stay distinct. */
+.select-option:hover:not(.select-option-active) { background: var(--hover); }
+/* Selected value (committed). */
 .select-option.active { background: var(--accent-soft); color: var(--accent); font-weight: var(--weight-semibold); }
+/* Keyboard / aria-activedescendant focus — visible without relying on :hover. */
+.select-option-active {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.select-option.active.select-option-active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 
 /* ---- switch ---- */
 .switch {
@@ -1125,6 +1173,13 @@ button.prov-account-row.active { cursor: default; }
 /* ── Setting row (label left, control right) ── */
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; gap: 16px; }
 .setting-row + .setting-row { border-top: 1px solid var(--border-soft); }
+.dash-subagent-guidance-row {
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-label .title { font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .setting-label .desc { font-size: var(--text-label); color: var(--muted); line-height: var(--leading-body); }

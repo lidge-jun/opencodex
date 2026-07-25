@@ -73,10 +73,21 @@ describe("provider rail source contract", () => {
   });
 
   test("preserves only the exact workspace subroute on page synchronization", async () => {
+    const { hashBelongsToPage } = await import("../gui/src/app-routing");
+    // Exact subroute only — unknown Providers suffixes must not count as belonging.
+    expect(hashBelongsToPage("providers/workspace", "providers")).toBe(true);
+    expect(hashBelongsToPage("providers", "providers")).toBe(true);
+    expect(hashBelongsToPage("providers/other", "providers")).toBe(false);
+    expect(hashBelongsToPage("providers/workspace/extra", "providers")).toBe(false);
+
+    const routing = await Bun.file("gui/src/app-routing.ts").text();
+    const routeState = await Bun.file("gui/src/use-app-route-state.ts").text();
     const app = await Bun.file("gui/src/App.tsx").text();
-    expect(app).toContain('rawHash === "providers/workspace"');
-    expect(app).toContain("hashBelongsToPage(rawHash, nextPage)");
-    expect(app).toContain("hashBelongsToPage(rawHash, page)");
-    expect(app).not.toContain("window.location.hash !== nextHash");
+    expect(routing).toContain('rawHash === "providers/workspace"');
+    expect(routing).toContain("hashBelongsToPage(rawHash, nextPage)");
+    expect(routeState).toContain('rawHash === "providers/workspace"');
+    expect(routeState).toContain("hashBelongsToPage(rawHash, page)");
+    expect(app).toContain("useAppRouteState");
+    expect(`${routing}\n${routeState}\n${app}`).not.toContain("window.location.hash !== nextHash");
   });
 });

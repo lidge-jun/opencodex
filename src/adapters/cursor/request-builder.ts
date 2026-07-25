@@ -15,8 +15,10 @@ import {
   cursorMcpToolEncodedSize,
   cursorMcpToolsEncodedSize,
   cursorToolAllowedByChoice,
+  cursorToolChoiceAliases,
   cursorToolWireName,
   cursorToolsForActivePrompt,
+  isBareCodexShellBridgeTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
 
@@ -35,10 +37,18 @@ function explicitlySelectedNames(choice: OcxToolChoice | undefined): Set<string>
 }
 
 function toolPriority(tool: OcxTool, selectedNames: ReadonlySet<string>): number {
-  if (toolChoiceAliases(tool).some(name => selectedNames.has(name))) return 0;
-  if (tool.loadedFromToolSearch) return 1;
-  if (!tool.namespace) return 2;
-  return 3;
+  // Shell bridge and apply_patch outrank unrelated allowed_tools entries so a large
+  // selected filler cannot starve the Codex execution path during truncation (#399).
+  if (isBareCodexShellBridgeTool(tool)) return 0;
+  if (!tool.namespace && tool.name === "apply_patch") return 1;
+  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 2;
+  if (tool.loadedFromToolSearch) return 3;
+  if (!tool.namespace) return 4;
+  return 5;
+}
+
+function isPinnedCursorTool(tool: OcxTool, selectedNames: ReadonlySet<string>): boolean {
+  return toolPriority(tool, selectedNames) <= 2;
 }
 
 /**
@@ -50,7 +60,8 @@ export function applyCursorToolBudget(
   tools: readonly OcxTool[] | undefined,
   toolChoice: OcxToolChoice | undefined,
 ): CursorToolBudgetResult {
-  const eligible = (tools ?? []).filter(tool => cursorToolAllowedByChoice(tool, toolChoice));
+  const catalog = tools ?? [];
+  const eligible = catalog.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog));
   if (
     eligible.length <= CURSOR_TOOL_COUNT_LIMIT
     && cursorMcpToolsEncodedSize(eligible, toolChoice) <= CURSOR_TOOL_BYTES_LIMIT
@@ -64,15 +75,28 @@ export function applyCursorToolBudget(
   const keptSet = new Set<OcxTool>();
   let keptBytes = 0;
 
-  for (const candidate of candidates) {
-    if (kept.length >= CURSOR_TOOL_COUNT_LIMIT) continue;
+  const tryKeep = (tool: OcxTool): boolean => {
+    if (keptSet.has(tool) || kept.length >= CURSOR_TOOL_COUNT_LIMIT) return keptSet.has(tool);
     // Repeated protobuf message fields serialize as concatenated tag/length/value entries,
     // so each one-entry wrapper size is the exact additive contribution to McpTools.
-    const candidateBytes = cursorMcpToolEncodedSize(candidate.tool, toolChoice);
-    if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) continue;
-    kept.push(candidate.tool);
-    keptSet.add(candidate.tool);
+    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice);
+    if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) return false;
+    kept.push(tool);
+    keptSet.add(tool);
     keptBytes += candidateBytes;
+    return true;
+  };
+
+  // Phase 1: selected tools + shell bridge + apply_patch (priority <= 2).
+  // Pins are admitted before filler so a crowded catalog cannot drop the Codex execution path (#399).
+  for (const candidate of candidates) {
+    if (!isPinnedCursorTool(candidate.tool, selectedNames)) continue;
+    tryKeep(candidate.tool);
+  }
+
+  // Phase 2: remaining tools by priority.
+  for (const candidate of candidates) {
+    tryKeep(candidate.tool);
   }
 
   return {

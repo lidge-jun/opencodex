@@ -6,13 +6,56 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Strip HTML comments, "No response" placeholders, and trim whitespace.
+ * True when the entire meaningful value is a placeholder-only token.
+ * Supports harmless Markdown emphasis/code markers and trailing punctuation.
+ * Sentences that merely contain a placeholder phrase are not matches.
+ */
+const PLACEHOLDER_ONLY_RE =
+  /^[\s_*~`]*(?:no\s+response|n\/?a|not\s+applicable|not\s+available|none|todo|tbd)[\s_*~`]*[.!?]*$/i;
+
+/**
+ * If `text` is exactly one enclosing fenced code block (``` or ~~~), return the
+ * inner body; otherwise null. Real multi-statement fences are left alone by
+ * the placeholder matcher after unwrap.
+ */
+function unwrapSingleEnclosingFence(text) {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(```|~~~)[^\n]*\r?\n([\s\S]*?)\r?\n\1[ \t]*$/);
+  if (!match) return null;
+  return match[2];
+}
+
+function isPlaceholderOnlyValue(raw) {
+  if (typeof raw !== "string") return false;
+  let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!value) return false;
+
+  // A lone fenced block whose entire body is a placeholder is still placeholder
+  // text (e.g. ```text\nN/A\n```), not a real example.
+  const unwrapped = unwrapSingleEnclosingFence(value);
+  if (unwrapped !== null) {
+    value = unwrapped.trim();
+    if (!value) return false;
+  }
+
+  return PLACEHOLDER_ONLY_RE.test(value);
+}
+
+/**
+ * Strip HTML comments, placeholder-only values, and trim whitespace.
  */
 function clean(raw) {
   if (typeof raw !== "string") return "";
   let s = raw.replace(/<!--[\s\S]*?-->/g, "");
-  // Treat GitHub's "No response" placeholder as empty.
-  s = s.replace(/^[\s_*]*No response[\s_*]*$/gim, "");
+  // Whole-value placeholders first (including a single enclosing fence), so
+  // line-by-line stripping cannot leave bare fence markers behind.
+  if (isPlaceholderOnlyValue(s)) return "";
+  // Treat placeholder-only lines (GitHub "No response", N/A, etc.) as empty.
+  s = s
+    .split("\n")
+    .map((line) => (isPlaceholderOnlyValue(line) ? "" : line))
+    .join("\n");
+  if (isPlaceholderOnlyValue(s)) return "";
   return s.trim();
 }
 
@@ -329,29 +372,52 @@ function allRepeatTitle(sections, title) {
 }
 
 function isPlaceholder(text) {
+  return isPlaceholderOnlyValue(text);
+}
+
+const CJK_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
+
+function countWords(text) {
   const c = clean(text);
-  if (!c) return true;
-  const lower = c.toLowerCase();
+  if (!c) return 0;
+
+  // Count each CJK character as one unit, and non-CJK scripts as Unicode
+  // word tokens. Mixing one CJK glyph into a Latin/Cyrillic word must not
+  // inflate the count to letter-length.
+  const cjkChars = c.match(CJK_RE) || [];
+  const nonCjkText = c.replace(CJK_RE, " ");
+  const nonCjkTokens = nonCjkText.match(/[\p{L}\p{N}']+/gu) || [];
+
+  return cjkChars.length + nonCjkTokens.length;
+}
+
+function hasConcreteDetail(text) {
+  const c = clean(text);
+  if (!c) return false;
   return (
-    lower === "no response" ||
-    lower === "n/a" ||
-    lower === "none" ||
-    lower === "todo" ||
-    lower === "tbd" ||
-    /^_no response_$/i.test(c)
+    /\d/.test(c) ||
+    /[`{}\[\]<>/\\]/.test(c) ||
+    /\b(ocx|config|api|cli|dashboard|provider|proxy|route|endpoint|workflow|command)\b/i.test(c)
   );
 }
 
+function isTooTerseFeatureSection(text) {
+  if (isEmpty(text) || isPlaceholder(text)) return false;
+  const words = countWords(text);
+  if (words >= 8) return false;
+  if (words >= 6 && hasConcreteDetail(text)) return false;
+  return true;
+}
+
 /**
- * Check if raw section text is a GitHub "No response" placeholder variant
- * without stripping it first. Used to distinguish intentionally blank optional
- * fields from actively cleared required fields.
+ * Check if raw section text is a placeholder-only variant without relying on
+ * clean() first. Used to distinguish intentionally blank optional fields
+ * (legacy "No response" / N/A) from actively cleared required fields.
  */
 function isRawPlaceholder(raw) {
   if (raw === null) return false;
-  const trimmed = raw.trim();
-  if (!trimmed) return false;
-  return /^[\s_*]*no response[\s_*]*$/i.test(trimmed);
+  return isPlaceholderOnlyValue(raw);
 }
 
 /**
@@ -386,7 +452,12 @@ function validateIssue(issue) {
     // On the legacy / translated forms these sections may be absent (null).
     if (blocker !== null && isEmpty(blocker)) emptyCore.push("current limitation");
     if (isEmpty(behaviour)) emptyCore.push("expected behaviour");
-    if (example !== null && isEmpty(example)) emptyCore.push("example usage");
+    if (example !== null && isPlaceholder(example)) {
+      reasons.push("Example usage or interface contains placeholder text instead of a concrete example.");
+      guidance.push("Add a real CLI command, config snippet, API exchange, or before/after workflow example.");
+    } else if (example !== null && isEmpty(example)) {
+      emptyCore.push("example usage");
+    }
 
     const mappedHeadingPresent =
       goal !== null || blocker !== null || behaviour !== null || example !== null;
@@ -420,6 +491,15 @@ function validateIssue(issue) {
         reasons.push("Required sections contain only placeholder text.");
         guidance.push("Replace placeholder text with your actual proposal.");
       }
+    }
+
+    const terseSections = [];
+    if (goal !== null && isTooTerseFeatureSection(goal)) terseSections.push("goal / problem");
+    if (blocker !== null && isTooTerseFeatureSection(blocker)) terseSections.push("current limitation");
+    if (behaviour !== null && isTooTerseFeatureSection(behaviour)) terseSections.push("expected behaviour");
+    if (terseSections.length > 0) {
+      reasons.push(`Required sections are too vague to act on: ${terseSections.join(", ")}.`);
+      guidance.push("Describe the workflow, limitation, and expected behaviour with enough detail for someone to implement or evaluate the request.");
     }
   }
 
@@ -587,6 +667,47 @@ function shouldReopen(botState, issue, maintainerOverride) {
   return true;
 }
 
+/**
+ * workflow_dispatch accepts a bare issue number, but GitHub reuses the same
+ * number namespace for issues and pull requests. Reject PR targets before any
+ * validation or mutation runs.
+ *
+ * @param {{ pull_request?: unknown }} issue
+ * @param {number|string} issueNumber
+ * @param {string} eventName
+ * @returns {string|null}
+ */
+function rejectsWorkflowDispatchPullRequest(issue, issueNumber, eventName) {
+  if (eventName !== "workflow_dispatch") return null;
+  if (!issue?.pull_request) return null;
+  return `#${issueNumber} is a pull request. This workflow only accepts issue numbers.`;
+}
+
+/**
+ * workflow_dispatch can be started from a selected branch. Reject runs whose
+ * selected ref is not the repository default branch so untrusted branch code
+ * cannot drive issue mutations with issues:write.
+ *
+ * @param {string} eventName
+ * @param {string|null|undefined} ref
+ * @param {string|null|undefined} defaultBranch
+ * @returns {string|null}
+ */
+function rejectsWorkflowDispatchNonDefaultBranch(eventName, ref, defaultBranch) {
+  if (eventName !== "workflow_dispatch") return null;
+  if (!defaultBranch || typeof defaultBranch !== "string") {
+    return "workflow_dispatch requires repository.default_branch to be available.";
+  }
+  const expected = `refs/heads/${defaultBranch}`;
+  if (ref !== expected) {
+    return (
+      `workflow_dispatch must run from the default branch (${defaultBranch}); ` +
+      `selected ref was ${ref || "(empty)"}.`
+    );
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
@@ -601,8 +722,14 @@ module.exports = {
   validateIssue,
   shouldReopen,
   shouldEnforceClosure,
+  isPlaceholderOnlyValue,
+  isPlaceholder,
   isRawPlaceholder,
+  countWords,
+  hasConcreteDetail,
   labelForKind,
   KIND_TO_LABEL,
   hasSubstantialStructuredContent,
+  rejectsWorkflowDispatchPullRequest,
+  rejectsWorkflowDispatchNonDefaultBranch,
 };

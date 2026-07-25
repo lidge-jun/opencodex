@@ -45,7 +45,7 @@ test("flips upward near the bottom of the viewport", () => {
   }, { menuHeight: 180 });
   expect(style.bottom).toBe(108);
   expect(style.top).toBeUndefined();
-  expect(style.maxHeight).toBe(688);
+  expect(style.maxHeight).toBe(280);
 });
 
 test("right placement opens beside the trigger", () => {

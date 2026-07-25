@@ -23,6 +23,7 @@ export const ja: Record<TKey, string> = {
   "app.logoAria": "opencodex ロゴ",
   "app.claudeOn": "Claude オン",
   "app.claudeOff": "Claude オフ",
+  "app.viewMode": "ビュー",
   "theme.label": "テーマ",
   "theme.light": "ライト",
   "theme.dark": "ダーク",
@@ -113,6 +114,8 @@ export const ja: Record<TKey, string> = {
 
   // dashboard
   "dash.subtitle": "ローカル opencodex プロキシ、そのプロバイダー、Codex にルーティングされるモデルのライブ状態です。",
+  "dash.workspace.overview": "概要",
+  "dash.workspace.sections": "セクション",
   "dash.status": "状態",
   "dash.online": "オンライン",
   "dash.offline": "オフライン",
@@ -145,6 +148,7 @@ export const ja: Record<TKey, string> = {
   "dash.col.adapter": "アダプター",
   "dash.col.baseUrl": "ベース URL",
   "dash.col.model": "モデル",
+  "dash.modelsNoResults": "検索に一致するモデルはありません。",
   "dash.availableModels": "利用可能なモデル",
   "dash.noModels": "モデルが見つかりません。プロバイダーの API キーを確認してください。",
   "dash.cannotConnect": "プロキシに接続できません。起動していますか?",

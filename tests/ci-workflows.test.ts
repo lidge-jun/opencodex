@@ -164,6 +164,62 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
   });
 
+  test("issue-quality workflow rejects workflow_dispatch pull request numbers before mutation", async () => {
+    const workflow = await readText(".github/workflows/enforce-issue-quality.yml");
+
+    // Manual dispatch is supported, but only with a positive issue number.
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("issue_number:");
+    expect(workflow).toContain("Number.isSafeInteger(parsedIssueNumber)");
+    expect(workflow).toContain("parsedIssueNumber <= 0");
+
+    // Job-scoped permissions only (no top-level issues:write).
+    expect(workflow).toMatch(
+      /jobs:\s*\n\s*validate:[\s\S]*?permissions:\s*\n\s*contents: read\s*\n\s*#.*\n\s*issues: write/,
+    );
+    const beforeJobs = workflow.split(/jobs:\s*\n/)[0]!;
+    expect(beforeJobs).not.toMatch(/^\s*permissions:/m);
+
+    // Trusted scripts always come from the repository default branch.
+    const checkoutStep = workflow
+      .split("- name: Checkout trusted workflow code")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(checkoutStep).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(checkoutStep).toContain("persist-credentials: false");
+    expect(checkoutStep).toContain("sparse-checkout: .github/scripts");
+
+    const script = workflow
+      .split("script: |")[1]!
+      .split(/\n {6}- name:/)[0]!;
+
+    // Invalid issue numbers fail before any issues API call.
+    const invalidNumberIdx = script.indexOf("Invalid workflow_dispatch issue_number:");
+    const firstIssuesGetIdx = script.indexOf("github.rest.issues.get({");
+    expect(invalidNumberIdx).toBeGreaterThan(-1);
+    expect(firstIssuesGetIdx).toBeGreaterThan(-1);
+    expect(invalidNumberIdx).toBeLessThan(firstIssuesGetIdx);
+
+    // Non-default-branch dispatches fail before any issues API mutation.
+    const branchGuardIdx = script.indexOf("const nonDefaultBranchFailure = rejectsWorkflowDispatchNonDefaultBranch(");
+    const firstMutationIdx = script.indexOf("github.rest.issues.update({");
+    expect(branchGuardIdx).toBeGreaterThan(-1);
+    expect(firstMutationIdx).toBeGreaterThan(-1);
+    expect(branchGuardIdx).toBeLessThan(firstMutationIdx);
+    expect(branchGuardIdx).toBeLessThan(firstIssuesGetIdx);
+
+    // Pull-request numbers are rejected after issues.get and before mutations.
+    const prGuardIdx = script.indexOf("const pullRequestFailure = rejectsWorkflowDispatchPullRequest(");
+    const listCommentsIdx = script.indexOf("github.rest.issues.listComments");
+    const addLabelsIdx = script.indexOf("github.rest.issues.addLabels");
+    expect(prGuardIdx).toBeGreaterThan(-1);
+    expect(prGuardIdx).toBeGreaterThan(firstIssuesGetIdx);
+    expect(prGuardIdx).toBeLessThan(listCommentsIdx);
+    expect(prGuardIdx).toBeLessThan(addLabelsIdx);
+    expect(prGuardIdx).toBeLessThan(firstMutationIdx);
+    expect(script).toContain("if (pullRequestFailure) {");
+    expect(script).toContain("core.setFailed(pullRequestFailure);");
+  });
+
   test("React Doctor workflow is SHA-pinned, engine-pinned, advisory, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
 

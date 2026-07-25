@@ -10,23 +10,33 @@ on:
       - opened
       - edited
       - reopened
-
-permissions:
-  contents: read
-  issues: write
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to validate and enforce
+        required: true
+        type: number
 
 concurrency:
-  group: issue-quality-${{ github.event.issue.number }}
+  group: issue-quality-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for issue closure, reopen, and bot comments.
+      issues: write
 
     steps:
       - name: Checkout trusted workflow code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          # Always load validator scripts from the repository default branch so
+          # a branch-selected workflow_dispatch cannot execute untrusted code
+          # with issues:write.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts
 
@@ -42,14 +52,45 @@ jobs:
               shouldReopen,
               shouldEnforceClosure,
               labelForKind,
+              rejectsWorkflowDispatchPullRequest,
+              rejectsWorkflowDispatchNonDefaultBranch,
             } = require(path.join(process.cwd(), ".github", "scripts", "issue-quality.cjs"));
 
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.issue.number;
+            let issue_number;
+            if (context.eventName === "workflow_dispatch") {
+              const rawIssueNumber = context.payload.inputs.issue_number;
+              const parsedIssueNumber = Number(rawIssueNumber);
+              if (
+                !Number.isSafeInteger(parsedIssueNumber) ||
+                parsedIssueNumber <= 0
+              ) {
+                core.setFailed(
+                  `Invalid workflow_dispatch issue_number: ${rawIssueNumber}. Expected a positive integer.`,
+                );
+                return;
+              }
+              issue_number = parsedIssueNumber;
+            } else {
+              issue_number = context.payload.issue.number;
+            }
             const actor = context.actor;
             const eventType = context.eventName === "issues"
               ? context.payload.action
               : "";
+
+            // -----------------------------------------------------------------
+            // Reject branch-selected manual dispatches before any issue API use
+            // -----------------------------------------------------------------
+            const nonDefaultBranchFailure = rejectsWorkflowDispatchNonDefaultBranch(
+              context.eventName,
+              context.ref,
+              context.payload.repository?.default_branch,
+            );
+            if (nonDefaultBranchFailure) {
+              core.setFailed(nonDefaultBranchFailure);
+              return;
+            }
 
             // -----------------------------------------------------------------
             // Fetch live issue state
@@ -57,6 +98,16 @@ jobs:
             const { data: issue } = await github.rest.issues.get({
               owner, repo, issue_number,
             });
+
+            const pullRequestFailure = rejectsWorkflowDispatchPullRequest(
+              issue,
+              issue_number,
+              context.eventName,
+            );
+            if (pullRequestFailure) {
+              core.setFailed(pullRequestFailure);
+              return;
+            }
 
             // -----------------------------------------------------------------
             // Trusted-user exemption

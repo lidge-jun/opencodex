@@ -50,7 +50,7 @@ import {
   buildCursorToolDefinitions,
   cursorRequestAdvertisesApplyPatch,
   cursorRequestHasShellAlias,
-  cursorToolInputSchema,
+  cursorToolArgNormalizeSchema,
   cursorToolWireName,
   cursorToolsForActivePrompt,
   isGenericToolUseCountDemoPrompt,
@@ -506,7 +506,10 @@ class LiveCursorTransport implements CursorTransport {
     const cursorToolNameMap = new Map<string, string>();
     for (const tool of cursorVisibleTools ?? []) {
       const cursorWireName = cursorToolWireName(tool);
-      toolSchemas.set(cursorWireName, cursorToolInputSchema(tool));
+      // Normalize against Responses/Codex field names, not the Cursor advertisement schema.
+      // Advertising `cmd` while also storing that schema here left `cmd` unmapped and Codex
+      // rejected shell_command with "missing field `command`" (#399).
+      toolSchemas.set(cursorWireName, cursorToolArgNormalizeSchema(tool));
       cursorToolNameMap.set(cursorWireName, namespacedToolName(tool.namespace, tool.name));
     }
     state = createCursorProtobufEventState({

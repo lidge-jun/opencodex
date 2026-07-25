@@ -41,6 +41,12 @@ bun run dev:gui
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). |
 
+### Classic vs Workspace
+
+The sidebar **Workspace / Classic** control switches the Dashboard and Providers layouts. The
+preference is stored in the browser and kept consistent across those pages. On Providers, the URL
+also reflects the mode (`#providers` vs `#providers/workspace`).
+
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.

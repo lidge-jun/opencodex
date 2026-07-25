@@ -108,6 +108,8 @@ export const zh: Record<TKey, string> = {
 
   // dashboard
   "dash.subtitle": "本地 opencodex 代理、其提供方以及路由到 Codex 的模型的实时状态。",
+  "dash.workspace.overview": "概览",
+  "dash.workspace.sections": "板块",
   "dash.status": "状态",
   "dash.online": "在线",
   "dash.offline": "离线",
@@ -140,6 +142,7 @@ export const zh: Record<TKey, string> = {
   "dash.col.adapter": "适配器",
   "dash.col.baseUrl": "Base URL",
   "dash.col.model": "模型",
+  "dash.modelsNoResults": "没有符合搜索的模型。",
   "dash.availableModels": "可用模型",
   "dash.noModels": "未找到模型。请检查提供方 API 密钥。",
   "dash.cannotConnect": "无法连接到代理。它在运行吗？",
@@ -794,6 +797,7 @@ export const zh: Record<TKey, string> = {
   "app.logoAria": "opencodex 徽标",
   "app.claudeOn": "Claude 开",
   "app.claudeOff": "Claude 关",
+  "app.viewMode": "视图",
   "usage.dayMon": "一",
   "usage.dayWed": "三",
   "usage.dayFri": "五",

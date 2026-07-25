@@ -4,10 +4,9 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { Select } from "../src/ui";
 
-// Mounted regressions for #340 / PR #393: the portal fix must (1) render an opt-in portaled
-// dropdown under document.body (outside the clipping card) with fixed positioning, and (2) leave a
-// NON-portal Select (the language menu contract) as a descendant of .custom-select keeping the
-// .select-dropdown-beside class so its glass fallback + mobile upward-placement CSS still apply.
+// Mounted regressions for #340 / PR #393: Select portals by default so menus flip inside the
+// viewport. The language menu is the explicit opt-out (portal={false} + placement="right") so its
+// glass fallback + mobile upward-placement CSS still apply as a .custom-select descendant.
 
 const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -56,7 +55,7 @@ async function mountAndOpen(node: React.ReactElement): Promise<{ container: HTML
 
 test("a portal Select renders its dropdown under document.body, outside the clipping card", async () => {
   const { container, root } = await mountAndOpen(
-    <Select value="a" options={OPTIONS} onChange={() => {}} label="Backend" portal />,
+    <Select value="a" options={OPTIONS} onChange={() => {}} label="Backend" />,
   );
   const listbox = document.body.querySelector<HTMLElement>('[role="listbox"]');
   expect(listbox).not.toBeNull();
@@ -69,7 +68,7 @@ test("a portal Select renders its dropdown under document.body, outside the clip
 
 test("a non-portal Select (language-menu contract) stays inside .custom-select and keeps .select-dropdown-beside", async () => {
   const { container, root } = await mountAndOpen(
-    <Select value="a" options={OPTIONS} onChange={() => {}} label="Language" placement="right" />,
+    <Select value="a" options={OPTIONS} onChange={() => {}} label="Language" placement="right" portal={false} />,
   );
   // Not portaled: nothing lands directly under body outside the mount container.
   const bodyListboxes = Array.from(document.body.querySelectorAll<HTMLElement>('[role="listbox"]'));

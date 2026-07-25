@@ -23,6 +23,7 @@ export const ru: Record<TKey, string> = {
   "app.logoAria": "Логотип opencodex",
   "app.claudeOn": "Claude ВКЛ",
   "app.claudeOff": "Claude ВЫКЛ",
+  "app.viewMode": "Вид",
   "theme.label": "Тема",
   "theme.light": "Светлая",
   "theme.dark": "Тёмная",
@@ -113,6 +114,8 @@ export const ru: Record<TKey, string> = {
 
   // dashboard
   "dash.subtitle": "Актуальное состояние локального прокси opencodex, его провайдеров и моделей, маршрутизируемых в Codex.",
+  "dash.workspace.overview": "Обзор",
+  "dash.workspace.sections": "Разделы",
   "dash.status": "Статус",
   "dash.online": "В сети",
   "dash.offline": "Не в сети",
@@ -145,6 +148,7 @@ export const ru: Record<TKey, string> = {
   "dash.col.adapter": "Адаптер",
   "dash.col.baseUrl": "Базовый URL",
   "dash.col.model": "Модель",
+  "dash.modelsNoResults": "Нет моделей, соответствующих поиску.",
   "dash.availableModels": "Доступные модели",
   "dash.noModels": "Модели не найдены. Проверьте API-ключи провайдеров.",
   "dash.cannotConnect": "Не удаётся подключиться к прокси. Он запущен?",

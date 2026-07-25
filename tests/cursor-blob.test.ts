@@ -325,7 +325,7 @@ describe("Cursor blob handshake", () => {
     expect(JSON.stringify(roots)).toContain("Shell commands use");
     expect(JSON.stringify(roots)).toContain("exec_command");
     expect(actionText(bytes)).toContain("Run: echo OCX via your shell tool, report stdout.");
-    expect(actionText(bytes)).toContain("Use exec_command for this shell command.");
+    expect(actionText(bytes)).toContain("Use the Codex shell bridge tool listed this turn");
   });
 
   test("adds generic exec_command guidance for active tool-count demo prompts", () => {
@@ -347,18 +347,18 @@ describe("Cursor blob handshake", () => {
     const text = actionText(bytes);
     expect(text).toContain("아무 tool 10개 써봐");
     expect(text).toContain("This turn requests 10 tool uses");
-    expect(text).toContain("exactly 10 separate `exec_command` function calls/results");
-    expect(text).toContain("One `exec_command` containing chained commands counts as 1 tool call, not 10");
+    expect(text).toContain("exactly 10 separate Codex shell bridge function calls/results");
+    expect(text).toContain("One shell-bridge call containing chained commands counts as 1 tool call, not 10");
     expect(text).toContain("one parallel tool-call batch containing all 10");
-    expect(text).toContain("repeated `exec_command` calls");
-    expect(text).toContain("Codex Responses bridge exec tool");
+    expect(text).toContain("repeated Codex shell bridge calls");
+    expect(text).toContain("Codex Responses shell bridge");
     expect(text).toContain("external MCP server tool");
     expect(text).toContain("bridge may suspend");
     expect(text).toContain("Do not use `run_shell`");
     expect(text).toContain("Do not use `tool_search`, external MCP, or resource discovery just to pad the count");
     expect(text).toContain("neighboring-agent tools");
     expect(text).toContain("unless this turn's catalog lists those exact names");
-    expect(text).not.toContain("Use exec_command for this shell command.");
+    expect(text).not.toContain("Use the Codex shell bridge tool listed this turn");
     const roots = JSON.stringify(decodeRootMessages(bytes));
     expect(roots).toContain("available tool names are exactly `exec_command`");
     expect(roots).not.toContain("available tool names are exactly `exec_command`, `tool_search`");

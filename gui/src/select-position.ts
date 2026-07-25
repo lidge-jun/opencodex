@@ -73,7 +73,7 @@ export function computeSelectMenuStyle(
       position: "fixed",
       bottom: vh - trigger.top + FLIP_GAP_PX,
       minWidth: width,
-      maxHeight: Math.max(MIN_MENU_HEIGHT_PX, spaceAbove - MENU_GAP_PX),
+      maxHeight: Math.max(0, Math.min(MAX_MENU_HEIGHT_PX, spaceAbove - MENU_GAP_PX)),
     };
     if (align === "right") {
       style.right = vw - trigger.right;
@@ -87,7 +87,7 @@ export function computeSelectMenuStyle(
     position: "fixed",
     top: trigger.bottom + MENU_GAP_PX,
     minWidth: width,
-    maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(MAX_MENU_HEIGHT_PX, spaceBelow - MENU_GAP_PX)),
+    maxHeight: Math.max(0, Math.min(MAX_MENU_HEIGHT_PX, spaceBelow - MENU_GAP_PX)),
   };
   if (align === "right") {
     style.right = vw - trigger.right;
