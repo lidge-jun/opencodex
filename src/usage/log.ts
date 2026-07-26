@@ -41,6 +41,10 @@ export interface PersistedUsageEntry {
   requestedModel?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
+  /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -223,6 +227,17 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),
+    ...(typeof entry.effectiveEffort === "string" && entry.effectiveEffort
+      ? { effectiveEffort: capMetadataString(entry.effectiveEffort) }
+      : {}),
+    ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
+      ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
+      : {}),
+    ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
+        ? { reasoningWireValue: entry.reasoningWireValue }
+        : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),

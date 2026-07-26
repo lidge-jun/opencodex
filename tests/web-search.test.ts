@@ -327,13 +327,24 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
 
   test("routed iterations use upstream streaming and never call parseResponse", async () => {
     const seenStream: boolean[] = [];
+    const reasoningLogs: unknown[] = [];
     let parseStreamCalls = 0;
     let parseResponseCalls = 0;
     const adapter: ProviderAdapter = {
       name: "stream-only",
       buildRequest(parsed) {
         seenStream.push(parsed.stream);
-        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+        return {
+          url: "https://routed.test/v1",
+          method: "POST",
+          headers: {},
+          body: "{}",
+          reasoningLog: {
+            effectiveEffort: "high",
+            wireField: "reasoning_effort",
+            wireValue: "high",
+          },
+        };
       },
       fetchResponse: async () => new Response("wire", { status: 200 }),
       async *parseStream() {
@@ -355,11 +366,17 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
       selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
       settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
+      onRequestBuilt: request => reasoningLogs.push(request.reasoningLog),
     });
 
     expect(response.status).toBe(200);
     const frames = await collectSse(response.body!);
     expect(seenStream).toEqual([true]);
+    expect(reasoningLogs).toEqual([{
+      effectiveEffort: "high",
+      wireField: "reasoning_effort",
+      wireValue: "high",
+    }]);
     expect(parseStreamCalls).toBe(1);
     expect(parseResponseCalls).toBe(0);
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);

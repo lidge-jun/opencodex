@@ -91,6 +91,7 @@ import {
   inspectResponseLogJson,
   noteAttemptSend,
   readConfiguredCodexServiceTier,
+  recordAdapterReasoning,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
   usageFromResponsesPayload,
@@ -1123,6 +1124,7 @@ export async function handleResponses(
       );
     }
     let request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+    recordAdapterReasoning(logCtx, request);
     const passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
       ? request.usageLog.inputTokens
       : undefined;
@@ -1212,6 +1214,7 @@ export async function handleResponses(
           config.cacheRetention,
         );
         request = await retryAdapter.buildRequest(parsed, { headers: retryHeaders });
+        recordAdapterReasoning(logCtx, request);
 
         await upstreamResponse.body?.cancel().catch(() => undefined);
         authCtx = retryAuthCtx;
@@ -1613,6 +1616,7 @@ export async function handleResponses(
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
       onUsage: usage => {
         logCtx.usageFromBridge = true;
         if (usage) {
@@ -1657,6 +1661,7 @@ export async function handleResponses(
   let activeAdapter = adapter;
 
   const request = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+  recordAdapterReasoning(logCtx, request);
   const inputTokenEstimate = typeof request.usageLog?.inputTokens === "number"
     ? request.usageLog.inputTokens
     : undefined;
@@ -1709,6 +1714,7 @@ export async function handleResponses(
         headers: selectedForwardHeaders,
         ...(imageTierBias > 0 ? { imageTierBias } : {}),
       });
+      recordAdapterReasoning(logCtx, retryRequest);
       const retryEstimate = typeof retryRequest.usageLog?.inputTokens === "number"
         ? retryRequest.usageLog.inputTokens
         : undefined;
@@ -1849,6 +1855,7 @@ export async function handleResponses(
           headers: selectedForwardHeaders,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
+        recordAdapterReasoning(logCtx, continuationRequest);
         const continuationEstimate = typeof continuationRequest.usageLog?.inputTokens === "number"
           ? continuationRequest.usageLog.inputTokens
           : undefined;

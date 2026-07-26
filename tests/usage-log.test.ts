@@ -421,7 +421,10 @@ describe("usage log", () => {
       provider: "openai",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",
@@ -433,7 +436,10 @@ describe("usage log", () => {
     });
     expect(readUsageEntries()[0]).toMatchObject({
       requestId: "ocx-effort",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",

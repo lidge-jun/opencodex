@@ -17,6 +17,7 @@ import {
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
   noteAttemptSend,
+  recordAdapterReasoning,
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
   sealRequestAttemptIdentity,
@@ -44,6 +45,48 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("records the adapter's exact outbound reasoning parameter", () => {
+    const logCtx: RequestLogContext = {
+      model: "grok-4.5",
+      provider: "xai",
+      requestedEffort: "max",
+    };
+
+    recordAdapterReasoning(logCtx, {
+      url: "https://api.x.ai/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "high",
+        wireField: "reasoning_effort",
+        wireValue: "high",
+      },
+    });
+
+    expect(logCtx).toMatchObject({
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
+    });
+
+    const sensitiveAlias = ["sk", "proj", "redaction-fixture"].join("-");
+    recordAdapterReasoning(logCtx, {
+      url: "https://provider.test/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: sensitiveAlias,
+        wireField: "reasoning_effort",
+        wireValue: sensitiveAlias,
+      },
+    });
+    expect(logCtx.effectiveEffort).not.toContain("redaction-fixture");
+    expect(logCtx.reasoningWireValue).not.toContain("redaction-fixture");
+  });
+
   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
     const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
     const logCtx: RequestLogContext = {
@@ -398,6 +441,9 @@ describe("request log metadata", () => {
       provider: "chatgpt-p000001",
       requestedModel: "gpt-5.5",
       requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: requestLogSpeedLabel("priority"),
       configuredServiceTier: "fast",
@@ -421,6 +467,9 @@ describe("request log metadata", () => {
     expect(entries[0]).toMatchObject({
       requestedModel: "gpt-5.5",
       requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "fast",
@@ -879,6 +928,9 @@ describe("request log restart hydrate", () => {
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
       requestedEffort: "high",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",
@@ -898,6 +950,9 @@ describe("request log restart hydrate", () => {
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
       requestedEffort: "high",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",

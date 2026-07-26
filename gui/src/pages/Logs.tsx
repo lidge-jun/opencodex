@@ -95,6 +95,9 @@ interface LogEntry {
   provider: string;
   surface?: "claude";
   requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -161,6 +164,19 @@ function speedLabel(log: LogEntry): string | undefined {
   if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
   if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
   return undefined;
+}
+
+function effortLabel(log: LogEntry): string {
+  const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
+  const effective = log.effectiveEffort;
+  if (!requested) return effective ?? "-";
+  if (!effective || requested === effective || requested.split(" → ").at(-1) === effective) return requested;
+  return `${requested} → ${effective}`;
+}
+
+function reasoningWireLabel(log: LogEntry): string | undefined {
+  if (!log.reasoningWireField || log.reasoningWireValue === undefined) return undefined;
+  return `${log.reasoningWireField}=${log.reasoningWireValue}`;
 }
 
 function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
@@ -468,7 +484,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono">{log.requestedEffort ?? "-"}</td>
+                  <td className="mono" title={reasoningWireLabel(log)}>{effortLabel(log)}</td>
                   <td className="muted">{log.provider}</td>
                   <td>
                     <span className="log-status-cell">
@@ -533,6 +549,7 @@ function LogDetailDialog({
   const [copied, setCopied] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
+  const reasoningWire = reasoningWireLabel(detail);
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -577,6 +594,9 @@ function LogDetailDialog({
             </span>
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+            {(detail.requestedEffort || detail.effectiveEffort) && (
+              <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
+            )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
           </div>
