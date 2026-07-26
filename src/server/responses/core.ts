@@ -624,6 +624,19 @@ export async function handleComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  const adoptFailedChildLog = (childLog: RequestLogContext): void => {
+    // Attempts remain the complete physical history; the logical row mirrors the most recent
+    // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
+    Object.assign(logCtx, childLog, {
+      requestedModel,
+      model: requestedModel,
+      provider: "combo",
+      comboId,
+      attempts: logCtx.attempts,
+      activeAttempt: undefined,
+      activeAttemptStartedAt: undefined,
+    });
+  };
 
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (rawBody as { input?: unknown } | undefined)?.input,
@@ -794,25 +807,19 @@ export async function handleComboResponses(
     if (comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     }) === "stop") {
-      Object.assign(logCtx, childLog, {
-        requestedModel,
-        model: requestedModel,
-        provider: "combo",
-        comboId,
-        attempts: logCtx.attempts,
-        activeAttempt: undefined,
-        activeAttemptStartedAt: undefined,
-      });
+      adoptFailedChildLog(childLog);
       return lastFailure;
     }
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
     );
-    pick = advanceComboAfterFailure(config, pick, {
+    const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
       now: Date.now(),
       eligible: payloadEligible,
     });
+    if (!nextPick) adoptFailedChildLog(childLog);
+    pick = nextPick;
   }
   return lastFailure!;
 }

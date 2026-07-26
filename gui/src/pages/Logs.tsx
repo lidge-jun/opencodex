@@ -181,6 +181,8 @@ function effortLabel(log: ReasoningLogFields): string {
   const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
   const effective = log.effectiveEffort;
   if (!requested) return effective ?? "-";
+  // requestedEffort may already contain a cap/clamp chain (for example max->high).
+  // Only append the adapter result when it differs from that chain's terminal value.
   if (!effective || requested === effective || requested.split(" → ").at(-1) === effective) return requested;
   return `${requested} → ${effective}`;
 }
@@ -447,6 +449,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               )}
               {virtualRows.map(virtualRow => {
                 const log = filteredLogs[filteredLogs.length - 1 - virtualRow.index];
+                const reasoningWire = reasoningWireLabel(log);
                 return (
                <tr
                  key={log.requestId ?? `${log.timestamp}-${virtualRow.index}`}
@@ -495,7 +498,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono" title={reasoningWireLabel(log)}>{effortLabel(log)}</td>
+                  <td className="mono log-reasoning-cell" title={reasoningWire}>
+                    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                      <span>{effortLabel(log)}</span>
+                      {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
+                    </span>
+                  </td>
                   <td className="muted">{log.provider}</td>
                   <td>
                     <span className="log-status-cell">

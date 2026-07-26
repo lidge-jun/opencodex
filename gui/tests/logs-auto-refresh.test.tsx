@@ -336,7 +336,7 @@ test("Logs: switching to the Debug tab stops scheduled log requests", async () =
 test("Logs: attempt details render exact reasoning wire values without legacy placeholders", async () => {
   const attemptsLog = {
     ...sampleLog,
-    requestedEffort: "high",
+    requestedEffort: "max->high",
     effectiveEffort: "high",
     reasoningWireField: "reasoning_effort",
     reasoningWireValue: "high",
@@ -391,6 +391,10 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
+  const overviewReasoning = container.querySelector<HTMLElement>(".log-reasoning-cell");
+  expect(overviewReasoning?.textContent).toContain("max → high");
+  expect(overviewReasoning?.textContent).toContain("reasoning_effort=high");
+  expect(overviewReasoning?.textContent).not.toContain("max → high → high");
   await act(async () => {
     container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
   });
