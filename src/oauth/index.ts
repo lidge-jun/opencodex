@@ -13,7 +13,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
-import { effectiveGoogleMode } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -566,12 +566,29 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
   return changed;
 }
 
-/** Add/refresh an OAuth provider's config entry on a config object (does not persist). */
+/**
+ * Add/refresh an OAuth provider's config entry on a config object (does not persist).
+ *
+ * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
+ * billed through a stored API key instead of the OAuth login (router.ts honors
+ * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
+ * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
+ * flips billing back to the subscription without the user asking. Carry the key fields over
+ * and keep an explicitly chosen `authMode: "key"`, so logging in never changes which
+ * credential bills the request.
+ */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
-  config.providers[provider] = { ...def.providerConfig };
+  const existing = config.providers[provider];
+  const next: OcxProviderConfig = { ...def.providerConfig };
+  if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
+    if (existing.apiKey !== undefined) next.apiKey = existing.apiKey;
+    if (existing.apiKeyPool !== undefined) next.apiKeyPool = existing.apiKeyPool;
+    if (existing.authMode === "key") next.authMode = "key";
+  }
+  config.providers[provider] = next;
 }
 
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */
