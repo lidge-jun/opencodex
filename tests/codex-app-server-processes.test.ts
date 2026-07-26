@@ -204,13 +204,13 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
     const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
     expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
-    expect(syncCase).toContain("syncResult.catalogExists || syncResult.cacheSynced");
+    expect(syncCase).toContain("syncResult.catalogWritten || syncResult.cacheSynced");
     expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase).toContain("restart: restartCodex");
-    expect(syncCase.indexOf("catalogExists || syncResult.cacheSynced"))
+    expect(syncCase.indexOf("catalogWritten || syncResult.cacheSynced"))
       .toBeLessThan(syncCase.indexOf("afterCatalogWriteHandleAppServers"));
     // No-write path must not call the handler outside the gate.
-    const gatedBlock = syncCase.slice(syncCase.indexOf("if (syncResult.catalogExists"));
+    const gatedBlock = syncCase.slice(syncCase.indexOf("if (syncResult.catalogWritten"));
     expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });

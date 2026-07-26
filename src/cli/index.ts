@@ -747,7 +747,7 @@ switch (command) {
     const restartCodex = args.slice(1).includes("--restart-codex");
     const syncResult = await syncModelsToCodex((await findLiveProxy())?.port);
     // Only warn/restart when a catalog or models_cache write actually happened.
-    if (syncResult.catalogExists || syncResult.cacheSynced) {
+    if (syncResult.catalogWritten || syncResult.cacheSynced) {
       const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }

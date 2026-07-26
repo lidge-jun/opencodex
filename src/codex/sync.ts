@@ -11,6 +11,7 @@ export interface CodexSyncResult {
   added: number;
   catalogPath: string | null;
   catalogExists: boolean;
+  catalogWritten: boolean;
   cacheSynced: boolean;
   message: string;
   warning?: string;
@@ -61,6 +62,7 @@ export async function syncModelsToCodex(
       added: 0,
       catalogPath: null,
       catalogExists: false,
+      catalogWritten: false,
       cacheSynced: false,
       message: result.message,
     };
@@ -71,6 +73,7 @@ export async function syncModelsToCodex(
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
   let catalogExists = false;
+  let catalogWritten = false;
   let cacheSynced = false;
   let warning: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
@@ -79,6 +82,7 @@ export async function syncModelsToCodex(
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;
     catalogExists = cat.catalogExists;
+    catalogWritten = cat.catalogWritten;
     cacheSynced = cat.cacheSynced;
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
@@ -110,6 +114,7 @@ export async function syncModelsToCodex(
     added,
     catalogPath,
     catalogExists,
+    catalogWritten,
     cacheSynced,
     message: result.message,
     ...(warning ? { warning } : {}),
