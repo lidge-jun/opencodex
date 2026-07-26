@@ -186,29 +186,42 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
 }
 
 /**
- * Windows snapshots scoped to the invoking user via Win32_Process.GetOwner().
+ * Windows snapshots scoped to the invoking user via Win32_Process GetOwner.
  * PowerShell is the sole path: WMIC lacks reliable owner data and is disabled on
  * many Windows 11 installs; returning unscoped rows would contradict the
  * current-user restart contract.
+ *
+ * CIM instance methods must use Invoke-CimMethod (direct .GetOwner() calls fail).
+ * Candidates are pre-filtered to Codex basename / code-mode-host command lines
+ * so we do not pay GetOwner per every process on the machine.
+ * Exported for the Windows integration regression that exercises the real
+ * PowerShell enumeration.
  */
-function listWindowsSnapshots(): ProcessSnapshot[] {
+export function listWindowsSnapshots(): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
-  // Double-quoted PS format string so `t expands to a real tab (single-quoted would emit literal `t).
+  // Newlines keep -Command as a real script (space-joined statements need ';').
+  // Double-quoted format string so `t expands to a real tab.
+  // Codex candidates only: basename token codex / codex.exe / codex.cmd, or
+  // code-mode-host — not incidental substrings like a repo path with "opencodex".
   const psCommand = [
     "$ErrorActionPreference='SilentlyContinue'",
     "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
-    "Get-CimInstance Win32_Process | ForEach-Object {",
+    "Get-CimInstance Win32_Process | Where-Object {",
+    "  -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and (",
+    "    $_.CommandLine -match '(?i)(^|[/\\\\\\s''\"=])codex([.]exe|[.]cmd)?(\\s|$)' -or",
+    "    $_.CommandLine -match '(?i)codex-code-mode-host'",
+    "  )",
+    "} | ForEach-Object {",
     "  try {",
-    "    $o=$_.GetOwner()",
-    "    if(-not $o -or [string]::IsNullOrWhiteSpace($o.User)){return}",
+    "    $o=Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction Stop",
+    "    if($null -eq $o -or $o.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($o.User)){return}",
     "    $owner=if($o.Domain){\"$($o.Domain)\\$($o.User)\"}else{$o.User}",
     "    if($owner -ine $me){return}",
-    "    if([string]::IsNullOrWhiteSpace($_.CommandLine)){return}",
     "    $cmd=($_.CommandLine -replace \"`t\",\" \")",
     "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
     "  } catch { }",
     "}",
-  ].join(" ");
+  ].join("\n");
   try {
     const output = execFileSync("powershell.exe", [
       "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",

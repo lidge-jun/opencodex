@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -6,6 +7,7 @@ import {
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
   listCodexAppServerProcesses,
+  listWindowsSnapshots,
   restartCodexAppServers,
   STALE_CODEX_APP_SERVER_HINT,
 } from "../src/codex/app-server-processes";
@@ -202,4 +204,54 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");
   });
+});
+
+describe("Windows Win32_Process owner enumeration (#476)", () => {
+  const processSource = readFileSync(
+    join(import.meta.dir, "..", "src", "codex", "app-server-processes.ts"),
+    "utf8",
+  );
+
+  test("PowerShell uses Invoke-CimMethod GetOwner and fails closed on ReturnValue", () => {
+    expect(processSource).toContain(
+      "Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction Stop",
+    );
+    expect(processSource).toContain("$o.ReturnValue -ne 0");
+    expect(processSource).toContain(".join(\"\\n\")");
+    expect(processSource).not.toMatch(/\$o=\$_\.GetOwner\(\)/);
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "listWindowsSnapshots returns a current-user Codex-shaped process via real PowerShell enumeration",
+    () => {
+      // Keep a live process whose CommandLine contains a Codex basename token.
+      const child = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+          "-Command",
+          "Start-Sleep -Seconds 25 # codex app-server integration-probe",
+        ],
+        { stdio: "ignore", windowsHide: true },
+      );
+      try {
+        expect(child.pid).toBeGreaterThan(1);
+        // Brief settle so Win32_Process can observe the child.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+        const snapshots = listWindowsSnapshots();
+        const match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        expect(match).toBeDefined();
+        expect(match!.owner).toMatch(/\\/);
+        expect(match!.commandLine.toLowerCase()).toContain("codex app-server");
+        expect(snapshots.every(snapshot => (snapshot.owner?.trim().length ?? 0) > 0)).toBe(true);
+      } finally {
+        try {
+          child.kill();
+        } catch {
+          /* already exited */
+        }
+      }
+    },
+    { timeout: 30_000 },
+  );
 });
