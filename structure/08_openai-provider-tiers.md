@@ -18,6 +18,13 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+Pool selection treats the main login and added accounts equally by default. The opt-in
+`mainAccountLastResort` policy keeps new or re-bound work on selectable added accounts, excludes
+the main login from quota rebalancing away from an added account, and permits failure/cooldown
+failover to the main login only after no other added account is selectable. Existing thread
+affinity remains authoritative until its normal re-evaluation, expiry, or failure path runs. An
+explicit manual account selection applies immediately until normal quota or failure routing changes it.
+
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
 openai-apikey/gpt-5.6-sol           # OpenAI API key

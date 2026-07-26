@@ -144,6 +144,29 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("mainAccountLastResort loads booleans and rejects other values", () => {
+    const base = {
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    };
+    writeConfig({ ...base, mainAccountLastResort: true });
+    expect(readConfigDiagnostics().config.mainAccountLastResort).toBe(true);
+
+    for (const invalid of [null, "true", 1]) {
+      writeConfig({ ...base, mainAccountLastResort: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain("mainAccountLastResort");
+    }
+  });
+
   test("multi-agent guidance is default-on and false is the only off state", () => {
     expect(getDefaultConfig().multiAgentGuidanceEnabled).toBe(true);
     expect(multiAgentGuidanceEnabled({})).toBe(true);

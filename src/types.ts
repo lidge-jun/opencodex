@@ -642,6 +642,8 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
+  /** Use the main Codex login only when no added pool account is selectable. Default false. */
+  mainAccountLastResort?: boolean;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */

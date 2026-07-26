@@ -2,12 +2,15 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS,
   clearThreadAccountMap,
   clearCodexUpstreamHealth,
   formatCodexProviderForLog,
   isCodexAccountInCooldown,
   pickLowestUsageCodexAccount,
+  previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
+  resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import {
@@ -135,6 +138,111 @@ describe("main account rotation (Option A)", () => {
     expect(pickLowestUsageCodexAccount(config)).toBe(MAIN_CODEX_ACCOUNT_ID);
     // Excluding main falls back to the lowest-usage pool account.
     expect(pickLowestUsageCodexAccount(config, MAIN_CODEX_ACCOUNT_ID)).toBe("b");
+  });
+
+  test("last-resort policy keeps main out while an added account is selectable", () => {
+    const config = makeConfig({
+      activeCodexAccountId: undefined,
+      autoSwitchThreshold: 0,
+      mainAccountLastResort: true,
+    });
+    updateAccountQuota("a", 80, 0);
+    updateAccountQuota("b", 40, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+
+    expect(pickLowestUsageCodexAccount(config)).toBe("b");
+    expect(previewCodexAccountForRequest(null, config)).toBe("b");
+    expect(resolveCodexAccountForThread("last-resort-new", config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("b");
+  });
+
+  test("last-resort policy does not quota-switch an added account to main", () => {
+    const now = 1_800_000_000_000;
+    const config = makeConfig({
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      mainAccountLastResort: true,
+    });
+    updateAccountQuota("a", 90, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+
+    expect(resolveCodexAccountForThread("last-resort-hot", config, now)).toBe("a");
+    expect(previewCodexAccountForRequest(null, config, now + 1)).toBe("a");
+    expect(resolveCodexAccountForThread(
+      "last-resort-hot",
+      config,
+      now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1,
+    )).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
+  });
+
+  test("last-resort policy preserves an explicit manual main selection until failure", () => {
+    const config = makeConfig({
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      autoSwitchThreshold: 0,
+      mainAccountLastResort: true,
+    });
+    updateAccountQuota("a", 20, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+
+    resetCodexRoutingForManualSelection(config, MAIN_CODEX_ACCOUNT_ID);
+
+    expect(previewCodexAccountForRequest(null, config)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(resolveCodexAccountForThread("manual-main", config)).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "60" });
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(resolveCodexAccountForThread("after-manual-main-failure", config)).toBe("a");
+  });
+
+  test("last-resort quota failover exhausts added accounts before main", () => {
+    const config = makeConfig({ autoSwitchThreshold: 0, mainAccountLastResort: true });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10, 0);
+    updateAccountQuota("b", 50, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "60", now });
+    expect(config.activeCodexAccountId).toBe("b");
+
+    recordCodexUpstreamOutcome(config, "b", 429, { retryAfter: "60", now: now + 1 });
+    expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("last-resort transient failover exhausts added accounts before main", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 0,
+      upstreamFailoverThreshold: 1,
+      mainAccountLastResort: true,
+    });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10, 0);
+    updateAccountQuota("b", 50, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+
+    recordCodexUpstreamOutcome(config, "a", 502, { now });
+    expect(resolveCodexAccountForThread("last-resort-transient-a", config, now + 1)).toBe("b");
+
+    recordCodexUpstreamOutcome(config, "b", 502, { now: now + 2 });
+    expect(resolveCodexAccountForThread("last-resort-transient-b", config, now + 3)).toBe(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("last-resort policy returns new threads to a recovered added account", () => {
+    const config = makeConfig({
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      autoSwitchThreshold: 0,
+      mainAccountLastResort: true,
+    });
+    markAccountNeedsReauth("a");
+    markAccountNeedsReauth("b");
+
+    expect(resolveCodexAccountForThread("main-existing", config)).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    clearAccountNeedsReauth("b");
+    updateAccountQuota("b", 40, 0);
+    expect(resolveCodexAccountForThread("main-existing", config)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(previewCodexAccountForRequest(null, config)).toBe("b");
+    expect(resolveCodexAccountForThread("managed-new", config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("b");
   });
 
   test("main is excluded from rotation candidates when its token is missing", () => {

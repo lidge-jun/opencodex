@@ -24,6 +24,7 @@ export type CodexThreadResolution =
   | { status: "expired"; accountId: string };
 
 const threadAccountMap = new Map<string, ThreadAffinityEntry>();
+const manualAccountSelections = new WeakMap<OcxConfig, string>();
 type CodexUpstreamHealth = {
   consecutiveFailures: number;
   /** Consecutive healthy terminals observed while recovering from escalation level 2+. */
@@ -306,8 +307,9 @@ function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Parti
 }
 
 /** Manual selection resets transient routing evidence without bypassing a real 429 cooldown. */
-export function resetCodexRoutingForManualSelection(accountId: string): void {
+export function resetCodexRoutingForManualSelection(config: OcxConfig, accountId: string): void {
   clearThreadAccountMap();
+  manualAccountSelections.set(config, accountId);
   const current = upstreamHealth.get(accountId);
   if (!current) return;
   const preserved = preservedCooldownFields(current);
@@ -449,7 +451,8 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   // The main Codex account is not stored in config.codexAccounts; include it as a
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
-    excludeId !== MAIN_CODEX_ACCOUNT_ID
+    (!config.mainAccountLastResort || ids.length === 0)
+    && excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && !isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now)
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
@@ -460,6 +463,13 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   return ids;
 }
 
+function getQuotaAutoSwitchCandidates(config: OcxConfig, active: string, now: number): string[] {
+  const candidates = getEligiblePoolAccounts(config, active, now);
+  return config.mainAccountLastResort && active !== MAIN_CODEX_ACCOUNT_ID
+    ? candidates.filter(id => id !== MAIN_CODEX_ACCOUNT_ID)
+    : candidates;
+}
+
 export function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return getMainAccountPlan();
   return (config.codexAccounts ?? []).find(account => !account.isMain && account.id === accountId)?.plan;
@@ -468,7 +478,7 @@ export function getPoolAccountPlan(config: OcxConfig, accountId: string): string
 function pickLowerUsageAccount(config: OcxConfig, active: string, activeUsage: number, now: number): string {
   let best = active;
   let bestUsage = activeUsage;
-  for (const id of getEligiblePoolAccounts(config, active, now)) {
+  for (const id of getQuotaAutoSwitchCandidates(config, active, now)) {
     const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
     if (usage < bestUsage) {
       best = id;
@@ -491,8 +501,18 @@ export function pickLowestUsageCodexAccount(config: OcxConfig, excludeId?: strin
   return best;
 }
 
+function preferAddedPoolAccount(config: OcxConfig, active: string, now: number): string {
+  if (
+    !config.mainAccountLastResort
+    || active !== MAIN_CODEX_ACCOUNT_ID
+    || manualAccountSelections.get(config) === active
+  ) return active;
+  return pickLowestUsageCodexAccount(config, MAIN_CODEX_ACCOUNT_ID, now) ?? active;
+}
+
 function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   if (config.activeCodexAccountId === accountId) return;
+  manualAccountSelections.delete(config);
   config.activeCodexAccountId = accountId;
   saveConfigPreservingClaudeCode(config);
 }
@@ -587,6 +607,7 @@ export function previewCodexAccountForRequest(
   if (!active) {
     return pickLowestUsageCodexAccount(config, undefined, now);
   }
+  active = preferAddedPoolAccount(config, active, now);
   if (!isCodexAccountSelectable(config, active, now)) {
     const fallback = pickLowestUsageCodexAccount(config, active, now);
     if (fallback) active = fallback;
@@ -676,6 +697,11 @@ export function resolveCodexAccountForThreadDetailed(
     } else {
       return { status: "none" };
     }
+  }
+  const preferred = preferAddedPoolAccount(config, active, now);
+  if (preferred !== active) {
+    setActiveCodexAccount(config, preferred);
+    active = preferred;
   }
   active = applyQuotaAutoSwitch(config, active, now);
   active = applyFailureFailover(config, active, now);

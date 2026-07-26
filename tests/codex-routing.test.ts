@@ -818,7 +818,7 @@ describe("codex routing", () => {
     expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(true);
 
     config.activeCodexAccountId = "b";
-    resetCodexRoutingForManualSelection("b");
+    resetCodexRoutingForManualSelection(config, "b");
     expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(false);
     expect(isCodexAccountInCooldown("b", now + 4)).toBe(true);
     expect(getCodexUpstreamHealth("b")?.consecutiveFailures).toBe(0);

@@ -243,6 +243,10 @@ next Codex session. opencodex keeps these behaviors:
 - **New sessions can auto-route.** When auto-switch is enabled, opencodex compares the hottest known
   quota window across 5h, weekly, and 30d usage, then picks a lower-usage eligible account for new
   sessions once the active account crosses the threshold.
+- **The main login can be reserved for last.** Set `mainAccountLastResort` to `true` to keep new or
+  re-bound work on added pool accounts while any is selectable. Quota rebalancing stays on added
+  accounts; cooldown and failure paths try the remaining added accounts before using the main login.
+  An explicit manual account selection still applies immediately.
 - **Quota lookup is built in.** The dashboard can refresh all account quotas in one click, and the
   request log labels pool traffic with non-PII account ordinals.
 - **Failures fail closed.** Token failures mark reauthentication instead of falling back to another
