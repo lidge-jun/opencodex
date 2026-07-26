@@ -325,7 +325,7 @@ export function recordAdapterReasoning(
       || (reasoning.wireField !== "reasoning_effort"
         && reasoning.wireField !== "thinking_budget"
         && reasoning.wireField !== "thinking.type")
-      || (typeof reasoning.wireValue !== "string"
+      || (!(typeof reasoning.wireValue === "string" && reasoning.wireValue)
         && !(typeof reasoning.wireValue === "number"
           && Number.isFinite(reasoning.wireValue)
           && reasoning.wireValue >= 0))) {

@@ -103,6 +103,7 @@ describe("request log metadata", () => {
       { effectiveEffort: null, wireField: "reasoning_effort", wireValue: "high" },
       { effectiveEffort: {}, wireField: "reasoning_effort", wireValue: "high" },
       { effectiveEffort: "high", wireField: "unknown", wireValue: "high" },
+      { effectiveEffort: "high", wireField: "reasoning_effort", wireValue: "" },
       { effectiveEffort: "high", wireField: "thinking_budget", wireValue: null },
       { effectiveEffort: "high", wireField: "thinking_budget", wireValue: {} },
       { effectiveEffort: "high", wireField: "thinking_budget", wireValue: Number.NaN },

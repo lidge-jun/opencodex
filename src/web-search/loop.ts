@@ -273,7 +273,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           headers: selectedForwardHeaders,
           abortSignal: headerDeadline.signal,
         });
-        deps.onRequestBuilt?.(request);
+        try {
+          deps.onRequestBuilt?.(request);
+        } catch {
+          // Diagnostics are best-effort and must never abort a web-search iteration.
+        }
         const response = requestAdapter.fetchResponse
           ? await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
