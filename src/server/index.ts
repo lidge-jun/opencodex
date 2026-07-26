@@ -113,6 +113,7 @@ export {
   isApiAuthRequired,
   isLoopbackHostname,
   jsonResponse,
+  requireResponsesApiAuth,
   safeConfigDTO,
 } from "./auth-cors";
 import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";

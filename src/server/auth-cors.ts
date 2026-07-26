@@ -177,14 +177,11 @@ export function requireApiAuth(req: Request, config: OcxConfig, kind: "managemen
 }
 
 /**
- * Admission for OpenAI Responses transports whose Authorization header belongs to
- * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
- * domains can never be confused.
+ * Admission for OpenAI Responses transports.
+ * Supports OpenAI standard Authorization header (Bearer <token>), x-api-key, and x-opencodex-api-key.
  */
 export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
-  if (!isApiAuthRequired(config)) return null;
-  const actual = req.headers.get("x-opencodex-api-key")?.trim();
-  if (actual && isProxyAdmissionSecret(actual, config)) return null;
+  if (hasValidApiAuth(req, config)) return null;
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");
 }
 

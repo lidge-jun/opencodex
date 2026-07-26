@@ -22,6 +22,7 @@ import {
   isApiAuthRequired,
   isLoopbackHostname,
   resolveGuiFilePath,
+  requireResponsesApiAuth,
   rootFallbackPayload,
   safeConfigDTO,
   startServer,
@@ -278,6 +279,38 @@ describe("server local API auth", () => {
     expect(hasValidApiAuth(new Request("http://localhost/api/config", {
       headers: { "x-opencodex-api-key": "local-secret" },
     }), cfg)).toBe(true);
+    expect(hasValidApiAuth(new Request("http://localhost/api/config", {
+      headers: { authorization: "Bearer local-secret" },
+    }), cfg)).toBe(true);
+    expect(hasValidApiAuth(new Request("http://localhost/api/config", {
+      headers: { "x-api-key": "local-secret" },
+    }), cfg)).toBe(true);
+  });
+
+  test("requireResponsesApiAuth accepts standard Authorization header, x-api-key, and x-opencodex-api-key on non-loopback bindings", () => {
+    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    const cfg = config("0.0.0.0");
+
+    expect(requireResponsesApiAuth(new Request("http://localhost/v1/responses", { method: "POST" }), cfg)).not.toBeNull();
+    expect(requireResponsesApiAuth(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "x-opencodex-api-key": "wrong" },
+    }), cfg)).not.toBeNull();
+
+    expect(requireResponsesApiAuth(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "x-opencodex-api-key": "local-secret" },
+    }), cfg)).toBeNull();
+
+    expect(requireResponsesApiAuth(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer local-secret" },
+    }), cfg)).toBeNull();
+
+    expect(requireResponsesApiAuth(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "x-api-key": "local-secret" },
+    }), cfg)).toBeNull();
   });
 
   test("loopback remains allowed even when env token exists", () => {
