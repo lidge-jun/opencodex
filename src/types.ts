@@ -521,6 +521,11 @@ export interface OcxConfig {
   subagentModelFallbackPollMs?: number;
   injectionModel?: string;
   /**
+   * Opt in to synchronizing the selected injection model into Codex's native
+   * sub-agent defaults. Only meaningful while `injectionModel` is set.
+   */
+  syncCodexSubagentDefaults?: boolean;
+  /**
    * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls
    * (`reasoning_effort` argument). Only meaningful while `injectionModel` is set; validated against
    * the Codex ladder (src/reasoning-effort.ts CODEX_REASONING_LEVELS) at the API boundary.

@@ -17,7 +17,7 @@ import {
 } from "./types";
 import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
 import { parseDesktopProfile } from "./claude/desktop-profile";
-import { modelRecordValue } from "./reasoning-effort";
+import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 
 let _atomicSeq = 0;
 
@@ -515,6 +515,13 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // These selections pre-date schema validation and used to pass through as
+  // unknown fields. Invalid hand edits must disable only the optional
+  // delegation/native-default feature, not reject the whole config and hide
+  // otherwise valid providers, accounts, or the configured listen port.
+  injectionModel: z.string().optional().catch(undefined),
+  injectionEffort: z.string().optional().catch(undefined),
+  syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
@@ -773,6 +780,64 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
   }
 }
 
+type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
+
+function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
+  return rawParsed !== null && typeof rawParsed === "object" && !Array.isArray(rawParsed)
+    ? rawParsed as Record<string, unknown>
+    : null;
+}
+
+function malformedNativeSubagentFields(rawParsed: unknown): NativeSubagentPersistedField[] {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw) return [];
+  const malformed: NativeSubagentPersistedField[] = [];
+  if (Object.hasOwn(raw, "injectionModel") && typeof raw.injectionModel !== "string") {
+    malformed.push("injectionModel");
+  }
+  if (Object.hasOwn(raw, "injectionEffort") && typeof raw.injectionEffort !== "string") {
+    malformed.push("injectionEffort");
+  }
+  if (Object.hasOwn(raw, "syncCodexSubagentDefaults") && typeof raw.syncCodexSubagentDefaults !== "boolean") {
+    malformed.push("syncCodexSubagentDefaults");
+  }
+  return malformed;
+}
+
+function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField): string {
+  const expected = field === "syncCodexSubagentDefaults" ? "a boolean" : "a string";
+  return `${field} ignored: expected ${expected}`;
+}
+
+function nativeSubagentSyncDisabledReason(config: OcxConfig, rawParsed?: unknown): string | null {
+  if (config.syncCodexSubagentDefaults !== true) return null;
+  const malformed = malformedNativeSubagentFields(rawParsed);
+  if (malformed.includes("injectionModel")) return "injectionModel must be a string";
+  if (!config.injectionModel?.trim()) return "a nonblank injectionModel is required";
+  if (malformed.includes("injectionEffort")) return "injectionEffort must be a string or omitted";
+  if (config.injectionEffort !== undefined && !isCodexReasoningEffort(config.injectionEffort)) {
+    return "injectionEffort must be a supported Codex reasoning effort";
+  }
+  return null;
+}
+
+function normalizeNativeSubagentSync(config: OcxConfig, rawParsed?: unknown): OcxConfig {
+  if (!nativeSubagentSyncDisabledReason(config, rawParsed)) return config;
+  const normalized = { ...config };
+  delete normalized.syncCodexSubagentDefaults;
+  return normalized;
+}
+
+function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig): void {
+  for (const field of malformedNativeSubagentFields(rawParsed)) {
+    console.warn(`⚠️  config.json ${malformedNativeSubagentFieldWarning(field)}. Other settings were preserved.`);
+  }
+  const reason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  if (reason) {
+    console.warn(`⚠️  config.json syncCodexSubagentDefaults was disabled: ${reason}. Other settings were preserved.`);
+  }
+}
+
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -787,8 +852,10 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      warnDegradedStreamMode(parsed, result.data as OcxConfig);
-      return result.data as OcxConfig;
+      const config = result.data as OcxConfig;
+      warnDegradedStreamMode(parsed, config);
+      warnDegradedNativeSubagentConfig(parsed, config);
+      return normalizeNativeSubagentSync(config, parsed);
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -802,7 +869,9 @@ export function loadConfig(): OcxConfig {
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
-      return retryResult.data as OcxConfig;
+      const config = retryResult.data as OcxConfig;
+      warnDegradedNativeSubagentConfig(parsed, config);
+      return normalizeNativeSubagentSync(config, parsed);
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
@@ -832,14 +901,29 @@ function configPlaceholderWarnings(config: OcxConfig): string[] {
   return warnings;
 }
 
-function validFileConfigDiagnostics(config: OcxConfig): ConfigDiagnostics {
-  const warnings = configPlaceholderWarnings(config);
+function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): ConfigDiagnostics {
+  // An unsafe hand-edited opt-in is disabled in memory instead of rejecting
+  // the entire config, which would hide unrelated providers/accounts. The next
+  // ordinary save persists the normalized absence.
+  const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  const normalized = normalizeNativeSubagentSync(config, rawParsed);
+  const warnings = configPlaceholderWarnings(normalized);
+  warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
+  if (syncDisabledReason) {
+    warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
+  }
   return {
-    config,
+    config: normalized,
     source: "file",
     error: null,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
+}
+
+export function subagentDefaultSyncEffective(
+  config: Pick<OcxConfig, "syncCodexSubagentDefaults" | "injectionModel">,
+): boolean {
+  return config.syncCodexSubagentDefaults === true && Boolean(config.injectionModel?.trim());
 }
 
 function mergeConfigDefaults(parsed: unknown): unknown {
@@ -878,12 +962,12 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      return validFileConfigDiagnostics(result.data as OcxConfig);
+      return validFileConfigDiagnostics(result.data as OcxConfig, parsed);
     }
 
     const retryResult = configSchema.safeParse(mergeConfigDefaults(parsed));
     if (retryResult.success) {
-      return validFileConfigDiagnostics(retryResult.data as OcxConfig);
+      return validFileConfigDiagnostics(retryResult.data as OcxConfig, parsed);
     }
 
     return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };

@@ -91,10 +91,25 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restartCase).toContain("if (await handleStop()) await handleEnsure()");
   });
 
+  test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    expect(stopFn).toContain("if (r.success) console.log");
+    expect(stopFn).toContain("stopFailed = true");
+    expect(stopFn).toContain("console.error(`⚠️  ${r.message}`)");
+  });
+
   test("the daemon's exit cleanup keeps the OCX_SERVICE exclusion and adds the ownership check", () => {
     const startFn = sliceFn(CLI_SOURCE, "const syncCleanup = () => {", "let shuttingDown = false;");
     // Crash/respawn under a service manager must still keep the fence.
     expect(startFn).toContain("!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()");
+  });
+
+  test("signal shutdown reports and exits nonzero when native Codex restore is incomplete", () => {
+    const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleStop(");
+    expect(startFn).toContain("if (!restored.success)");
+    expect(startFn).toContain("cleanupSucceeded = false");
+    expect(startFn).toContain("Native Codex restore failed during shutdown");
+    expect(startFn).toContain("process.exit(restored ? 0 : 1)");
   });
 });
 

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
+import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
 import type { OcxConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
 
@@ -161,6 +163,65 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(result.ok).toBe(true);
     expect(result.catalogPath).toBeNull();
     expect(result.warning).toContain("catalog boom");
+  });
+
+  test("returns native subagent default conflicts as structured warnings", async () => {
+    const result = await syncModelsToCodex(10100, config, null, {
+      refreshCodexModelCatalog: async () => ({
+        added: 0,
+        path: "/tmp/opencodex-catalog.json",
+        catalogExists: true,
+        cacheSynced: true,
+      }),
+      injectCodexConfig: async () => ({
+        success: true,
+        message: "injected with a preserved user setting",
+        nativeSubagentDefaultsWarning: "Native Codex sub-agent defaults were not injected: user-owned agents.default_subagent_model preserved.",
+      }),
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.nativeSubagentDefaultsWarning).toContain("user-owned agents.default_subagent_model preserved");
+  });
+
+  test("POST /api/sync exposes an actionable error when native defaults are ambiguous", () => {
+    const ocxHome = join(TEST_DIR, "opencodex");
+    mkdirSync(ocxHome, { recursive: true });
+    writeFileSync(join(TEST_CODEX_HOME, "config.toml"), [
+      MANAGED_AGENTS_TABLE_MARKER,
+      "[agents]",
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      "",
+      'default_subagent_model = "gpt-5.6-sol"',
+      "",
+    ].join("\n"), "utf8");
+
+    const child = spawnSync(process.execPath, ["-e", `
+      const { handleManagementAPI } = await import("./src/server/management-api.ts");
+      const config = { port: 10100, defaultProvider: "openai", providers: {} };
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/sync", { method: "POST" }),
+        new URL("http://localhost/api/sync"),
+        config,
+      );
+      console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+    `], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, CODEX_HOME: TEST_CODEX_HOME, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+    });
+
+    expect(child.status).toBe(0);
+    const payload = JSON.parse(child.stdout.trim()) as {
+      status: number;
+      body: { ok: boolean; error?: string; message: string };
+    };
+    expect(payload.status).toBe(500);
+    expect(payload.body.ok).toBe(false);
+    expect(payload.body.error).toBe(payload.body.message);
+    expect(payload.body.error).toContain("inspect");
+    expect(payload.body.error).toContain(join(TEST_CODEX_HOME, "config.toml"));
   });
 
   test("skips catalog refresh before preserving an external provider", async () => {

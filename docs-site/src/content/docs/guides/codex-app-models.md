@@ -136,9 +136,10 @@ Set the mode from the Dashboard or Models page, `ocx v2 mode v1|default|v2`, or 
 with `{ "multiAgentMode": "v1" }`. Changes apply to new Codex sessions.
 
 :::caution
-On the v2 (`multi_agent_v2`) surface, spawned sub-agents inherit the parent session's model. The
-dashboard's delegation model/effort picker is v1 prompt guidance, not a proxy-side per-spawn
-cross-model router. See [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical
+On the v2 (`multi_agent_v2`) surface, a spawn without an explicit model can inherit the parent
+session's model. OpenCodex guidance can ask Codex to pass the selected model/effort explicitly, and
+the separate native-default opt-in can supply defaults after sync/restart. Neither mechanism is a
+proxy-side per-spawn router. See [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical
 behavior.
 :::
 
@@ -175,8 +176,9 @@ Codex sorts picker-visible catalog entries by ascending `priority` and advertise
 through `subagentModels` or the dashboard Subagents page; opencodex gives those entries priorities
 0-4 in the chosen order. Other models remain callable by exact id.
 
-The featured-model list is separate from the Dashboard's **Sub-agent delegation** guidance. In
-particular, featured model overrides do not bypass v2's parent-model inheritance rule.
+The featured-model list is separate from the Dashboard's **Sub-agent delegation** selection. It
+controls which overrides Codex offers first; it does not select a model or trigger delegation by
+itself.
 
 ## Refreshing model state
 

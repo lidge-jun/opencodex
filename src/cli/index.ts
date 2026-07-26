@@ -227,8 +227,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
 
   let cleaned = false;
+  let cleanupSucceeded = true;
   const syncCleanup = () => {
-    if (cleaned) return;
+    if (cleaned) return cleanupSucceeded;
     cleaned = true;
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
@@ -236,7 +237,16 @@ async function handleStart(options: { block?: boolean } = {}) {
     removePid(process.pid);
     removeRuntimePort(process.pid);
     if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
-      try { restoreNativeCodex(); } catch { /* best-effort restore */ }
+      try {
+        const restored = restoreNativeCodex();
+        if (!restored.success) {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        }
+      } catch (error) {
+        cleanupSucceeded = false;
+        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
     // Grok fence is shared state we must not remove — that service keeps running and would be
@@ -245,6 +255,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
+    return cleanupSucceeded;
   };
 
   let shuttingDown = false;
@@ -269,8 +280,8 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
       } finally {
-        syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
-        process.exit(0);
+        const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
+        process.exit(restored ? 0 : 1);
       }
     })();
   };
@@ -499,7 +510,11 @@ async function handleStop() {
   }
   if (!ownershipBlocked) {
     const r = restoreNativeCodex();
-    console.log(`↩️  ${r.message}`);
+    if (r.success) console.log(`↩️  ${r.message}`);
+    else {
+      stopFailed = true;
+      console.error(`⚠️  ${r.message}`);
+    }
   }
   // revertSystemEnv is NOT gated: it carries its own ownership check and concerns launchctl
   // user env, not CODEX_HOME. Safety net for when the daemon's syncCleanup didn't run (SIGKILL).
@@ -716,19 +731,40 @@ switch (command) {
         console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
         process.exit(1);
       }
-      await syncModelsToCodex(live.port);
+      const synced = await syncModelsToCodex(live.port);
+      if (!synced.ok) {
+        process.exitCode = 1;
+        console.error("Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.");
+        break;
+      }
       const target = collectOrcaCodexHomeDiagnostic();
       console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
       break;
     }
-    const r = restoreNativeCodex();
-    console.log(r.success ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+    let r: { success: boolean; message: string };
+    try {
+      r = restoreNativeCodex();
+    } catch (err) {
+      r = { success: false, message: err instanceof Error ? err.message : String(err) };
+    }
+    if (r.success) console.log(`✅ ${r.message}`);
+    else {
+      console.error(`⚠️  ${r.message}`);
+      process.exitCode = 1;
+    }
     try {
       const g = stripGrokConfig();
       if (g.changed) console.log(`✅ ${g.message}`);
-      else if (!g.ok) console.error(`⚠️  ${g.message}`);
+      else if (!g.ok) {
+        console.error(`⚠️  ${g.message}`);
+        process.exitCode = 1;
+      }
     } catch { /* best-effort */ }
-    console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    if (r.success) {
+      console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    } else {
+      console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
+    }
     break;
   }
   case "recover-history":
@@ -767,7 +803,11 @@ switch (command) {
     break;
   }
   case "sync": {
-    await syncModelsToCodex((await findLiveProxy())?.port);
+    const synced = await syncModelsToCodex((await findLiveProxy())?.port);
+    if (!synced.ok) {
+      process.exitCode = 1;
+      console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
+    }
     break;
   }
   case "v2": {

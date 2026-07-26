@@ -39,7 +39,9 @@ v2 서피스(`multi_agent_v2`)의 서브에이전트는 **기본적으로** 부�
 
 ### 위임 모델과 추론 강도
 
-대시보드의 **서브에이전트 위임** 선택기는 `injectionModel`과 선택 사항인 `injectionEffort`를 저장합니다. 이 값은 위임 가이드를 만드는 설정이지, 프록시가 스폰 요청을 다른 모델로 다시 라우팅하는 설정이 아닙니다. `injectionPrompt`를 지정하면 내장 가이드 문구 전체를 원하는 텍스트로 교체할 수 있습니다.
+대시보드의 **서브에이전트 위임** 선택기는 `injectionModel`과 선택 사항인 `injectionEffort`를 저장합니다. 선택한 값은 OpenCodex가 작성하는 위임 가이드에 사용되며, 이 가이드는 `multiAgentGuidanceEnabled`가 별도로 제어합니다. 이 값은 프록시가 스폰 요청을 다른 모델로 다시 라우팅하는 규칙이 아닙니다. `injectionPrompt`를 지정하면 내장 가이드 문구 전체를 원하는 텍스트로 교체할 수 있습니다.
+
+`syncCodexSubagentDefaults`를 명시적으로 켜면 OpenCodex가 활성 Codex 라우팅을 관리하는 경우 다음 sync 또는 restart에서 선택한 모델과 강도를 Codex 네이티브 `[agents]` 서브에이전트 기본값으로 적용합니다. 외부 사용자 관리 provider 설정은 변경하지 않습니다. 이 기본값은 새로 생성되는 Codex task에만 적용되며 위임 자체를 일으키지는 않습니다. 기존 사용자 소유 `[agents]` 기본값은 덮어쓰지 않고 보존하므로, 요청한 기본값과 실제 Codex 기본값이 다를 수 있습니다.
 
 `multiAgentGuidanceText`는 요청에 들어온 툴 목록으로 서피스를 판별합니다. Codex Desktop의 WebSocket 경로(`responses_lite`)처럼 툴이 요청의 `tools` 배열 대신 `additional_tools` input 항목으로 도착하는 경우도 인식합니다.
 
@@ -56,7 +58,7 @@ v2 서피스(`multi_agent_v2`)의 서브에이전트는 **기본적으로** 부�
 - **대시보드** → 첫 번째 스탯 셀에서 **v1**, **base**, **v2**를 선택합니다.
 - **모델** 페이지 → 상단 세그먼트 컨트롤에서 선택합니다.
 - 두 페이지 모두 **?** 버튼을 누르면 이 문서로 연결되는 도움말 모달이 열립니다.
-- **대시보드** → **서브에이전트 위임**에서 선호 모델과 선택 사항인 추론 강도를 고릅니다. v2에서는 주입된 가이드가 `fork_turns: "none"` 스폰을 지시해 모델 오버라이드가 적용되게 합니다 — 다만 네이티브→라우팅 자식은 작업 본문이 암호화 상태로 도착할 수 있습니다([#92](https://github.com/lidge-jun/opencodex/issues/92)).
+- **대시보드** → **서브에이전트 위임**에서 선호 모델과 선택 사항인 추론 강도를 고릅니다. **Codex 네이티브 서브에이전트 기본값으로 사용**을 켜면 OpenCodex가 활성 Codex 라우팅을 관리할 때 다음 sync 또는 restart부터 새 Codex task에도 같은 선택값을 적용합니다. 외부 사용자 관리 provider 설정은 그대로 유지합니다. 이 토글은 위임 가이드 토글과 별개입니다. v2에서는 주입된 가이드가 `fork_turns: "none"` 스폰을 지시해 모델 오버라이드가 적용되게 합니다 — 다만 네이티브→라우팅 자식은 작업 본문이 암호화 상태로 도착할 수 있습니다([#92](https://github.com/lidge-jun/opencodex/issues/92)).
 
 ### CLI
 
@@ -92,6 +94,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
   -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
 
+# 선택값을 Codex 네이티브 서브에이전트 기본값으로 동기화하도록 설정(모델 필요)
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+
 # 커스텀 가이드 프롬프트 설정 ({{model}}/{{effort}}/{{roster}} 플레이스홀더)
 curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
@@ -103,11 +110,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -d '{"model": null}'
 ```
 
-`GET /api/injection-model`은 `model`, `effort`, `prompt`, 전역 `efforts` 단계, 활성화된 네이티브·라우팅 모델인 `available`을 반환합니다. PUT에서 `effort`나 `prompt`를 생략하면 기존 값을 유지하고, `null`이면 지웁니다. `model`을 지우면 추론 강도도 항상 함께 지워집니다. API는 전역 Codex 단계에 맞는 추론 강도인지 검증하고, Codex는 스폰 시 대상 카탈로그 항목이 그 강도를 지원하는지 다시 검증합니다.
+`GET /api/injection-model`은 `model`, `effort`, `prompt`, `multiAgentGuidanceEnabled`, `syncCodexSubagentDefaults`, 전역 `efforts` 단계, 활성화된 네이티브·라우팅 모델인 `available`을 반환합니다. PUT은 부분 업데이트입니다. `effort`나 `prompt`를 생략하면 기존 값을 유지하고, `null`이면 지웁니다. `syncCodexSubagentDefaults: true`에는 선택된 모델이 필요하며, `model`을 지우면 추론 강도와 네이티브 기본값 동기화도 함께 꺼집니다. API는 전역 Codex 단계에 맞는 추론 강도인지 검증하고, Codex는 스폰 시 대상 카탈로그 항목이 그 강도를 지원하는지 다시 검증합니다.
 
 ## 추론 강도
 
-서브에이전트 추론 강도는 `injectionEffort`에 저장되며 주입 모델이 있을 때만 의미가 있습니다. 이 값은 주입된 v2 가이드에 `reasoning_effort` 지시를 추가하며, 부모 세션의 추론 강도를 바꾸지는 않습니다. 오버라이드가 허용되는 fork에서는 `spawn_agent`에 전달된 `reasoning_effort`를 Codex가 그대로 적용합니다.
+서브에이전트 추론 강도는 `injectionEffort`에 저장되며 주입 모델이 있을 때만 의미가 있습니다. 이 값은 주입된 v2 가이드에 `reasoning_effort` 지시를 추가하며, 부모 세션의 추론 강도를 바꾸지는 않습니다. `syncCodexSubagentDefaults`를 켜고 OpenCodex가 활성 Codex 라우팅을 관리하는 경우에는 다음 sync 또는 restart부터 새 Codex task의 네이티브 서브에이전트 기본 강도로도 사용됩니다. 오버라이드가 허용되는 fork에서는 `spawn_agent`에 전달된 `reasoning_effort`를 Codex가 그대로 적용합니다.
 
 `ultra`는 Codex 카탈로그에서 `max`보다 높은 단계이며 자동 위임 의미가 더해지지만, 프로바이더 와이어에는 `ultra`라는 값이 그대로 전달되지 않습니다. Codex가 클라이언트 경계에서 `ultra`를 `max`로 바꾸고, opencodex가 프로바이더에 맞는 유효한 값으로 조정합니다.
 

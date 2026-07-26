@@ -114,10 +114,10 @@ Dashboard나 Models 페이지, `ocx v2 mode v1|default|v2`, 또는
 세션부터 적용됩니다.
 
 :::caution
-v2(`multi_agent_v2`) 서피스에서 생성된 서브에이전트는 부모 세션의 모델을 상속합니다. 대시보드의
-위임 모델/강도 선택기는 v1 프롬프트 안내이며, 프록시가 스폰마다 다른 모델로 라우팅하는 기능이
-아닙니다. 정확한 동작은 [서브에이전트 서피스](/ko/guides/sub-agent-surface/)를
-참고하세요.
+v2(`multi_agent_v2`) 서피스에서는 모델을 명시하지 않은 스폰이 부모 세션의 모델을 상속할 수 있습니다.
+OpenCodex 안내는 선택한 모델/강도를 명시적으로 전달하도록 Codex에 요청할 수 있고, 별도의 네이티브 기본값
+옵트인은 sync/restart 후 기본값을 제공할 수 있습니다. 어느 쪽도 프록시가 스폰마다 모델을 정하는 라우터는
+아닙니다. 정확한 동작은 [서브에이전트 서피스](/ko/guides/sub-agent-surface/)를 참고하세요.
 :::
 
 ## 최상위 reasoning 단계
@@ -153,8 +153,8 @@ Codex는 선택기에 표시되는 카탈로그 항목을 `priority` 오름차�
 네이티브 id 또는 `provider/model` id를 최대 5개 고르면 opencodex가 선택 순서대로 priority 0-4를
 부여합니다. 나머지 모델도 정확한 id로 직접 호출할 수 있습니다.
 
-featured 모델 목록은 Dashboard의 **Sub-agent delegation** 안내와 별개입니다. 특히 featured 모델
-override로 v2의 부모 모델 상속 규칙을 우회할 수 없습니다.
+featured 모델 목록은 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
+override를 정할 뿐, 모델을 선택하거나 위임을 시작하지는 않습니다.
 
 ## 모델 상태 새로고침
 

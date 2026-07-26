@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { en } from "../src/i18n/en";
+import { normalizeInjectionSelection } from "../src/pages/dashboard-core-poll";
 import { PROJECT_CONFIG_DIAGNOSTICS_POLL_MS } from "../src/startup-health-ui";
 
 test("project-config diagnostics poll cadence is owned by the shared constant", () => {
@@ -40,10 +42,39 @@ test("Dashboard workspace pane is a labelled section, not a nested main landmark
   expect(src).toMatch(/<(section)\b[^>]*dashboard-workspace-main/);
 });
 
-test("multi-agent guidance gates injection controls and Active badge on the enabled flag", async () => {
+test("native Codex subagent defaults stay separate from OpenCodex guidance", async () => {
+  const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   const sections = await Bun.file(new URL("../src/pages/dashboard-overview-sections.tsx", import.meta.url)).text();
   const head = await Bun.file(new URL("../src/pages/dashboard-overview-head.tsx", import.meta.url)).text();
-  expect(sections).toContain("!multiAgentGuidanceEnabled");
-  expect(sections).toContain("multiAgentGuidanceEnabled &&");
+  expect(core).toContain("syncCodexSubagentDefaults: data.syncCodexSubagentDefaults === true");
+  expect(sections).toContain("saveInjection({ syncCodexSubagentDefaults: !syncCodexSubagentDefaults })");
+  expect(sections).toContain("disabled={injectionSaving || !injectionModel}");
+  expect(sections).not.toContain("injectionSaving || !multiAgentGuidanceEnabled");
+  expect(sections).not.toContain("dash.injectionActive");
+  expect(en["dash.syncCodexSubagentDefaults"]).toBe("Use as native Codex subagent defaults");
+  expect(en["dash.syncCodexSubagentDefaultsHint"]).toContain("Off by default");
+  expect(en["dash.syncCodexSubagentDefaultsHint"]).toContain("existing user-owned [agents] defaults are preserved rather than overwritten");
+  expect(en["dash.multiAgentGuidanceHint"]).not.toContain("proactive");
   expect(head).toContain("models.v2Mode_");
+});
+
+test("injection writes consume the server's model-clear normalization", () => {
+  expect(normalizeInjectionSelection({
+    multiAgentGuidanceEnabled: true,
+    syncCodexSubagentDefaults: false,
+    model: null,
+    effort: null,
+  })).toEqual({
+    multiAgentGuidanceEnabled: true,
+    syncCodexSubagentDefaults: false,
+    injectionModel: "",
+    injectionEffort: "",
+  });
+});
+
+test("Dashboard sync surfaces native subagent default warnings", async () => {
+  const sections = await Bun.file(new URL("../src/pages/dashboard-overview-sections.tsx", import.meta.url)).text();
+  expect(sections).toContain("syncResult.nativeSubagentDefaultsWarning");
+  expect(sections).toContain('"notice-warn"');
+  expect(sections).toContain("<IconAlert />");
 });

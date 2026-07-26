@@ -174,6 +174,144 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("native subagent-default sync is opt-in and ignores malformed opt-ins without falling back", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+        },
+      },
+      defaultProvider: "custom",
+      codexAccounts: [{ id: "account-1", email: "owner@example.test", isMain: true }],
+      injectionModel: "gpt-5.6-terra",
+    };
+    expect(getDefaultConfig().syncCodexSubagentDefaults).toBeUndefined();
+
+    for (const enabled of [true, false]) {
+      writeConfig({ ...base, syncCodexSubagentDefaults: enabled });
+      expect(loadConfig().syncCodexSubagentDefaults).toBe(enabled);
+    }
+
+    for (const invalid of [null, "true", 1]) {
+      writeConfig({ ...base, syncCodexSubagentDefaults: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        config: {
+          port: 12345,
+          defaultProvider: "custom",
+          providers: { custom: { baseUrl: "https://example.test/v1" } },
+          codexAccounts: [{ id: "account-1", email: "owner@example.test", isMain: true }],
+          injectionModel: "gpt-5.6-terra",
+        },
+      });
+      expect(diagnostics.config.syncCodexSubagentDefaults).toBeUndefined();
+      expect(diagnostics.warnings).toContain("syncCodexSubagentDefaults ignored: expected a boolean");
+      expect(loadConfig()).toMatchObject({
+        port: 12345,
+        defaultProvider: "custom",
+        providers: { custom: { baseUrl: "https://example.test/v1" } },
+        codexAccounts: [{ id: "account-1", email: "owner@example.test", isMain: true }],
+      });
+      expect(backupNames()).toEqual([]);
+    }
+  });
+
+  test("validates disk injection selections and safely normalizes a model-less sync opt-in", () => {
+    const base = {
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    };
+
+    writeConfig({
+      ...base,
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "ultra",
+      syncCodexSubagentDefaults: true,
+    });
+    expect(loadConfig()).toMatchObject({
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "ultra",
+      syncCodexSubagentDefaults: true,
+    });
+
+    for (const invalid of ["", "   "]) {
+      writeConfig({ ...base, injectionModel: invalid, syncCodexSubagentDefaults: true });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.injectionModel).toBe(invalid);
+      expect(diagnostics.config.syncCodexSubagentDefaults).toBeUndefined();
+      expect(diagnostics.warnings).toContain("syncCodexSubagentDefaults ignored: a nonblank injectionModel is required");
+    }
+
+    for (const invalid of ["", "turbo"]) {
+      writeConfig({
+        ...base,
+        injectionModel: "gpt-5.6-terra",
+        injectionEffort: invalid,
+        syncCodexSubagentDefaults: true,
+      });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.injectionEffort).toBe(invalid);
+      expect(diagnostics.config.syncCodexSubagentDefaults).toBeUndefined();
+      expect(diagnostics.warnings).toContain("syncCodexSubagentDefaults ignored: injectionEffort must be a supported Codex reasoning effort");
+    }
+
+    for (const [field, invalid] of [["injectionModel", 1], ["injectionEffort", 1]] as const) {
+      writeConfig({
+        ...base,
+        injectionModel: "gpt-5.6-terra",
+        syncCodexSubagentDefaults: true,
+        [field]: invalid,
+      });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.port).toBe(10100);
+      expect(diagnostics.config.defaultProvider).toBe("openai");
+      expect(diagnostics.config.providers.openai.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
+      expect(diagnostics.config[field]).toBeUndefined();
+      expect(diagnostics.config.syncCodexSubagentDefaults).toBeUndefined();
+      expect(diagnostics.warnings).toContain(`${field} ignored: expected a string`);
+      expect(diagnostics.warnings?.some(warning => warning.startsWith("syncCodexSubagentDefaults ignored:"))).toBe(true);
+      expect(loadConfig()).toMatchObject({
+        port: 10100,
+        defaultProvider: "openai",
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      });
+      expect(backupNames()).toEqual([]);
+    }
+
+    // Guidance-only values retain their pre-existing compatibility. They are
+    // constrained only when the native Codex config mutation is opted into.
+    writeConfig({ ...base, injectionModel: "legacy/model", injectionEffort: "provider-specific" });
+    expect(readConfigDiagnostics()).toMatchObject({
+      source: "file",
+      error: null,
+      config: { injectionModel: "legacy/model", injectionEffort: "provider-specific" },
+    });
+
+    writeConfig({ ...base, syncCodexSubagentDefaults: true });
+    const normalized = readConfigDiagnostics();
+    expect(normalized.source).toBe("file");
+    expect(normalized.error).toBeNull();
+    expect(normalized.config.syncCodexSubagentDefaults).toBeUndefined();
+    expect(loadConfig().syncCodexSubagentDefaults).toBeUndefined();
+  });
+
   test("loads valid config from OPENCODEX_HOME", () => {
     writeConfig({
       port: 12345,

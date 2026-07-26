@@ -86,12 +86,11 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   );
 }
 
-export function DashboardInjectionPanel({ apiBase, d }: { apiBase: string; d: Dash }) {
+export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
   const {
     t,
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
-    setInjectionModel, setInjectionEffort, setInjectionSaving,
-    multiAgentGuidanceEnabled, setMultiAgentGuidanceEnabled,
+    multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
   } = d;
 
   return (
@@ -104,22 +103,8 @@ export function DashboardInjectionPanel({ apiBase, d }: { apiBase: string; d: Da
             { value: "", label: t("dash.injectionNone") },
             ...injectionAvailable.map(m => ({ value: m.namespaced, label: `${m.provider} / ${m.model}` })),
           ]}
-          onChange={async (v) => {
-            if (injectionSaving) return;
-            setInjectionSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/injection-model`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: v || null, effort: injectionEffort || null }),
-              });
-              const data = await requireJson<{ model?: string | null; effort?: string | null }>(res);
-              setInjectionModel(data.model ?? "");
-              setInjectionEffort(data.effort ?? "");
-            } catch { /* ignore */ }
-            finally { setInjectionSaving(false); }
-          }}
-          disabled={injectionSaving || !multiAgentGuidanceEnabled}
+          onChange={(v) => { void saveInjection({ model: v || null, effort: injectionEffort || null }); }}
+          disabled={injectionSaving}
           label={t("dash.injectionLabel")}
         />
         {injectionModel && injectionEfforts.length > 0 && (
@@ -129,28 +114,29 @@ export function DashboardInjectionPanel({ apiBase, d }: { apiBase: string; d: Da
               { value: "", label: t("dash.injectionEffortNone") },
               ...injectionEfforts.map(e => ({ value: e, label: e })),
             ]}
-            onChange={async (v) => {
-              if (injectionSaving) return;
-              setInjectionSaving(true);
-              try {
-                const res = await fetch(`${apiBase}/api/injection-model`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: injectionModel || null, effort: v || null }),
-                });
-                const data = await requireJson<{ model?: string | null; effort?: string | null }>(res);
-                setInjectionModel(data.model ?? "");
-                setInjectionEffort(data.effort ?? "");
-              } catch { /* ignore */ }
-              finally { setInjectionSaving(false); }
-            }}
-            disabled={injectionSaving || !multiAgentGuidanceEnabled}
+            onChange={(v) => { void saveInjection({ model: injectionModel || null, effort: v || null }); }}
+            disabled={injectionSaving}
             label={t("dash.injectionEffortLabel")}
           />
         )}
-        {injectionModel && multiAgentGuidanceEnabled && <span className="badge badge-green text-micro">{t("dash.injectionActive")}</span>}
       </div>
       <div className="muted text-control" style={{ marginTop: 6 }}>{t("dash.injectionHint")}</div>
+      <div className="spread dash-subagent-guidance-row">
+        <div className="setting-copy" style={{ flex: 1 }}>
+          <div className="font-semibold">{t("dash.syncCodexSubagentDefaults")}</div>
+          <div className="muted setting-hint">{t("dash.syncCodexSubagentDefaultsHint")}</div>
+        </div>
+        <button
+          type="button"
+          className={`switch ${syncCodexSubagentDefaults ? "on" : ""}`}
+          onClick={() => { void saveInjection({ syncCodexSubagentDefaults: !syncCodexSubagentDefaults }); }}
+          disabled={injectionSaving || !injectionModel}
+          aria-label={t("dash.syncCodexSubagentDefaults")}
+          aria-pressed={syncCodexSubagentDefaults}
+        >
+          <span className="knob" />
+        </button>
+      </div>
       <div className="spread dash-subagent-guidance-row">
         <div className="setting-copy" style={{ flex: 1 }}>
           <div className="font-semibold">{t("dash.multiAgentGuidance")}</div>
@@ -159,20 +145,7 @@ export function DashboardInjectionPanel({ apiBase, d }: { apiBase: string; d: Da
         <button
           type="button"
           className={`switch ${multiAgentGuidanceEnabled ? "on" : ""}`}
-          onClick={async () => {
-            if (injectionSaving) return;
-            setInjectionSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/injection-model`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ multiAgentGuidanceEnabled: !multiAgentGuidanceEnabled }),
-              });
-              const data = await requireJson<{ multiAgentGuidanceEnabled?: boolean }>(res);
-              setMultiAgentGuidanceEnabled(data.multiAgentGuidanceEnabled !== false);
-            } catch { /* ignore */ }
-            finally { setInjectionSaving(false); }
-          }}
+          onClick={() => { void saveInjection({ multiAgentGuidanceEnabled: !multiAgentGuidanceEnabled }); }}
           disabled={injectionSaving}
           aria-label={t("dash.multiAgentGuidance")}
           aria-pressed={multiAgentGuidanceEnabled}
@@ -216,11 +189,12 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
         </div>
       </div>
       {syncResult && (
-        <div className="notice notice-ok maintenance-notice" role="status">
-          <IconRefresh />
+        <div className={`notice ${syncResult.nativeSubagentDefaultsWarning ? "notice-warn" : "notice-ok"} maintenance-notice`} role="status">
+          {syncResult.nativeSubagentDefaultsWarning ? <IconAlert /> : <IconRefresh />}
           <span>
             {t("dash.syncOk", { count: syncResult.added })}
             {syncResult.warning ? ` ${syncResult.warning}` : ""}
+            {syncResult.nativeSubagentDefaultsWarning ? ` ${syncResult.nativeSubagentDefaultsWarning}` : ""}
             {syncResult.staleAppServerHint ? ` ${t("dash.syncStaleHint")}` : ""}
           </span>
         </div>

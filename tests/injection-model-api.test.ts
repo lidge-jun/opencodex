@@ -47,7 +47,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig();
     const putRes = await put(config, { model: "openai/gpt-5.6-sol", effort: "xhigh" });
-    expect(await putRes.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "openai/gpt-5.6-sol", effort: "xhigh", prompt: null });
+    expect(await putRes.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false, model: "openai/gpt-5.6-sol", effort: "xhigh", prompt: null });
     expect(config.injectionEffort).toBe("xhigh");
 
     const getRes = await handleManagementAPI(
@@ -89,7 +89,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "max" });
     const res = await put(config, { model: "openai/gpt-5.6-sol", effort: null });
-    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "openai/gpt-5.6-sol", effort: null, prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false, model: "openai/gpt-5.6-sol", effort: null, prompt: null });
     expect(config.injectionEffort).toBeUndefined();
   });
 
@@ -97,7 +97,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "max" });
     const res = await put(config, { model: null });
-    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: null, effort: null, prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false, model: null, effort: null, prompt: null });
     expect(config.injectionModel).toBeUndefined();
     expect(config.injectionEffort).toBeUndefined();
   });
@@ -106,7 +106,7 @@ describe("/api/injection-model reasoning effort", () => {
     isolatedHome();
     const config = makeConfig({ injectionModel: "openai/gpt-5.6-sol", injectionEffort: "ultra" });
     const res = await put(config, { model: "anthropic/claude-sonnet-5" });
-    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, model: "anthropic/claude-sonnet-5", effort: "ultra", prompt: null });
+    expect(await res.json()).toEqual({ ok: true, multiAgentGuidanceEnabled: true, syncCodexSubagentDefaults: false, model: "anthropic/claude-sonnet-5", effort: "ultra", prompt: null });
   });
 
   test("GET round-trips combo aliases and excludes an alias-disabled combo", async () => {
@@ -163,6 +163,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     expect(await response.json()).toEqual({
       ok: true,
       multiAgentGuidanceEnabled: false,
+      syncCodexSubagentDefaults: false,
       model: "gpt-5.6-terra",
       effort: "max",
       prompt: "RULES {{model}} {{roster}}",
@@ -195,6 +196,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     expect(await response.json()).toEqual({
       ok: true,
       multiAgentGuidanceEnabled: false,
+      syncCodexSubagentDefaults: false,
       model: null,
       effort: null,
       prompt: "RULES {{roster}}",
@@ -203,6 +205,148 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     expect(config.injectionEffort).toBeUndefined();
     expect(config.injectionPrompt).toBe("RULES {{roster}}");
     expect(config.multiAgentGuidanceEnabled).toBe(false);
+  });
+
+  test("subagent-default sync is opt-in, model-bound, partial, and normalized on disk", async () => {
+    isolatedHome();
+    const config = makeConfig();
+
+    let response = await handleManagementAPI(
+      new Request("http://localhost/api/injection-model"),
+      new URL("http://localhost/api/injection-model"),
+      config,
+    );
+    expect(await response!.json()).toMatchObject({
+      syncCodexSubagentDefaults: false,
+      model: null,
+    });
+
+    response = await put(config, { syncCodexSubagentDefaults: true });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "syncCodexSubagentDefaults requires an injection model" });
+    expect(config.syncCodexSubagentDefaults).toBeUndefined();
+    expect(existsSync(getConfigPath())).toBe(false);
+
+    response = await put(config, { syncCodexSubagentDefaults: "true" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "syncCodexSubagentDefaults must be a boolean" });
+
+    response = await put(config, {
+      model: "gpt-5.6-terra",
+      effort: "max",
+      syncCodexSubagentDefaults: true,
+    });
+    expect(await response.json()).toMatchObject({
+      syncCodexSubagentDefaults: true,
+      model: "gpt-5.6-terra",
+      effort: "max",
+    });
+    expect(config.syncCodexSubagentDefaults).toBe(true);
+
+    response = await put(config, { effort: "high" });
+    expect(await response.json()).toMatchObject({ syncCodexSubagentDefaults: true, effort: "high" });
+    expect(config.syncCodexSubagentDefaults).toBe(true);
+
+    response = await put(config, { syncCodexSubagentDefaults: false });
+    expect(await response.json()).toMatchObject({ syncCodexSubagentDefaults: false, model: "gpt-5.6-terra" });
+    expect(config.syncCodexSubagentDefaults).toBeUndefined();
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).not.toHaveProperty("syncCodexSubagentDefaults");
+  });
+
+  test("clearing the injection model also clears subagent-default sync", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "max",
+      syncCodexSubagentDefaults: true,
+    });
+
+    const response = await put(config, { model: null });
+    expect(await response.json()).toMatchObject({
+      syncCodexSubagentDefaults: false,
+      model: null,
+      effort: null,
+    });
+    expect(config.injectionModel).toBeUndefined();
+    expect(config.injectionEffort).toBeUndefined();
+    expect(config.syncCodexSubagentDefaults).toBeUndefined();
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).not.toHaveProperty("syncCodexSubagentDefaults");
+  });
+
+  test("clearing model with sync on and unsupported inherited effort returns 200 and clears all", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      injectionModel: "legacy/model",
+      injectionEffort: "provider-specific",
+      syncCodexSubagentDefaults: true,
+    });
+
+    const response = await put(config, { model: null });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      syncCodexSubagentDefaults: false,
+      model: null,
+      effort: null,
+    });
+    expect(config.injectionModel).toBeUndefined();
+    expect(config.injectionEffort).toBeUndefined();
+    expect(config.syncCodexSubagentDefaults).toBeUndefined();
+  });
+
+  test("a latent model-less sync flag stays off during a model-only partial update", async () => {
+    isolatedHome();
+    const config = makeConfig({ syncCodexSubagentDefaults: true });
+
+    let response = await handleManagementAPI(
+      new Request("http://localhost/api/injection-model"),
+      new URL("http://localhost/api/injection-model"),
+      config,
+    );
+    expect(await response!.json()).toMatchObject({
+      syncCodexSubagentDefaults: false,
+      model: null,
+    });
+
+    response = await put(config, { model: "gpt-5.6-terra" });
+    expect(await response.json()).toMatchObject({
+      syncCodexSubagentDefaults: false,
+      model: "gpt-5.6-terra",
+    });
+    expect(config.syncCodexSubagentDefaults).toBeUndefined();
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).not.toHaveProperty("syncCodexSubagentDefaults");
+  });
+
+  test("rejects a whitespace-only model without mutating existing settings", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      injectionModel: "gpt-5.6-terra",
+      injectionEffort: "high",
+      syncCodexSubagentDefaults: true,
+    });
+    const before = structuredClone(config);
+
+    const response = await put(config, { model: "   " });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "model must be a nonblank string or null" });
+    expect(config).toEqual(before);
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  test("rejects native-default opt-in when a legacy stored effort is not Codex-supported", async () => {
+    isolatedHome();
+    const config = makeConfig({
+      injectionModel: "legacy/model",
+      injectionEffort: "provider-specific",
+    });
+    const before = structuredClone(config);
+
+    const response = await put(config, { syncCodexSubagentDefaults: true });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort",
+    });
+    expect(config).toEqual(before);
+    expect(existsSync(getConfigPath())).toBe(false);
   });
 
   test.each([

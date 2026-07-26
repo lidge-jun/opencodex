@@ -60,6 +60,7 @@ export interface SyncResult {
   cacheSynced: boolean;
   message: string;
   warning?: string;
+  nativeSubagentDefaultsWarning?: string;
   staleAppServerHint?: string;
   projectConfigWarnings?: ProjectCodexConfigWarning[];
 }
@@ -151,7 +152,7 @@ export function sidecarBackendForModel(models: ModelInfo[], modelId: string): Si
 }
 
 let lastInputWasKeyboard = false;
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("keydown", () => { lastInputWasKeyboard = true; }, { capture: true, passive: true });
   window.addEventListener("pointerdown", () => { lastInputWasKeyboard = false; }, { capture: true, passive: true });
 }

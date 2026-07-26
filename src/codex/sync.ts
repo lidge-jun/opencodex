@@ -16,6 +16,7 @@ export interface CodexSyncResult {
   message: string;
   warning?: string;
   comboOmissions?: ComboCatalogOmission[];
+  nativeSubagentDefaultsWarning?: string;
   projectConfigWarnings?: ProjectCodexConfigWarning[];
   projectConfigGrouped?: { path: string; issues: string[]; bypass: string }[];
 }
@@ -65,6 +66,7 @@ export async function syncModelsToCodex(
       catalogWritten: false,
       cacheSynced: false,
       message: result.message,
+      ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     };
   }
 
@@ -119,6 +121,7 @@ export async function syncModelsToCodex(
     message: result.message,
     ...(warning ? { warning } : {}),
     ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     ...(projectConfigWarnings.length > 0 ? {
       projectConfigWarnings,
       projectConfigGrouped: groupProjectCodexConfigWarningsByPath(projectConfigWarnings),

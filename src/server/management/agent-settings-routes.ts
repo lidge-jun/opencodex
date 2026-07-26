@@ -11,6 +11,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  subagentDefaultSyncEffective,
 } from "../../config";
 import {
   clearLoginState,
@@ -190,6 +191,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       )));
     return jsonResponse({
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
@@ -207,6 +209,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     const body = parsedBody as {
       multiAgentGuidanceEnabled?: unknown;
+      syncCodexSubagentDefaults?: unknown;
       model?: unknown;
       effort?: unknown;
       prompt?: unknown;
@@ -214,6 +217,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { isCodexReasoningEffort } = await import("../../reasoning-effort");
 
     let nextEnabled = config.multiAgentGuidanceEnabled;
+    // Start from the effective state reported by GET. A stale hand-edited
+    // `true` without a model must not spring back on during a model-only PUT.
+    let nextSyncCodexSubagentDefaults = subagentDefaultSyncEffective(config);
     let nextModel = config.injectionModel;
     let nextEffort = config.injectionEffort;
     let nextPrompt = config.injectionPrompt;
@@ -224,10 +230,16 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       nextEnabled = body.multiAgentGuidanceEnabled;
     }
+    if ("syncCodexSubagentDefaults" in body) {
+      if (typeof body.syncCodexSubagentDefaults !== "boolean") {
+        return jsonResponse({ error: "syncCodexSubagentDefaults must be a boolean" }, 400);
+      }
+      nextSyncCodexSubagentDefaults = body.syncCodexSubagentDefaults;
+    }
     if ("model" in body) {
       if (body.model === null || body.model === "") nextModel = undefined;
-      else if (typeof body.model === "string" && body.model.length > 0) nextModel = body.model;
-      else return jsonResponse({ error: "model must be a non-empty string or null" }, 400);
+      else if (typeof body.model === "string" && body.model.trim().length > 0) nextModel = body.model;
+      else return jsonResponse({ error: "model must be a nonblank string or null" }, 400);
     }
     if ("effort" in body) {
       if (body.effort === null || body.effort === "") nextEffort = undefined;
@@ -242,10 +254,21 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       else if (body.prompt === null || body.prompt === "") nextPrompt = undefined;
       else return jsonResponse({ error: "prompt must be a string or null" }, 400);
     }
-    // Clearing the model always clears the effort (it is meaningless alone).
-    if (!nextModel) nextEffort = undefined;
+    // Clearing the model always clears model-dependent settings before sync/effort gates.
+    if (!nextModel) {
+      nextEffort = undefined;
+      nextSyncCodexSubagentDefaults = false;
+    }
+    if (body.syncCodexSubagentDefaults === true && !nextModel?.trim()) {
+      return jsonResponse({ error: "syncCodexSubagentDefaults requires an injection model" }, 400);
+    }
+    if (nextSyncCodexSubagentDefaults && nextEffort !== undefined && !isCodexReasoningEffort(nextEffort)) {
+      return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
+    }
 
     config.multiAgentGuidanceEnabled = nextEnabled;
+    if (nextSyncCodexSubagentDefaults) config.syncCodexSubagentDefaults = true;
+    else delete config.syncCodexSubagentDefaults;
     if (nextModel) config.injectionModel = nextModel;
     else delete config.injectionModel;
     if (nextEffort) config.injectionEffort = nextEffort;
@@ -257,6 +280,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({
       ok: true,
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,

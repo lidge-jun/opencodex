@@ -228,6 +228,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const result = await syncModelsToCodex(undefined, config, null);
     return jsonResponse({
       ...result,
+      ...(result.ok ? {} : { error: result.message }),
       staleAppServerHint: "If Codex App still shows an older model list, restart its long-lived app-server process after sync.",
     }, result.ok ? 200 : 500);
   }
