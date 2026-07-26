@@ -489,6 +489,7 @@ const configSchema = z.object({
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   mainAccountLastResort: z.boolean().optional(),
+  manualCodexAccountSelectionId: z.string().min(1).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.

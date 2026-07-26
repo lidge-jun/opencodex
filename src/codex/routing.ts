@@ -24,7 +24,6 @@ export type CodexThreadResolution =
   | { status: "expired"; accountId: string };
 
 const threadAccountMap = new Map<string, ThreadAffinityEntry>();
-const manualAccountSelections = new WeakMap<OcxConfig, string>();
 type CodexUpstreamHealth = {
   consecutiveFailures: number;
   /** Consecutive healthy terminals observed while recovering from escalation level 2+. */
@@ -306,15 +305,17 @@ function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Parti
   return cooldownFields;
 }
 
-/** Manual selection resets transient routing evidence without bypassing a real 429 cooldown. */
-export function resetCodexRoutingForManualSelection(config: OcxConfig, accountId: string): void {
+/** Manual selection persists its origin and resets transient evidence without bypassing a real 429 cooldown. */
+export function resetCodexRoutingForManualSelection(config: OcxConfig, accountId: string | null): void {
   clearThreadAccountMap();
-  manualAccountSelections.set(config, accountId);
-  const current = upstreamHealth.get(accountId);
+  if (accountId === null) delete config.manualCodexAccountSelectionId;
+  else config.manualCodexAccountSelectionId = accountId;
+  const selectedAccountId = accountId ?? MAIN_CODEX_ACCOUNT_ID;
+  const current = upstreamHealth.get(selectedAccountId);
   if (!current) return;
   const preserved = preservedCooldownFields(current);
-  if (Object.keys(preserved).length === 0) upstreamHealth.delete(accountId);
-  else upstreamHealth.set(accountId, { consecutiveFailures: 0, ...preserved });
+  if (Object.keys(preserved).length === 0) upstreamHealth.delete(selectedAccountId);
+  else upstreamHealth.set(selectedAccountId, { consecutiveFailures: 0, ...preserved });
 }
 
 export function getCodexAccountCooldownUntil(accountId: string, now = Date.now()): number | null {
@@ -505,14 +506,14 @@ function preferAddedPoolAccount(config: OcxConfig, active: string, now: number):
   if (
     !config.mainAccountLastResort
     || active !== MAIN_CODEX_ACCOUNT_ID
-    || manualAccountSelections.get(config) === active
+    || config.manualCodexAccountSelectionId === active
   ) return active;
   return pickLowestUsageCodexAccount(config, MAIN_CODEX_ACCOUNT_ID, now) ?? active;
 }
 
 function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   if (config.activeCodexAccountId === accountId) return;
-  manualAccountSelections.delete(config);
+  delete config.manualCodexAccountSelectionId;
   config.activeCodexAccountId = accountId;
   saveConfigPreservingClaudeCode(config);
 }

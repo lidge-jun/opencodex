@@ -246,7 +246,7 @@ next Codex session. opencodex keeps these behaviors:
 - **The main login can be reserved for last.** Set `mainAccountLastResort` to `true` to keep new or
   re-bound work on added pool accounts while any is selectable. Quota rebalancing stays on added
   accounts; cooldown and failure paths try the remaining added accounts before using the main login.
-  An explicit manual account selection still applies immediately.
+  An explicit manual account selection applies immediately and survives proxy restarts.
 - **Quota lookup is built in.** The dashboard can refresh all account quotas in one click, and the
   request log labels pool traffic with non-PII account ordinals.
 - **Failures fail closed.** Token failures mark reauthentication instead of falling back to another

@@ -26,12 +26,14 @@ import {
 } from "../src/codex/account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { loadConfig } from "../src/config";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
   clearMainAccountInfoCache,
   fetchMainAccountInfo,
   getAccountQuota,
+  handleCodexAuthAPI,
   isAccountNeedsReauth,
   markAccountNeedsReauth,
   primeCodexPoolQuotas,
@@ -192,6 +194,46 @@ describe("main account rotation (Option A)", () => {
     recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "60" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(resolveCodexAccountForThread("after-manual-main-failure", config)).toBe("a");
+  });
+
+  test("manual main selection survives save and reload until routing changes it", async () => {
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 0,
+      mainAccountLastResort: true,
+    });
+    updateAccountQuota("a", 20, 0);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
+    const request = new Request("http://localhost/api/codex-auth/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: MAIN_CODEX_ACCOUNT_ID }),
+    });
+
+    const response = await handleCodexAuthAPI(request, new URL(request.url), config);
+    expect(response?.status).toBe(200);
+    expect(config.manualCodexAccountSelectionId).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    clearThreadAccountMap();
+    clearCodexUpstreamHealth();
+    const reloaded = loadConfig();
+    expect(reloaded.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(reloaded.manualCodexAccountSelectionId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(previewCodexAccountForRequest(null, reloaded)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(resolveCodexAccountForThread("manual-main-reloaded", reloaded)).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    recordCodexUpstreamOutcome(reloaded, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "60" });
+    expect(reloaded.activeCodexAccountId).toBe("a");
+    expect(reloaded.manualCodexAccountSelectionId).toBeUndefined();
+    expect(loadConfig().manualCodexAccountSelectionId).toBeUndefined();
   });
 
   test("last-resort quota failover exhausts added accounts before main", () => {

@@ -47,6 +47,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
   removeCodexAccountCredential(accountId);
   runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? []).filter(account => account.id !== accountId);
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
+  if (runtimeConfig.manualCodexAccountSelectionId === accountId) delete runtimeConfig.manualCodexAccountSelectionId;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);
 }

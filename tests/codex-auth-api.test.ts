@@ -1101,6 +1101,7 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(200);
     expect(await resp!.json()).toMatchObject({ activeCodexAccountId: "pool-next", appliesImmediately: true });
     expect(config.activeCodexAccountId).toBe("pool-next");
+    expect(config.manualCodexAccountSelectionId).toBe("pool-next");
   });
 
   test("PUT /api/codex-auth/accounts/alias changes display metadata only", async () => {
@@ -1135,6 +1136,7 @@ describe("codex-auth API", () => {
   test("DELETE /api/codex-auth/accounts clears deleted active account from live runtime config", async () => {
     const config = makeConfig({
       activeCodexAccountId: "pool-delete",
+      manualCodexAccountSelectionId: "pool-delete",
       codexAccounts: [{ id: "pool-delete", email: "pool-delete@example.test", isMain: false }],
     });
     saveCodexAccountCredential("pool-delete", {
@@ -1176,6 +1178,7 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(200);
     expect(config.codexAccounts).toEqual([]);
     expect(config.activeCodexAccountId).toBeUndefined();
+    expect(config.manualCodexAccountSelectionId).toBeUndefined();
     expect(getCodexAccountCredential("pool-delete")).toBeNull();
     expect(getAccountQuota("pool-delete")).toBeNull();
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);

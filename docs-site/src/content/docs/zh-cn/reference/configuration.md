@@ -50,7 +50,8 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容模式。opencodex 会备份原始 Codex thread metadata，把旧 OpenAI interactive row 重映射到 `opencodex`，并暂时把 opencodex 创建的 `exec` row 提升成 App 可见 source。`ocx stop` / `ocx restore` 会恢复已备份的 OpenAI row，并把剩余 opencodex user thread 转回 OpenAI，使原生 Codex 在从 `config.toml` 移除代理后仍能继续这些 thread。设为 `false` 可退出该模式。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 仪表盘管理的 ChatGPT/Codex pool account metadata。secret 单独存放在 `codex-accounts.json`。 |
 | `activeCodexAccountId?` | `string` | — | 手动选择的 pool account。选择时清除已有 thread affinity，并从下一次请求开始生效；进行中的请求保留原账号。 |
-| `mainAccountLastResort?` | `boolean` | `false` | 只要仍有已添加的 pool 账户可选，自动路由就继续使用这些账户，主 Codex 登录仅作为最后 fallback。显式手动选择仍会立即生效；已有 thread affinity 及正常冷却/失败规则保持不变。 |
+| `manualCodexAccountSelectionId?` | `string` | — | 显式手动选择的内部来源标记。它会跨代理重启保留，并在自动配额或失败路由改变活跃账号时清除。请勿手动设置。 |
+| `mainAccountLastResort?` | `boolean` | `false` | 只要仍有已添加的 pool 账户可选，自动路由就继续使用这些账户，主 Codex 登录仅作为最后 fallback。显式手动选择会立即生效并跨代理重启保留；已有 thread affinity 及正常冷却/失败规则保持不变。 |
 | `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |

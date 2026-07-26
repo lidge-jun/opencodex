@@ -167,6 +167,29 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("manual Codex account-selection provenance loads strings and rejects other values", () => {
+    const base = {
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    };
+    writeConfig({ ...base, manualCodexAccountSelectionId: "__main__" });
+    expect(readConfigDiagnostics().config.manualCodexAccountSelectionId).toBe("__main__");
+
+    for (const invalid of [null, true, 1, ""]) {
+      writeConfig({ ...base, manualCodexAccountSelectionId: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain("manualCodexAccountSelectionId");
+    }
+  });
+
   test("multi-agent guidance is default-on and false is the only off state", () => {
     expect(getDefaultConfig().multiAgentGuidanceEnabled).toBe(true);
     expect(multiAgentGuidanceEnabled({})).toBe(true);
