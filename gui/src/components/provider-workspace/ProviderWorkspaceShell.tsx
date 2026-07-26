@@ -200,7 +200,11 @@ export default function ProviderWorkspaceShell({
       })
       .catch(() => { /* keep last-good */ });
     return () => { cancelled = true; };
-  }, [apiBase]);
+    // `activeAccountNeedsReauth` is rebuilt whenever the account sets are refetched, including
+    // right after an active-account switch. Keying the quota fetch on it re-reads the rows for
+    // the newly active account instead of leaving the previous account's numbers on screen
+    // until a full page reload.
+  }, [apiBase, activeAccountNeedsReauth]);
 
   useEffect(() => {
     if (!filterOpen) return;

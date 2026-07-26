@@ -42,6 +42,12 @@
 }
 .pwi-auth-row:hover { background: var(--hover); }
 .pwi-auth-row--active { background: var(--accent-soft); }
+
+/* One account entry: the row itself plus (optionally) that account's own rate-limit bars. */
+.pwi-auth-acct { display: flex; flex-direction: column; gap: 2px; border-radius: var(--radius-xs); }
+.pwi-auth-acct--active { background: var(--accent-soft); }
+.pwi-auth-acct--active .pwi-auth-row--active { background: none; }
+.pwi-auth-acct-quota { padding: 0 8px 8px 26px; }
 .pwi-auth-row-main  {
   appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;

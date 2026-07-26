@@ -27,7 +27,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
+import { clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, supportsPerAccountQuota } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
@@ -146,8 +146,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     await removeCredential(provider);
     clearLoginState(provider);
     // Drop cached/last-good quota rows tied to the removed credential.
-    const { clearProviderQuotaCache } = await import("../../providers/quota");
+    const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
+    clearAccountQuotaCache(provider);
     return jsonResponse({ success: true });
   }
 
@@ -174,7 +175,26 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         });
       return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health) };
     });
-    return jsonResponse({ activeAccountId: status.activeAccountId ?? null, accounts });
+    // Per-account rate limits: Anthropic reports usage per credential, so every logged-in
+    // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
+    // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
+    const wantQuota = url.searchParams.get("quota") === "1" && supportsPerAccountQuota(provider);
+    if (!wantQuota) return jsonResponse({ activeAccountId: status.activeAccountId ?? null, accounts });
+    const forceRefresh = url.searchParams.get("refresh") === "1";
+    const rows = await fetchProviderAccountQuotas(provider, forceRefresh);
+    const byId = new Map(rows.map(row => [row.accountId, row]));
+    return jsonResponse({
+      activeAccountId: status.activeAccountId ?? null,
+      accounts: accounts.map(account => {
+        const row = byId.get(account.id);
+        if (!row) return account;
+        return {
+          ...account,
+          quota: row.quota,
+          ...(row.unavailable ? { quotaUnavailable: true } : {}),
+        };
+      }),
+    });
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { provider?: string; accountId?: string };
@@ -209,8 +229,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     if (!getAccountSet(provider)) clearLoginState(provider);
-    const { clearProviderQuotaCache } = await import("../../providers/quota");
+    const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
+    clearAccountQuotaCache(provider);
     return jsonResponse({ ok: true });
   }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
+import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 
 export interface Config {
@@ -21,6 +22,10 @@ export interface OAuthAccount {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
+  /** Per-account rate limits (providers that report usage per credential, e.g. anthropic). */
+  quota?: AccountQuota | null;
+  /** Set when the per-account probe could not reach upstream (expired login, 429, network). */
+  quotaUnavailable?: boolean;
 }
 export interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
 
@@ -75,7 +80,10 @@ export function useProviderAccountPools(deps: {
       const generation = (accountRequestGenerationRef.current[provider] ?? 0) + 1;
       accountRequestGenerationRef.current[provider] = generation;
       try {
-        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
+        // `quota=1` asks the proxy for each account's own rate limits (Anthropic reports usage
+        // per credential), so every logged-in account can show its 5h/weekly bars — not just
+        // the active one.
+        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
         if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;

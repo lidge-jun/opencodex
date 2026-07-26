@@ -20,6 +20,7 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import { LoginUrlBlock } from "../login-url-block";
+import QuotaBars from "../QuotaBars";
 import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
@@ -181,7 +182,8 @@ export default function ProviderAuthPanel({
                   const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
                   const copyDoctor = () => { doctorCopy.copy(DOCTOR_CMD, account.id); };
                   return (
-                  <li key={account.id} className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
+                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
+                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !showReauth && !inCooldown && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
@@ -231,6 +233,12 @@ export default function ProviderAuthPanel({
                       onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
+                    </div>
+                    {account.quota && (
+                      <div className="pwi-auth-acct-quota">
+                        <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
+                      </div>
+                    )}
                   </li>
                   );
                 })}
