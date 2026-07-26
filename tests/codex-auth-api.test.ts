@@ -1104,6 +1104,36 @@ describe("codex-auth API", () => {
     expect(config.manualCodexAccountSelectionId).toBe("pool-next");
   });
 
+  test("PUT /api/codex-auth/active distinguishes explicit main from automatic selection", async () => {
+    const config = makeConfig({
+      activeCodexAccountId: "pool-next",
+      manualCodexAccountSelectionId: "pool-next",
+    });
+    const selectMain = new Request("http://localhost/api/codex-auth/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: MAIN_CODEX_ACCOUNT_ID }),
+    });
+    const mainResponse = await handleCodexAuthAPI(selectMain, new URL(selectMain.url), config);
+
+    expect(mainResponse!.status).toBe(200);
+    expect(await mainResponse!.json()).toMatchObject({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID });
+    expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(config.manualCodexAccountSelectionId).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    const selectAutomatically = new Request("http://localhost/api/codex-auth/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: null }),
+    });
+    const automaticResponse = await handleCodexAuthAPI(selectAutomatically, new URL(selectAutomatically.url), config);
+
+    expect(automaticResponse!.status).toBe(200);
+    expect(await automaticResponse!.json()).toMatchObject({ activeCodexAccountId: null });
+    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(config.manualCodexAccountSelectionId).toBeUndefined();
+  });
+
   test("PUT /api/codex-auth/accounts/alias changes display metadata only", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "work", email: "work@example.test", plan: "plus", isMain: false }],

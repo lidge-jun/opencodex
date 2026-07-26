@@ -24,7 +24,8 @@ the main login from quota rebalancing away from an added account, and permits fa
 failover to the main login only after no other added account is selectable. Existing thread
 affinity remains authoritative until its normal re-evaluation, expiry, or failure path runs. An
 explicit manual account selection persists its account-id provenance across proxy restarts and applies
-immediately until normal quota or failure routing changes it.
+immediately until normal quota or failure routing changes it. The active-account API uses `__main__`
+for an explicit main-login selection; `null` means automatic selection with no pin.
 
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
