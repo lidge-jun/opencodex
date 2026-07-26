@@ -61,6 +61,13 @@ import {
   type OAuthAccountHealth,
   type OAuthHealthLabel,
 } from "../oauth/health";
+import {
+  CODEX_ACCOUNT_ID_RE,
+  hasLegacyMainCodexPoolAccount,
+  isSelectableCodexPoolAccount,
+  isValidCodexAccountId,
+} from "./account-id";
+import { codexAccountIdNamespaceCollisionError } from "./account-namespace-match";
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -69,14 +76,32 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-const ACCOUNT_ID_RE = /^[a-zA-Z0-9._-]{1,64}$/;
 const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 
 const codexAuthLoginState = new Map<string, { status: string; accountId?: string; email?: string; error?: string; doneAt?: number }>();
 
 function configuredPoolAccount(config: OcxConfig, accountId: string): CodexAccount | null {
-  if (!ACCOUNT_ID_RE.test(accountId)) return null;
-  return (config.codexAccounts ?? []).find(account => account.id === accountId && !account.isMain) ?? null;
+  if (!isValidCodexAccountId(accountId)) return null;
+  return (config.codexAccounts ?? [])
+    .find(account => account.id === accountId && isSelectableCodexPoolAccount(account)) ?? null;
+}
+
+function codexAccountPersistenceConflict(
+  config: OcxConfig,
+  accountId: string,
+  mode: "create" | "reauth",
+): string | undefined {
+  if (mode === "reauth") {
+    return configuredPoolAccount(config, accountId)
+      ? undefined
+      : "Pool account was removed while login was in progress. Add it again as a new account.";
+  }
+  const namespaceCollision = codexAccountIdNamespaceCollisionError(config.codexAccountNamespaces, accountId);
+  if (namespaceCollision) return namespaceCollision;
+  return (config.codexAccounts ?? []).some(account => account.id === accountId)
+    || Boolean(getCodexAccountCredential(accountId))
+    ? `Account id already exists: ${accountId}`
+    : undefined;
 }
 
 function isThirtyDayOnlyPlan(plan: string | null | undefined): boolean {
@@ -127,11 +152,14 @@ async function resolveResetCreditAuth(
   | { ok: false; response: Response }
 > {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    if (hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
+      return { ok: false, response: jsonResponse({ error: "Remove the legacy __main__ pool row before using the Desktop account" }, 409) };
+    }
     const tokens = readCodexTokens();
     if (!tokens) return { ok: false, response: jsonResponse({ error: "Main Codex account not logged in" }, 401) };
     return { ok: true, isMain: true, accessToken: tokens.access_token, chatgptAccountId: tokens.account_id };
   }
-  if (!ACCOUNT_ID_RE.test(accountId)) {
+  if (!isValidCodexAccountId(accountId)) {
     return { ok: false, response: jsonResponse({ error: "Invalid account id format" }, 400) };
   }
   if (!configuredPoolAccount(runtimeConfig, accountId)) {
@@ -447,7 +475,7 @@ export async function primeCodexPoolQuotas(config: OcxConfig, reason: string): P
   reconcileMainCodexAccountRuntimeState();
   primeInFlight = (async () => {
     const runtimeConfig = getRuntimeConfig(config);
-    const pool = (runtimeConfig.codexAccounts ?? []).filter(a => !a.isMain);
+    const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
       const q = getAccountQuota(a.id);
       return !q || Date.now() - q.updatedAt >= POOL_CACHE_TTL;
@@ -479,7 +507,7 @@ export function clearCodexQuotaPrimeState(): void {
 
 export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
   const runtimeConfig = getRuntimeConfig(config);
-  const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(a => !a.isMain);
+  const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
   const mainInfo = await fetchMainAccountInfo(forceRefresh);
   const withQuota = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
     const cred = getCodexAccountCredential(a.id);
@@ -526,17 +554,15 @@ export async function handleCodexAuthAPI(
     if (!body.id || !body.email || !body.accessToken || !body.refreshToken || !body.chatgptAccountId) {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
-    if (!ACCOUNT_ID_RE.test(body.id)) {
+    if (!isValidCodexAccountId(body.id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     if (body.accessToken.length > 10_000 || body.refreshToken.length > 10_000) {
       return jsonResponse({ error: "Input too large" }, 400);
     }
     const runtimeConfig = getRuntimeConfig(config);
-    const accounts = runtimeConfig.codexAccounts ?? [];
-    if (accounts.some(a => a.id === body.id) || getCodexAccountCredential(body.id)) {
-      return jsonResponse({ error: `Account id already exists: ${body.id}` }, 400);
-    }
+    const preflightConflict = codexAccountPersistenceConflict(runtimeConfig, body.id, "create");
+    if (preflightConflict) return jsonResponse({ error: preflightConflict }, 400);
     // 1.1: Duplicate check is scoped by personal vs workspace plan bucket.
     const derivedAccountId = extractAccountId(undefined, body.accessToken) ?? body.chatgptAccountId;
     const collision = checkAccountIdCollision(derivedAccountId, body.email, body.plan);
@@ -548,6 +574,9 @@ export async function handleCodexAuthAPI(
     const exp = typeof payload?.exp === "number" ? payload.exp * 1000 : Date.now() + 3600_000;
     const warmup = await verifyCodexAccountWarmup(body.id, body.accessToken, derivedAccountId);
     if (!warmup.ok) return warmup.response;
+    const latestConfig = getRuntimeConfig(config);
+    const commitConflict = codexAccountPersistenceConflict(latestConfig, body.id, "create");
+    if (commitConflict) return jsonResponse({ error: commitConflict }, 400);
     saveCodexAccountCredential(body.id, {
       accessToken: body.accessToken,
       refreshToken: body.refreshToken,
@@ -556,9 +585,10 @@ export async function handleCodexAuthAPI(
     });
     markCodexAccountValidated(body.id, warmup.validatedAt);
     clearAccountNeedsReauth(body.id);
+    const accounts = latestConfig.codexAccounts ?? [];
     accounts.push(withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts));
-    runtimeConfig.codexAccounts = accounts;
-    saveRuntimeConfig(config, runtimeConfig);
+    latestConfig.codexAccounts = accounts;
+    saveRuntimeConfig(config, latestConfig);
     return jsonResponse({ ok: true });
   }
 
@@ -566,6 +596,11 @@ export async function handleCodexAuthAPI(
     const id = url.searchParams.get("id");
     if (!id) return jsonResponse({ error: "Missing id" }, 400);
     const runtimeConfig = getRuntimeConfig(config);
+    const isLegacyPoolAccount = CODEX_ACCOUNT_ID_RE.test(id)
+      && (runtimeConfig.codexAccounts ?? []).some(account => !account.isMain && account.id === id);
+    if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
+      return jsonResponse({ error: "Invalid account id format" }, 400);
+    }
     deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true });
@@ -575,8 +610,8 @@ export async function handleCodexAuthAPI(
     const body = await req.json().catch(() => ({})) as { id?: unknown; alias?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
-    if (!id || !ACCOUNT_ID_RE.test(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
     if (id === MAIN_CODEX_ACCOUNT_ID) return jsonResponse({ error: "Main Codex account alias is not configurable" }, 400);
+    if (!isValidCodexAccountId(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
     if (typeof body.alias !== "string" || alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) {
       return jsonResponse({ error: "Alias must be a string of at most 80 printable characters" }, 400);
     }
@@ -600,7 +635,9 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts/clear-cooldown" && req.method === "POST") {
     const body = await req.json().catch(() => ({})) as { id?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
-    if (!id || !ACCOUNT_ID_RE.test(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
+    if (id !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(id)) {
+      return jsonResponse({ error: "Invalid account id format" }, 400);
+    }
     return jsonResponse({ ok: true, id, cleared: clearCodexAccountCooldown(id) });
   }
 
@@ -608,8 +645,13 @@ export async function handleCodexAuthAPI(
     let body: { accountId: string | null };
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     const runtimeConfig = getRuntimeConfig(config);
+    if (body.accountId === MAIN_CODEX_ACCOUNT_ID && hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
+      return jsonResponse({ error: "Remove the legacy __main__ pool row before selecting the Desktop account" }, 409);
+    }
     if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
-      const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === body.accountId);
+      if (!isValidCodexAccountId(body.accountId)) return jsonResponse({ error: "Invalid account id format" }, 400);
+      const exists = (runtimeConfig.codexAccounts ?? [])
+        .some(account => isSelectableCodexPoolAccount(account) && account.id === body.accountId);
       if (!exists) return jsonResponse({ error: "Account not found" }, 400);
     }
     runtimeConfig.activeCodexAccountId = body.accountId ?? undefined;
@@ -782,15 +824,15 @@ export async function handleCodexAuthAPI(
     const body = (await req.json().catch(() => ({}))) as { id?: string; reauth?: boolean };
     const requestedAccountId = body.id?.trim();
     const reauth = body.reauth === true;
-    if (requestedAccountId && !ACCOUNT_ID_RE.test(requestedAccountId)) {
+    if (requestedAccountId && !isValidCodexAccountId(requestedAccountId)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
     const runtimeConfig = getRuntimeConfig(config);
-    const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === accountId) || Boolean(getCodexAccountCredential(accountId));
-    if (exists && !reauth) {
-      return jsonResponse({ error: `Account id already exists: ${accountId}` }, 400);
-    }
+    const preflightConflict = !reauth
+      ? codexAccountPersistenceConflict(runtimeConfig, accountId, "create")
+      : undefined;
+    if (preflightConflict) return jsonResponse({ error: preflightConflict }, 400);
     if (reauth) {
       if (!requestedAccountId) return jsonResponse({ error: "id required for reauth" }, 400);
       if (!configuredPoolAccount(runtimeConfig, accountId)) {
@@ -908,6 +950,24 @@ export async function handleCodexAuthAPI(
                 break;
               }
 
+              const latestConfig = getRuntimeConfig(config);
+              const accounts = latestConfig.codexAccounts ?? [];
+              const existingIdx = accounts.findIndex(account => account.id === accountId);
+              const commitConflict = codexAccountPersistenceConflict(
+                latestConfig,
+                accountId,
+                reauth ? "reauth" : "create",
+              );
+              if (commitConflict) {
+                codexAuthLoginState.set(flowId, {
+                  status: "error",
+                  error: commitConflict,
+                  doneAt: Date.now(),
+                });
+                completed = true;
+                break;
+              }
+
               saveCodexAccountCredential(accountId, {
                 accessToken: cred.access,
                 refreshToken: cred.refresh,
@@ -920,15 +980,12 @@ export async function handleCodexAuthAPI(
                 setAccountQuotaFromParsed(accountId, quota);
               }
 
-              const latestConfig = getRuntimeConfig(config);
-              const accounts = latestConfig.codexAccounts ?? [];
-              const existingIdx = accounts.findIndex(a => a.id === accountId);
               if (existingIdx >= 0) {
                 // Keep the pool id stable; refresh display metadata after a successful login/reauth.
                 accounts[existingIdx] = withCodexAccountLogLabel({
                   ...accounts[existingIdx],
                   email,
-                  plan,
+                  plan: plan ?? accounts[existingIdx].plan,
                   isMain: false,
                 }, accounts);
                 latestConfig.codexAccounts = accounts;

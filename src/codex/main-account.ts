@@ -1,14 +1,8 @@
 import { readCodexTokens } from "./auth-collision";
 import { decodeJwtPayload } from "../oauth/chatgpt";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
-/**
- * Stable id under which the "main" Codex account (the Codex CLI login stored in
- * ~/.codex/auth.json) participates in opencodex's account rotation. The main account is
- * NOT imported into the managed credential store (Option A): its token is read-only from
- * auth.json, so opencodex never refreshes it — an expired token surfaces as a reauth
- * notice (re-login via the Codex CLI) rather than a background refresh.
- */
-export const MAIN_CODEX_ACCOUNT_ID = "__main__";
+export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
 /**
  * Main account plan (e.g. "plus", "go", "free", "team"), populated from the WHAM usage

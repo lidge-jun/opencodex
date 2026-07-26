@@ -16,6 +16,7 @@ import {
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
+import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 
 type ThreadAffinityEntry = {
@@ -187,7 +188,8 @@ export type CodexUpstreamOutcomeMeta = {
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return isCodexAccountUsable(config, accountId);
-  return (config.codexAccounts ?? []).some(account => !account.isMain && account.id === accountId);
+  return (config.codexAccounts ?? [])
+    .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);
 }
 
 export function clearThreadAccountMap(): void {
@@ -691,7 +693,9 @@ function getEligiblePoolAccounts(
   quotaScope?: CodexQuotaScope,
 ): string[] {
   const ids = (config.codexAccounts ?? [])
-    .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
+    .filter(account => isSelectableCodexPoolAccount(account)
+      && account.id !== excludeId
+      && !isAccountNeedsReauth(account.id))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id))
@@ -850,7 +854,8 @@ function pickUnboundStrategyAccount(
 
 export function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return getMainAccountPlan();
-  return (config.codexAccounts ?? []).find(account => !account.isMain && account.id === accountId)?.plan;
+  return (config.codexAccounts ?? [])
+    .find(account => isSelectableCodexPoolAccount(account) && account.id === accountId)?.plan;
 }
 
 function pickLowerUsageAccount(
@@ -1392,6 +1397,7 @@ export function formatCodexProviderForLog(providerName: string, accountId: strin
   // same physical account as the "main" passthrough (null accountId). Log both under the base provider
   // name so usage/tokens aggregate into a single row instead of splitting into `chatgpt` + `chatgpt-main`.
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return providerName;
-  const account = (config.codexAccounts ?? []).find(a => !a.isMain && a.id === accountId);
+  const account = (config.codexAccounts ?? [])
+    .find(candidate => isSelectableCodexPoolAccount(candidate) && candidate.id === accountId);
   return account ? `${providerName}-${codexAccountLogLabel(account)}` : providerName;
 }

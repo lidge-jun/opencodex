@@ -97,6 +97,38 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider add rejects a configured Codex account namespace without mutating config", () => {
+    const { dir, configPath } = freshConfig({
+      codexAccountNamespaces: { deepseek: "side-account-id" },
+    });
+    try {
+      const before = readFileSync(configPath, "utf8");
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { OPENCODEX_HOME: dir });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["xai", "deepseek"])("login %s rejects a configured Codex account namespace before prompting", provider => {
+    const { dir, configPath } = freshConfig({
+      codexAccountNamespaces: { [provider]: "side-account-id" },
+    });
+    try {
+      const before = readFileSync(configPath, "utf8");
+      const result = runCli(["login", provider], { OPENCODEX_HOME: dir });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("provider add custom provider requires --adapter and --base-url", () => {
     const { dir } = freshConfig();
     try {

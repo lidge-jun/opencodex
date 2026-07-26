@@ -66,6 +66,25 @@ function writeResponsesPathConfig(responsesPath: string): void {
   });
 }
 
+function writeAccountNamespaceConfig(
+  codexAccountNamespaces: unknown,
+  overrides: Record<string, unknown> = {},
+): void {
+  writeConfig({
+    port: 10100,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+    codexAccountNamespaces,
+    ...overrides,
+  });
+}
+
 describe("opencodex config defaults", () => {
   test("atomic rename retries transient Windows sharing violations", () => {
     const sleeps: number[] = [];
@@ -989,6 +1008,170 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("openrouter/custom")).toBe(false);
     expect(isValidProviderName("__proto__")).toBe(false);
     expect(isValidProviderName("constructor")).toBe(false);
+  });
+
+  test("persists an explicit Codex account selector map without enabling it by default", () => {
+    const selectors = {
+      desktop: "@main",
+      work: "work-account",
+      legacy: "work-account",
+      poolNamedMain: "main",
+    };
+    writeAccountNamespaceConfig(selectors);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.codexAccountNamespaces).toEqual(selectors);
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountNamespaces")).toBe(false);
+  });
+
+  test("validates Claude Desktop profiles and Codex account selectors independently", () => {
+    const desktopProfile = {
+      version: 1,
+      assignments: {},
+      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+    };
+    writeAccountNamespaceConfig({ main: "@main" }, { claudeCode: { desktopProfile } });
+    expect(readConfigDiagnostics()).toMatchObject({
+      error: null,
+      config: { claudeCode: { desktopProfile }, codexAccountNamespaces: { main: "@main" } },
+    });
+
+    writeAccountNamespaceConfig({ main: "@main" }, {
+      claudeCode: { desktopProfile: { ...desktopProfile, version: 2 } },
+    });
+    expect(readConfigDiagnostics().error).toContain("claudeCode.desktopProfile");
+
+    writeAccountNamespaceConfig({ "bad/selector": "account-id" }, { claudeCode: { desktopProfile } });
+    expect(readConfigDiagnostics().error).toContain("codexAccountNamespaces.bad/selector");
+  });
+
+  test.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "main"],
+  ] as const)("rejects Codex account selectors stored as %s", (_label, selectors) => {
+    writeAccountNamespaceConfig(selectors);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("codexAccountNamespaces must be a plain object");
+  });
+
+  test.each([
+    ["blank", "", "side-account"],
+    ["surrounding whitespace", " side", "side-account"],
+    ["a slash", "side/account", "side-account"],
+    ["a reserved prototype key", "__proto__", "side-account"],
+    ["a reserved constructor key", "constructor", "side-account"],
+    ["an empty target", "side", ""],
+    ["the internal main account id", "side", "__main__"],
+    ["a reserved prototype target", "side", "__proto__"],
+    ["a reserved prototype-name target", "side", "prototype"],
+    ["a reserved constructor target", "side", "Constructor"],
+    ["a target with whitespace", "side", "side account"],
+    ["a target with a slash", "side", "account/id"],
+    ["an overlong target", "side", "a".repeat(65)],
+    ["a non-string target", "side", 42],
+  ] as const)("rejects %s in the Codex account selector map", (_label, selector, target) => {
+    writeAccountNamespaceConfig(Object.fromEntries([[selector, target]]));
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain(`codexAccountNamespaces.${selector}`);
+  });
+
+  test.each([
+    [
+      "a configured provider",
+      { side: "side-account" },
+      {
+        providers: {
+          side: { adapter: "openai-chat", baseUrl: "https://side.example.test/v1" },
+        },
+        defaultProvider: "side",
+      },
+      "must not collide",
+    ],
+    [
+      "a configured provider with different casing",
+      { SIDE: "side-account" },
+      {
+        providers: {
+          side: { adapter: "openai-chat", baseUrl: "https://side.example.test/v1" },
+        },
+        defaultProvider: "side",
+      },
+      "must not collide",
+    ],
+    ["the combo namespace", { combo: "side-account" }, {}, "must not collide"],
+    ["the combo namespace with different casing", { Combo: "side-account" }, {}, "must not collide"],
+    ["the canonical OpenAI namespace with different casing", { OpenAI: "side-account" }, {}, "must not collide"],
+    [
+      "the canonical OpenAI provider namespace before legacy migration",
+      { openai: "side-account" },
+      {
+        providers: {
+          "openai-multi": {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+          },
+        },
+        defaultProvider: "openai-multi",
+      },
+      "must not collide",
+    ],
+    [
+      "a combo alias prefix",
+      { side: "side-account" },
+      {
+        combos: {
+          intentional: {
+            alias: "side/gpt-5.5",
+            targets: [{ provider: "openai", model: "gpt-5.5" }],
+          },
+        },
+      },
+      "combo alias must not use a configured Codex account namespace",
+    ],
+    [
+      "a whitespace-padded combo alias prefix",
+      { side: "side-account" },
+      {
+        combos: {
+          intentional: {
+            alias: " side/gpt-5.5 ",
+            targets: [{ provider: "openai", model: "gpt-5.5" }],
+          },
+        },
+      },
+      "combo alias must not use a configured Codex account namespace",
+    ],
+    [
+      "a configured pool account id",
+      { work: "pool-a" },
+      {
+        codexAccounts: [{
+          id: "work",
+          email: "work@example.test",
+          isMain: false,
+        }],
+      },
+      "must not collide with configured Codex pool-account ids or account selector targets",
+    ],
+    [
+      "another selector target",
+      { primary: "side", side: "pool-a" },
+      {},
+      "must not collide with configured Codex pool-account ids or account selector targets",
+    ],
+  ] as const)("rejects a Codex account selector colliding with %s", (_label, selectors, overrides, error) => {
+    writeAccountNamespaceConfig(selectors, overrides);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain(error);
   });
 
   test("backs up config when defaultProvider only exists on Object prototype", () => {

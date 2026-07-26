@@ -29,6 +29,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { getProviderDiscoveryStatus } from "../../codex/model-cache";
@@ -98,6 +99,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (!isValidProviderName(name)) {
       return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
+    }
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+    if (namespaceCollision) {
+      return jsonResponse({ error: namespaceCollision }, 409);
     }
     // Hostname destinations additionally get a DNS-resolved SSRF check at write time —
     // the sync check above only classifies literal IPs (review finding, PR #96).

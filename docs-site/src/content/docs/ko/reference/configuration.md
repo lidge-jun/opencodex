@@ -52,6 +52,7 @@ namespaced selected id를 bare id로 바꿉니다.
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 이전에 설치한 shim을 교체하면 자동으로 복구합니다. 끄려면 `false`로 설정하거나 프로세스에 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정합니다. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App 기록 호환 모드. opencodex가 원래 Codex thread metadata를 백업하고, 예전 OpenAI interactive row를 `opencodex`로 재매핑하며, opencodex가 만든 `exec` row를 App에 보이는 source로 잠시 승격합니다. `ocx stop` / `ocx restore`는 백업한 OpenAI row를 복원하고 남은 opencodex user thread를 OpenAI로 돌려 네이티브 Codex가 `config.toml`에서 프록시를 제거한 뒤에도 이어서 열 수 있게 합니다. 끄려면 `false`로 설정합니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 대시보드에서 관리하는 ChatGPT/Codex pool 계정 metadata. secret은 `codex-accounts.json`에 따로 둡니다. |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | 공개 model selector namespace에서 저장된 Codex 계정 target으로 연결하는 선택적 map입니다. 이 foundation layer는 map을 검증하고 저장하지만 picker row를 추가하거나 routing을 변경하지 않습니다. |
 | `activeCodexAccountId?` | `string` | — | 수동으로 선택한 pool 계정. 선택 시 기존 thread affinity를 지우고 다음 요청부터 적용하며, 진행 중인 요청은 기존 계정을 유지합니다. |
 | `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. `quota` 전략과 `fill-first` drain threshold에도 사용됩니다. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool의 새 세션 rotation 전략. **새 세션에만** 적용되며 기존 thread id는 affinity를 유지합니다. `quota`(기본) — 활성 계정이 `autoSwitchThreshold`를 넘으면 알려진 usage가 가장 낮은 계정 선택. `round-robin` — 적격 계정 간 smooth weighted 균등 분배. `fill-first` — cooldown, 사용 불가 또는(설정 시) `autoSwitchThreshold`까지 활성 계정을 소진(알 수 없는 usage는 강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. |
@@ -63,6 +64,15 @@ namespaced selected id를 bare id로 바꿉니다.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | 비전 사이드카 옵션(아래 참조). |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 선택형 proactive OAuth 갱신 및 Codex 계정 warmup 정책. 필드는 아래에 설명합니다. |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS에서 추가로 허용할 정확한 origin. loopback origin은 항상 허용합니다. |
+
+`codexAccountNamespaces` 키는 공개 selector입니다. 길이는 1~64자이고 시작과 끝은 ASCII 영숫자여야
+하며, 내부에는 영숫자, `.`, `_`, `-`를 사용할 수 있습니다. 예약된 JavaScript object 이름은 거부됩니다.
+값은 유효한 pool account id(내부 `__main__` 제외)이거나 Codex Desktop 계정을 나타내는 `"@main"`입니다.
+provider 및 예약된 `openai` / `combo` 충돌은 대소문자를 구분하지 않고 검사하며, namespace가 있는
+combo alias는 selector를 namespace prefix로 재사용할 수 없습니다. 설정된 pool id와 다른 selector
+target도 selector로 재사용할 수 없습니다. raw account id와 email은 비공개로
+유지하고 selector를 공개 이름으로 사용하세요. 이 foundation layer에서 map은 inert하며 model picker
+entry 생성, session 고정, Pool / Direct routing 변경을 수행하지 않습니다.
 
 `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2`에서 쓰는 camel-case
 필드입니다. `ocx v2 threads <n>`은 대응하는 `max_concurrent_threads_per_session` 값을 Codex의

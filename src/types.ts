@@ -680,6 +680,12 @@ export interface OcxConfig {
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
   codexAccounts?: CodexAccount[];
+  /**
+   * Public model-selector namespaces bound to one Codex account. Values are stored account ids;
+   * `"@main"` selects the Codex Desktop/main auth.json account. Account display aliases
+   * are intentionally separate from these selectors.
+   */
+  codexAccountNamespaces?: Record<string, string>;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
