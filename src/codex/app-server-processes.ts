@@ -79,11 +79,30 @@ function isCodeModeHostToken(token: string): boolean {
   return base === "codex-code-mode-host" || base === "codex-code-mode-host.exe";
 }
 
+function isInterpreterToken(token: string): boolean {
+  const base = tokenBasename(token);
+  return base === "node" || base === "node.exe"
+    || base === "bun" || base === "bun.exe"
+    || base === "deno" || base === "deno.exe";
+}
+
+/** True when code-mode-host is the process executable or interpreter entrypoint, not a later arg. */
+function isCodeModeHostProcess(tokens: readonly string[]): boolean {
+  if (tokens.length === 0) return false;
+  if (isCodeModeHostToken(tokens[0]!)) return true;
+  return isInterpreterToken(tokens[0]!) && tokens.length > 1 && isCodeModeHostToken(tokens[1]!);
+}
+
+/** Stable identity for PID reuse checks: pid + normalized command line. */
+export function codexAppServerProcessIdentity(proc: Pick<CodexAppServerProcess, "pid" | "commandLine">): string {
+  return `${proc.pid}\0${proc.commandLine.trim().replace(/\s+/g, " ")}`;
+}
+
 /** True when the command line is a Codex app-server (or code-mode host) worth restarting. */
 export function isCodexAppServerCommandLine(commandLine: string): boolean {
   const tokens = tokenizeCommandLine(commandLine.trim());
   if (tokens.length === 0) return false;
-  if (tokens.some(isCodeModeHostToken)) return true;
+  if (isCodeModeHostProcess(tokens)) return true;
 
   const codexIdx = tokens.findIndex(isCodexExecutableToken);
   if (codexIdx < 0) return false;
@@ -272,6 +291,8 @@ export function restartCodexAppServers(
   const failed: Array<{ pid: number; error: string }> = [];
 
   // Re-resolve immediately before signaling so a recycled PID is never killed.
+  // Require the same pid+command-line identity as the original match — a new
+  // Codex-shaped process that reused the PID must not receive SIGTERM.
   const liveByPid = new Map(
     listCodexAppServerProcesses(io).map(process => [process.pid, process] as const),
   );
@@ -279,7 +300,7 @@ export function restartCodexAppServers(
 
   for (const proc of processes) {
     const live = liveByPid.get(proc.pid);
-    if (!live || !isCodexAppServerCommandLine(live.commandLine)) {
+    if (!live || codexAppServerProcessIdentity(live) !== codexAppServerProcessIdentity(proc)) {
       // Original target exited (or identity changed); do not signal a replacement.
       if (!isAlive(proc.pid)) stopped.push(proc.pid);
       continue;

@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   afterCatalogWriteHandleAppServers,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
   listCodexAppServerProcesses,
   restartCodexAppServers,
+  STALE_CODEX_APP_SERVER_HINT,
 } from "../src/codex/app-server-processes";
 
 describe("Codex app-server process matching (#476)", () => {
@@ -14,15 +17,18 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("C:\\Users\\a\\AppData\\codex.exe app-server --listen pipe")).toBe(true);
     expect(isCodexAppServerCommandLine("codex --verbose app-server")).toBe(true);
     expect(isCodexAppServerCommandLine("codex-code-mode-host --session 1")).toBe(true);
+    expect(isCodexAppServerCommandLine("node /opt/codex-code-mode-host --session 1")).toBe(true);
   });
 
-  test("rejects unrelated processes and app-server only in later arguments", () => {
+  test("rejects unrelated processes and app-server / code-mode-host only in later arguments", () => {
     expect(isCodexAppServerCommandLine("hermes-codex-bridge-mcp --port 9")).toBe(false);
     expect(isCodexAppServerCommandLine("node ./opencodex/src/cli/index.ts start")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec 'hello'")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec \"debug app-server behavior\"")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec debug app-server behavior")).toBe(false);
     expect(isCodexAppServerCommandLine("something-app-server-without-codex-bin")).toBe(false);
+    expect(isCodexAppServerCommandLine("node worker.js codex-code-mode-host")).toBe(false);
+    expect(isCodexAppServerCommandLine("bash -c codex-code-mode-host")).toBe(false);
   });
 
   test("listCodexAppServerProcesses filters injected snapshots", () => {
@@ -34,6 +40,7 @@ describe("Codex app-server process matching (#476)", () => {
         { pid: 33, commandLine: "codex-code-mode-host" },
         { pid: 44, commandLine: "codex exec hi" },
         { pid: 55, commandLine: "codex exec \"debug app-server behavior\"" },
+        { pid: 66, commandLine: "node worker.js codex-code-mode-host" },
       ],
     });
     expect(matched.map(process => process.pid)).toEqual([22, 33]);
@@ -112,6 +119,26 @@ describe("Codex app-server process matching (#476)", () => {
     expect(result.failed).toEqual([]);
   });
 
+  test("restartCodexAppServers skips recycled PID that matches a different Codex process", () => {
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const result = restartCodexAppServers(
+      [{ pid: 42, commandLine: "codex app-server --listen unix://old" }],
+      {
+        // Same PID, still Codex-shaped, but a different process identity.
+        listSnapshots: () => [{ pid: 42, commandLine: "codex-code-mode-host --session 9" }],
+        kill: (pid, signal) => {
+          signals.push({ pid, signal });
+        },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    );
+    expect(signals).toEqual([]);
+    expect(result.stopped).toEqual([]);
+    expect(result.surviving).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
   test("afterCatalogWriteHandleAppServers warns by default and restarts when requested", () => {
     const errors: string[] = [];
     const logs: string[] = [];
@@ -140,5 +167,39 @@ describe("Codex app-server process matching (#476)", () => {
     expect(restarted.warned).toBe(false);
     expect(restarted.restart?.stopped).toEqual([7]);
     expect(logs.some(line => line.includes("Stopping Codex app-server"))).toBe(true);
+  });
+});
+
+describe("CLI /api sync wiring for stale app-servers (#476)", () => {
+  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+  const configRoutesSource = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "management", "config-routes.ts"),
+    "utf8",
+  );
+
+  test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
+    const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
+    expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
+    expect(syncCase).toContain("syncResult.catalogExists || syncResult.cacheSynced");
+    expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCase).toContain("restart: restartCodex");
+    expect(syncCase.indexOf("catalogExists || syncResult.cacheSynced"))
+      .toBeLessThan(syncCase.indexOf("afterCatalogWriteHandleAppServers"));
+    // No-write path must not call the handler outside the gate.
+    const gatedBlock = syncCase.slice(syncCase.indexOf("if (syncResult.catalogExists"));
+    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+  });
+
+  test("POST /api/sync always returns shared staleAppServerHint without enumerating processes", () => {
+    const syncHandler = configRoutesSource.slice(
+      configRoutesSource.indexOf('url.pathname === "/api/sync"'),
+      configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
+    );
+    expect(syncHandler).toContain("staleAppServerHint: STALE_CODEX_APP_SERVER_HINT");
+    expect(syncHandler).toContain("STALE_CODEX_APP_SERVER_HINT");
+    expect(syncHandler).not.toContain("listCodexAppServerProcesses");
+    expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
+    expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");
   });
 });
