@@ -189,7 +189,7 @@ export const de: Record<TKey, string> = {
   "dash.syncModels": "Modelle synchronisieren",
   "dash.syncing": "Synchronisiere…",
   "dash.syncOk": "Synchronisierung abgeschlossen. {count} Modell(e) angehängt.",
-  "dash.syncStaleHint": "Falls Codex weiterhin eine alte Liste zeigt, starte den langlebigen App-Server neu (ocx sync --restart-codex).",
+  "dash.syncStaleHint": "Falls Codex weiterhin eine alte Liste zeigt, starte den langlebigen App-Server neu ({cmd}).",
   "dash.syncFailed": "Synchronisierung fehlgeschlagen: {error}",
   "dash.projectConfigTitle": "Projekt-Codex-Konfig umgeht OpenCodex",
   "dash.projectConfigHint": "Diese repo-lokalen Einstellungen überschreiben den OpenCodex-Proxy (z. B. direkt zu OpenCode Go routen). Entferne sie, damit die Routing aus ~/.codex/config.toml in diesem Projekt greift.",

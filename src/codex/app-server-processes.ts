@@ -2,9 +2,10 @@
  * Detect / optionally terminate long-lived Codex app-server processes that keep an
  * in-memory model catalog after `ocx sync` rewrites on-disk files (#476).
  *
- * Matching is intentionally narrow: require `app-server` (with a `codex` argv token)
- * or `codex-code-mode-host`. Never match broad `*codex*` patterns that hit unrelated
- * tools such as `hermes-codex-bridge-mcp`.
+ * Matching is intentionally narrow: require `app-server` as the Codex subcommand
+ * (not merely as a substring in some later argument) or `codex-code-mode-host`.
+ * Never match broad `*codex*` patterns that hit unrelated tools such as
+ * `hermes-codex-bridge-mcp`.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -18,25 +19,80 @@ export interface CodexAppServerProcess {
   commandLine: string;
 }
 
+export interface ProcessSnapshot {
+  pid: number;
+  commandLine: string;
+  uid?: number;
+  owner?: string;
+}
+
 export interface CodexAppServerProcessIo {
   platform?: NodeJS.Platform;
   getuid?: () => number | undefined;
-  listSnapshots?: () => Array<{ pid: number; commandLine: string; uid?: number }>;
+  listSnapshots?: () => ProcessSnapshot[];
   isAlive?: (pid: number) => boolean;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   now?: () => number;
 }
 
+/** Split a process command line into argv-like tokens (handles simple quotes). */
+export function tokenizeCommandLine(commandLine: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < commandLine.length; i++) {
+    const ch = commandLine[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function tokenBasename(token: string): string {
+  return token.toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
+}
+
+function isCodexExecutableToken(token: string): boolean {
+  const base = tokenBasename(token);
+  return base === "codex" || base === "codex.exe" || base === "codex.cmd";
+}
+
+function isCodeModeHostToken(token: string): boolean {
+  const base = tokenBasename(token);
+  return base === "codex-code-mode-host" || base === "codex-code-mode-host.exe";
+}
+
 /** True when the command line is a Codex app-server (or code-mode host) worth restarting. */
 export function isCodexAppServerCommandLine(commandLine: string): boolean {
-  const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
-  if (normalized.includes("codex-code-mode-host")) return true;
-  if (!normalized.includes("app-server")) return false;
-  // Require a codex executable token so we do not match unrelated "*codex*" names that
-  // happen to embed the substring "app-server" in some other argument.
-  return /(?:^|[\s/"'])codex(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized)
-    || /\/codex(?:\.cmd|\.exe)?(?:\s|$|"|')/.test(normalized);
+  const tokens = tokenizeCommandLine(commandLine.trim());
+  if (tokens.length === 0) return false;
+  if (tokens.some(isCodeModeHostToken)) return true;
+
+  const codexIdx = tokens.findIndex(isCodexExecutableToken);
+  if (codexIdx < 0) return false;
+  for (let i = codexIdx + 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.startsWith("-")) continue;
+    return token.toLowerCase() === "app-server";
+  }
+  return false;
 }
 
 function parseUnixProcStatusUid(status: string): number | undefined {
@@ -46,9 +102,9 @@ function parseUnixProcStatusUid(status: string): number | undefined {
   return Number.isSafeInteger(uid) ? uid : undefined;
 }
 
-function listUnixProcSnapshots(uid: number | undefined): Array<{ pid: number; commandLine: string; uid?: number }> {
+function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
   if (!existsSync("/proc")) return [];
-  const out: Array<{ pid: number; commandLine: string; uid?: number }> = [];
+  const out: ProcessSnapshot[] = [];
   for (const ent of readdirSync("/proc")) {
     if (!/^\d+$/.test(ent)) continue;
     const pid = Number(ent);
@@ -70,39 +126,39 @@ function listUnixProcSnapshots(uid: number | undefined): Array<{ pid: number; co
   return out;
 }
 
-function listWindowsSnapshots(): Array<{ pid: number; commandLine: string }> {
-  const out: Array<{ pid: number; commandLine: string }> = [];
-  const wmic = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\wbem\\WMIC.exe`;
+function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
+  const out: ProcessSnapshot[] = [];
   try {
-    const output = execFileSync(wmic, [
-      "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST",
-    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
-    const blocks = output.replace(/\r/g, "").split(/\n\n+/);
-    for (const block of blocks) {
-      const commandLine = /^CommandLine=(.*)$/m.exec(block)?.[1]?.trim();
-      const pidRaw = /^ProcessId=(\d+)$/m.exec(block)?.[1];
-      if (!commandLine || !pidRaw) continue;
-      const pid = Number(pidRaw);
-      if (!Number.isSafeInteger(pid) || pid <= 1) continue;
-      out.push({ pid, commandLine });
-    }
-    if (out.length > 0) return out;
-  } catch {
-    /* WMIC missing — fall through */
-  }
-  try {
-    const output = execFileSync("powershell.exe", [
-      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
-      "-Command",
-      "Get-CimInstance Win32_Process | ForEach-Object { '{0}`t{1}' -f $_.ProcessId, $_.CommandLine }",
-    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 12_000, windowsHide: true });
-    for (const line of output.split(/\r?\n/)) {
-      const tab = line.indexOf("\t");
-      if (tab <= 0) continue;
-      const pid = Number(line.slice(0, tab));
-      const commandLine = line.slice(tab + 1).trim();
+    const output = uid !== undefined
+      ? execFileSync("ps", ["-u", String(uid), "-o", "pid=,command="], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 8_000,
+      })
+      : execFileSync("ps", ["-axo", "pid=,uid=,command="], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 8_000,
+      });
+    for (const raw of output.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (uid !== undefined) {
+        const match = /^(\d+)\s+(.*)$/.exec(line);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        const commandLine = match[2]?.trim() ?? "";
+        if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
+        out.push({ pid, commandLine, uid });
+        continue;
+      }
+      const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (!match) continue;
+      const pid = Number(match[1]);
+      const processUid = Number(match[2]);
+      const commandLine = match[3]?.trim() ?? "";
       if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
-      out.push({ pid, commandLine });
+      out.push({ pid, commandLine, uid: Number.isSafeInteger(processUid) ? processUid : undefined });
     }
   } catch {
     return out;
@@ -110,8 +166,56 @@ function listWindowsSnapshots(): Array<{ pid: number; commandLine: string }> {
   return out;
 }
 
-function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined) {
+/**
+ * Windows snapshots scoped to the invoking user via Win32_Process.GetOwner().
+ * PowerShell is the sole path: WMIC lacks reliable owner data and is disabled on
+ * many Windows 11 installs; returning unscoped rows would contradict the
+ * current-user restart contract.
+ */
+function listWindowsSnapshots(): ProcessSnapshot[] {
+  const out: ProcessSnapshot[] = [];
+  // Double-quoted PS format string so `t expands to a real tab (single-quoted would emit literal `t).
+  const psCommand = [
+    "$ErrorActionPreference='SilentlyContinue'",
+    "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
+    "Get-CimInstance Win32_Process | ForEach-Object {",
+    "  try {",
+    "    $o=$_.GetOwner()",
+    "    if(-not $o -or [string]::IsNullOrWhiteSpace($o.User)){return}",
+    "    $owner=if($o.Domain){\"$($o.Domain)\\$($o.User)\"}else{$o.User}",
+    "    if($owner -ine $me){return}",
+    "    if([string]::IsNullOrWhiteSpace($_.CommandLine)){return}",
+    "    $cmd=($_.CommandLine -replace \"`t\",\" \")",
+    "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
+    "  } catch { }",
+    "}",
+  ].join(" ");
+  try {
+    const output = execFileSync("powershell.exe", [
+      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+      "-Command",
+      psCommand,
+    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 12_000, windowsHide: true });
+    for (const line of output.split(/\r?\n/)) {
+      const tab = line.indexOf("\t");
+      if (tab <= 0) continue;
+      const tab2 = line.indexOf("\t", tab + 1);
+      if (tab2 <= tab) continue;
+      const pid = Number(line.slice(0, tab));
+      const commandLine = line.slice(tab + 1, tab2).trim();
+      const owner = line.slice(tab2 + 1).trim();
+      if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
+      out.push({ pid, commandLine, owner });
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
+
+function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
   if (platform === "win32") return listWindowsSnapshots();
+  if (platform === "darwin") return listDarwinSnapshots(getuid());
   return listUnixProcSnapshots(getuid());
 }
 
@@ -161,23 +265,46 @@ export function restartCodexAppServers(
   const isAlive = io.isAlive ?? isProcessAlive;
   const kill = io.kill ?? ((pid, signal) => { process.kill(pid, signal); });
   const wait = io.waitExit ?? waitForExit;
+  const now = io.now ?? Date.now;
   const requested = processes.map(process => process.pid);
   const stopped: number[] = [];
   const surviving: number[] = [];
   const failed: Array<{ pid: number; error: string }> = [];
 
+  // Re-resolve immediately before signaling so a recycled PID is never killed.
+  const liveByPid = new Map(
+    listCodexAppServerProcesses(io).map(process => [process.pid, process] as const),
+  );
+  const signaled: CodexAppServerProcess[] = [];
+
   for (const proc of processes) {
-    try {
-      kill(proc.pid, "SIGTERM");
-    } catch (error) {
-      failed.push({
-        pid: proc.pid,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (isAlive(proc.pid)) surviving.push(proc.pid);
+    const live = liveByPid.get(proc.pid);
+    if (!live || !isCodexAppServerCommandLine(live.commandLine)) {
+      // Original target exited (or identity changed); do not signal a replacement.
+      if (!isAlive(proc.pid)) stopped.push(proc.pid);
       continue;
     }
-    if (wait(proc.pid, 2_000) || !isAlive(proc.pid)) stopped.push(proc.pid);
+    try {
+      kill(proc.pid, "SIGTERM");
+      signaled.push(proc);
+    } catch (error) {
+      if (isAlive(proc.pid)) {
+        failed.push({
+          pid: proc.pid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        surviving.push(proc.pid);
+      } else {
+        stopped.push(proc.pid);
+      }
+    }
+  }
+
+  // Shared deadline so N survivors wait ~2s total, not N×2s.
+  const deadline = now() + 2_000;
+  for (const proc of signaled) {
+    const remaining = Math.max(0, deadline - now());
+    if (wait(proc.pid, remaining) || !isAlive(proc.pid)) stopped.push(proc.pid);
     else surviving.push(proc.pid);
   }
 
