@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { upsertOAuthProvider } from "../src/oauth";
+import { removeProviderApiKey } from "../src/providers/api-keys";
+import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 /**
@@ -51,6 +56,106 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("oauth");
   });
 
+  test("treats an API key environment reference as stored key material", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }];
+    upsertOAuthProvider(config, "xai");
+    const provider = config.providers.xai!;
+    expect(provider.apiKey).toBe("${OCX_TEST_XAI_API_KEY}");
+    expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }]);
+    expect(provider.authMode).toBe("key");
+  });
+
+  test("drops malformed stored key fields instead of breaking OAuth routing", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: 12345,
+          apiKeyPool: [{ id: "bad-key", key: 67890 }],
+        },
+      },
+    } as unknown as OcxConfig;
+    upsertOAuthProvider(config, "xai");
+    expect(config.providers.xai!.authMode).toBe("oauth");
+    expect(config.providers.xai!.apiKey).toBeUndefined();
+    expect(config.providers.xai!.apiKeyPool).toBeUndefined();
+    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("oauth");
+  });
+
+  test("rejects an unsafe active key but keeps valid alternate pool entries", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "unsafe\r\nheader",
+          apiKeyPool: [
+            { id: "safe", key: " safe-alternate " },
+            { id: "unsafe", key: "bad\r\nheader" },
+          ],
+        },
+      },
+    } as OcxConfig;
+    upsertOAuthProvider(config, "xai");
+    const provider = config.providers.xai!;
+    expect(provider.authMode).toBe("oauth");
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toEqual([{ id: "safe", key: "safe-alternate" }]);
+    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("oauth");
+  });
+
+  test("filters malformed and duplicate pool data without deleting valid keys", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    config.providers.xai!.apiKeyPool = [
+      { id: "primary", key: "stored-key-sentinel" },
+      { id: "alternate", key: " alternate-key " },
+      { id: "alternate", key: "duplicate-id" },
+      { id: "duplicate-key", key: "alternate-key" },
+      { id: "bad-added-at", key: "bad-metadata", addedAt: Number.NaN },
+    ];
+    upsertOAuthProvider(config, "xai");
+    const provider = config.providers.xai!;
+    expect(provider.authMode).toBe("key");
+    expect(provider.apiKey).toBe("stored-key-sentinel");
+    expect(provider.apiKeyPool).toEqual([
+      { id: "primary", key: "stored-key-sentinel" },
+      { id: "alternate", key: "alternate-key" },
+      { id: "bad-added-at", key: "bad-metadata" },
+    ]);
+  });
+
+  test("returns to oauth after the last stored API key is removed", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    const previousHome = process.env.OPENCODEX_HOME;
+    const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-"));
+    process.env.OPENCODEX_HOME = testHome;
+    try {
+      expect(removeProviderApiKey(config, "xai", "aaaaaaaa")).toBe(true);
+      expect(config.providers.xai!.authMode).toBe("key");
+      expect(config.providers.xai!.apiKey).toBeUndefined();
+      expect(config.providers.xai!.apiKeyPool).toBeUndefined();
+
+      upsertOAuthProvider(config, "xai");
+      const provider = config.providers.xai!;
+      expect(provider.authMode).toBe("oauth");
+      expect(provider.apiKey).toBeUndefined();
+      expect(provider.apiKeyPool).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      rmSync(testHome, { recursive: true, force: true });
+    }
+  });
+
   test("still applies the plain preset for oauth-only providers", () => {
     const config = {
       port: 10100,
@@ -59,7 +164,9 @@ describe("upsertOAuthProvider credential preservation", () => {
         anthropic: {
           adapter: "anthropic",
           baseUrl: "https://api.anthropic.com",
-          authMode: "oauth",
+          authMode: "key",
+          apiKey: "stale-key",
+          apiKeyPool: [{ id: "stale", key: "stale-key" }],
           note: "stale-note",
         },
       },
@@ -68,6 +175,7 @@ describe("upsertOAuthProvider credential preservation", () => {
     const provider = config.providers.anthropic!;
     expect(provider.authMode).toBe("oauth");
     expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
     expect(provider.note).toBeUndefined();
   });
 

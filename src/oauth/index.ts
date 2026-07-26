@@ -566,6 +566,42 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
   return changed;
 }
 
+/** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
+function normalizePreservableApiKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && !/[\r\n]/.test(trimmed) ? trimmed : undefined;
+}
+
+function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
+  const ids = new Set<string>();
+  const keys = new Set<string>();
+  for (const entry of value as unknown[]) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = entry as Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const key = normalizePreservableApiKey(candidate.key);
+    if (!id || !key || ids.has(id) || keys.has(key)) continue;
+    const label = typeof candidate.label === "string" ? candidate.label : undefined;
+    const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
+      ? candidate.addedAt
+      : undefined;
+    ids.add(id);
+    keys.add(key);
+    pool.push({
+      id,
+      key,
+      ...(label !== undefined ? { label } : {}),
+      ...(addedAt !== undefined ? { addedAt } : {}),
+    });
+  }
+  // `apiKey` remains the routing source of truth. Keep valid alternate slots even when a
+  // hand-edited config left the pool out of sync, rather than deleting usable credentials.
+  return pool.length > 0 ? pool : undefined;
+}
+
 /**
  * Add/refresh an OAuth provider's config entry on a config object (does not persist).
  *
@@ -574,8 +610,10 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
  * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
  * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
  * flips billing back to the subscription without the user asking. Carry the key fields over
- * and keep an explicitly chosen `authMode: "key"`, so logging in never changes which
- * credential bills the request.
+ * and keep an explicitly chosen `authMode: "key"` while an active stored key remains, so
+ * logging in does not change which credential bills the request. If the final key was removed
+ * and only the old key mode remains, let the OAuth preset restore `authMode: "oauth"` so the
+ * newly saved OAuth credential can be used.
  */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
@@ -584,9 +622,11 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
-    if (existing.apiKey !== undefined) next.apiKey = existing.apiKey;
-    if (existing.apiKeyPool !== undefined) next.apiKeyPool = existing.apiKeyPool;
-    if (existing.authMode === "key") next.authMode = "key";
+    const storedApiKey = normalizePreservableApiKey(existing.apiKey);
+    const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
+    if (storedApiKey !== undefined) next.apiKey = storedApiKey;
+    if (storedApiKeyPool !== undefined) next.apiKeyPool = storedApiKeyPool;
+    if (existing.authMode === "key" && storedApiKey !== undefined) next.authMode = "key";
   }
   config.providers[provider] = next;
 }
