@@ -4,6 +4,7 @@ import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
 import { resolveCodexHomeDir } from "./home";
 import { extractAccountId } from "../oauth/chatgpt";
+import { isSelectableCodexPoolAccount } from "./account-id";
 
 export interface CodexTokens {
   access_token: string;
@@ -94,7 +95,7 @@ export function checkAccountIdCollision(
   const candidateWorkspace = isWorkspacePlan(plan);
   for (const account of loadConfig().codexAccounts ?? []) {
     if (excludeAccountId && account.id === excludeAccountId) continue;
-    if (account.isMain) continue;
+    if (!isSelectableCodexPoolAccount(account)) continue;
     if (isWorkspacePlan(account.plan) !== candidateWorkspace) continue;
     const cred = getCodexAccountCredential(account.id);
     const poolEmail = normalizedEmail(account.email);

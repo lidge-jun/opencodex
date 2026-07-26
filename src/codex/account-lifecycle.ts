@@ -45,7 +45,8 @@ export function resetMainCodexAccountIdentityTrackingForTests(): void {
 
 export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): void {
   removeCodexAccountCredential(accountId);
-  runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? []).filter(account => account.id !== accountId);
+  runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
+    .filter(account => account.isMain || account.id !== accountId);
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);

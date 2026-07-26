@@ -517,6 +517,44 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider management rejects names owned by a Codex account namespace without mutating config", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const cfg = {
+      ...config("127.0.0.1"),
+      codexAccountNamespaces: { side: "side-account-id" },
+    };
+    saveConfig(cfg);
+    const beforeMemory = structuredClone(cfg);
+    const beforeDisk = readFileSync(join(TEST_DIR, "config.json"), "utf8");
+
+    const requestUrl = new URL("http://127.0.0.1/api/providers");
+    const response = await handleManagementAPI(
+      new Request(requestUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "side",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://side.example.test/v1",
+          },
+        }),
+      }),
+      requestUrl,
+      cfg,
+      { refreshCodexCatalog: async () => {} },
+    );
+
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toEqual({
+      error: "provider name must not collide with a configured Codex account namespace",
+    });
+    expect(cfg).toEqual(beforeMemory);
+    expect(readFileSync(join(TEST_DIR, "config.json"), "utf8")).toBe(beforeDisk);
+  });
+
   test("provider management rejects base URLs with embedded credentials", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

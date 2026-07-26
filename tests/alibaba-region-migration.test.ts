@@ -20,6 +20,13 @@ function migratableConfig(): OcxConfig {
   } as unknown as OcxConfig;
 }
 
+function namespaceCollidingConfig(): OcxConfig {
+  return {
+    ...migratableConfig(),
+    codexAccountNamespaces: { "alibaba-token-plan-intl": "pool-a" },
+  };
+}
+
 test("moves a Beijing entry holding an international endpoint", () => {
   const config = migratableConfig();
   // Beijing catalog fields, as `ocx provider add` would have persisted them.
@@ -92,6 +99,51 @@ test("refuses to merge when the intl entry exists, and says why", () => {
   expect(projection.config).toEqual(before);
   expect(projection.warnings).toHaveLength(1);
   expect(projection.warnings[0]).toContain("already exists");
+});
+
+test("refuses to replace an account namespace with the intl provider", () => {
+  const config = namespaceCollidingConfig();
+  const before = structuredClone(config);
+
+  const projection = projectAlibabaRegionMigration(config);
+  expect(projection.changed).toBe(false);
+  expect(projection.config).toEqual(before);
+  expect(projection.warnings).toHaveLength(1);
+  expect(projection.warnings[0]).toContain("reserved by a configured Codex account namespace");
+  expect(projection.warnings[0]).toContain("Rename the account selector");
+});
+
+test("refuses a mixed-case account namespace that owns the intl provider id", () => {
+  const config = migratableConfig();
+  config.codexAccountNamespaces = { "ALIBABA-TOKEN-PLAN-INTL": "pool-a" };
+  const before = structuredClone(config);
+
+  const projection = projectAlibabaRegionMigration(config);
+
+  expect(projection.changed).toBe(false);
+  expect(projection.config).toEqual(before);
+  expect(projection.warnings).toHaveLength(1);
+  expect(projection.warnings[0]).toContain("reserved by a configured Codex account namespace");
+});
+
+test("a namespace-blocked migration remains valid across reload", () => {
+  const projection = projectAlibabaRegionMigration(namespaceCollidingConfig());
+  expect(projection.changed).toBe(false);
+
+  const home = mkdtempSync(join(tmpdir(), "ocx-alibaba-namespace-"));
+  const prev = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try {
+    saveConfig(projection.config);
+    const reloaded = loadConfig();
+    expect(reloaded.providers["alibaba-token-plan"]).toBeDefined();
+    expect(reloaded.providers["alibaba-token-plan-intl"]).toBeUndefined();
+    expect(reloaded.codexAccountNamespaces).toEqual({ "alibaba-token-plan-intl": "pool-a" });
+  } finally {
+    if (prev === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("aborts without changing anything when a destination key is occupied", () => {
