@@ -209,9 +209,11 @@ Adapters may adjust the resolved URL afterward. The `kiro` adapter, for example,
 region of the imported credential for a canonical `runtime.{region}.kiro.dev` host. See
 [Adapters](/reference/adapters/) for per-adapter rules.
 
-When routing discards a configured `baseUrl`, opencodex logs a warning naming both URLs, with any
-credentials in them masked. Either drop the `baseUrl` — the registry endpoint is what routing
-will use regardless — or switch to the provider whose endpoint matches the URL you wanted.
+When routing discards a configured `baseUrl`, opencodex logs a warning. It names the registry
+endpoint in full and your configured one by origin only, shown as `https://host/…` when it had a
+path — a configured path can itself be a credential, so none of it is logged. Either drop the
+`baseUrl` — the registry endpoint is what routing will use regardless — or switch to the provider
+whose endpoint matches the URL you wanted.
 Picking the right entry matters when a vendor runs one product in several regions:
 `alibaba-token-plan` is pinned to Beijing while `alibaba-token-plan-intl` covers the
 international endpoints, and a key issued for one is rejected by the other.

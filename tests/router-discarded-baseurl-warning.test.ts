@@ -44,12 +44,14 @@ function routePinned(baseUrl: unknown, times = 1): string[] {
 }
 
 test("warns when a pinned provider discards a configured baseUrl", () => {
-  const discarded = "https://vertex-relay.example.test/v1";
-  const warnings = routePinned(discarded);
+  const warnings = routePinned("https://vertex-relay.example.test/v1");
 
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain(`provider "${PINNED_PROVIDER}"`);
-  expect(warnings[0]).toContain(discarded);
+  // The configured side is named by origin only; its path is never logged.
+  expect(warnings[0]).toContain("https://vertex-relay.example.test/…");
+  expect(warnings[0]).not.toContain("/v1");
+  // The effective side is a registry constant, so it is printed in full.
   expect(warnings[0]).toContain(PINNED_REGISTRY_BASE_URL);
 });
 
@@ -89,6 +91,28 @@ test("redacts a token embedded in the URL path, which redactUrlForLog keeps", ()
   expect(warnings[0]).not.toContain("sk-live-ijklmnop");
 });
 
+test("withholds an opaque high-entropy path credential with no recognizable prefix", () => {
+  // The case pattern-based redaction cannot catch: an account-scoped route token that looks
+  // like an ordinary path segment. Nothing in redactSecretString matches it, so the only safe
+  // answer is to log no path at all.
+  const opaque = "8fK2mP7qR4nV6xZ1cT5wY9bJ";
+  const warnings = routePinned(`https://opaque.example.test/v1/${opaque}`);
+
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).not.toContain(opaque);
+  // The origin still names the mismatch, and the marker shows a path existed.
+  expect(warnings[0]).toContain("https://opaque.example.test/…");
+});
+
+test("withholds every path segment, not just the credential-looking one", () => {
+  const warnings = routePinned("https://segments.example.test/tenant-42/v1/route/Zx9Qw");
+
+  expect(warnings).toHaveLength(1);
+  for (const segment of ["tenant-42", "route", "Zx9Qw"]) {
+    expect(warnings[0]).not.toContain(segment);
+  }
+});
+
 test("warns once for URLs that differ only in their credentials", () => {
   const warnings = [
     ...routePinned("https://alice:secret-one@shared-endpoint.example.test/v1"),
@@ -119,6 +143,54 @@ test("stays silent for a non-string baseUrl (control: unchanged pre-existing beh
   // A non-string baseUrl is already dropped by the `typeof` guard in routedProviderConfig and is
   // a config-schema concern, not this diagnostic's. Pinned here so the omission stays deliberate.
   expect(routePinned(42 as unknown as string)).toEqual([]);
+});
+
+/**
+ * The split this diagnostic exists for (#457): the Beijing Personal Edition entry is pinned, and
+ * the international Team Edition is a separate provider that honors its configured endpoint.
+ * Locking it here means a change to either registry entry has to face this test.
+ */
+const ALIBABA_BEIJING_BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+const ALIBABA_INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+
+test("alibaba-token-plan is pinned to Beijing and warns about a saved international URL", () => {
+  const config = configFor("alibaba-token-plan", {
+    adapter: "openai-chat",
+    baseUrl: ALIBABA_INTL_BASE_URL,
+  });
+  const warnings = routeCapturingWarnings(config, "alibaba-token-plan/qwen3.8-max-preview");
+
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("token-plan.ap-southeast-1.maas.aliyuncs.com");
+  expect(warnings[0]).toContain(ALIBABA_BEIJING_BASE_URL);
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    expect(routeModel(config, "alibaba-token-plan/qwen3.8-max-preview").provider.baseUrl)
+      .toBe(ALIBABA_BEIJING_BASE_URL);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("alibaba-token-plan-intl honors its configured international endpoint silently", () => {
+  const config = configFor("alibaba-token-plan-intl", {
+    adapter: "openai-chat",
+    baseUrl: ALIBABA_INTL_BASE_URL,
+  });
+
+  expect(routeCapturingWarnings(config, "alibaba-token-plan-intl/qwen3.7-max")).toEqual([]);
+  expect(routeModel(config, "alibaba-token-plan-intl/qwen3.7-max").provider.baseUrl)
+    .toBe(ALIBABA_INTL_BASE_URL);
+});
+
+test("alibaba-token-plan-intl honors its pay-as-you-go choice too", () => {
+  const payg = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+  const config = configFor("alibaba-token-plan-intl", { adapter: "openai-chat", baseUrl: payg });
+
+  expect(routeCapturingWarnings(config, "alibaba-token-plan-intl/qwen3.7-max")).toEqual([]);
+  expect(routeModel(config, "alibaba-token-plan-intl/qwen3.7-max").provider.baseUrl).toBe(payg);
 });
 
 for (const { label, id, adapter, baseUrl } of [

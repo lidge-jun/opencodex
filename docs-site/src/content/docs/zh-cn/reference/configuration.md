@@ -181,7 +181,8 @@ x-opencodex-api-key: your-secret-token
 `runtime.{region}.kiro.dev` 时，会改用导入凭据所属的 API region。逐个 adapter 的规则见
 [Adapters](/zh-cn/reference/adapters/)。
 
-当路由丢弃配置的 `baseUrl` 时，opencodex 会打印一条同时列出两个 URL 的警告，其中的凭据已被遮蔽。
+当路由丢弃配置的 `baseUrl` 时，opencodex 会打印一条警告：registry 端点会完整列出，而你配置的那个
+只列出 origin —— 原本带路径时显示为 `https://host/…`。配置的路径本身可能就是凭据，因此一段都不会记录。
 此时要么删掉 `baseUrl`（路由本来就只会使用 registry 端点），要么改用端点与目标 URL 相符的 provider。
 当同一产品分区域运营时，选对条目尤其重要：`alibaba-token-plan` 固定指向北京，而
 `alibaba-token-plan-intl` 覆盖国际端点，为其中一个签发的 key 在另一个上会被拒绝。
