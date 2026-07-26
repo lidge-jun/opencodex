@@ -226,10 +226,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
+    const { STALE_CODEX_APP_SERVER_HINT, listCodexAppServerProcesses } = await import("../../codex/app-server-processes");
     const result = await syncModelsToCodex(undefined, config, null);
+    const staleAppServers = listCodexAppServerProcesses();
     return jsonResponse({
       ...result,
-      staleAppServerHint: "If Codex App still shows an older model list, restart its long-lived app-server process after sync.",
+      staleAppServerHint: STALE_CODEX_APP_SERVER_HINT,
+      ...(staleAppServers.length > 0
+        ? { staleAppServerPids: staleAppServers.map(process => process.pid) }
+        : {}),
     }, result.ok ? 200 : 500);
   }
 

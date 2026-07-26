@@ -193,7 +193,7 @@ export const ko: Record<TKey, string> = {
   "dash.syncModels": "모델 동기화",
   "dash.syncing": "동기화 중…",
   "dash.syncOk": "동기화 완료. {count}개 모델이 추가됐습니다.",
-  "dash.syncStaleHint": "Codex App에 여전히 예전 목록이 보이면 오래 실행 중인 app-server 프로세스를 재시작하세요.",
+  "dash.syncStaleHint": "Codex에 여전히 예전 목록이 보이면 오래 실행 중인 app-server를 재시작하세요 (ocx sync --restart-codex).",
   "dash.syncFailed": "동기화 실패: {error}",
   "dash.projectConfigTitle": "프로젝트 Codex 설정이 OpenCodex를 우회합니다",
   "dash.projectConfigHint": "저장소 로컬 설정이 OpenCodex 프록시를 덮어씁니다(예: OpenCode Go로 직접 라우팅). 해당 프로젝트에서 ~/.codex/config.toml 프록시를 쓰려면 제거하세요.",

@@ -198,7 +198,7 @@ export const ja: Record<TKey, string> = {
   "dash.syncModels": "モデルを同期",
   "dash.syncing": "同期中…",
   "dash.syncOk": "同期完了。{count} 個のモデルを追加しました。",
-  "dash.syncStaleHint": "Codex App がまだ古いリストを表示する場合、長時間稼働の app-server プロセスを再起動してください。",
+  "dash.syncStaleHint": "Codex がまだ古いリストを表示する場合、長時間稼働の app-server を再起動してください（ocx sync --restart-codex）。",
   "dash.syncFailed": "同期失敗: {error}",
   "dash.projectConfigTitle": "プロジェクトの Codex 設定が OpenCodex をバイパスします",
   "dash.projectConfigHint": "これらのリポジローカル設定は OpenCodex プロキシを上書きします(例: OpenCode Go に直接ルーティング)。~/.codex/config.toml のルーティングがそのプロジェクトで適用されるように削除してください。",

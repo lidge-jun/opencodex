@@ -199,7 +199,7 @@ export const en = {
   "dash.syncModels": "Sync models",
   "dash.syncing": "Syncing…",
   "dash.syncOk": "Sync complete. {count} model(s) appended.",
-  "dash.syncStaleHint": "If Codex App still shows an older list, restart its long-lived app-server process.",
+  "dash.syncStaleHint": "If Codex still shows an older list, restart its long-lived app-server (ocx sync --restart-codex).",
   "dash.syncFailed": "Sync failed: {error}",
   "dash.projectConfigTitle": "Project Codex config bypasses OpenCodex",
   "dash.projectConfigHint": "These repo-local settings override the OpenCodex proxy (e.g. route to OpenCode Go directly). Remove them so ~/.codex/config.toml routing applies in that project.",

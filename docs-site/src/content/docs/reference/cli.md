@@ -142,14 +142,21 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 
 ## Models & Codex
 
-### `ocx sync`
+### `ocx sync [--restart-codex]`
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
 
-### `ocx sync-cache`
+If long-lived Codex `app-server` processes are still running, `ocx sync` warns that they may keep
+serving the previous in-memory model list even though `opencodex-catalog.json` / `models_cache.json`
+were updated. Pass `--restart-codex` to send `SIGTERM` only to matching `codex … app-server` and
+`codex-code-mode-host` processes owned by the current user (active turns may be interrupted). Broad
+`pkill -f codex` matching is intentionally avoided.
 
-Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog.
+### `ocx sync-cache [--restart-codex]`
+
+Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog. The
+same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx sync` apply.
 
 ### `ocx v2 [subcommand]`
 

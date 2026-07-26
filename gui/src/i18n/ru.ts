@@ -198,7 +198,7 @@ export const ru: Record<TKey, string> = {
   "dash.syncModels": "Синхронизировать модели",
   "dash.syncing": "Синхронизация…",
   "dash.syncOk": "Синхронизация завершена. Добавлено моделей: {count}.",
-  "dash.syncStaleHint": "Если Codex App всё ещё показывает старый список, перезапустите его долгоживущий процесс app-server.",
+  "dash.syncStaleHint": "Если Codex всё ещё показывает старый список, перезапустите долгоживущий app-server (ocx sync --restart-codex).",
   "dash.syncFailed": "Ошибка синхронизации: {error}",
   "dash.projectConfigTitle": "Конфигурация Codex в проекте обходит OpenCodex",
   "dash.projectConfigHint": "Эти локальные настройки репозитория переопределяют прокси OpenCodex (например, направляют запросы напрямую в OpenCode Go). Удалите их, чтобы в этом проекте действовала маршрутизация из ~/.codex/config.toml.",

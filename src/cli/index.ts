@@ -744,7 +744,10 @@ switch (command) {
     break;
   }
   case "sync": {
+    const restartCodex = args.slice(1).includes("--restart-codex");
     await syncModelsToCodex((await findLiveProxy())?.port);
+    const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+    afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     break;
   }
   case "v2": {
@@ -753,8 +756,11 @@ switch (command) {
     break;
   }
   case "sync-cache": {
+    const restartCodex = args.slice(1).includes("--restart-codex");
     const { invalidateCodexModelsCache } = await import("../codex/catalog");
     invalidateCodexModelsCache();
+    const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+    afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     break;
   }
   case "gui": {
