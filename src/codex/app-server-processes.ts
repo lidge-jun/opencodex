@@ -14,6 +14,27 @@ import { isProcessAlive, waitForExit } from "../lib/process-control";
 export const STALE_CODEX_APP_SERVER_HINT =
   "If Codex still shows an older model list, restart its long-lived app-server process after sync (ocx sync --restart-codex).";
 
+/**
+ * Narrow Win32_Process CommandLine pre-filter (JS + .NET compatible).
+ * Allows an optional closing quote after the executable basename so paths like
+ * `"C:\Program Files\...\codex.exe" app-server` still reach GetOwner.
+ */
+export const WINDOWS_CODEX_BASENAME_CANDIDATE_RE =
+  /(^|[/\\\s'"=])codex([.]exe|[.]cmd)?['"]?(\s|$)/i;
+
+export const WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE = /codex-code-mode-host/i;
+
+/** True when a Windows CommandLine is worth paying GetOwner for (current-user scoped later). */
+export function isWindowsCodexCandidateCommandLine(commandLine: string): boolean {
+  return WINDOWS_CODEX_BASENAME_CANDIDATE_RE.test(commandLine)
+    || WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.test(commandLine);
+}
+
+/** Embed a regex source in a PowerShell single-quoted -match operand (`''` escapes `'`). */
+function powerShellSingleQuotedIgnoreCaseMatch(patternSource: string): string {
+  return `'(?i)${patternSource.replace(/'/g, "''")}'`;
+}
+
 export interface CodexAppServerProcess {
   pid: number;
   commandLine: string;
@@ -201,15 +222,18 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
-  // Codex candidates only: basename token codex / codex.exe / codex.cmd, or
-  // code-mode-host — not incidental substrings like a repo path with "opencodex".
+  // Codex candidates only: basename token codex / codex.exe / codex.cmd (optional
+  // closing quote after the basename), or code-mode-host — not incidental
+  // substrings like a repo path with "opencodex".
+  const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
+  const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
   const psCommand = [
     "$ErrorActionPreference='SilentlyContinue'",
     "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
     "Get-CimInstance Win32_Process | Where-Object {",
     "  -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and (",
-    "    $_.CommandLine -match '(?i)(^|[/\\\\\\s''\"=])codex([.]exe|[.]cmd)?(\\s|$)' -or",
-    "    $_.CommandLine -match '(?i)codex-code-mode-host'",
+    `    $_.CommandLine -match ${basenameMatch} -or`,
+    `    $_.CommandLine -match ${codeModeMatch}`,
     "  )",
     "} | ForEach-Object {",
     "  try {",

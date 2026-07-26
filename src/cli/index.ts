@@ -761,9 +761,11 @@ switch (command) {
   case "sync-cache": {
     const restartCodex = args.slice(1).includes("--restart-codex");
     const { invalidateCodexModelsCache } = await import("../codex/catalog");
-    invalidateCodexModelsCache();
-    const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
-    afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    // Only warn/restart when models_cache was actually rewritten from a readable catalog.
+    if (invalidateCodexModelsCache()) {
+      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    }
     break;
   }
   case "gui": {

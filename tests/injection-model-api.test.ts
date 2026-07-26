@@ -251,7 +251,7 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
         flagSeenBySync = syncedConfig.multiAgentGuidanceEnabled;
         return { added: 0, path: join(tempHome!, "missing-catalog.json") };
       },
-      invalidateCodexModelsCache: () => {},
+      invalidateCodexModelsCache: () => false,
       existsSync: () => false,
     });
     expect(flagSeenBySync).toBe(false);

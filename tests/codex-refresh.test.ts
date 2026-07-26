@@ -13,7 +13,10 @@ describe("Codex catalog refresh", () => {
     let invalidated = 0;
     const result = await refreshCodexModelCatalog(config, {
       syncCatalogModels: async () => ({ added: 0, path: "/tmp/opencodex-catalog.json" }),
-      invalidateCodexModelsCache: () => { invalidated += 1; },
+      invalidateCodexModelsCache: () => {
+        invalidated += 1;
+        return true;
+      },
       existsSync: () => true,
     });
 
@@ -30,12 +33,26 @@ describe("Codex catalog refresh", () => {
     let invalidated = 0;
     const result = await refreshCodexModelCatalog(config, {
       syncCatalogModels: async () => ({ added: 0, path: "/tmp/missing-catalog.json" }),
-      invalidateCodexModelsCache: () => { invalidated += 1; },
+      invalidateCodexModelsCache: () => {
+        invalidated += 1;
+        return true;
+      },
       existsSync: () => false,
     });
 
     expect(result.catalogExists).toBe(false);
     expect(result.cacheSynced).toBe(false);
     expect(invalidated).toBe(0);
+  });
+
+  test("reports cacheSynced false when invalidate cannot write", async () => {
+    const result = await refreshCodexModelCatalog(config, {
+      syncCatalogModels: async () => ({ added: 0, path: "/tmp/opencodex-catalog.json" }),
+      invalidateCodexModelsCache: () => false,
+      existsSync: () => true,
+    });
+
+    expect(result.catalogExists).toBe(true);
+    expect(result.cacheSynced).toBe(false);
   });
 });

@@ -6,10 +6,12 @@ import {
   afterCatalogWriteHandleAppServers,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
+  isWindowsCodexCandidateCommandLine,
   listCodexAppServerProcesses,
   listWindowsSnapshots,
   restartCodexAppServers,
   STALE_CODEX_APP_SERVER_HINT,
+  WINDOWS_CODEX_BASENAME_CANDIDATE_RE,
 } from "../src/codex/app-server-processes";
 
 describe("Codex app-server process matching (#476)", () => {
@@ -17,6 +19,8 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("codex app-server --listen unix:///tmp/codex.sock")).toBe(true);
     expect(isCodexAppServerCommandLine("/usr/local/bin/codex app-server proxy")).toBe(true);
     expect(isCodexAppServerCommandLine("C:\\Users\\a\\AppData\\codex.exe app-server --listen pipe")).toBe(true);
+    expect(isCodexAppServerCommandLine("\"C:\\Program Files\\nodejs\\codex.exe\" app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("\"C:\\Program Files\\nodejs\\codex.cmd\" app-server --listen pipe")).toBe(true);
     expect(isCodexAppServerCommandLine("codex --verbose app-server")).toBe(true);
     expect(isCodexAppServerCommandLine("codex-code-mode-host --session 1")).toBe(true);
     expect(isCodexAppServerCommandLine("node /opt/codex-code-mode-host --session 1")).toBe(true);
@@ -31,6 +35,24 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("something-app-server-without-codex-bin")).toBe(false);
     expect(isCodexAppServerCommandLine("node worker.js codex-code-mode-host")).toBe(false);
     expect(isCodexAppServerCommandLine("bash -c codex-code-mode-host")).toBe(false);
+  });
+
+  test("Windows candidate pre-filter matches quoted Install-path executables", () => {
+    expect(isWindowsCodexCandidateCommandLine(
+      "\"C:\\Program Files\\nodejs\\codex.exe\" app-server",
+    )).toBe(true);
+    expect(isWindowsCodexCandidateCommandLine(
+      "\"C:\\Program Files\\nodejs\\codex.cmd\" app-server --listen pipe",
+    )).toBe(true);
+    // Closing quote immediately after the executable basename.
+    expect(isWindowsCodexCandidateCommandLine("codex.exe\" app-server")).toBe(true);
+    expect(isWindowsCodexCandidateCommandLine("codex.cmd' app-server")).toBe(true);
+    expect(isWindowsCodexCandidateCommandLine("codex app-server")).toBe(true);
+    // Stay narrow: incidental "opencodex" paths must not pay GetOwner.
+    expect(isWindowsCodexCandidateCommandLine(
+      "node C:\\Users\\a\\opencodex\\src\\cli\\index.ts start",
+    )).toBe(false);
+    expect(isWindowsCodexCandidateCommandLine("hermes-codex-bridge-mcp")).toBe(false);
   });
 
   test("listCodexAppServerProcesses filters injected snapshots", () => {
@@ -193,6 +215,21 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
+  test("ocx sync-cache only handles app-servers after a successful models_cache write", () => {
+    const syncCacheCase = cliSource.slice(
+      cliSource.indexOf('case "sync-cache":'),
+      cliSource.indexOf('case "gui":'),
+    );
+    expect(syncCacheCase).toContain("invalidateCodexModelsCache()");
+    expect(syncCacheCase).toContain("if (invalidateCodexModelsCache())");
+    expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"))
+      .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
+    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"));
+    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+  });
+
   test("POST /api/sync always returns shared staleAppServerHint without enumerating processes", () => {
     const syncHandler = configRoutesSource.slice(
       configRoutesSource.indexOf('url.pathname === "/api/sync"'),
@@ -219,6 +256,10 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     expect(processSource).toContain("$o.ReturnValue -ne 0");
     expect(processSource).toContain(".join(\"\\n\")");
     expect(processSource).not.toMatch(/\$o=\$_\.GetOwner\(\)/);
+    // Shared candidate regex (optional closing quote after basename) drives -match.
+    expect(processSource).toContain("WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source");
+    expect(processSource).toContain("powerShellSingleQuotedIgnoreCaseMatch");
+    expect(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source).toContain("['\"]?");
   });
 
   test.skipIf(process.platform !== "win32")(
