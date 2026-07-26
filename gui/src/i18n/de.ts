@@ -1172,6 +1172,7 @@ export const de: Record<TKey, string> = {
   "cws.attentionTitle": "Aufmerksamkeit nötig",
   "cws.attention.empty": "Keine Ziele konfiguriert",
   "cws.attention.few": "Nur ein Ziel — Failover hat kein Ersatzziel",
+  "cws.attention.catalogOmitted": "Fehlt im Modellkatalog — Mitgliederfähigkeiten sind unvollständig oder inkompatibel (fehlendes Context-Window/Metadaten oder leere Modalitäts-Schnittmenge). Routing per Alias funktioniert weiterhin",
   "cws.emptyTitle": "Erste Combo erstellen",
   "cws.empty.createDesc": "Virtuelles Modell benennen und zwei oder mehr Backends verketten.",
   "cws.backToAll": "Zurück zu allen Combos",

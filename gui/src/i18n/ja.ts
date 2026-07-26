@@ -1232,6 +1232,7 @@ export const ja: Record<TKey, string> = {
   "cws.attentionTitle": "要対応",
   "cws.attention.empty": "ターゲットが設定されていません",
   "cws.attention.few": "ターゲットが 1 つだけ — フェイルオーバーのホップ先がありません",
+  "cws.attention.catalogOmitted": "モデルカタログにありません — メンバー能力が不完全または非互換です（context window / メタデータ不足、または modality 交差が空）。エイリアス指定のルーティングは動作します",
   "cws.emptyTitle": "最初のコンボを作成",
   "cws.empty.createDesc": "仮想モデルに名前を付け、2 つ以上のバックエンドをつなぎます。",
   "cws.backToAll": "すべてのコンボに戻る",

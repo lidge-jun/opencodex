@@ -54,6 +54,7 @@ describe("GUI/CLI Codex sync backend", () => {
         path: "/tmp/opencodex-catalog.json",
         catalogExists: true,
         cacheSynced: true,
+        comboOmissions: [],
       }),
       injectCodexConfig: async (port, _config, options) => {
         injectedPort = port;
@@ -76,6 +77,66 @@ describe("GUI/CLI Codex sync backend", () => {
     });
     expect(logs).toContain("   Target Codex home: C:\\Users\\[USER]\\.codex");
     expect(errors).toEqual([]);
+  });
+
+  test("surfaces combo catalog omissions in sync result and CLI stderr (#484)", async () => {
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const omission = {
+      id: "k3k3",
+      targets: ["kimi/k3", "xianyu/kimi-k3"],
+      reason: "incomplete_metadata" as const,
+      message: "[opencodex] Combo \"k3k3\" is omitted from the catalog because member capabilities are incomplete: kimi/k3, xianyu/kimi-k3.",
+    };
+    const result = await syncModelsToCodex(12345, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
+      refreshCodexModelCatalog: async () => ({
+        added: 1,
+        path: "/tmp/opencodex-catalog.json",
+        catalogExists: true,
+        cacheSynced: true,
+        comboOmissions: [omission],
+      }),
+      injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(result.comboOmissions).toEqual([omission]);
+    expect(result.warning).toContain("1 combo omitted from the catalog");
+    expect(errors).toEqual([
+      "1 combo omitted from the catalog because member capabilities are incomplete.",
+    ]);
+  });
+
+  test("CLI sync summary uses incompatible_modalities reason, not incomplete (#516)", async () => {
+    const errors: string[] = [];
+    const omission = {
+      id: "disjoint",
+      targets: ["a/m1", "b/m2"],
+      reason: "incompatible_modalities" as const,
+      message: "[opencodex] Combo \"disjoint\" is omitted from the catalog because members have no common input modalities: a/m1, b/m2.",
+    };
+    const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
+      refreshCodexModelCatalog: async () => ({
+        added: 0,
+        path: "/tmp/opencodex-catalog.json",
+        catalogExists: true,
+        cacheSynced: true,
+        comboOmissions: [omission],
+      }),
+      injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(result.comboOmissions).toEqual([omission]);
+    expect(result.warning).toBe(
+      "1 combo omitted from the catalog because members have no common input modalities.",
+    );
+    expect(errors).toEqual([
+      "1 combo omitted from the catalog because members have no common input modalities.",
+    ]);
+    expect(errors.join("\n")).not.toContain("member capabilities are incomplete");
   });
 
   test("keeps injection fallback behavior when catalog refresh throws", async () => {

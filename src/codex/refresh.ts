@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
+import type { ComboCatalogOmission } from "./catalog/aggregation";
 import { CODEX_MODELS_CACHE_PATH } from "./paths";
 import { atomicWriteFile } from "../config";
 import type { OcxConfig } from "../types";
@@ -9,6 +10,7 @@ export interface CodexCatalogRefreshResult {
   path: string;
   catalogExists: boolean;
   cacheSynced: boolean;
+  comboOmissions: ComboCatalogOmission[];
 }
 
 interface RefreshDeps {
@@ -40,7 +42,8 @@ export async function refreshCodexModelCatalog(
 ): Promise<CodexCatalogRefreshResult> {
   const result = await deps.syncCatalogModels(config);
   const catalogExists = deps.existsSync(result.path);
-  if (!catalogExists) return { ...result, catalogExists, cacheSynced: false };
+  const comboOmissions = result.comboOmissions ?? [];
+  if (!catalogExists) return { ...result, catalogExists, cacheSynced: false, comboOmissions };
   const cacheSynced = deps.invalidateCodexModelsCache();
-  return { ...result, catalogExists, cacheSynced };
+  return { ...result, catalogExists, cacheSynced, comboOmissions };
 }

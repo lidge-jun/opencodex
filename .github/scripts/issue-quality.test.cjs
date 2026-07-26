@@ -9,6 +9,7 @@ const {
   extractSection,
   detectIssueKind,
   validateIssue,
+  looksLikeUntemplatedBugReport,
   shouldReopen,
   shouldEnforceClosure,
   labelForKind,
@@ -1087,6 +1088,111 @@ describe("labelForKind", () => {
     assert.equal(labelForKind("provider-compatibility"), "provider-compatibility");
     assert.equal(labelForKind(null), null);
     assert.equal(labelForKind("unknown"), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Freeform / non-template bypass (e.g. issue #521)
+// ---------------------------------------------------------------------------
+
+describe("validateIssue - freeform / non-template", () => {
+  it("rejects a plain freeform body that previously skipped validation", () => {
+    const result = validateIssue({
+      title: "How do I configure?",
+      body: "Just a random question about setup.",
+      labels: [],
+    });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+    assert.equal(result.softPass, false);
+    assert.ok(result.reasons.some((r) => /recognized issue template/i.test(r)));
+    assert.ok(result.guidance.some((g) => /Bug report|Feature request/i.test(g)));
+  });
+
+  it("rejects a #521-shaped Description/Reproduction/Log entry body with a clear message", () => {
+    const body = [
+      "### Description",
+      "Proxy returns 502 when streaming is enabled on Windows.",
+      "### Reproduction",
+      "1. ocx start",
+      "2. Send a streaming request",
+      "3. Observe 502",
+      "### Log entry",
+      "```",
+      "upstream connect error or disconnect/reset before headers",
+      "```",
+    ].join("\n");
+    assert.equal(
+      detectIssueKind({ title: "Proxy 502 on streaming", body, labels: [] }),
+      null,
+      "near-miss headings must not silently classify as a structured bug",
+    );
+    assert.equal(looksLikeUntemplatedBugReport({ title: "Proxy 502 on streaming", body }), true);
+
+    const result = validateIssue({
+      title: "Proxy 502 on streaming",
+      body,
+      labels: [],
+    });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /bug report/i.test(r) && /template/i.test(r)),
+      `Expected bug-template reason, got: ${result.reasons.join("; ")}`,
+    );
+    assert.ok(
+      result.guidance.some((g) => /Client or integration|Summary|Reproduction/i.test(g)),
+      `Expected template-heading guidance, got: ${result.guidance.join("; ")}`,
+    );
+  });
+
+  it("still detects and validates a real structured bug as before", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Summary",
+      "Proxy segfaults on ARM64 when streaming is enabled.",
+      "### Reproduction",
+      "ocx start on Raspberry Pi 4, send any streaming request.",
+      "### Version",
+      "2.7.30",
+      "### Operating system",
+      "Debian 12 aarch64",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Segfault on ARM64 streaming",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, true);
+  });
+
+  it("does not treat Summary+Reproduction alone as a bug without prefix or label", () => {
+    // Existing anti-false-positive rule; freeform gate still fails these as untemplated.
+    const body = [
+      "### Summary",
+      "Something went wrong in the proxy.",
+      "### Reproduction",
+      "Run ocx start.",
+    ].join("\n");
+    assert.equal(detectIssueKind({ title: "Something went wrong", body, labels: [] }), null);
+    const result = validateIssue({ title: "Something went wrong", body, labels: [] });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+  });
+
+  it("keeps label-backed storedKind validation for enhancement freeform", () => {
+    // Workflow passes storedKind from the enhancement label; empty feature form still fails.
+    const result = validateIssue({
+      title: "How do I configure?",
+      body: "Just a random question about setup.",
+      labels: ["enhancement"],
+      storedKind: "feature",
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /missing or empty/i.test(r)));
   });
 });
 

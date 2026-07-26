@@ -854,8 +854,13 @@ jobs:
               return null;
             })();
             if (!kind && !labelBasedKind) {
-              core.info("Issue is not a structured form; skipping validation.");
-              return;
+              // Freeform / API-opened issues used to skip here, which let reports
+              // like non-template Description/Reproduction bodies bypass the gate.
+              // Continue into validateIssue (invalid) so non-trusted authors are
+              // closed with template guidance; trusted authors remain exempt below.
+              core.info(
+                "Issue is not a structured form; requiring a template for non-trusted authors.",
+              );
             }
             const resolvedKind = kind ?? labelBasedKind;
 
@@ -994,6 +999,7 @@ jobs:
             // Close (or re-close) the issue.
             const reasonList = result.reasons.map((r) => `- ${r}`).join("\n");
             const guidanceList = result.guidance.map((g) => `- ${g}`).join("\n");
+            const missingTemplate = !resolvedKind;
 
             // Close as not_planned.
             await github.rest.issues.update({
@@ -1013,13 +1019,20 @@ jobs:
               stateReason: closedIssue.state_reason || "not_planned",
             };
 
+            const closeHeading = missingTemplate
+              ? "### Issue closed: use an issue template"
+              : "### Issue closed: insufficient detail";
+            const closeIntro = missingTemplate
+              ? "Thanks for taking the time to submit this issue. It was closed automatically because it was not opened with a recognized issue template (Bug report, Feature request, Documentation, or Provider compatibility). Freeform and API-opened issues cannot skip this check."
+              : "Thanks for taking the time to submit this issue. It was closed automatically because the structured report is missing information needed to evaluate or reproduce it.";
+
             await upsertComment([
               BOT_MARKER,
               stateTag(newBotState),
               "",
-              "### Issue closed: insufficient detail",
+              closeHeading,
               "",
-              "Thanks for taking the time to submit this issue. It was closed automatically because the structured report is missing information needed to evaluate or reproduce it.",
+              closeIntro,
               "",
               reasonList,
               "",

@@ -1194,6 +1194,7 @@ export const en = {
   "cws.attentionTitle": "Needs attention",
   "cws.attention.empty": "No targets configured",
   "cws.attention.few": "Only one target — failover has nowhere to hop",
+  "cws.attention.catalogOmitted": "Missing from the model catalog — member capabilities are incomplete or incompatible (missing context window / metadata, or empty modality intersection). Routing by alias still works",
   "cws.emptyTitle": "Create your first combo",
   "cws.empty.createDesc": "Name a virtual model and chain two or more backends.",
   "cws.backToAll": "Back to all combos",

@@ -70,7 +70,7 @@ export interface ComboSections {
 export interface ComboAttentionItem {
   id: string;
   model: string;
-  reason: "few-targets" | "empty-targets";
+  reason: "few-targets" | "empty-targets" | "catalog-omitted";
 }
 
 export const COMBO_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -176,13 +176,23 @@ export function filterCombos(items: ComboItem[], query: string): ComboItem[] {
   });
 }
 
-export function buildComboAttention(items: ComboItem[]): ComboAttentionItem[] {
+export function buildComboAttention(
+  items: ComboItem[],
+  options: { cataloguedComboIds?: ReadonlySet<string> } = {},
+): ComboAttentionItem[] {
   const out: ComboAttentionItem[] = [];
+  const catalogued = options.cataloguedComboIds;
   for (const item of items) {
     if (item.targets.length === 0) {
       out.push({ id: item.id, model: item.model, reason: "empty-targets" });
     } else if (item.targets.length < 2) {
       out.push({ id: item.id, model: item.model, reason: "few-targets" });
+    }
+    // Configured combos missing from the live catalog (usually incomplete member
+    // contextWindow / modality intersection) still route by alias, but never appear
+    // in Codex's picker — flag that gap (#484).
+    if (catalogued && item.targets.length > 0 && !catalogued.has(item.id)) {
+      out.push({ id: item.id, model: item.model, reason: "catalog-omitted" });
     }
   }
   return out;

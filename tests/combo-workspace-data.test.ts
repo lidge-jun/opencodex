@@ -194,6 +194,21 @@ describe("combo-workspace-data", () => {
     ]);
   });
 
+  test("attention flags combos missing from the live catalog (#484)", () => {
+    const attention = buildComboAttention(
+      [
+        combo({ id: "ok" }),
+        combo({ id: "missing", model: "combo/missing" }),
+        combo({ id: "empty", model: "combo/empty", targets: [] }),
+      ],
+      { cataloguedComboIds: new Set(["ok"]) },
+    );
+    expect(attention).toEqual([
+      { id: "missing", model: "combo/missing", reason: "catalog-omitted" },
+      { id: "empty", model: "combo/empty", reason: "empty-targets" },
+    ]);
+  });
+
   test("validates combo id boundaries and duplicate ids on create and rename", () => {
     expect(isValidComboId("a")).toBe(true);
     expect(isValidComboId(`a${"x".repeat(63)}`)).toBe(true);

@@ -70,6 +70,26 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 `max_concurrent_threads_per_session` value under `[features.multi_agent_v2]` in Codex's
 `$CODEX_HOME/config.toml`; enable v2 first so that table exists.
 
+## Combos (`config.combos`)
+
+Failover / round-robin aliases live under `combos.<id>` with `targets` (provider + model), optional
+`strategy`, `alias`, and `defaultEffort`. A combo is always routable by `combo/<id>` or its alias
+when requested explicitly.
+
+Catalog listing is stricter. `ocx sync`, `/v1/models`, and Codex's model picker only include a combo
+when **every** target has discoverable capabilities that can be intersected:
+
+- a positive `contextWindow` (from live `/models`, registry hints, or provider
+  `modelContextWindows` / `contextWindow`)
+- a non-empty `inputModalities` intersection (defaults to `["text"]` when a member omits modalities)
+
+When a member is a bare relay id with no context metadata, or when members advertise **disjoint**
+`inputModalities` (empty intersection), the combo is **omitted from the catalog** even though direct
+requests still work. `ocx sync` surfaces a summary warning (and `console.warn` once per combo); the
+Combos dashboard flags it under Needs attention. Fix by setting `modelContextWindows` / matching
+modalities on the relay provider, or by pointing targets at models that already advertise compatible
+fields.
+
 If an older development build already ran `syncResumeHistory` before backup support existed, you can
 also force the same native-provider recovery with `ocx recover-history --legacy-openai`.
 

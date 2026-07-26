@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -202,6 +202,33 @@ describe("combo catalog capability intersection", () => {
         { provider: "a", model: "m1", weight: 1 },
       ],
     }), [memberA, memberA])).toBeNull();
+  });
+
+  test("omission diagnostics distinguish incomplete metadata from disjoint modalities (#516)", () => {
+    const incompleteMembers = [memberA];
+    expect(comboCatalogOmissionReason(normalizedCombo(), incompleteMembers)).toBe("incomplete_metadata");
+    const incomplete = buildComboCatalogOmission("missing-meta", normalizedCombo(), incompleteMembers);
+    expect(incomplete).toMatchObject({
+      id: "missing-meta",
+      reason: "incomplete_metadata",
+    });
+    expect(incomplete.message).toContain("member capabilities are incomplete");
+    expect(incomplete.message).not.toContain("no common input modalities");
+
+    const disjointMembers = [
+      { ...memberA, inputModalities: ["image"] },
+      { ...memberB, inputModalities: ["text"] },
+    ];
+    expect(comboCatalogOmissionReason(normalizedCombo(), disjointMembers)).toBe("incompatible_modalities");
+    expect(deriveComboCatalogModel("disjoint", normalizedCombo(), disjointMembers)).toBeNull();
+    const incompatible = buildComboCatalogOmission("disjoint", normalizedCombo(), disjointMembers);
+    expect(incompatible).toMatchObject({
+      id: "disjoint",
+      reason: "incompatible_modalities",
+      targets: ["a/m1", "b/m2"],
+    });
+    expect(incompatible.message).toContain("no common input modalities");
+    expect(incompatible.message).not.toContain("member capabilities are incomplete");
   });
 
   test("requires member identity to follow target order", () => {
@@ -477,10 +504,65 @@ describe("combo catalog capability intersection", () => {
       expect(String(warn.mock.calls[0]?.[0])).toContain("[REDACTED]");
       expect(String(warn.mock.calls[0]?.[0])).not.toContain(warningSentinel);
       expect(second).toEqual(first);
+      const { getLastComboCatalogOmissions } = await import("../src/codex/catalog");
+      const hidden = getLastComboCatalogOmissions().find(item => item.id === "hidden");
+      expect(hidden).toMatchObject({
+        id: "hidden",
+        reason: "incomplete_metadata",
+      });
+      expect(hidden?.message).toContain("member capabilities are incomplete");
+      expect(hidden?.message).toContain("[REDACTED]");
 
       resetCatalogRuntimeStateForTests();
       await gatherRoutedModels(config);
       expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  }, 15_000);
+
+  test("gather warns about disjoint modalities without calling them incomplete (#516)", async () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "a",
+      providers: {
+        a: {
+          adapter: "openai-chat",
+          baseUrl: "https://a.example/v1",
+          liveModels: false,
+          models: ["m1"],
+          modelContextWindows: { m1: 200_000 },
+          modelInputModalities: { m1: ["image"] },
+        },
+        b: {
+          adapter: "openai-chat",
+          baseUrl: "https://b.example/v1",
+          liveModels: false,
+          models: ["m2"],
+          modelContextWindows: { m2: 128_000 },
+          modelInputModalities: { m2: ["text"] },
+        },
+      },
+      combos: {
+        disjoint: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+      },
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      resetCatalogRuntimeStateForTests();
+      const models = await gatherRoutedModels(config);
+      expect(models.some(model => model.provider === "combo" && model.id === "disjoint")).toBe(false);
+      const { getLastComboCatalogOmissions } = await import("../src/codex/catalog");
+      const omission = getLastComboCatalogOmissions().find(item => item.id === "disjoint");
+      expect(omission).toMatchObject({
+        id: "disjoint",
+        reason: "incompatible_modalities",
+      });
+      expect(omission?.message).toContain("no common input modalities");
+      expect(omission?.message).not.toContain("member capabilities are incomplete");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("no common input modalities");
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain("member capabilities are incomplete");
     } finally {
       warn.mockRestore();
     }

@@ -1,20 +1,31 @@
 import type { ComboItem } from "../combo-workspace-data";
 import { buildComboAttention, groupCombos } from "../combo-workspace-data";
 import { IconAlert, IconChevron, IconPlus } from "../icons";
-import { useT } from "../i18n/shared";
+import { useT, type TFn } from "../i18n/shared";
+
+function attentionCopy(
+  reason: "empty-targets" | "few-targets" | "catalog-omitted",
+  t: TFn,
+): string {
+  if (reason === "empty-targets") return t("cws.attention.empty");
+  if (reason === "catalog-omitted") return t("cws.attention.catalogOmitted");
+  return t("cws.attention.few");
+}
 
 export function OverviewPanel({
   combos,
+  cataloguedComboIds,
   onSelect,
   onAdd,
 }: {
   combos: ComboItem[];
+  cataloguedComboIds?: ReadonlySet<string>;
   onSelect: (id: string) => void;
   onAdd: () => void;
 }) {
   const t = useT();
   const sections = groupCombos(combos);
-  const attention = buildComboAttention(combos);
+  const attention = buildComboAttention(combos, { cataloguedComboIds });
 
   return (
     <div className="combos-workspace-overview">
@@ -41,12 +52,15 @@ export function OverviewPanel({
           <h3 className="pwi-section-title">{t("cws.attentionTitle")}</h3>
           <div className="cwi-attention-list">
             {attention.map((item) => (
-              <button key={item.id} type="button" className="cwi-attention-row" onClick={() => onSelect(item.id)}>
+              <button
+                key={`${item.id}:${item.reason}`}
+                type="button"
+                className="cwi-attention-row"
+                onClick={() => onSelect(item.id)}
+              >
                 <IconAlert width={14} height={14} aria-hidden="true" />
                 <code className="chip">{item.model}</code>
-                <span className="muted">
-                  {item.reason === "empty-targets" ? t("cws.attention.empty") : t("cws.attention.few")}
-                </span>
+                <span className="muted">{attentionCopy(item.reason, t)}</span>
                 <IconChevron width={14} height={14} style={{ marginLeft: "auto" }} aria-hidden="true" />
               </button>
             ))}

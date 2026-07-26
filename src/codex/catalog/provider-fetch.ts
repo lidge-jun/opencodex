@@ -47,7 +47,8 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
-import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, warnUncataloguedComboOnce } from "./aggregation";
+import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
+import type { ComboCatalogOmission } from "./aggregation";
 
 type OcxProviderConfigWithReasoningSummaries = OcxProviderConfig & {
   modelSupportsReasoningSummaries?: Record<string, boolean>;
@@ -464,7 +465,12 @@ export function filterCatalogVisibleModels(
   });
 }
 
-export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
+export async function gatherRoutedModels(
+  config: OcxConfig,
+  options?: { comboOmissions?: ComboCatalogOmission[] },
+): Promise<CatalogModel[]> {
+  // Per-invocation list: sync passes `comboOmissions` so overlapping gathers cannot race.
+  const localOmissions: ComboCatalogOmission[] = [];
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
   // Persisted provider entries can predate newer registry fields (noVisionModels,
   // modelInputModalities, ...). The ROUTER merges registry seeds at request time
@@ -542,7 +548,12 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
     if (derived) all.push(derived);
-    else warnUncataloguedComboOnce(id, combo, members);
+    else warnUncataloguedComboOnce(id, combo, members, localOmissions);
+  }
+  replaceLastComboCatalogOmissions(localOmissions);
+  if (options?.comboOmissions) {
+    options.comboOmissions.length = 0;
+    options.comboOmissions.push(...localOmissions);
   }
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so

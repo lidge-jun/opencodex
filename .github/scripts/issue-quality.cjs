@@ -421,7 +421,97 @@ function isRawPlaceholder(raw) {
 }
 
 /**
+ * Near-miss freeform headings that often appear in API-opened or copy-pasted
+ * bug reports instead of the Bug report template (e.g. Description / Log entry).
+ */
+const FREEFORM_BUG_NEAR_MISS_HEADINGS = [
+  "Description",
+  "Steps to reproduce",
+  "Steps to Reproduce",
+  "How to reproduce",
+  "Log",
+  "Logs",
+  "Log entry",
+  "Error",
+  "Error output",
+  "Stack trace",
+];
+
+/**
+ * True when an unclassified body looks like a bug report that skipped the
+ * template (near-miss headings and/or repro/error signals).
+ *
+ * @param {{ title?: string, body?: string }} issue
+ * @returns {boolean}
+ */
+function looksLikeUntemplatedBugReport(issue) {
+  const body = typeof issue?.body === "string" ? issue.body : "";
+  if (!body.trim()) return false;
+
+  const nearMissCount = countHeadings(body, FREEFORM_BUG_NEAR_MISS_HEADINGS);
+  const hasReproduction =
+    extractSection(body, "Reproduction") !== null ||
+    extractSection(body, "Steps to reproduce") !== null ||
+    extractSection(body, "Steps to Reproduce") !== null ||
+    extractSection(body, "How to reproduce") !== null;
+  const hasDescription = extractSection(body, "Description") !== null;
+  const hasLogOrError =
+    extractSection(body, "Log") !== null ||
+    extractSection(body, "Logs") !== null ||
+    extractSection(body, "Log entry") !== null ||
+    extractSection(body, "Logs or error output") !== null ||
+    extractSection(body, "Error") !== null ||
+    extractSection(body, "Error output") !== null ||
+    extractSection(body, "Stack trace") !== null;
+
+  if (hasDescription && (hasReproduction || hasLogOrError)) return true;
+  if (hasReproduction && hasLogOrError) return true;
+  if (nearMissCount >= 2) return true;
+
+  // Body-level signals for heading-free freeform dumps.
+  const signalRe =
+    /\b(repro(?:duce|duction| steps)?|stack\s*traces?|traceback|segfault|panic|exception|error\s*output|ECONNREFUSED|SIGSEGV)\b/i;
+  if (signalRe.test(body) && (hasDescription || hasReproduction || hasLogOrError || nearMissCount >= 1)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Reasons/guidance when no structured issue kind was detected.
+ *
+ * @param {{ title?: string, body?: string }} issue
+ * @returns {{ reasons: string[], guidance: string[] }}
+ */
+function untemplatedIssueFailure(issue) {
+  if (looksLikeUntemplatedBugReport(issue)) {
+    return {
+      reasons: [
+        "This looks like a bug report but it does not use the Bug report template headings (for example Description/Log entry instead of Summary).",
+      ],
+      guidance: [
+        "Use the Bug report template, or edit this issue to include: Client or integration, Summary, Reproduction, Version, and Operating system.",
+        "Retitling with `[Bug]:` and applying the `bug` label alone is not enough without those section headings filled in.",
+      ],
+    };
+  }
+  return {
+    reasons: [
+      "This issue does not use a recognized issue template.",
+    ],
+    guidance: [
+      "Open a new issue with the Bug report, Feature request, Documentation, or Provider compatibility template.",
+      "Or edit this issue so the body uses the template section headings for the kind of report you are filing.",
+    ],
+  };
+}
+
+/**
  * Validate an issue body for its detected kind.
+ *
+ * Unclassified (freeform / non-template) issues are invalid so API-opened
+ * reports cannot skip the quality gate. Trusted-author exemption is enforced
+ * by the workflow, not here.
  *
  * @param {{ title: string, body: string, labels: string[], storedKind?: string|null }} issue
  * @returns {{ kind: string|null, valid: boolean, softPass: boolean, reasons: string[], guidance: string[] }}
@@ -435,8 +525,14 @@ function validateIssue(issue) {
   const titleLower = title.toLowerCase();
 
   if (!kind) {
-    // Not a structured form we validate.
-    return { kind: null, valid: true, softPass: false, reasons: [], guidance: [] };
+    const failure = untemplatedIssueFailure(issue);
+    return {
+      kind: null,
+      valid: false,
+      softPass: false,
+      reasons: failure.reasons,
+      guidance: failure.guidance,
+    };
   }
 
   if (kind === "feature") {
@@ -720,6 +816,7 @@ module.exports = {
   resolveSection,
   detectIssueKind,
   validateIssue,
+  looksLikeUntemplatedBugReport,
   shouldReopen,
   shouldEnforceClosure,
   isPlaceholderOnlyValue,
