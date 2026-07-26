@@ -29,6 +29,11 @@ export interface PersistedUsageAttempt {
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
 }
 
 export interface PersistedUsageEntry {
@@ -200,6 +205,20 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(typeof attempt.requestedEffort === "string" && attempt.requestedEffort
+      ? { requestedEffort: capMetadataString(attempt.requestedEffort) }
+      : {}),
+    ...(typeof attempt.effectiveEffort === "string" && attempt.effectiveEffort
+      ? { effectiveEffort: capMetadataString(attempt.effectiveEffort) }
+      : {}),
+    ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
+      ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
+      : {}),
+    ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
+        ? { reasoningWireValue: attempt.reasoningWireValue }
+        : {}),
   };
 }
 

@@ -92,6 +92,7 @@ import {
   noteAttemptSend,
   readConfiguredCodexServiceTier,
   recordAdapterReasoning,
+  recordAttemptRequestedEffort,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
   usageFromResponsesPayload,
@@ -593,6 +594,7 @@ async function applyFinalRouteRequestNormalization(args: {
       logCtx.requestedEffort = `${logCtx.requestedEffort ?? "max"}->${clamped}`;
     }
   }
+  recordAttemptRequestedEffort(logCtx);
   logCtx.modelSupportsServiceTier = catalogModelSupportsServiceTier(
     route.modelId,
     logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,

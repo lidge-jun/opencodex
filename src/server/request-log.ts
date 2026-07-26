@@ -284,6 +284,20 @@ export function recordFirstOutput(
   }
 }
 
+/** Snapshot target-specific requested effort even for runTurn adapters with no AdapterRequest. */
+export function recordAttemptRequestedEffort(logCtx: RequestLogContext): void {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt) return;
+  delete attempt.requestedEffort;
+  try {
+    if (typeof logCtx.requestedEffort === "string" && logCtx.requestedEffort) {
+      attempt.requestedEffort = redactSecretString(logCtx.requestedEffort).slice(0, 64);
+    }
+  } catch {
+    // Request logging is best-effort and must not affect request delivery.
+  }
+}
+
 /** Copy the adapter's exact outbound reasoning parameter into the durable request log. */
 export function recordAdapterReasoning(
   logCtx: RequestLogContext,
@@ -292,12 +306,47 @@ export function recordAdapterReasoning(
   delete logCtx.effectiveEffort;
   delete logCtx.reasoningWireField;
   delete logCtx.reasoningWireValue;
-  if (!request.reasoningLog) return;
-  logCtx.effectiveEffort = redactSecretString(request.reasoningLog.effectiveEffort).slice(0, 64);
-  logCtx.reasoningWireField = request.reasoningLog.wireField;
-  logCtx.reasoningWireValue = typeof request.reasoningLog.wireValue === "string"
-    ? redactSecretString(request.reasoningLog.wireValue).slice(0, 64)
-    : request.reasoningLog.wireValue;
+  const attempt = logCtx.activeAttempt;
+  if (attempt) {
+    delete attempt.effectiveEffort;
+    delete attempt.reasoningWireField;
+    delete attempt.reasoningWireValue;
+  }
+  recordAttemptRequestedEffort(logCtx);
+
+  // Diagnostics must never make an otherwise valid upstream request fail. Config files
+  // written by older versions (or edited by hand) can contain values that violate the
+  // current TypeScript shape, so validate the runtime object before redacting strings.
+  try {
+    const raw: unknown = request.reasoningLog;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const reasoning = raw as Record<string, unknown>;
+    if (typeof reasoning.effectiveEffort !== "string" || !reasoning.effectiveEffort
+      || (reasoning.wireField !== "reasoning_effort"
+        && reasoning.wireField !== "thinking_budget"
+        && reasoning.wireField !== "thinking.type")
+      || (typeof reasoning.wireValue !== "string"
+        && !(typeof reasoning.wireValue === "number"
+          && Number.isFinite(reasoning.wireValue)
+          && reasoning.wireValue >= 0))) {
+      return;
+    }
+
+    const effectiveEffort = redactSecretString(reasoning.effectiveEffort).slice(0, 64);
+    const wireValue = typeof reasoning.wireValue === "string"
+      ? redactSecretString(reasoning.wireValue).slice(0, 64)
+      : reasoning.wireValue;
+    logCtx.effectiveEffort = effectiveEffort;
+    logCtx.reasoningWireField = reasoning.wireField;
+    logCtx.reasoningWireValue = wireValue;
+    if (attempt) {
+      attempt.effectiveEffort = effectiveEffort;
+      attempt.reasoningWireField = reasoning.wireField;
+      attempt.reasoningWireValue = wireValue;
+    }
+  } catch {
+    // Request logging is best-effort and must not affect request delivery.
+  }
 }
 
 export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {

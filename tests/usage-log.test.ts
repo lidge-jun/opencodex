@@ -54,6 +54,10 @@ describe("usage log", () => {
         inputTokenEstimate: 5,
         usage: { inputTokens: 5, outputTokens: 0, estimated: true },
         totalTokens: 5,
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
         headers: { authorization: "Bearer attempt-token" },
         body: "attempt body secret",
         messages: ["attempt message secret"],
@@ -86,7 +90,45 @@ describe("usage log", () => {
       inputTokenEstimate: 5,
       usage: { inputTokens: 5, outputTokens: 0, estimated: true },
       totalTokens: 5,
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
     }]);
+  });
+
+  test("omits malformed optional attempt reasoning metadata without dropping the attempt", () => {
+    appendUsageEntry({
+      requestId: "ocx-attempt-reasoning",
+      timestamp: 1,
+      provider: "combo",
+      model: "combo/free",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "unreported",
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        requestedEffort: 123,
+        effectiveEffort: null,
+        reasoningWireField: {},
+        reasoningWireValue: -1,
+      } as never],
+    });
+
+    const attempt = readUsageEntries()[0]?.attempts?.[0];
+    expect(attempt?.ordinal).toBe(1);
+    expect(attempt).not.toHaveProperty("requestedEffort");
+    expect(attempt).not.toHaveProperty("effectiveEffort");
+    expect(attempt).not.toHaveProperty("reasoningWireField");
+    expect(attempt).not.toHaveProperty("reasoningWireValue");
   });
 
   test("drops only malformed persisted attempts while preserving valid siblings", () => {

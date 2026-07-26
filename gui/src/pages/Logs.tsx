@@ -85,6 +85,10 @@ interface LogAttempt {
   totalTokens?: number;
   errorCode?: string;
   firstOutputMs?: number;
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   displayMetrics?: LogDisplayMetrics;
 }
 
@@ -166,7 +170,14 @@ function speedLabel(log: LogEntry): string | undefined {
   return undefined;
 }
 
-function effortLabel(log: LogEntry): string {
+interface ReasoningLogFields {
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
+}
+
+function effortLabel(log: ReasoningLogFields): string {
   const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
   const effective = log.effectiveEffort;
   if (!requested) return effective ?? "-";
@@ -174,7 +185,7 @@ function effortLabel(log: LogEntry): string {
   return `${requested} → ${effective}`;
 }
 
-function reasoningWireLabel(log: LogEntry): string | undefined {
+function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
   if (!log.reasoningWireField || log.reasoningWireValue === undefined) return undefined;
   return `${log.reasoningWireField}=${log.reasoningWireValue}`;
 }
@@ -667,6 +678,7 @@ function LogDetailDialog({
                 </tr></thead>
                 <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
+                  const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
                   const reason = attempt.errorCode
                     ?? (attempt.recoveryKinds.length ? attempt.recoveryKinds.join(", ") : undefined)
@@ -677,6 +689,14 @@ function LogDetailDialog({
                       <td>
                         <span>{attempt.provider}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {(attempt.requestedEffort || attempt.effectiveEffort) && (
+                          <>
+                            <br />
+                            <span className="mono muted text-caption log-detail-break">
+                              {effortLabel(attempt)}{attemptReasoningWire ? ` (${attemptReasoningWire})` : ""}
+                            </span>
+                          </>
+                        )}
                         {matched && (
                           <>
                             <br />

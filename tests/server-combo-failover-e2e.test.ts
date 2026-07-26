@@ -816,6 +816,42 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bHits).toBe(1);
   });
 
+  test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "first target unavailable" });
+        return;
+      }
+      emit({ type: "text_delta", text: "runTurn backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await postLogged(config, {
+      reasoning: { effort: "high" },
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("runTurn backup");
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        attempts: [
+          { ordinal: 1, provider: "a", requestedEffort: "high" },
+          { ordinal: 2, provider: "b", requestedEffort: "high" },
+        ],
+      });
+      for (const attempt of receipt.attempts as Array<Record<string, unknown>>) {
+        expect(attempt).not.toHaveProperty("effectiveEffort");
+        expect(attempt).not.toHaveProperty("reasoningWireField");
+        expect(attempt).not.toHaveProperty("reasoningWireValue");
+      }
+    }
+  });
+
   test("hosted web-search eager model failure hops through the loop path", async () => {
     const modelHits: Array<{ model?: string; hasWebTool: boolean }> = [];
     const routed = serve(async request => {
