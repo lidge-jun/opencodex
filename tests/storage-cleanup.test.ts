@@ -666,7 +666,7 @@ describe("executeArchivedCleanup", () => {
     expect(Buffer.compare(beforeGoals, readFileSync(join(home, "goals_1.sqlite")))).toBe(0);
     expect(Buffer.compare(beforeMemories, readFileSync(join(home, "memories_1.sqlite")))).toBe(0);
     expect(Buffer.compare(beforeState, readFileSync(join(home, "state_5.sqlite")))).toBe(0);
-  });
+  }, { timeout: 20_000 });
 
   // Windows CI: injected satellite rollback paths (especially goals) can measure 6–13s
   // there and trip bun's default 5s harness timeout.
