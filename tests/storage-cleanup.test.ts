@@ -1521,6 +1521,60 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(existsSync(stage)).toBe(false);
   }, { timeout: 20_000 });
 
+  test("mid-move failure keeps placed dest, marker, and resumes without dest_exists", () => {
+    // First rename succeeds, second throws. Do not reverse the first file or drop
+    // the durable planned acceptedDestRels — retry must finish both states.
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_550 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterMoveCount: 1 },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(failed.count).toBe(1);
+    expect(failed.restoredPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
+
+    // First dest stays; remaining rollouts stay staged; marker keeps full plan.
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(join(stage, "rollout-mid.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-new.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      filesRestored: boolean;
+      acceptedDestRels: string[];
+      pending: { state: boolean; logs: boolean; memories: boolean; goals: boolean };
+    };
+    expect(pending.filesRestored).toBe(true);
+    expect(pending.acceptedDestRels).toEqual([
+      "archived_sessions/rollout-old.jsonl",
+      "archived_sessions/rollout-mid.jsonl",
+      "archived_sessions/rollout-new.jsonl",
+    ]);
+    expect(pending.pending).toEqual({
+      state: true,
+      logs: true,
+      memories: true,
+      goals: true,
+    });
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(retried.error).not.toBe("dest_exists");
+    expect(retried.error).not.toBe("fs_failed");
+    expect(retried.count).toBe(3);
+    expect(existsSync(stage)).toBe(false);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
+  }, { timeout: 20_000 });
+
   test("malformed restore-pending.json is not treated as a fresh restore", () => {
     home = buildHome({ withSatelliteStores: true });
     const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_600 });

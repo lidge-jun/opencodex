@@ -619,7 +619,11 @@ interface RestorePendingSections {
 interface RestorePendingState {
   version: 1;
   filesRestored: true;
-  /** CODEX_HOME-relative paths already restored by this incomplete attempt. */
+  /**
+   * Planned CODEX_HOME-relative destinations for this restore attempt.
+   * Written before moves so a mid-loop failure can still accept placed dests
+   * on resume while finishing files that remain staged.
+   */
   acceptedDestRels: string[];
   /** Sections that still need reconciliation on retry. */
   pending: RestorePendingSections;
@@ -727,15 +731,6 @@ function remapSatelliteBackupPaths(
     next.goals = { ...backup.goals, path: paths.goals };
   }
   return { ok: true, backup: next };
-}
-
-function rollbackMoves(moved: StagedFile[]): void {
-  for (let i = moved.length - 1; i >= 0; i--) {
-    const item = moved[i]!;
-    try {
-      if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
-    } catch { /* best-effort */ }
-  }
 }
 
 /**
@@ -2236,6 +2231,11 @@ export interface RestoreTestHooks {
   failPendingWriteBeforeRename?: boolean;
   /** Crash immediately after file moves (marker already durable). */
   failAfterFileMoves?: boolean;
+  /**
+   * After this many successful rollout moves in the current attempt, throw.
+   * Exercises mid-loop failure with some dests placed and others still staged.
+   */
+  failAfterMoveCount?: number;
 }
 
 /**
@@ -2484,31 +2484,34 @@ export function restoreTrashEntry(
   try {
     mkdirSync(join(codexHome, ARCHIVED_SESSIONS_DIR), { recursive: true });
     for (const item of toMove) {
-      // Atomic no-replace (.trash ↔ archived_sessions); rollbackMoves undoes a partial run.
+      // Atomic no-replace (.trash ↔ archived_sessions). Mid-loop failure keeps
+      // already-placed dests and the durable planned acceptedDestRels marker.
       renameNoReplace(item.from, item.to);
       newlyMoved.push(item);
+      if (
+        hooks?.failAfterMoveCount !== undefined
+        && newlyMoved.length >= hooks.failAfterMoveCount
+      ) {
+        throw new Error("test_fail_after_move_count");
+      }
     }
   } catch (error) {
-    rollbackMoves(newlyMoved);
-    if (alreadyMoved.length > 0 || priorPending) {
-      try {
-        writeRestorePending(stageDir, {
-          version: 1,
-          filesRestored: true,
-          acceptedDestRels: alreadyMoved.map(m => m.relPath),
-          pending: { ...pendingSections },
-        });
-      } catch { /* best-effort — keep prior marker if rewrite fails */ }
-    } else {
-      try { unlinkSync(join(stageDir, RESTORE_PENDING_FILE)); } catch { /* */ }
-    }
+    // Marker was written before any move. Never reverse successful renames or
+    // drop/narrow acceptedDestRels — resume must accept placed dests and finish
+    // the remaining staged files.
     if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
+    const placed = [...alreadyMoved, ...newlyMoved];
+    const placedPhysical = new Set(placed.map(m => m.relPath));
+    const partialEntries = entries.filter(e =>
+      e.physicalRelPaths.every(rel => placedPhysical.has(rel)),
+    );
+    const midMoveRestored = [...new Set(partialEntries.map(e => e.relPath))];
     return {
       ok: false,
       trashDir: id,
-      count: 0,
-      bytes: 0,
-      restoredPaths: [],
+      count: midMoveRestored.length,
+      bytes: partialEntries.reduce((sum, e) => sum + (e.bytes || 0), 0),
+      restoredPaths: midMoveRestored,
       error: isExistError(error) ? "dest_exists" : "fs_failed",
     };
   }
