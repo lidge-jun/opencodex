@@ -369,6 +369,8 @@ interface PoolQuotaResult {
   needsReauth: boolean;
   /** Present only when this call freshly parsed a WHAM usage response. */
   freshQuota?: Omit<StoredAccountQuota, "updatedAt">;
+  /** Present only when this call's WHAM response included a non-empty `plan_type`. */
+  freshPlan?: string;
   /** Present only when this call's WHAM response included `rate_limit_reset_credits.available_count`. */
   freshResetCredits?: number;
 }
@@ -403,7 +405,10 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
     });
     if (!resp.ok) return { quota: existing ?? null, needsReauth: resp.status === 401 };
     const data = (await resp.json()) as WhamUsageResponse;
-    const quota = parseUsageQuota({ ...data, plan_type: data.plan_type ?? configuredPlan });
+    const freshPlan = typeof data.plan_type === "string" && data.plan_type.trim() !== ""
+      ? data.plan_type
+      : undefined;
+    const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
     const freshResetCredits = quota?.resetCredits;
     if (!quota) return { quota: existing ?? null, needsReauth: false };
     setAccountQuotaFromParsed(accountId, quota);
@@ -411,6 +416,7 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
       quota: getAccountQuota(accountId),
       needsReauth: false,
       freshQuota: quota,
+      ...(freshPlan !== undefined ? { freshPlan } : {}),
       ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
     };
   } catch (e) {
@@ -536,7 +542,7 @@ async function pauseExhaustedCodexAccounts(config: OcxConfig): Promise<string[]>
   for (const { account, quotaResult } of poolResults) {
     if (
       !isCodexAccountPaused(config, account.id)
-      && isCodexQuotaExhausted(quotaResult?.freshQuota ?? null, account.plan)
+      && isCodexQuotaExhausted(quotaResult?.freshQuota ?? null, quotaResult?.freshPlan ?? account.plan)
     ) {
       exhaustedIds.push(account.id);
     }

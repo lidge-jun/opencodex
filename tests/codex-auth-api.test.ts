@@ -1149,6 +1149,7 @@ describe("codex-auth API", () => {
         { id: "exhausted", email: "exhausted@example.test", plan: "plus", isMain: false },
         { id: "available", email: "available@example.test", plan: "plus", isMain: false },
         { id: "free-weekly-only", email: "free@example.test", plan: "free", isMain: false },
+        { id: "upgraded-plus", email: "upgraded@example.test", plan: "free", isMain: false },
         { id: "stale-unknown", email: "stale@example.test", plan: "plus", isMain: false },
         { id: "already-paused", email: "paused@example.test", plan: "plus", isMain: false },
       ],
@@ -1169,10 +1170,10 @@ describe("codex-auth API", () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const accountId = new Headers(init?.headers).get("ChatGPT-Account-Id");
       if (accountId === "stale-unknown") return new Response(null, { status: 502 });
-      const weekly = accountId === "exhausted" || accountId === "already-paused" || accountId === "free-weekly-only"
+      const weekly = accountId === "exhausted" || accountId === "already-paused" || accountId === "free-weekly-only" || accountId === "upgraded-plus"
         ? 100
         : 72;
-      const monthly = accountId === "free-weekly-only" ? 20 : 40;
+      const monthly = accountId === "free-weekly-only" || accountId === "upgraded-plus" ? 20 : 40;
       return Response.json({
         plan_type: accountId === "free-weekly-only" ? "free" : "plus",
         rate_limit: {
@@ -1187,12 +1188,12 @@ describe("codex-auth API", () => {
 
     expect(resp!.status).toBe(200);
     expect(await resp!.json()).toMatchObject({
-      pausedAccountIds: ["exhausted"],
-      pausedCount: 1,
+      pausedAccountIds: ["exhausted", "upgraded-plus"],
+      pausedCount: 2,
       activeCodexAccountId: null,
       appliesImmediately: true,
     });
-    expect(config.pausedCodexAccountIds).toEqual(["already-paused", "exhausted"]);
+    expect(config.pausedCodexAccountIds).toEqual(["already-paused", "exhausted", "upgraded-plus"]);
     expect(resolveCodexAccountForThread("bulk-pause-thread", config)).toBe("free-weekly-only");
   });
 
