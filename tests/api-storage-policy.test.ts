@@ -283,7 +283,10 @@ describe("storage cleanup policy API", () => {
   }, { timeout: 30_000 });
 
   test("blocked worker completion preserves concurrent policy PUT edits", async () => {
-    setStorageCleanupPolicyJobTestHooks({ blockMs: 800 });
+    // Long hold so a slow Windows CI worker spawn can load the enabled snapshot
+    // before the concurrent PUT lands inside holdAfterLoadMs.
+    const blockMs = 1_500;
+    setStorageCleanupPolicyJobTestHooks({ blockMs });
     seedArchived(isolatedCodexHome!.path);
     const server = startServer(0);
     try {
@@ -307,17 +310,21 @@ describe("storage cleanup policy API", () => {
       expect(runStart.started).toBe(true);
       expect(runStart.job?.status).toBe("running");
 
-      // Wait until the job is visibly running, then edit policy while the worker holds.
-      const editDeadline = Date.now() + 2_000;
+      // Status flips to running before the worker loads policy — wait for that marker,
+      // then allow spawn+load margin before editing during the hold window.
+      const editDeadline = Date.now() + 5_000;
+      let sawRunning = false;
       while (Date.now() < editDeadline) {
         const peek = await fetch(new URL("/api/storage/cleanup-policy", server.url));
         const peekBody = await peek.json() as { job?: { status?: string } };
-        if (peekBody.job?.status === "running") break;
+        if (peekBody.job?.status === "running") {
+          sawRunning = true;
+          break;
+        }
         await Bun.sleep(20);
       }
-
-      // Let the worker load the start-of-job snapshot, then edit during the hold window.
-      await Bun.sleep(120);
+      expect(sawRunning).toBe(true);
+      await Bun.sleep(800);
 
       const put = await fetch(new URL("/api/storage/cleanup-policy", server.url), {
         method: "PUT",
@@ -337,6 +344,7 @@ describe("storage cleanup policy API", () => {
 
       const done = await waitForJobIdle(server.url, runStart.job!.startedAt);
       expect(done.job.lastOutcome?.ok).toBe(true);
+      expect(done.job.lastOutcome?.skipped).toBeUndefined();
       expect(done.job.lastOutcome?.removed).toBe(1);
       expect(done.enabled).toBe(false);
       expect(done.lastRun?.removed).toBe(1);
