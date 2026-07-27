@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -178,6 +178,58 @@ describe("GUI update execution decisions", () => {
     }));
     writeFileSync(join(currentRoot, "bin", "ocx.mjs"), "process.exit(0);\n");
     chmodSync(unsafeParent, 0o777);
+    let probed = false;
+
+    expect(await findNpmRecoveryLaunchers(
+      join(currentRoot, "bin", "ocx.mjs"),
+      "2.7.40",
+      async () => {
+        probed = true;
+        return true;
+      },
+    )).toEqual([]);
+    expect(probed).toBe(false);
+  });
+
+  test("allows npm-generated symlinks that resolve inside a trusted recovery package", async () => {
+    if (process.platform === "win32") return;
+    const scopeRoot = join(dir, "global", "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    const dependencyBin = join(currentRoot, "node_modules", "bun", "bin", "bun.exe");
+    const generatedBin = join(currentRoot, "node_modules", ".bin", "bun");
+    mkdirSync(join(currentRoot, "bin"), { recursive: true });
+    mkdirSync(join(currentRoot, "node_modules", ".bin"), { recursive: true });
+    mkdirSync(join(currentRoot, "node_modules", "bun", "bin"), { recursive: true });
+    writeFileSync(join(currentRoot, "package.json"), JSON.stringify({
+      name: "@bitkyc08/opencodex",
+      version: "2.7.40",
+    }));
+    writeFileSync(join(currentRoot, "bin", "ocx.mjs"), "process.exit(0);\n");
+    writeFileSync(dependencyBin, "#!/usr/bin/env node\n");
+    symlinkSync("../bun/bin/bun.exe", generatedBin);
+
+    const launcher = realpathSync(join(currentRoot, "bin", "ocx.mjs"));
+    expect(await findNpmRecoveryLaunchers(
+      launcher,
+      "2.7.40",
+      async candidate => candidate === launcher,
+    )).toEqual([launcher]);
+  });
+
+  test("rejects a recovery package symlink that leaves the candidate tree", async () => {
+    if (process.platform === "win32") return;
+    const scopeRoot = join(dir, "global", "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    const externalBin = join(dir, "external-tool");
+    mkdirSync(join(currentRoot, "bin"), { recursive: true });
+    mkdirSync(join(currentRoot, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(currentRoot, "package.json"), JSON.stringify({
+      name: "@bitkyc08/opencodex",
+      version: "2.7.40",
+    }));
+    writeFileSync(join(currentRoot, "bin", "ocx.mjs"), "process.exit(0);\n");
+    writeFileSync(externalBin, "#!/usr/bin/env node\n");
+    symlinkSync(externalBin, join(currentRoot, "node_modules", ".bin", "external-tool"));
     let probed = false;
 
     expect(await findNpmRecoveryLaunchers(
@@ -889,6 +941,53 @@ describe("GUI update execution decisions", () => {
     expect(runningPids.has(222)).toBe(false);
     expect(runningPids.has(333)).toBe(true);
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("trying candidate 2 of 2"))).toBe(true);
+  });
+
+  test("failed install stops trying candidates when a started PID has no OpenCodex identity", async () => {
+    let now = 0;
+    const attempted: Array<string | undefined> = [];
+    const killed: number[] = [];
+    const job: UpdateJobState = {
+      id: "failed-install-unverified-pid",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        verifyPidIdentityFn: () => null,
+        recoveryLaunchersFn: () => ["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"],
+        probeProxy: async () => false,
+        restartAfterUpdateFn: async (_job, captured) => {
+          attempted.push(captured?.recoveryLauncher);
+          return 222;
+        },
+        killProxyFn: pid => { killed.push(pid); },
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+
+    expect(recovery).toBe("failed");
+    expect(attempted).toEqual(["/current/bin/ocx.mjs"]);
+    expect(killed).toEqual([]);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("without a matching OpenCodex identity"),
+    )).toBe(true);
   });
 
   test("failed install reports remediation when no runnable recovery package remains", async () => {

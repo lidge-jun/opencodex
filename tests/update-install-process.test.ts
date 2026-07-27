@@ -57,7 +57,7 @@ describe("update installer process isolation", () => {
     expect(processGroupForceDecision({ hasRunningMember: true, hasRunningLeader: true }, true)).toBe("signal");
   });
 
-  test("rechecks the original leader immediately before SIGTERM", async () => {
+  test("checks the original leader immediately before SIGTERM", async () => {
     if (process.platform === "win32") return;
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       detached: true,
@@ -75,13 +75,26 @@ describe("update installer process isolation", () => {
       inspectProcessGroup: () => ({ hasRunningMember: true, hasRunningLeader: true }),
       isOriginalLeader: () => {
         leaderChecks += 1;
-        return leaderChecks === 1;
+        return false;
       },
     });
 
     expect(treeExited).toBe(false);
-    expect(leaderChecks).toBe(2);
+    expect(leaderChecks).toBe(1);
     expect(isRunning(child.pid!)).toBe(true);
+  });
+
+  test("accepts a clean POSIX exit when process-group inspection is unavailable", async () => {
+    if (process.platform === "win32") return;
+    const result = await runProcessTreeCommand(process.execPath, ["-e", ""], {
+      stdio: "ignore",
+      timeoutMs: 1_000,
+      inspectProcessGroup: () => null,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.treeExited).toBe(true);
   });
 
   test("spawn failures report their cause without inventing a live process tree", async () => {

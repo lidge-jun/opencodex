@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -179,16 +179,33 @@ function hasTrustedRecoveryTree(packageRoot: string): boolean {
 
   const deadline = Date.now() + MAX_NPM_RECOVERY_TREE_SCAN_MS;
   const pending = [canonicalRoot];
+  const visited = new Set<string>();
   let inspected = 0;
   while (pending.length > 0) {
     if (Date.now() > deadline || inspected >= MAX_NPM_RECOVERY_TREE_ENTRIES) return false;
     const path = pending.pop()!;
     inspected += 1;
-    const stat = lstatSync(path);
-    if (stat.isSymbolicLink() || !hasTrustedRecoveryPermissions(stat)) return false;
-    if (stat.isFile()) continue;
-    if (!stat.isDirectory()) return false;
-    for (const name of readdirSync(path, { encoding: "utf8" })) pending.push(join(path, name));
+    const entryStat = lstatSync(path);
+    let canonicalPath = path;
+    let canonicalStat = entryStat;
+    if (entryStat.isSymbolicLink()) {
+      // npm creates node_modules/.bin links. Permit only trusted-owner links whose
+      // immediate and final targets both remain inside this candidate package.
+      if (!hasTrustedRecoveryOwner(entryStat.uid)) return false;
+      const directTarget = resolve(dirname(path), readlinkSync(path));
+      if (!isPathInside(canonicalRoot, directTarget)) return false;
+      canonicalPath = realpathSync(path);
+      if (!isPathInside(canonicalRoot, canonicalPath)) return false;
+      canonicalStat = lstatSync(canonicalPath);
+    }
+    if (!hasTrustedRecoveryPermissions(canonicalStat)) return false;
+    if (visited.has(canonicalPath)) continue;
+    visited.add(canonicalPath);
+    if (canonicalStat.isFile()) continue;
+    if (!canonicalStat.isDirectory()) return false;
+    for (const name of readdirSync(canonicalPath, { encoding: "utf8" })) {
+      pending.push(join(canonicalPath, name));
+    }
   }
   return true;
 }

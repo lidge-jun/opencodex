@@ -38,10 +38,11 @@ probes again immediately before recovery and leaves any old or concurrently repl
 when health or PID identity proves it is OpenCodex. When npm already stopped the proxy and retired
 the old package, the worker validates each candidate's trusted ownership, name, version, path
 containment, and complete launcher runtime with a side-effect-free `--version` probe. On UID-capable
-platforms, the scope and complete package tree must also reject symlinks, foreign owners, and
-group/world-writable entries before any candidate code executes. The tree walk is bounded by entry
-count and elapsed time. Candidate inspection and restart are bounded to at most two candidates,
-preferring the current package and then the newest retired copies, and it tries those runnable
+platforms, the scope and complete package tree must also reject foreign owners, group/world-writable
+entries, and symlinks that leave the candidate tree before any code executes. Trusted npm-generated
+links whose immediate and final targets remain inside the candidate tree are allowed. The tree walk
+is bounded by entry count and elapsed time. Candidate inspection and restart are bounded to at most
+two candidates, preferring the current package and then the newest retired copies, and it tries those runnable
 candidates in order until one restores health. A recovery launcher is always started directly: it
 may restore availability, but its potentially temporary path is never persisted into launchd,
 systemd, or Task Scheduler. If a candidate starts but does not become healthy, the worker records
@@ -58,10 +59,10 @@ containment boundary because a lifecycle child can leave it with `setsid` or `se
 timeout, interruption, or nonzero POSIX root exit is always reported as unconfirmed even when the
 known group was successfully stopped, and automatic recovery stays disabled. Once a POSIX root has
 exited, the updater also refuses to signal its leaderless group by a reusable numeric PGID. While the
-root is live, cleanup treats zombie-only groups as stopped and rechecks the original leader twice at
-the SIGTERM boundary; force-kill retains its own second group inspection. Windows has no retained
-job-object handle after a normally failed installer root exits, so that case likewise remains
-explicitly unconfirmed. The outer worker timeout remains longer than the nested deadline, and
+root is live, cleanup treats zombie-only groups as stopped and revalidates group membership and the
+original leader immediately before each signal; uninspectable or replacement-led groups are refused.
+Windows has no retained job-object handle after a normally failed installer root exits, so that case
+likewise remains explicitly unconfirmed. The outer worker timeout remains longer than the nested deadline, and
 recovery is skipped whenever either layer cannot prove installer-tree shutdown.
 
 After an update requests a restart, the worker now waits for an identity-checked `/healthz` to
