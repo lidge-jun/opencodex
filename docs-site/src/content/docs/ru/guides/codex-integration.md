@@ -54,7 +54,9 @@ fast_mode = true
   Маршрутизируемые провайдеры (Cursor, Gemini, Kiro, …) по умолчанию не могут обслуживать генерацию
 - **Резерв Google Antigravity (CCA):** когда ни forward-кандидат OpenAI, ни провайдер с
   API-ключом не настроены, `/v1/images/generations` (но не `/images/edits`) переключается на
-  эндпоинт Antigravity **Cloud Code Assist** с моделью `gemini-3.1-flash-image`. Требуется
+  эндпоинт Antigravity **Cloud Code Assist** с моделью `gemini-3.1-flash-image`. Этот же резерв
+  срабатывает и при сбое разрешения аутентификации OpenAI (например, истёкшая или отсутствующая
+  учётная запись ChatGPT), а не только при отсутствии кандидата OpenAI. Требуется
   `ocx login google-antigravity`; OAuth-токен отправляется только на закреплённый хост реестра
   CCA, а не на `baseUrl` из конфигурации. Ответ возвращается в том же формате
   `{created, data:[{b64_json}]}`, что ожидает Codex.

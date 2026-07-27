@@ -1,6 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { createImageBudget, materializeInlineImage } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -247,14 +248,15 @@ function isImageCapableModel(modelId: string): boolean {
 }
 
 /**
- * Emit a file: URI so markdown renderers (including Codex) can resolve and open
- * the image. The previous "~/" prefix approach was not expanded by clients,
- * silently breaking the feature. encodeURI percent-encodes special path
- * characters so they don't appear verbatim in model-visible text, while the
- * URI remains resolvable by file: URI handlers on the local machine.
+ * Emit a standard file: URI (via node:url pathToFileURL) so markdown renderers
+ * (including Codex) can resolve and open the image. The previous "~/" prefix
+ * approach was not expanded by clients, and a hand-rolled `"file:" + encodeURI`
+ * produced non-standard URIs that break on Windows (file:C:%5C… should be
+ * file:///C:/…) and mishandle '#'/':' in paths. pathToFileURL follows the
+ * WHATWG URL spec for correct, cross-platform file: URIs.
  */
 function artifactFileUrl(filePath: string): string {
-  return "file:" + encodeURI(filePath);
+  return pathToFileURL(filePath).href;
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {

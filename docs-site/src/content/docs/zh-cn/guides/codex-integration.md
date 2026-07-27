@@ -47,7 +47,8 @@ OpenAI 上游：
   Kiro 等）默认无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
 - **Google Antigravity（CCA）回退：** 当 OpenAI forward 候选和 API key 提供商都不存在时，
   `/v1/images/generations`（不含 `/images/edits`）会回退到 Antigravity **Cloud Code Assist**
-  端点，使用 `gemini-3.1-flash-image` 模型。需要 `ocx login google-antigravity`；OAuth token
+  端点，使用 `gemini-3.1-flash-image` 模型。当 OpenAI 认证解析失败（例如 ChatGPT 凭证过期或缺失）时，
+  该回退同样会触发，而不仅仅在没有任何 OpenAI 候选时。需要 `ocx login google-antigravity`；OAuth token
   只发送到 CCA 注册端点，不会发送到配置中的 `baseUrl` 覆盖地址。返回格式与 Codex 期望的
   `{created, data:[{b64_json}]}` 一致。
 - **以上都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、

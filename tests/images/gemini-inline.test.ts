@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { createGoogleAdapter } from "../../src/adapters/google";
@@ -282,16 +283,17 @@ describe("markdown path escaping with special characters", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    // file: prefix so clients can resolve the link
+    // Standard file: URI prefix so clients can resolve the link
     expect(mdPath.startsWith("file:")).toBe(true);
-    // Spaces are percent-encoded by encodeURI, never literal
+    // Spaces are percent-encoded by pathToFileURL, never literal
     expect(mdPath).toContain("%20");
     expect(mdPath).not.toMatch(/(?<!\\) /);
-    // Parens are backslash-escaped (encodeURI does not encode them)
+    // Parens are backslash-escaped (pathToFileURL leaves them unencoded)
     expect(mdPath).toContain("\\(dir\\)");
-    // Decoded + unescaped path resolves to a real file on disk
-    const decoded = decodeURI(mdPath.replace(/^file:/, "")).replace(/\\([()])/g, "$1");
-    expect(existsSync(decoded)).toBe(true);
+    // Round-trip: unescape markdown parens, then fileURLToPath must resolve
+    // to the original file path on disk (validates a standard file: URI).
+    const unescaped = mdPath.replace(/\\([()])/g, "$1");
+    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
   });
 
   test("non-streaming: file: URI percent-encodes spaces and escapes parens", async () => {
@@ -307,11 +309,15 @@ describe("markdown path escaping with special characters", () => {
     expect(match).not.toBeNull();
     const mdPath = match![1];
     expect(mdPath.startsWith("file:")).toBe(true);
+    // Spaces are percent-encoded by pathToFileURL, never literal
     expect(mdPath).toContain("%20");
     expect(mdPath).not.toMatch(/(?<!\\) /);
+    // Parens are backslash-escaped (pathToFileURL leaves them unencoded)
     expect(mdPath).toContain("\\(dir\\)");
-    const decoded = decodeURI(mdPath.replace(/^file:/, "")).replace(/\\([()])/g, "$1");
-    expect(existsSync(decoded)).toBe(true);
+    // Round-trip: unescape markdown parens, then fileURLToPath must resolve
+    // to the original file path on disk (validates a standard file: URI).
+    const unescaped = mdPath.replace(/\\([()])/g, "$1");
+    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
   });
 });
 
@@ -345,6 +351,11 @@ describe("artifact path is a resolvable file: URI", () => {
     expect(md).toContain("file:");
     // The old ~/ abbreviation must NOT be used (it broke resolution).
     expect(md).not.toContain("~/");
+    // Round-trip with fileURLToPath to prove it's a standard file: URI.
+    const match = md.match(/^\n!\[image\]\((.+)\)\n$/);
+    expect(match).not.toBeNull();
+    const unescaped = match![1].replace(/\\([()])/g, "$1");
+    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
   });
 
   test("non-streaming: emitted path is a resolvable file: URI", async () => {
@@ -358,6 +369,11 @@ describe("artifact path is a resolvable file: URI", () => {
     const md = textEvents[0].text;
     expect(md).toContain("file:");
     expect(md).not.toContain("~/");
+    // Round-trip with fileURLToPath to prove it's a standard file: URI.
+    const match = md.match(/^\n!\[image\]\((.+)\)\n$/);
+    expect(match).not.toBeNull();
+    const unescaped = match![1].replace(/\\([()])/g, "$1");
+    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
   });
 });
 

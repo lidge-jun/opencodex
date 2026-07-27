@@ -68,9 +68,12 @@ async function tryCcaImageGeneration(
   let token: string;
   try {
     token = await getValidAccessToken("google-antigravity");
-  } catch {
-    // A transient OAuth/network refresh failure is not a permanent config issue.
-    // Surface a 502 so the caller does not misdiagnose it as "no provider configured".
+  } catch (err) {
+    // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
+    const errName = err instanceof Error ? err.name : "";
+    if (errName === "OAuthLoginRequiredError") {
+      return formatErrorResponse(401, "invalid_request_error", "Google Antigravity login required: run 'ocx login google-antigravity'");
+    }
     return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
   }
   const project = getOAuthCredentialProjectId("google-antigravity");
@@ -161,11 +164,15 @@ async function tryCcaImageGeneration(
       }
     } catch (err) {
       // Body-read timeout/abort: when CCA returns headers then stalls, the linked
-      // signal's timeout aborts reader.read(), which rejects here. Map it the same
-      // way as the fetch catch above so the rejection never escapes this function.
-      if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
-      if (err instanceof Error && err.name === "TimeoutError") {
+      // signal's timeout aborts reader.read(), which rejects here. The rejection
+      // often surfaces as AbortError (not TimeoutError), so distinguish by signal
+      // state, not error name. Linked deadline won → 504 (upstream stall); parent
+      // abort → 499 (client cancelled); anything else → 502 body-read failure.
+      if (linkedSignal.signal.aborted) {
         return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
+      }
+      if (signal.aborted) {
+        return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
       }
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");
@@ -190,9 +197,13 @@ async function tryCcaImageGeneration(
       return formatErrorResponse(502, "upstream_error", "CCA image response was not valid JSON");
     }
     const resp = (json.response ?? json) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[] } }[] };
-    const parts = resp.candidates?.[0]?.content?.parts ?? [];
+    const parts = resp.candidates?.[0]?.content?.parts;
+    if (!Array.isArray(parts)) {
+      return formatErrorResponse(502, "upstream_error", "CCA image response had no valid parts array");
+    }
     const images: { b64_json: string }[] = [];
     for (const part of parts) {
+      if (!part || typeof part !== "object") continue;
       if (part.inlineData?.data) images.push({ b64_json: part.inlineData.data });
     }
     if (images.length === 0) {

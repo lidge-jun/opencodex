@@ -1119,12 +1119,13 @@ test("CCA fallback serves images when OpenAI forward auth fails but Google Antig
   }
 });
 
-test("CCA OAuth refresh failure returns 502, not a misleading 400 'none configured'", async () => {
+test("CCA OAuth no credential saved returns 401 (login required), not a misleading 502/400", async () => {
   saveConfig(ccaConfig());
   // Deliberately do NOT save a google-antigravity credential. The provider IS
   // configured, but getValidAccessToken will throw OAuthLoginRequiredError.
-  // This must surface as a 502 upstream error, NOT the permanent 400
-  // "none configured" message that implies the user forgot to add a provider.
+  // This must surface as a 401 "login required" — NOT 502 (which implies a
+  // transient refresh/network failure) or the permanent 400 "none configured"
+  // message that implies the user forgot to add a provider.
 
   const server = startServer(0);
   try {
@@ -1133,9 +1134,9 @@ test("CCA OAuth refresh failure returns 502, not a misleading 400 'none configur
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
     });
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(401);
     const json = await response.json() as { error: { message: string } };
-    expect(json.error.message).toContain("OAuth token refresh failed");
+    expect(json.error.message).toContain("login required");
   } finally {
     await server.stop(true);
   }
@@ -1176,8 +1177,10 @@ test("CCA fetch network failure returns 502 without leaking the timeout timer", 
 test("CCA body-read timeout returns 504 when upstream stalls after sending headers", async () => {
   // Mock: CCA returns 200 OK headers immediately but the body stream never
   // produces data. The linked signal's timeout aborts reader.read(), which
-  // must be caught and mapped to 504 — previously the rejection escaped
-  // tryCcaImageGeneration entirely.
+  // must be caught and mapped to 504. The abort surfaces as a generic
+  // AbortError (not TimeoutError) — just like in production Bun — so the
+  // signal-state check (linkedSignal.signal.aborted) is what maps it, not
+  // err.name matching.
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
@@ -1186,12 +1189,14 @@ test("CCA body-read timeout returns 504 when upstream stalls after sending heade
       const stalledBody = new ReadableStream<Uint8Array>({
         start(controller) {
           // Never produce data — stall until the fetch signal aborts, then
-          // error the stream so reader.read() rejects with the abort reason.
+          // error the stream as AbortError (the typical rejection Bun's
+          // stream layer produces on linked-signal abort, NOT TimeoutError).
+          const abortError = new DOMException("The operation was aborted.", "AbortError");
           if (fetchSignal) {
             if (fetchSignal.aborted) {
-              controller.error(fetchSignal.reason);
+              controller.error(abortError);
             } else {
-              fetchSignal.addEventListener("abort", () => controller.error(fetchSignal.reason), { once: true });
+              fetchSignal.addEventListener("abort", () => controller.error(abortError), { once: true });
             }
           }
         },
@@ -1240,6 +1245,35 @@ test("CCA image fallback preserves upstream 400 (not collapsed to 502)", async (
     });
     // 400 must be forwarded, not collapsed to 502.
     expect(response.status).toBe(400);
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA image response with non-array parts returns 502 (envelope validation)", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  // A truthy but non-array parts object would throw inside for...of before the
+  // Array.isArray guard was added. It must be caught and surfaced as 502.
+  ccaFetchMock(registryHits, otherHits, {
+    payload: { response: { candidates: [{ content: { parts: "not-an-array" } }] } },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("no valid parts array");
     expect(registryHits).toHaveLength(1);
     expect(otherHits).toHaveLength(0);
   } finally {

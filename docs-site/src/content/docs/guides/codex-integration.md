@@ -48,7 +48,9 @@ points at opencodex, the proxy relays those calls to the OpenAI upstream:
   are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
 - **Google Antigravity (CCA) fallback:** when neither an OpenAI forward candidate nor a keyed
   provider is configured, `/v1/images/generations` (not `/images/edits`) falls back to the
-  Antigravity **Cloud Code Assist** endpoint using the `gemini-3.1-flash-image` model. This
+  Antigravity **Cloud Code Assist** endpoint using the `gemini-3.1-flash-image` model. The fallback
+  also fires after OpenAI auth resolution fails (e.g. an expired or missing ChatGPT credential),
+  not only when no OpenAI candidate is configured. This
   requires `ocx login google-antigravity`; the OAuth token is sent only to the pinned CCA registry
   host, never to a config-level `baseUrl` override. The response is returned in the same
   `{created, data:[{b64_json}]}` shape Codex expects.
