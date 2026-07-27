@@ -1433,4 +1433,132 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     ).toEqual({ ts: 42, target: "pre" });
     logsAfter.close();
   }, { timeout: 20_000 });
+
+  test("initial restore-pending write failure moves no files", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_300 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failInitialPendingWrite: true },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(failed.count).toBe(0);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(false);
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(retried.count).toBe(3);
+    expect(existsSync(stage)).toBe(false);
+  }, { timeout: 20_000 });
+
+  test("interrupted pending update preserves the previous valid marker", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_400 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failPendingWriteBeforeRename: true },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      filesRestored: boolean;
+      acceptedDestRels: string[];
+      pending: { state: boolean; logs: boolean; memories: boolean; goals: boolean };
+    };
+    // Atomic rename never landed the post-state update — prior marker remains.
+    expect(pending.filesRestored).toBe(true);
+    expect(pending.pending).toEqual({
+      state: true,
+      logs: true,
+      memories: true,
+      goals: true,
+    });
+    expect(pending.acceptedDestRels).toContain("archived_sessions/rollout-old.jsonl");
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(retried.error).toBeUndefined();
+    expect(existsSync(stage)).toBe(false);
+  }, { timeout: 20_000 });
+
+  test("crash after file move retries without dest_exists or fs_failed", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_500 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const crashed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterFileMoves: true },
+    });
+    expect(crashed.ok).toBe(false);
+    expect(crashed.error).toBe("fs_failed");
+    expect(crashed.count).toBe(3);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(retried.error).not.toBe("dest_exists");
+    expect(retried.error).not.toBe("fs_failed");
+    expect(retried.count).toBe(3);
+    expect(existsSync(stage)).toBe(false);
+  }, { timeout: 20_000 });
+
+  test("malformed restore-pending.json is not treated as a fresh restore", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_600 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    writeFileSync(join(stage, "restore-pending.json"), "{not-valid-json", "utf8");
+    const failed = restoreTrashEntry(trashId, { codexHome: home });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(failed.count).toBe(0);
+    // Stage intact — no silent fresh restore that would move files under a corrupt marker.
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+    expect(readFileSync(join(stage, "restore-pending.json"), "utf8")).toBe("{not-valid-json");
+  }, { timeout: 20_000 });
+
+  test("resume with owed satellite sections and missing backup fails closed", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_700 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const partial = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterFirstSatelliteCommit: true },
+    });
+    expect(partial.ok).toBe(false);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+    expect(existsSync(join(stage, "satellite-backup.json"))).toBe(true);
+
+    unlinkSync(join(stage, "satellite-backup.json"));
+    const failed = restoreTrashEntry(trashId, { codexHome: home });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("db_reconcile_failed");
+    expect(existsSync(stage)).toBe(true);
+    expect(existsSync(join(stage, "manifest.json"))).toBe(true);
+  }, { timeout: 20_000 });
 });

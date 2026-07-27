@@ -14,9 +14,12 @@
  */
 import { createHash } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   linkSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -24,6 +27,7 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
   chmodSync,
 } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -2034,46 +2038,94 @@ function reconstructThreadRowFromRollout(
   return row;
 }
 
-function readRestorePending(stageDir: string): RestorePendingState | null {
-  const path = join(stageDir, RESTORE_PENDING_FILE);
-  if (!existsSync(path)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    const o = raw as Record<string, unknown>;
-    if (o.version !== 1 || o.filesRestored !== true) return null;
-    if (!Array.isArray(o.acceptedDestRels)) return null;
-    const acceptedDestRels = o.acceptedDestRels.filter((r): r is string => typeof r === "string");
-    if (acceptedDestRels.length !== o.acceptedDestRels.length) return null;
-    const pendingRaw = o.pending;
-    if (!pendingRaw || typeof pendingRaw !== "object" || Array.isArray(pendingRaw)) return null;
-    const p = pendingRaw as Record<string, unknown>;
-    if (
-      typeof p.state !== "boolean"
-      || typeof p.logs !== "boolean"
-      || typeof p.memories !== "boolean"
-      || typeof p.goals !== "boolean"
-    ) {
-      return null;
-    }
-    return {
-      version: 1,
-      filesRestored: true,
-      acceptedDestRels,
-      pending: {
-        state: p.state,
-        logs: p.logs,
-        memories: p.memories,
-        goals: p.goals,
-      },
-    };
-  } catch {
+type RestorePendingRead =
+  | { status: "missing" }
+  | { status: "valid"; state: RestorePendingState }
+  | { status: "invalid" };
+
+let _restorePendingSeq = 0;
+
+function parseRestorePendingState(raw: unknown): RestorePendingState | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if (o.version !== 1 || o.filesRestored !== true) return null;
+  if (!Array.isArray(o.acceptedDestRels)) return null;
+  const acceptedDestRels = o.acceptedDestRels.filter((r): r is string => typeof r === "string");
+  if (acceptedDestRels.length !== o.acceptedDestRels.length) return null;
+  const pendingRaw = o.pending;
+  if (!pendingRaw || typeof pendingRaw !== "object" || Array.isArray(pendingRaw)) return null;
+  const p = pendingRaw as Record<string, unknown>;
+  if (
+    typeof p.state !== "boolean"
+    || typeof p.logs !== "boolean"
+    || typeof p.memories !== "boolean"
+    || typeof p.goals !== "boolean"
+  ) {
     return null;
+  }
+  return {
+    version: 1,
+    filesRestored: true,
+    acceptedDestRels,
+    pending: {
+      state: p.state,
+      logs: p.logs,
+      memories: p.memories,
+      goals: p.goals,
+    },
+  };
+}
+
+/**
+ * Distinguish a missing marker from a present-but-malformed one. An invalid marker
+ * must never be treated as a fresh restore (that would ignore already-moved files).
+ */
+function readRestorePending(stageDir: string): RestorePendingRead {
+  const path = join(stageDir, RESTORE_PENDING_FILE);
+  if (!existsSync(path)) return { status: "missing" };
+  try {
+    const state = parseRestorePendingState(JSON.parse(readFileSync(path, "utf8")) as unknown);
+    if (!state) return { status: "invalid" };
+    return { status: "valid", state };
+  } catch {
+    return { status: "invalid" };
   }
 }
 
-function writeRestorePending(stageDir: string, state: RestorePendingState): void {
-  writePrivateFile(join(stageDir, RESTORE_PENDING_FILE), JSON.stringify(state));
+/**
+ * Atomically replace restore-pending.json: private temp in the stage, fsync, then rename.
+ * An interrupted update leaves the previous valid marker intact.
+ */
+function writeRestorePending(
+  stageDir: string,
+  state: RestorePendingState,
+  options?: { failBeforeRename?: boolean; failWrite?: boolean },
+): void {
+  if (options?.failWrite) throw new Error("test_fail_pending_write");
+  const dest = join(stageDir, RESTORE_PENDING_FILE);
+  const tmp = join(stageDir, `${RESTORE_PENDING_FILE}.${process.pid}.${++_restorePendingSeq}.tmp`);
+  const payload = JSON.stringify(state);
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, payload, null, "utf8");
+    fsyncSync(fd);
+  } catch (error) {
+    try { closeSync(fd); } catch { /* */ }
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw error;
+  }
+  closeSync(fd);
+  chmodPrivatePath(tmp, 0o600);
+  if (options?.failBeforeRename) {
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw new Error("test_fail_pending_rename");
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw error;
+  }
 }
 
 function restoreThreadsFromManifest(
@@ -2178,6 +2230,12 @@ export interface RestoreTestHooks {
   failAfterFirstSatelliteCommit?: boolean;
   /** When the leftover staged-rollout completeness gate runs. */
   failAtLeftoverStageGate?: boolean;
+  /** Fail the initial restore-pending.json write (before any file moves). */
+  failInitialPendingWrite?: boolean;
+  /** Fail a later pending update after the temp is written but before rename. */
+  failPendingWriteBeforeRename?: boolean;
+  /** Crash immediately after file moves (marker already durable). */
+  failAfterFileMoves?: boolean;
 }
 
 /**
@@ -2186,9 +2244,9 @@ export interface RestoreTestHooks {
  *
  * Late failures after files have moved never compensate metadata or restage.
  * Instead they persist `restore-pending.json` (accepted dest paths + which
- * state/logs/memories/goals sections still need work) and return accurate
- * partial counts so a retry can accept existing destinations and resume only
- * missing metadata.
+ * state/logs/memories/goals sections still need work) atomically *before* any
+ * rollout move, then update it after each section so a retry can accept existing
+ * destinations and resume only missing metadata.
  */
 export function restoreTrashEntry(
   trashId: string,
@@ -2219,7 +2277,13 @@ export function restoreTrashEntry(
     return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
   }
 
-  const priorPending = readRestorePending(stageDir);
+  const pendingRead = readRestorePending(stageDir);
+  if (pendingRead.status === "invalid") {
+    // Malformed marker means an incomplete restore may already have moved files;
+    // never treat it as a fresh restore.
+    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+  }
+  const priorPending = pendingRead.status === "valid" ? pendingRead.state : null;
   const acceptedDest = new Set(priorPending?.acceptedDestRels ?? []);
 
   // Partial permanent purges may leave only a subset of physical files on disk —
@@ -2272,6 +2336,23 @@ export function restoreTrashEntry(
       };
     }
     satelliteBackup = remapped.backup;
+  }
+
+  // A resume that still owes satellite work but has no backup to replay must not
+  // be reported as success — that would delete the stage with the work undone.
+  if (
+    priorPending
+    && !satelliteBackup
+    && (priorPending.pending.logs || priorPending.pending.memories || priorPending.pending.goals)
+  ) {
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: "db_reconcile_failed",
+    };
   }
 
   const pendingSections: RestorePendingSections = {
@@ -2367,6 +2448,38 @@ export function restoreTrashEntry(
     }
   }
 
+  const planned = [...alreadyMoved, ...toMove];
+  const restoredPaths = [...new Set(entries.map(e => e.relPath))];
+  const bytes = entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
+  const partialCounts = { count: restoredPaths.length, bytes, restoredPaths };
+
+  let pendingWriteCount = 0;
+  const persistPending = (): void => {
+    pendingWriteCount += 1;
+    const isInitial = pendingWriteCount === 1;
+    writeRestorePending(
+      stageDir,
+      {
+        version: 1,
+        filesRestored: true,
+        acceptedDestRels: planned.map(m => m.relPath),
+        pending: { ...pendingSections },
+      },
+      {
+        failWrite: Boolean(isInitial && hooks?.failInitialPendingWrite),
+        failBeforeRename: Boolean(!isInitial && hooks?.failPendingWriteBeforeRename),
+      },
+    );
+  };
+
+  // Durable resume marker before any rollout leaves the stage. Crash after a
+  // later move can still accept destinations from this marker.
+  try {
+    persistPending();
+  } catch {
+    return failBeforeMoves("fs_failed");
+  }
+
   const newlyMoved: StagedFile[] = [];
   try {
     mkdirSync(join(codexHome, ARCHIVED_SESSIONS_DIR), { recursive: true });
@@ -2377,6 +2490,18 @@ export function restoreTrashEntry(
     }
   } catch (error) {
     rollbackMoves(newlyMoved);
+    if (alreadyMoved.length > 0 || priorPending) {
+      try {
+        writeRestorePending(stageDir, {
+          version: 1,
+          filesRestored: true,
+          acceptedDestRels: alreadyMoved.map(m => m.relPath),
+          pending: { ...pendingSections },
+        });
+      } catch { /* best-effort — keep prior marker if rewrite fails */ }
+    } else {
+      try { unlinkSync(join(stageDir, RESTORE_PENDING_FILE)); } catch { /* */ }
+    }
     if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
     return {
       ok: false,
@@ -2389,28 +2514,6 @@ export function restoreTrashEntry(
   }
 
   const moved = [...alreadyMoved, ...newlyMoved];
-  const restoredPaths = [...new Set(entries.map(e => e.relPath))];
-  const bytes = entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
-  const partialCounts = { count: restoredPaths.length, bytes, restoredPaths };
-
-  const persistPending = (): void => {
-    writeRestorePending(stageDir, {
-      version: 1,
-      filesRestored: true,
-      acceptedDestRels: moved.map(m => m.relPath),
-      pending: { ...pendingSections },
-    });
-  };
-
-  // Files are at destination — persist resume state immediately so a crash
-  // mid-metadata still leaves an idempotent partial restore.
-  try {
-    persistPending();
-  } catch {
-    if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
-    // Files may already be restored; report partial counts (do not restage).
-    return { ok: false, trashDir: id, ...partialCounts, error: "fs_failed" };
-  }
 
   /**
    * Never compensate DBs or restage files after moves. Keep restored files,
@@ -2424,10 +2527,14 @@ export function restoreTrashEntry(
     try {
       persistPending();
     } catch {
-      /* best-effort — files already restored */
+      /* best-effort — files already restored; prior atomic marker remains */
     }
     return { ok: false, trashDir: id, ...partialCounts, error };
   };
+
+  if (hooks?.failAfterFileMoves) {
+    return abortAfterMoves("fs_failed");
+  }
 
   if (pendingSections.state) {
     const threadsRestored = restoreThreadsFromManifest(
