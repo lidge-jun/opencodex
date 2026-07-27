@@ -164,9 +164,11 @@ export function pinnedHttpsGet(
 
     const req = https.request(optionsHttps, (res: IncomingMessage) => {
       const status = res.statusCode ?? 0;
-      // Match fetch({ redirect: "error" }): never follow 3xx.
-      if (status >= 300 && status < 400) {
-        res.resume();
+      // Any non-2xx must destroy immediately. Returning a streaming Response for
+      // 4xx/5xx (or 3xx) lets callers that only check `Response.ok` abandon an
+      // unread body while the peer keeps sending — a failed-response socket leak.
+      if (status < 200 || status >= 300) {
+        try { res.destroy(); } catch { /* ignore */ }
         fail(new Error("image download failed: " + status));
         return;
       }
@@ -266,7 +268,12 @@ export async function downloadImageToArtifact(
   const pinned = pickPinnedAddress(resolved.addresses);
   const download = options?.pinnedDownload ?? pinnedHttpsGet;
   const resp = await download(url, pinned, signal);
-  if (!resp.ok) throw new Error("image download failed: " + resp.status);
+  if (!resp.ok) {
+    // Custom `pinnedDownload` seams may still return a failed Response with a
+    // live body; cancel it so unread error payloads cannot keep the socket warm.
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw new Error("image download failed: " + resp.status);
+  }
 
   // Stream the body with a hard byte cap so a missing/lying Content-Length or a
   // compromised CDN URL cannot exhaust memory before the size check runs.

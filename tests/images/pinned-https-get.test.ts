@@ -139,6 +139,73 @@ describe("pinnedHttpsGet transport", () => {
     expect(received).toBeLessThanOrEqual(maxBytes + small.byteLength);
   });
 
+  test("non-2xx destroys the transport immediately without buffering body chunks", async () => {
+    // Regression: a 500 that keeps emitting must not resolve a streaming Response
+    // whose body nobody will read — destroy on status and reject before any data
+    // listener is attached.
+    let dataListeners = 0;
+    let reqDestroyed = false;
+    let resDestroyed = false;
+    const requestMock = mock((
+      _options: unknown,
+      onResponse?: (res: EventEmitter & {
+        statusCode: number;
+        headers: Record<string, string>;
+        setTimeout: Function;
+        resume: Function;
+        destroy: Function;
+        on: Function;
+      }) => void,
+    ) => {
+      const req = new EventEmitter() as EventEmitter & {
+        setTimeout: Function;
+        end: Function;
+        destroy: Function;
+      };
+      req.setTimeout = mock(() => {});
+      req.destroy = mock(() => { reqDestroyed = true; });
+      req.end = mock(() => {
+        const res = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          headers: Record<string, string>;
+          setTimeout: Function;
+          resume: Function;
+          destroy: Function;
+        };
+        res.statusCode = 500;
+        res.headers = { "content-type": "text/plain" };
+        res.setTimeout = mock(() => {});
+        res.resume = mock(() => {});
+        res.destroy = mock(() => { resDestroyed = true; });
+        const originalOn = res.on.bind(res);
+        res.on = ((event: string | symbol, listener: (...args: unknown[]) => void) => {
+          if (event === "data") dataListeners += 1;
+          return originalOn(event, listener);
+        }) as typeof res.on;
+        queueMicrotask(() => {
+          onResponse?.(res);
+          // Keep dumping body after headers — must not be buffered by pinnedHttpsGet.
+          queueMicrotask(() => {
+            for (let i = 0; i < 32; i++) res.emit("data", Buffer.alloc(64 * 1024, 7));
+            res.emit("end");
+          });
+        });
+      });
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    const { pinnedHttpsGet } = await import("../../src/images/artifacts");
+    await expect(pinnedHttpsGet(
+      "https://cdn.example/fail.png",
+      { address: "93.184.216.34", family: 4 },
+    )).rejects.toThrow(/image download failed: 500/);
+
+    expect(resDestroyed).toBe(true);
+    expect(reqDestroyed).toBe(true);
+    expect(dataListeners).toBe(0);
+  });
+
   test("idle timeout fires when no AbortSignal is supplied", async () => {
     const requestMock = mock((
       _options: unknown,
