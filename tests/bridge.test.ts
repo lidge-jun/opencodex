@@ -682,7 +682,8 @@ describe("Responses bridge reasoning and usage parity", () => {
   test("heartbeat events reset the stall watchdog and emit no protocol frame", async () => {
     // Regression for the Cursor parallel-tool-call stall: while the upstream silently assembles tool
     // calls, the adapter emits `heartbeat` events. They must keep the stall watchdog alive (no
-    // upstream_stall_timeout) without producing any Responses protocol event of their own.
+    // upstream_stall_timeout). Adapter heartbeats themselves are not translated into Responses
+    // protocol items; wire keepalives use a separate `response.heartbeat` frame (see next test).
     async function* heartbeatsThenDone(): AsyncGenerator<AdapterEvent> {
       // More heartbeats than maxStallTicks would allow if they did NOT reset the counter.
       for (let i = 0; i < 6; i++) {
@@ -699,8 +700,28 @@ describe("Responses bridge reasoning and usage parity", () => {
     ));
     expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
-    // No protocol frame is produced by a heartbeat itself (only created/text/completed appear).
+    // Adapter heartbeats must not be mis-translated into a rich protocol event of their own.
     expect(frames.some(f => f.event === "response.heartbeat" && f.data.type === "heartbeat" && Object.keys(f.data).length > 2)).toBe(false);
+  });
+
+  test("wire response.heartbeat keeps firing while only adapter heartbeats flow", async () => {
+    // Issue #521: web-search buffers semantic events and yields invisible adapter heartbeats from
+    // raw-byte progress. Those must not suppress wire keepalives, or Codex Desktop idle-timeouts
+    // (~5 min) while OCX still considers the upstream alive.
+    async function* adapterHeartbeatsOnly(): AsyncGenerator<AdapterEvent> {
+      for (let i = 0; i < 8; i++) {
+        yield { type: "heartbeat" };
+        await new Promise(r => setTimeout(r, 15));
+      }
+      yield { type: "text_delta", text: "ok" };
+      yield { type: "done" };
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(
+      adapterHeartbeatsOnly(), "model", undefined, undefined, undefined, undefined, 10, { stallTimeoutSec: 1 },
+    ));
+    expect(frames.some(f => f.event === "response.heartbeat" && f.data.type === "response.heartbeat")).toBe(true);
+    expect(frames.some(f => f.event === "response.completed")).toBe(true);
+    expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
   });
 });
 

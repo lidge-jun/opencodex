@@ -189,9 +189,11 @@ export function bridgeToResponsesSSE(
   };
   // RC3 keep-alive: Codex's idle timer is timeout(idle_timeout, stream.next()) over an
   // eventsource_stream; ANY received event re-arms it, while an unknown type is ignored
-  // (responses.rs `_ => Ok(None)`). We emit a real, parser-ignored `response.heartbeat` only during
-  // upstream silence so a stalled routed provider never trips "idle timeout waiting for SSE".
-  let activity = false;
+  // (responses.rs `_ => Ok(None)`). Emit a parser-ignored `response.heartbeat` whenever the
+  // *wire* has been silent, even if invisible adapter heartbeats are still flowing (web-search
+  // buffering + raw-byte progress). Upstream activity only resets the stall watchdog.
+  let upstreamActivity = false;
+  let wireActivity = false;
   let beat: ReturnType<typeof setInterval> | undefined;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   let emittedFrames = 0;
@@ -199,7 +201,7 @@ export function bridgeToResponsesSSE(
   let stepping = false;
   const emit = (name: string, data: Record<string, unknown>) => {
         if (closed) return;
-        activity = true;
+        wireActivity = true;
         try {
           controller.enqueue(encoder.encode(sseEvent(name, { type: name, sequence_number: seq++, ...data })));
           emittedFrames++;
@@ -482,7 +484,9 @@ export function bridgeToResponsesSSE(
           if (next.done) { upstreamDone = true; break; }
           const event = next.value;
           let terminalEvent = false;
-          activity = true;
+          // Invisible adapter heartbeats (and buffered web-search progress) count as upstream
+          // liveness only — they must not suppress wire keepalives that re-arm Codex idle timers.
+          upstreamActivity = true;
           stallTicks = 0;
           reportFirstOutput(event);
           // Compaction turns emit ONLY the synthetic compaction item + response.completed. The
@@ -846,8 +850,10 @@ export function bridgeToResponsesSSE(
         gated = true;
         beat = setInterval(() => {
           if (closed || gated) return;
-          if (activity) { activity = false; stallTicks = 0; return; }
-          if (++stallTicks >= maxStallTicks) {
+          if (upstreamActivity) {
+            upstreamActivity = false;
+            stallTicks = 0;
+          } else if (++stallTicks >= maxStallTicks) {
             if (currentMsg) closeCurrentMessage();
             if (currentReasoning) closeCurrentReasoning();
             if (currentRawReasoning) closeCurrentRawReasoning();
@@ -869,6 +875,11 @@ export function bridgeToResponsesSSE(
             beat = undefined;
             try { controller.close(); } catch { /* already closed */ }
             closed = true;
+            return;
+          }
+          // Wire silence is independent of upstream adapter heartbeats.
+          if (wireActivity) {
+            wireActivity = false;
             return;
           }
           try {
