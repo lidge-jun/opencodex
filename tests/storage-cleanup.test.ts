@@ -1214,4 +1214,73 @@ describe("listTrashEntries + restoreTrashEntry", () => {
       archived: 1,
     });
   });
+
+  test.each([
+    ["failAfterStateCommit", { failAfterStateCommit: true }, "db_reconcile_failed"],
+    ["failAfterFirstSatelliteCommit", { failAfterFirstSatelliteCommit: true }, "db_reconcile_failed"],
+    ["failAtLeftoverStageGate", { failAtLeftoverStageGate: true }, "fs_failed"],
+  ] as const)(
+    "injected %s compensates DB rows, restages files, and retry succeeds",
+    (_name, hook, error) => {
+      home = buildHome({
+        withSatelliteStores: true,
+        withDynamicTools: true,
+        withSpawnEdges: true,
+      });
+      const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_000 });
+      expect(quarantined.ok).toBe(true);
+      const trashId = quarantined.trashDir!;
+      const stage = join(home, ...trashId.split("/"));
+
+      const failed = restoreTrashEntry(trashId, { codexHome: home, _test: { ...hook } });
+      expect(failed.ok).toBe(false);
+      expect(failed.error).toBe(error);
+      expect(failed.count).toBe(0);
+      expect(failed.restoredPaths).toEqual([]);
+
+      // Files restaged into trash — retryable quarantine shape.
+      expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
+      expect(existsSync(join(stage, "manifest.json"))).toBe(true);
+      expect(existsSync(join(stage, "satellite-backup.json"))).toBe(true);
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+      expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(false);
+      expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(false);
+
+      // No orphan state / satellite rows from the aborted restore.
+      const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
+      expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('told','tmid','tnew')").get())
+        .toEqual({ n: 0 });
+      expect(state.query("SELECT COUNT(*) AS n FROM thread_dynamic_tools").get()).toEqual({ n: 0 });
+      expect(state.query("SELECT COUNT(*) AS n FROM thread_spawn_edges").get()).toEqual({ n: 0 });
+      state.close();
+
+      const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+      expect(logs.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id IN ('told','tmid','tnew')").get())
+        .toEqual({ n: 0 });
+      logs.close();
+      const mem = new Database(join(home, "memories_1.sqlite"), { readonly: true });
+      expect(mem.query("SELECT COUNT(*) AS n FROM stage1_outputs WHERE thread_id IN ('told','tmid','tnew')").get())
+        .toEqual({ n: 0 });
+      mem.close();
+      const goals = new Database(join(home, "goals_1.sqlite"), { readonly: true });
+      expect(goals.query("SELECT COUNT(*) AS n FROM thread_goals WHERE thread_id IN ('told','tmid','tnew')").get())
+        .toEqual({ n: 0 });
+      goals.close();
+
+      const retried = restoreTrashEntry(trashId, { codexHome: home });
+      expect(retried.ok).toBe(true);
+      expect(retried.count).toBe(3);
+      expect(existsSync(stage)).toBe(false);
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+
+      const stateAfter = new Database(join(home, "state_5.sqlite"), { readonly: true });
+      expect(stateAfter.query("SELECT id FROM threads WHERE id='told'").get()).toEqual({ id: "told" });
+      expect(stateAfter.query("SELECT COUNT(*) AS n FROM thread_dynamic_tools WHERE thread_id='told'").get())
+        .toEqual({ n: 1 });
+      stateAfter.close();
+      const logsAfter = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+      expect(logsAfter.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id='told'").get()).toEqual({ n: 1 });
+      logsAfter.close();
+    },
+  );
 });

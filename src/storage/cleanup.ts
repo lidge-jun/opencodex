@@ -1147,39 +1147,6 @@ function restoreSatelliteBackup(
   }
 }
 
-/** Insert snapshotted satellite rows into already-open write transactions. */
-function restoreSatelliteBackupInLocks(
-  locks: SatelliteWriteLocks,
-  backup: SatelliteBackup,
-): void {
-  if (backup.logs) {
-    if (!locks.logs) throw new Error("missing_logs_lock");
-    if (!tableExists(locks.logs.db, "logs")) throw new Error("missing_logs_table");
-    insertRowsConflictIgnore(locks.logs.db, "logs", backup.logs.rows);
-  }
-  if (backup.memories) {
-    if (!locks.memories) throw new Error("missing_memories_lock");
-    const mem = backup.memories;
-    if (!tableExists(locks.memories.db, "stage1_outputs")) throw new Error("missing_stage1_outputs_table");
-    insertRowsConflictIgnore(locks.memories.db, "stage1_outputs", mem.stage1);
-    if (tableExists(locks.memories.db, "jobs")) {
-      insertRowsConflictIgnore(locks.memories.db, "jobs", mem.stage1Jobs);
-      if (mem.consolidateTouched) {
-        restoreConsolidateGlobalJob(locks.memories.db, mem.consolidateJob, mem.consolidatePostImage);
-      }
-    }
-  }
-  if (backup.goals) {
-    if (!locks.goals) throw new Error("missing_goals_lock");
-    const g = backup.goals;
-    if (!tableExists(locks.goals.db, "thread_goals")) throw new Error("missing_thread_goals_table");
-    insertRowsConflictIgnore(locks.goals.db, "thread_goals", g.goals);
-    if (tableExists(locks.goals.db, "thread_goal_continuation_deferrals")) {
-      insertRowsConflictIgnore(locks.goals.db, "thread_goal_continuation_deferrals", g.deferrals);
-    }
-  }
-}
-
 function withWritableDb(
   path: string,
   busyTimeoutMs: number,
@@ -2038,13 +2005,61 @@ function reconstructThreadRowFromRollout(
 }
 
 /** Re-insert threads (+ dependents) from satellite snapshot or rollout reconstruction. */
+function existingThreadIds(db: Database, ids: string[]): Set<string> {
+  const out = new Set<string>();
+  if (ids.length === 0 || !tableExists(db, "threads")) return out;
+  for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK * 2)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    for (const row of selectRows(db, `SELECT id FROM threads WHERE id IN (${placeholders})`, chunk)) {
+      if (typeof row.id === "string") out.add(row.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Undo state + satellite rows committed by a restore that is about to restage
+ * files back into `.trash`. Only deletes IDs / satellite sections this restore
+ * actually inserted (or committed), so conflict-ignored pre-existing rows stay.
+ */
+function compensateRestoreMetadata(
+  stateDbPath: string | null,
+  insertedThreadIds: string[],
+  backup: SatelliteBackup | null,
+  committedSatellites: { logs: boolean; memories: boolean; goals: boolean },
+  busyTimeoutMs: number,
+): void {
+  if (backup) {
+    if (committedSatellites.logs && backup.logs) {
+      withWritableDb(backup.logs.path, busyTimeoutMs, db => {
+        deleteLogsInTx(db, backup.logs!.rows);
+      });
+    }
+    if (committedSatellites.memories && backup.memories) {
+      withWritableDb(backup.memories.path, busyTimeoutMs, db => {
+        deleteMemoriesInTx(db, backup.memories!);
+      });
+    }
+    if (committedSatellites.goals && backup.goals) {
+      withWritableDb(backup.goals.path, busyTimeoutMs, db => {
+        deleteGoalsInTx(db, backup.goals!);
+      });
+    }
+  }
+  if (stateDbPath && insertedThreadIds.length > 0 && existsSync(stateDbPath)) {
+    withWritableDb(stateDbPath, busyTimeoutMs, db => {
+      deleteThreadsAndDependents(db, insertedThreadIds);
+    });
+  }
+}
+
 function restoreThreadsFromManifest(
   stateDbPath: string | null,
   entries: CleanupManifestEntry[],
   backup: SatelliteBackup | null,
   busyTimeoutMs: number,
   codexHome: string,
-): { ok: true } | ReconcileErr {
+): { ok: true; insertedThreadIds: string[] } | ReconcileErr {
   const manifestThreadIds = entries
     .map(e => e.threadId)
     .filter((id): id is string => typeof id === "string");
@@ -2056,9 +2071,10 @@ function restoreThreadsFromManifest(
   if (needsThreads && (!stateDbPath || !existsSync(stateDbPath))) {
     return { ok: false, error: "db_reconcile_failed" };
   }
-  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true };
+  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true, insertedThreadIds: [] };
 
-  return withWritableDb(stateDbPath, busyTimeoutMs, db => {
+  let insertedThreadIds: string[] = [];
+  const result = withWritableDb(stateDbPath, busyTimeoutMs, db => {
     if (!tableExists(db, "threads")) throw new Error("missing_threads_table");
 
     const requiredCols = requiredThreadColumnNames(db);
@@ -2075,10 +2091,6 @@ function restoreThreadsFromManifest(
         .filter((id): id is string => typeof id === "string"),
     );
 
-    if (completeSnapshots.length > 0) {
-      insertRowsConflictIgnore(db, "threads", completeSnapshots);
-    }
-
     // Legacy Phase-2 quarantine (no / incomplete satellite thread snapshots): reconstruct
     // every required column from the restored rollout via the history-provider session path.
     const toReconstruct = entries.filter(
@@ -2086,27 +2098,39 @@ function restoreThreadsFromManifest(
         && typeof e.rolloutPath === "string"
         && !coveredIds.has(e.threadId!),
     );
-    if (toReconstruct.length > 0) {
-      const reconstructed: SqlRow[] = [];
-      for (const entry of toReconstruct) {
-        let abs: string;
-        try {
-          abs = absFromRel(codexHome, entry.rolloutPath!);
-        } catch {
-          // Prefer the first restored physical path under archived_sessions.
-          const rel = entry.physicalRelPaths[0];
-          if (!rel) throw new Error("missing_rollout_for_thread");
-          abs = absFromRel(codexHome, rel);
-        }
-        // .jsonl.zst cannot be parsed here — require a plain .jsonl sibling or path.
-        if (abs.endsWith(ZST_SUFFIX)) {
-          const plain = abs.slice(0, -".zst".length);
-          if (existsSync(plain)) abs = plain;
-        }
-        const row = reconstructThreadRowFromRollout(entry, abs, allowedCols, requiredCols);
-        if (!row) throw new Error("thread_reconstruct_failed");
-        reconstructed.push(row);
+    const reconstructed: SqlRow[] = [];
+    for (const entry of toReconstruct) {
+      let abs: string;
+      try {
+        abs = absFromRel(codexHome, entry.rolloutPath!);
+      } catch {
+        // Prefer the first restored physical path under archived_sessions.
+        const rel = entry.physicalRelPaths[0];
+        if (!rel) throw new Error("missing_rollout_for_thread");
+        abs = absFromRel(codexHome, rel);
       }
+      // .jsonl.zst cannot be parsed here — require a plain .jsonl sibling or path.
+      if (abs.endsWith(ZST_SUFFIX)) {
+        const plain = abs.slice(0, -".zst".length);
+        if (existsSync(plain)) abs = plain;
+      }
+      const row = reconstructThreadRowFromRollout(entry, abs, allowedCols, requiredCols);
+      if (!row) throw new Error("thread_reconstruct_failed");
+      reconstructed.push(row);
+    }
+
+    const candidateIds = [
+      ...coveredIds,
+      ...reconstructed
+        .map(r => r.id)
+        .filter((id): id is string => typeof id === "string"),
+    ];
+    const preexisting = existingThreadIds(db, candidateIds);
+
+    if (completeSnapshots.length > 0) {
+      insertRowsConflictIgnore(db, "threads", completeSnapshots);
+    }
+    if (reconstructed.length > 0) {
       insertRowsConflictIgnore(db, "threads", reconstructed);
     }
 
@@ -2116,7 +2140,11 @@ function restoreThreadsFromManifest(
     if (backup?.spawnEdges && isSqlRowArray(backup.spawnEdges) && tableExists(db, "thread_spawn_edges")) {
       insertRowsConflictIgnore(db, "thread_spawn_edges", backup.spawnEdges);
     }
+
+    insertedThreadIds = [...new Set(candidateIds.filter(id => !preexisting.has(id)))];
   });
+  if (!result.ok) return result;
+  return { ok: true, insertedThreadIds };
 }
 
 function isSafeArchivedPhysicalRel(rel: string): boolean {
@@ -2128,19 +2156,35 @@ function isSafeArchivedPhysicalRel(rel: string): boolean {
   return isRolloutFileName(rest);
 }
 
+/** Test-only failure injection for restore atomicity regressions. */
+export interface RestoreTestHooks {
+  /** After state threads/dependents commit, before satellite commits. */
+  failAfterStateCommit?: boolean;
+  /** After the first satellite DB commit (logs → memories → goals). */
+  failAfterFirstSatelliteCommit?: boolean;
+  /** When the leftover staged-rollout completeness gate runs. */
+  failAtLeftoverStageGate?: boolean;
+}
+
 /**
  * Restore one quarantine entry: move JSONL back, re-insert threads (+ satellites
  * when satellite-backup.json is present), then remove the trash directory.
+ *
+ * Late failures restage files first, then compensate any rows this restore
+ * committed, so the trash entry stays retryable without `dest_exists` or
+ * orphan metadata.
  */
 export function restoreTrashEntry(
   trashId: string,
   options?: {
     codexHome?: string;
     busyTimeoutMs?: number;
+    _test?: RestoreTestHooks;
   },
 ): RestoreResult {
   const codexHome = options?.codexHome ?? resolveCodexHomeDir();
   const busyTimeoutMs = options?.busyTimeoutMs ?? 100;
+  const hooks = options?._test;
 
   const resolved = resolveTrashStageDir(trashId, codexHome);
   if (!resolved.ok) {
@@ -2288,6 +2332,41 @@ export function restoreTrashEntry(
   const bytes = entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
   const partialCounts = { count: restoredPaths.length, bytes, restoredPaths };
 
+  let insertedThreadIds: string[] = [];
+  const committedSatellites = { logs: false, memories: false, goals: false };
+
+  /**
+   * Restage files first (retryable if we crash mid-compensate), then delete any
+   * rows this restore committed. When restage is incomplete, keep metadata so
+   * unrestored files are not left without DB rows.
+   */
+  const abortAfterMoves = (error: RestoreErrorCode): RestoreResult => {
+    if (satelliteLocks) {
+      rollbackAllSatelliteLocks(satelliteLocks);
+      satelliteLocks = undefined;
+    }
+    rollbackMoves(moved);
+    const unrestored = moved.filter(m => existsSync(m.to) && !existsSync(m.from));
+    if (unrestored.length > 0) {
+      return { ok: false, trashDir: id, ...partialCounts, error };
+    }
+    compensateRestoreMetadata(
+      paths.state,
+      insertedThreadIds,
+      satelliteBackup,
+      committedSatellites,
+      busyTimeoutMs,
+    );
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error,
+    };
+  };
+
   const threadsRestored = restoreThreadsFromManifest(
     paths.state,
     entries,
@@ -2296,48 +2375,86 @@ export function restoreTrashEntry(
     codexHome,
   );
   if (!threadsRestored.ok) {
-    rollbackMoves(moved);
-    if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
-    return {
-      ok: false,
-      trashDir: id,
-      count: 0,
-      bytes: 0,
-      restoredPaths: [],
-      error: threadsRestored.error === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
-    };
+    return abortAfterMoves(
+      threadsRestored.error === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+    );
+  }
+  insertedThreadIds = threadsRestored.insertedThreadIds;
+
+  if (hooks?.failAfterStateCommit) {
+    return abortAfterMoves("db_reconcile_failed");
   }
 
   if (satelliteLocks && satelliteBackup) {
     const locks = satelliteLocks;
     try {
-      restoreSatelliteBackupInLocks(locks, satelliteBackup);
-      commitSatelliteLock(locks.logs);
-      commitSatelliteLock(locks.memories);
-      commitSatelliteLock(locks.goals);
+      // Commit one satellite DB at a time so a later failure can compensate
+      // earlier commits; uncommitted txs roll back via rollbackAllSatelliteLocks.
+      if (satelliteBackup.logs) {
+        if (!locks.logs) throw new Error("missing_logs_lock");
+        if (!tableExists(locks.logs.db, "logs")) throw new Error("missing_logs_table");
+        insertRowsConflictIgnore(locks.logs.db, "logs", satelliteBackup.logs.rows);
+        commitSatelliteLock(locks.logs);
+        locks.logs = undefined;
+        committedSatellites.logs = true;
+        if (hooks?.failAfterFirstSatelliteCommit) {
+          throw new Error("test_fail_after_first_satellite");
+        }
+      }
+      if (satelliteBackup.memories) {
+        if (!locks.memories) throw new Error("missing_memories_lock");
+        const mem = satelliteBackup.memories;
+        if (!tableExists(locks.memories.db, "stage1_outputs")) {
+          throw new Error("missing_stage1_outputs_table");
+        }
+        insertRowsConflictIgnore(locks.memories.db, "stage1_outputs", mem.stage1);
+        if (tableExists(locks.memories.db, "jobs")) {
+          insertRowsConflictIgnore(locks.memories.db, "jobs", mem.stage1Jobs);
+          if (mem.consolidateTouched) {
+            restoreConsolidateGlobalJob(
+              locks.memories.db,
+              mem.consolidateJob,
+              mem.consolidatePostImage,
+            );
+          }
+        }
+        commitSatelliteLock(locks.memories);
+        locks.memories = undefined;
+        committedSatellites.memories = true;
+        if (hooks?.failAfterFirstSatelliteCommit && !committedSatellites.logs) {
+          throw new Error("test_fail_after_first_satellite");
+        }
+      }
+      if (satelliteBackup.goals) {
+        if (!locks.goals) throw new Error("missing_goals_lock");
+        const g = satelliteBackup.goals;
+        if (!tableExists(locks.goals.db, "thread_goals")) {
+          throw new Error("missing_thread_goals_table");
+        }
+        insertRowsConflictIgnore(locks.goals.db, "thread_goals", g.goals);
+        if (tableExists(locks.goals.db, "thread_goal_continuation_deferrals")) {
+          insertRowsConflictIgnore(
+            locks.goals.db,
+            "thread_goal_continuation_deferrals",
+            g.deferrals,
+          );
+        }
+        commitSatelliteLock(locks.goals);
+        locks.goals = undefined;
+        committedSatellites.goals = true;
+        if (
+          hooks?.failAfterFirstSatelliteCommit
+          && !committedSatellites.logs
+          && !committedSatellites.memories
+        ) {
+          throw new Error("test_fail_after_first_satellite");
+        }
+      }
       satelliteLocks = undefined;
     } catch (error) {
-      rollbackAllSatelliteLocks(locks);
-      satelliteLocks = undefined;
-      rollbackMoves(moved);
-      const unrestored = moved.filter(m => existsSync(m.to) && !existsSync(m.from));
-      // If rollback could not restage every file, report what remains restored.
-      if (unrestored.length > 0) {
-        return {
-          ok: false,
-          trashDir: id,
-          ...partialCounts,
-          error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
-        };
-      }
-      return {
-        ok: false,
-        trashDir: id,
-        count: 0,
-        bytes: 0,
-        restoredPaths: [],
-        error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
-      };
+      return abortAfterMoves(
+        mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+      );
     }
   }
 
@@ -2345,41 +2462,20 @@ export function restoreTrashEntry(
   // must hold no leftover rollout files, before we destroy the quarantine evidence.
   for (const item of moved) {
     if (!existsSync(item.to) || existsSync(item.from)) {
-      rollbackMoves(moved);
-      return {
-        ok: false,
-        trashDir: id,
-        count: 0,
-        bytes: 0,
-        restoredPaths: [],
-        error: "fs_failed",
-      };
+      return abortAfterMoves("fs_failed");
     }
   }
   try {
+    if (hooks?.failAtLeftoverStageGate) {
+      return abortAfterMoves("fs_failed");
+    }
     for (const name of readdirSync(stageDir)) {
       if (name === "manifest.json" || name === SATELLITE_BACKUP_FILE) continue;
       if (!isRolloutFileName(name)) continue;
-      rollbackMoves(moved);
-      return {
-        ok: false,
-        trashDir: id,
-        count: 0,
-        bytes: 0,
-        restoredPaths: [],
-        error: "fs_failed",
-      };
+      return abortAfterMoves("fs_failed");
     }
   } catch {
-    rollbackMoves(moved);
-    return {
-      ok: false,
-      trashDir: id,
-      count: 0,
-      bytes: 0,
-      restoredPaths: [],
-      error: "fs_failed",
-    };
+    return abortAfterMoves("fs_failed");
   }
 
   try {
