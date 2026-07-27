@@ -205,10 +205,14 @@ export function assessUrlDestination(url: string): UrlDestinationAssessment | nu
 /**
  * Async DNS-resolved URL safety check. Resolves A/AAAA records and rejects
  * if any address is loopback, private, link-local, unspecified, or metadata.
- * Throws on unsafe destination; returns void on safe/public destination.
+ * Throws on unsafe destination; returns the validated public addresses on success
+ * so callers can pin the connect peer and avoid a second, rebindable resolution.
  * DNS resolution failures are treated as unsafe (fail-closed).
  */
-export async function assertUrlResolvesPublic(url: string): Promise<void> {
+export async function resolvePublicAddresses(url: string): Promise<{
+  hostname: string;
+  addresses: { address: string; family: number }[];
+}> {
   let hostname: string;
   try {
     hostname = normalizeHostname(new URL(url.trim()).hostname);
@@ -220,9 +224,15 @@ export async function assertUrlResolvesPublic(url: string): Promise<void> {
   if (literalAssessment && literalAssessment.kind !== "public" && literalAssessment.kind !== "hostname") {
     throw new Error(`image URL targets ${literalAssessment.detail}`);
   }
-  // For literal IPs and localhost, the sync path already classified them.
-  if (isIP(hostname) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost")) return;
-  let addresses: { address: string }[];
+  // Literal public IPs: no DNS round-trip; pin the literal itself.
+  const literalKind = isIP(hostname);
+  if (literalKind !== 0) {
+    return { hostname, addresses: [{ address: hostname, family: literalKind }] };
+  }
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new Error(`image URL targets localhost destination`);
+  }
+  let addresses: { address: string; family: number }[];
   try {
     addresses = await lookup(hostname, { all: true, verbatim: true });
   } catch {
@@ -230,10 +240,25 @@ export async function assertUrlResolvesPublic(url: string): Promise<void> {
     // this is a runtime fetch to an untrusted URL, so be conservative).
     throw new Error(`image URL hostname ${hostname} could not be resolved`);
   }
-  for (const { address } of addresses) {
-    const ipKind = isIP(address);
-    const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
-    if (!assessment || assessment.kind === "public") continue;
-    throw new Error(`image URL hostname ${hostname} resolves to ${assessment.detail} (${address})`);
+  if (addresses.length === 0) {
+    throw new Error(`image URL hostname ${hostname} could not be resolved`);
   }
+  const publicAddresses: { address: string; family: number }[] = [];
+  for (const { address, family } of addresses) {
+    const ipKind = family === 4 || family === 6 ? family : isIP(address);
+    const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
+    if (!assessment || assessment.kind !== "public") {
+      throw new Error(`image URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
+    }
+    publicAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
+  }
+  return { hostname, addresses: publicAddresses };
+}
+
+/**
+ * Void assertion wrapper around {@link resolvePublicAddresses} for call sites
+ * that only need the safety check.
+ */
+export async function assertUrlResolvesPublic(url: string): Promise<void> {
+  await resolvePublicAddresses(url);
 }

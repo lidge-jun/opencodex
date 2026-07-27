@@ -1,7 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import https from "node:https";
+import type { IncomingMessage, RequestOptions } from "node:http";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { assessUrlDestination, assertUrlResolvesPublic } from "../lib/destination-policy";
+import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
@@ -14,6 +16,15 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 export interface ImageBudget {
   spent: number;
 }
+
+export type PinnedAddress = { address: string; family: number };
+
+/** Test seam / custom transport: must connect to `pinned`, not re-resolve `url`'s hostname. */
+export type PinnedDownloadFn = (
+  url: string,
+  pinned: PinnedAddress,
+  signal?: AbortSignal,
+) => Promise<Response>;
 
 export function createImageBudget(): ImageBudget {
   return { spent: 0 };
@@ -78,10 +89,95 @@ export async function materializeInlineImage(
   return filePath;
 }
 
+/**
+ * HTTPS GET that connects to a previously validated address while keeping the
+ * original hostname for SNI / Host. The custom `lookup` never asks the OS
+ * resolver again, so a rebinding answer cannot redirect the TCP peer.
+ */
+export function pinnedHttpsGet(
+  url: string,
+  pinned: PinnedAddress,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    throw new Error(`image URL must use HTTPS, got ${parsed.protocol}`);
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+      return;
+    }
+
+    const options: RequestOptions & { servername?: string } = {
+      protocol: "https:",
+      hostname: parsed.hostname,
+      servername: parsed.hostname,
+      port: parsed.port || 443,
+      path: `${parsed.pathname}${parsed.search}`,
+      method: "GET",
+      headers: { Host: parsed.host },
+      lookup(_hostname, lookupOptions, callback) {
+        const cb = typeof lookupOptions === "function"
+          ? lookupOptions
+          : callback;
+        if (!cb) return;
+        // Pin the validated peer — do not call dns.lookup again.
+        cb(null, pinned.address, pinned.family as 4 | 6);
+      },
+    };
+
+    const req = https.request(options, (res: IncomingMessage) => {
+      const status = res.statusCode ?? 0;
+      // Match fetch({ redirect: "error" }): never follow 3xx.
+      if (status >= 300 && status < 400) {
+        res.resume();
+        reject(new Error("image download failed: " + status));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer | string) => {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      });
+      res.on("end", () => {
+        const body = Buffer.concat(chunks);
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) {
+            for (const item of value) headers.append(key, item);
+          } else {
+            headers.set(key, value);
+          }
+        }
+        resolve(new Response(body, { status, headers }));
+      });
+      res.on("error", reject);
+    });
+
+    const onAbort = () => {
+      req.destroy(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    req.on("error", (err) => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(err);
+    });
+    req.on("close", () => signal?.removeEventListener("abort", onAbort));
+    req.end();
+  });
+}
+
+function pickPinnedAddress(addresses: PinnedAddress[]): PinnedAddress {
+  return addresses.find(a => a.family === 4) ?? addresses[0]!;
+}
+
 export async function downloadImageToArtifact(
   url: string,
   budget?: ImageBudget,
   signal?: AbortSignal,
+  options?: { pinnedDownload?: PinnedDownloadFn },
 ): Promise<string> {
   if (url.startsWith("data:")) {
     const m = /^data:([^;]+);base64,(.+)$/.exec(url);
@@ -91,8 +187,8 @@ export async function downloadImageToArtifact(
 
   // SSRF protection: validate the provider-returned URL before fetching.
   // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
-  // DNS is checked before fetch; pinning the connected peer across a second resolution
-  // (rebinding) remains a recorded residual for this loopback proxy (destination-policy.ts).
+  // Resolve DNS once, then pin that public address for the HTTPS connect (SNI/Host keep
+  // the original hostname) so a rebinding answer cannot retarget the TCP peer.
   let parsedUrl: URL;
   try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
   if (parsedUrl.protocol !== "https:") {
@@ -103,9 +199,10 @@ export async function downloadImageToArtifact(
   if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
     throw new Error(`image URL targets ${assessment.detail}`);
   }
-  // DNS check: resolve hostname and reject if it points at private/internal space.
-  await assertUrlResolvesPublic(url);
-  const resp = await fetch(url, { signal, redirect: "error" });
+  const resolved = await resolvePublicAddresses(url);
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const download = options?.pinnedDownload ?? pinnedHttpsGet;
+  const resp = await download(url, pinned, signal);
   if (!resp.ok) throw new Error("image download failed: " + resp.status);
 
   // Stream the body with a hard byte cap so a missing/lying Content-Length or a

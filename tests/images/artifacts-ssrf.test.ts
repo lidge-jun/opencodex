@@ -5,8 +5,10 @@ import { describe, expect, mock, test } from "bun:test";
 const lookupMock = mock(async (_hostname: string, _opts: unknown): Promise<{ address: string; family: number }[]> => []);
 mock.module("node:dns/promises", () => ({ lookup: lookupMock }));
 
-const { assessUrlDestination, assertUrlResolvesPublic } = await import("../../src/lib/destination-policy");
+const { assessUrlDestination, assertUrlResolvesPublic, resolvePublicAddresses } = await import("../../src/lib/destination-policy");
 const { downloadImageToArtifact } = await import("../../src/images/artifacts");
+
+const MIN_PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("SSRF: assessUrlDestination", () => {
   test("loopback IPv4 → loopback", () => {
@@ -66,6 +68,31 @@ describe("SSRF: assertUrlResolvesPublic", () => {
   });
 });
 
+describe("SSRF: resolvePublicAddresses", () => {
+  test("hostname with public A record → returns that address", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    try {
+      const resolved = await resolvePublicAddresses("https://public-host/img.png");
+      expect(resolved.hostname).toBe("public-host");
+      expect(resolved.addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
+    } finally {
+      lookupMock.mockClear();
+    }
+  });
+
+  test("hostname that also resolves private → throws (fail closed on any unsafe answer)", async () => {
+    lookupMock.mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ]);
+    try {
+      await expect(resolvePublicAddresses("https://mixed-host/img.png")).rejects.toThrow(/loopback|127\.0\.0\.1/);
+    } finally {
+      lookupMock.mockClear();
+    }
+  });
+});
+
 describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
   test("http:// → rejects (non-HTTPS)", async () => {
     await expect(downloadImageToArtifact("http://public-host/path")).rejects.toThrow(/HTTPS/);
@@ -93,39 +120,64 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
 
   test(`3xx redirect response → rejects (redirect: 'error')`, async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const originalFetch = globalThis.fetch;
-    let seenRedirect: RequestRedirect | undefined;
     try {
-      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-        seenRedirect = init?.redirect;
-        return new Response("", { status: 301, headers: { Location: "https://evil.example/redirect" } });
-      }) as typeof fetch;
-      await expect(downloadImageToArtifact("https://public-host/redirect-img")).rejects.toThrow();
-      expect(seenRedirect).toBe("error");
+      await expect(downloadImageToArtifact("https://public-host/redirect-img", undefined, undefined, {
+        pinnedDownload: async () => new Response("", {
+          status: 301,
+          headers: { Location: "https://evil.example/redirect" },
+        }),
+      })).rejects.toThrow();
     } finally {
-      globalThis.fetch = originalFetch;
       lookupMock.mockClear();
     }
   });
 
-  test("https:// public host → succeeds with mocked fetch", async () => {
-    // Stub DNS so public-host resolves to a public address.
+  test("https:// public host → succeeds with pinned download", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const originalFetch = globalThis.fetch;
     let downloadedPath: string | undefined;
+    let seenPinned: { address: string; family: number } | undefined;
     try {
-      globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
-        const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (!raw.startsWith("https://")) throw new Error("fetch must only be called over HTTPS");
-        // Minimal PNG signature so guessExtFromMagic returns "png".
-        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        return new Response(pngBytes, { status: 200 });
-      }) as typeof fetch;
-
-      downloadedPath = await downloadImageToArtifact("https://public-host/valid-image");
+      downloadedPath = await downloadImageToArtifact("https://public-host/valid-image", undefined, undefined, {
+        pinnedDownload: async (_url, pinned) => {
+          seenPinned = pinned;
+          return new Response(MIN_PNG, { status: 200 });
+        },
+      });
       expect(downloadedPath).toMatch(/dl-.*\.png$/);
+      expect(seenPinned).toEqual({ address: "93.184.216.34", family: 4 });
     } finally {
-      globalThis.fetch = originalFetch;
+      lookupMock.mockClear();
+      if (downloadedPath) await rm(downloadedPath).catch(() => {});
+    }
+  });
+
+  test("DNS rebinding: connection uses the validated public address, not a later private resolve", async () => {
+    // Validation lookup returns public; any subsequent OS resolve would return loopback.
+    // The download must pin the first answer and must not call dns.lookup again.
+    let lookups = 0;
+    lookupMock.mockImplementation(async () => {
+      lookups += 1;
+      if (lookups === 1) return [{ address: "93.184.216.34", family: 4 }];
+      return [{ address: "127.0.0.1", family: 4 }];
+    });
+
+    let downloadedPath: string | undefined;
+    let seenPinned: { address: string; family: number } | undefined;
+    try {
+      downloadedPath = await downloadImageToArtifact("https://rebind.example/img.png", undefined, undefined, {
+        pinnedDownload: async (_url, pinned) => {
+          // Still only one DNS resolve at connect time — pin came from validation.
+          expect(lookups).toBe(1);
+          seenPinned = pinned;
+          expect(pinned.address).toBe("93.184.216.34");
+          expect(pinned.address).not.toBe("127.0.0.1");
+          return new Response(MIN_PNG, { status: 200 });
+        },
+      });
+      expect(downloadedPath).toMatch(/dl-.*\.png$/);
+      expect(seenPinned?.address).toBe("93.184.216.34");
+      expect(lookups).toBe(1);
+    } finally {
       lookupMock.mockClear();
       if (downloadedPath) await rm(downloadedPath).catch(() => {});
     }
