@@ -85,6 +85,37 @@ describe("storage trash restore job responsiveness", () => {
     }
   });
 
+  test("test-stream route returns JSON 404 when hooks are enabled but stream is null", async () => {
+    process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+    // enableTestStream omitted → getRestoreTrashTestStreamResponse() returns null
+    setRestoreTrashJobTestHooks({ blockMs: 0 });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type") ?? "").toContain("application/json");
+      expect(await res.json()).toEqual({ error: "not_available" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("test-stream route serves the enabled hook stream", async () => {
+    process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+    setRestoreTrashJobTestHooks({ enableTestStream: true });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("text/plain");
+      const body = await res.text();
+      expect(body).toContain("chunk-0");
+      expect(body).toContain("chunk-7");
+    } finally {
+      await server.stop(true);
+    }
+  }, { timeout: 10_000 });
+
   test("blocked worker keeps /healthz and streaming response responsive", async () => {
     const blockMs = 1200;
     setRestoreTrashJobTestHooks({ blockMs, enableTestStream: true });
