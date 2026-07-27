@@ -13,7 +13,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
-import { sanitizeApiKeyValue } from "../providers/api-keys";
+import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -608,6 +608,12 @@ function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["a
  * and keep key billing while usable key material remains and the user was not explicitly on
  * oauth. If the final key was removed and only the old key mode remains, let the OAuth
  * preset restore `authMode: "oauth"` so the newly saved OAuth credential can be used.
+ *
+ * After preservation, `apiKey` always has exactly one matching pool entry (inserting via the
+ * same content-derived id as the API-key manager when the active key was missing from the
+ * pool). Key mode is restored only when the previous mode was `"key"` or omitted *and*
+ * `resolveEnvValue(apiKey)` yields a non-empty secret — unresolved env references stay
+ * preserved as literals but do not flip billing away from the OAuth preset.
  */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
@@ -624,11 +630,20 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
       storedApiKey = storedApiKeyPool[0]!.key;
     }
-    if (storedApiKey !== undefined) next.apiKey = storedApiKey;
-    if (storedApiKeyPool !== undefined) next.apiKeyPool = storedApiKeyPool;
-    // Router only honors key override when authMode is explicitly "key". Keep key mode
-    // when material survives and the user was not explicitly on oauth billing.
-    if (storedApiKey !== undefined && existing.authMode !== "oauth") next.authMode = "key";
+    if (storedApiKey !== undefined) {
+      const pool = storedApiKeyPool ? [...storedApiKeyPool] : [];
+      // Keep routing and listProviderApiKeys in sync: never leave a hidden active key that
+      // is absent from the pool (listing would fall back to pool[0] as "active").
+      if (!pool.some(entry => entry.key === storedApiKey)) {
+        pool.push({ id: apiKeyPoolEntryId(storedApiKey), key: storedApiKey });
+      }
+      next.apiKey = storedApiKey;
+      next.apiKeyPool = pool;
+      const resolved = resolveEnvValue(storedApiKey);
+      const usable = typeof resolved === "string" && resolved.trim().length > 0;
+      const previousModeAllowsKey = existing.authMode === "key" || existing.authMode === undefined;
+      if (usable && previousModeAllowsKey) next.authMode = "key";
+    }
   }
   config.providers[provider] = next;
 }

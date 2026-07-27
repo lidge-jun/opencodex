@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { upsertOAuthProvider } from "../src/oauth";
-import { removeProviderApiKey } from "../src/providers/api-keys";
+import {
+  apiKeyPoolEntryId,
+  listProviderApiKeys,
+  removeProviderApiKey,
+  setActiveProviderApiKey,
+} from "../src/providers/api-keys";
 import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
@@ -66,15 +71,96 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("key");
   });
 
-  test("treats an API key environment reference as stored key material", () => {
+  test("keeps key mode for a defined API key environment reference", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY}";
     config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }];
-    upsertOAuthProvider(config, "xai");
-    const provider = config.providers.xai!;
-    expect(provider.apiKey).toBe("${OCX_TEST_XAI_API_KEY}");
-    expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }]);
-    expect(provider.authMode).toBe("key");
+    const previous = process.env.OCX_TEST_XAI_API_KEY;
+    process.env.OCX_TEST_XAI_API_KEY = "resolved-xai-secret";
+    try {
+      upsertOAuthProvider(config, "xai");
+      const provider = config.providers.xai!;
+      expect(provider.apiKey).toBe("${OCX_TEST_XAI_API_KEY}");
+      expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY}" }]);
+      expect(provider.authMode).toBe("key");
+      const routed = routeModel(config, "xai/grok-4.5").provider;
+      expect(routed.authMode).toBe("key");
+      expect(routed.apiKey).toBe("resolved-xai-secret");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_TEST_XAI_API_KEY;
+      else process.env.OCX_TEST_XAI_API_KEY = previous;
+    }
+  });
+
+  test("preserves an unresolved environment reference without forcing key billing", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY_MISSING}";
+    config.providers.xai!.apiKeyPool = [{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY_MISSING}" }];
+    const previous = process.env.OCX_TEST_XAI_API_KEY_MISSING;
+    delete process.env.OCX_TEST_XAI_API_KEY_MISSING;
+    try {
+      upsertOAuthProvider(config, "xai");
+      const provider = config.providers.xai!;
+      expect(provider.apiKey).toBe("${OCX_TEST_XAI_API_KEY_MISSING}");
+      expect(provider.apiKeyPool).toEqual([{ id: "env-key", key: "${OCX_TEST_XAI_API_KEY_MISSING}" }]);
+      expect(provider.authMode).toBe("oauth");
+      const routed = routeModel(config, "xai/grok-4.5").provider;
+      expect(routed.authMode).toBe("oauth");
+      expect(routed.apiKey).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.OCX_TEST_XAI_API_KEY_MISSING;
+      else process.env.OCX_TEST_XAI_API_KEY_MISSING = previous;
+    }
+  });
+
+  test("inserts a missing active key into the pool so listing matches routing", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "routing-only-key",
+          apiKeyPool: [{ id: "pool-visible", key: "pool-visible-key" }],
+        },
+      },
+    } as OcxConfig;
+    const previousHome = process.env.OPENCODEX_HOME;
+    const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-pool-"));
+    process.env.OPENCODEX_HOME = testHome;
+    try {
+      upsertOAuthProvider(config, "xai");
+      const provider = config.providers.xai!;
+      const activeId = apiKeyPoolEntryId("routing-only-key");
+      expect(provider.authMode).toBe("key");
+      expect(provider.apiKey).toBe("routing-only-key");
+      expect(provider.apiKeyPool).toEqual([
+        { id: "pool-visible", key: "pool-visible-key" },
+        { id: activeId, key: "routing-only-key" },
+      ]);
+
+      const listed = listProviderApiKeys(config, "xai");
+      expect(listed.activeId).toBe(activeId);
+      expect(listed.keys.find(entry => entry.id === activeId)?.active).toBe(true);
+      expect(listed.keys.find(entry => entry.id === "pool-visible")?.active).toBe(false);
+
+      expect(setActiveProviderApiKey(config, "xai", "pool-visible")).toBe(true);
+      expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
+      expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
+
+      expect(setActiveProviderApiKey(config, "xai", activeId)).toBe(true);
+      expect(config.providers.xai!.apiKey).toBe("routing-only-key");
+      expect(removeProviderApiKey(config, "xai", activeId)).toBe(true);
+      expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
+      expect(config.providers.xai!.apiKeyPool).toEqual([{ id: "pool-visible", key: "pool-visible-key" }]);
+      expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      rmSync(testHome, { recursive: true, force: true });
+    }
   });
 
   test("drops malformed stored key fields instead of breaking OAuth routing", () => {
