@@ -848,6 +848,7 @@ export const ja: Record<TKey, string> = {
   "pws.usageUnavailable": "まだ使用量が記録されていません。",
   "pws.rateLimits": "レート制限",
   "pws.quotaUnavailable": "このプロバイダーのクォータデータがありません。",
+  "pws.accountQuotaUnavailable": "レート制限データを一時的に取得できません。前回の値がある場合はそれを表示します。",
   "pws.selected": "選択中",
   "pws.copyModelId": "ID をコピー",
   "pws.modelCopied": "コピーしました!",

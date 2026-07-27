@@ -890,6 +890,7 @@ export const ru: Record<TKey, string> = {
   "pws.usageUnavailable": "Использование пока не зафиксировано.",
   "pws.rateLimits": "Лимиты запросов",
   "pws.quotaUnavailable": "Нет данных о квоте для этого провайдера.",
+  "pws.accountQuotaUnavailable": "Данные о лимитах временно недоступны; при наличии показываются последние известные значения.",
   "pws.selected": "Выбрана",
   "pws.copyModelId": "Копировать ID",
   "pws.modelCopied": "Скопировано!",

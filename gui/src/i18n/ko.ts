@@ -1135,6 +1135,7 @@ export const ko: Record<TKey, string> = {
   "pws.usageUnavailable": "아직 기록된 사용량이 없습니다.",
   "pws.rateLimits": "요청 한도",
   "pws.quotaUnavailable": "이 프로바이더의 쿼터 데이터가 없습니다.",
+  "pws.accountQuotaUnavailable": "요금 한도 데이터를 일시적으로 가져올 수 없습니다. 이전 값이 있으면 그대로 표시합니다.",
   "pws.selected": "선택됨",
   "pws.copyModelId": "ID 복사",
   "pws.modelCopied": "복사됨!",

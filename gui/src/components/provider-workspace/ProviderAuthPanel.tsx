@@ -234,9 +234,14 @@ export default function ProviderAuthPanel({
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                     </div>
-                    {account.quota && (
+                    {(account.quota || account.quotaUnavailable) && (
                       <div className="pwi-auth-acct-quota">
-                        <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
+                        {account.quota && (
+                          <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
+                        )}
+                        {account.quotaUnavailable && (
+                          <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>
+                        )}
                       </div>
                     )}
                   </li>

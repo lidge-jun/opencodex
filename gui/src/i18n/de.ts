@@ -1115,6 +1115,7 @@ export const de: Record<TKey, string> = {
   "pws.usageUnavailable": "Noch keine Nutzung erfasst.",
   "pws.rateLimits": "Limits",
   "pws.quotaUnavailable": "Keine Kontingentdaten für diesen Provider.",
+  "pws.accountQuotaUnavailable": "Ratenlimit-Daten vorübergehend nicht verfügbar; falls vorhanden, werden zuletzt bekannte Werte angezeigt.",
   "pws.selected": "Ausgewählt",
   "pws.copyModelId": "ID kopieren",
   "pws.modelCopied": "Kopiert!",

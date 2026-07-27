@@ -891,6 +891,7 @@ export const en = {
   "pws.usageUnavailable": "No usage recorded yet.",
   "pws.rateLimits": "Rate limits",
   "pws.quotaUnavailable": "No quota data for this provider.",
+  "pws.accountQuotaUnavailable": "Rate-limit data temporarily unavailable; showing last known values when present.",
   "pws.selected": "Selected",
   "pws.copyModelId": "Copy ID",
   "pws.modelCopied": "Copied!",

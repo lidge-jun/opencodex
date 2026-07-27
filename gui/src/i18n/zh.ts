@@ -1135,6 +1135,7 @@ export const zh: Record<TKey, string> = {
   "pws.usageUnavailable": "尚无用量记录。",
   "pws.rateLimits": "速率限制",
   "pws.quotaUnavailable": "此提供商暂无配额数据。",
+  "pws.accountQuotaUnavailable": "速率限制数据暂时不可用；若有上次已知值则继续显示。",
   "pws.selected": "已选择",
   "pws.copyModelId": "复制 ID",
   "pws.modelCopied": "已复制！",

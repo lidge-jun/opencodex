@@ -32,7 +32,7 @@ bun run dev:gui
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
-| **Providers** | Add, edit, enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. |
+| **Providers** | Add, edit, enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |

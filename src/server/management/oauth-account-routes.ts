@@ -164,28 +164,37 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       projectOAuthAccountHealth,
       projectStoredOAuthAccountHealth,
     } = await import("../../oauth/health");
-    const set = getAccountSet(provider);
-    const accounts = (status.accounts ?? []).map(summary => {
-      const full = set?.accounts.find(account => account.id === summary.id);
-      const health = full
-        ? projectStoredOAuthAccountHealth(provider, full)
-        : projectOAuthAccountHealth({
-          needsReauth: summary.needsReauth === true,
-          reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
-        });
-      return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health) };
-    });
+    const projectAccounts = () => {
+      const set = getAccountSet(provider);
+      const current = getLoginStatus(provider);
+      return {
+        activeAccountId: current.activeAccountId ?? null,
+        accounts: (current.accounts ?? []).map(summary => {
+          const full = set?.accounts.find(account => account.id === summary.id);
+          const health = full
+            ? projectStoredOAuthAccountHealth(provider, full)
+            : projectOAuthAccountHealth({
+              needsReauth: summary.needsReauth === true,
+              reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
+            });
+          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health) };
+        }),
+      };
+    };
     // Per-account rate limits: Anthropic reports usage per credential, so every logged-in
     // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
     // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
     const wantQuota = url.searchParams.get("quota") === "1" && supportsPerAccountQuota(provider);
-    if (!wantQuota) return jsonResponse({ activeAccountId: status.activeAccountId ?? null, accounts });
+    if (!wantQuota) return jsonResponse(projectAccounts());
     const forceRefresh = url.searchParams.get("refresh") === "1";
+    // Probing may refresh the active credential and mark needsReauth — project health
+    // from the post-probe store so the response is not stale.
     const rows = await fetchProviderAccountQuotas(provider, forceRefresh);
     const byId = new Map(rows.map(row => [row.accountId, row]));
+    const projected = projectAccounts();
     return jsonResponse({
-      activeAccountId: status.activeAccountId ?? null,
-      accounts: accounts.map(account => {
+      activeAccountId: projected.activeAccountId,
+      accounts: projected.accounts.map(account => {
         const row = byId.get(account.id);
         if (!row) return account;
         return {

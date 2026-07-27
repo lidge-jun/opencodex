@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
-import { clearAccountQuotaCache, fetchProviderAccountQuotas, supportsPerAccountQuota } from "../src/providers/quota";
+import type { OcxConfig } from "../src/types";
+import {
+  clearAccountQuotaCache,
+  clearProviderQuotaCache,
+  fetchProviderAccountQuotas,
+  fetchProviderQuotaReports,
+  supportsPerAccountQuota,
+} from "../src/providers/quota";
 
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -30,6 +37,7 @@ beforeEach(() => {
   opencodexHome = mkdtempSync(join(tmpdir(), "ocx-account-quota-"));
   process.env.OPENCODEX_HOME = opencodexHome;
   clearAccountQuotaCache();
+  clearProviderQuotaCache();
 });
 
 afterEach(() => {
@@ -38,6 +46,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   rmSync(opencodexHome, { recursive: true, force: true });
   clearAccountQuotaCache();
+  clearProviderQuotaCache();
 });
 
 describe("fetchProviderAccountQuotas", () => {
@@ -99,6 +108,89 @@ describe("fetchProviderAccountQuotas", () => {
     expect(ok?.quota?.fiveHourPercent).toBe(3);
   });
 
+  test("success-then-fail preserves last-good quota and keeps unavailable", async () => {
+    await seedTwoAccounts();
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      calls += 1;
+      if (calls <= 2) {
+        const body = auth.endsWith("token-first") ? usageBody(70, 15) : usageBody(3, 21);
+        return new Response(body, { status: 200 });
+      }
+      return new Response("rate limited", { status: 429 });
+    }) as typeof fetch;
+
+    const first = await fetchProviderAccountQuotas("anthropic");
+    expect(first.every(row => row.quota && !row.unavailable)).toBe(true);
+    expect(calls).toBe(2);
+    const firstByValues = Object.fromEntries(
+      first.map(row => [`${row.quota?.fiveHourPercent}/${row.quota?.weeklyPercent}`, row.accountId]),
+    );
+
+    const second = await fetchProviderAccountQuotas("anthropic", true);
+    expect(calls).toBe(4);
+    for (const row of second) {
+      expect(row.unavailable).toBe(true);
+      expect(row.quota).not.toBeNull();
+    }
+    const byId = Object.fromEntries(second.map(row => [row.accountId, row]));
+    expect(byId[firstByValues["70/15"]!]?.quota?.fiveHourPercent).toBe(70);
+    expect(byId[firstByValues["3/21"]!]?.quota?.fiveHourPercent).toBe(3);
+  });
+
+  test("failed probes negative-cache for the account TTL instead of re-probing", async () => {
+    await seedTwoAccounts();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("rate limited", { status: 429 });
+    }) as typeof fetch;
+
+    const first = await fetchProviderAccountQuotas("anthropic");
+    expect(first.every(row => row.unavailable && row.quota === null)).toBe(true);
+    expect(calls).toBe(2);
+
+    const second = await fetchProviderAccountQuotas("anthropic");
+    expect(second.every(row => row.unavailable && row.quota === null)).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("expired background accounts skip CLI-adopting refresh for quota probes", async () => {
+    const expires = Date.now() - 60_000;
+    await saveCredential("anthropic", {
+      access: "token-active", refresh: "refresh-active", expires: Date.now() + 60 * 60_000,
+      accountId: "acct-active", email: "active@example.com",
+    });
+    await saveCredential("anthropic", {
+      access: "token-bg", refresh: "refresh-bg", expires,
+      accountId: "acct-bg", email: "bg@example.com", source: "local-cli",
+    });
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const set = getAccountSet("anthropic");
+    const active = set?.accounts.find(a => a.credential.email === "active@example.com");
+    const background = set?.accounts.find(a => a.credential.email === "bg@example.com");
+    expect(active && background).toBeTruthy();
+    await setActiveAccount("anthropic", active!.id);
+
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      expect(auth).toBe("Bearer token-active");
+      return new Response(usageBody(11, 22), { status: 200 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("anthropic");
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+    expect(byId[active!.id]?.quota?.fiveHourPercent).toBe(11);
+    expect(byId[active!.id]?.unavailable).toBeUndefined();
+    expect(byId[background!.id]?.quota).toBeNull();
+    expect(byId[background!.id]?.unavailable).toBe(true);
+    // Only the active credential was probed; background expired slot failed closed.
+    expect(calls).toBe(1);
+  });
+
   test("providers without a per-account usage API are skipped", async () => {
     expect(supportsPerAccountQuota("anthropic")).toBe(true);
     expect(supportsPerAccountQuota("kiro")).toBe(false);
@@ -113,5 +205,43 @@ describe("fetchProviderAccountQuotas", () => {
     globalThis.fetch = (async () => { called = true; return new Response("{}", { status: 200 }); }) as typeof fetch;
     expect(await fetchProviderAccountQuotas("anthropic")).toEqual([]);
     expect(called).toBe(false);
+  });
+
+  test("provider-report probe seeds the active account cache for per-account reads", async () => {
+    await seedTwoAccounts();
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const set = getAccountSet("anthropic");
+    const first = set?.accounts.find(a => a.credential.email === "first@example.com");
+    expect(first).toBeTruthy();
+    await setActiveAccount("anthropic", first!.id);
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      const body = auth.endsWith("token-first") ? usageBody(70, 15) : usageBody(3, 21);
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 1455,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          authMode: "oauth",
+          baseUrl: "https://api.anthropic.com/v1",
+        },
+      },
+    };
+    await fetchProviderQuotaReports(config, true);
+    expect(calls).toBe(1);
+
+    const rows = await fetchProviderAccountQuotas("anthropic");
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+    // Active account reused the provider-report probe; only the sibling was hit again.
+    expect(calls).toBe(2);
+    expect(byId[first!.id]?.quota?.fiveHourPercent).toBe(70);
+    const sibling = rows.find(row => row.accountId !== first!.id);
+    expect(sibling?.quota?.fiveHourPercent).toBe(3);
   });
 });
