@@ -94,11 +94,14 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
   test(`3xx redirect response → rejects (redirect: 'error')`, async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     const originalFetch = globalThis.fetch;
+    let seenRedirect: RequestRedirect | undefined;
     try {
-      globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenRedirect = init?.redirect;
         return new Response("", { status: 301, headers: { Location: "https://evil.example/redirect" } });
       }) as typeof fetch;
       await expect(downloadImageToArtifact("https://public-host/redirect-img")).rejects.toThrow();
+      expect(seenRedirect).toBe("error");
     } finally {
       globalThis.fetch = originalFetch;
       lookupMock.mockClear();

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -33,6 +33,16 @@ const { runWithImageBridge, clampImageMaxRounds, DEFAULT_MAX_ROUNDS, MAX_ROUNDS_
 // --- Mock adapter: yields canned events per iteration from a queue ---
 let streamQueue: AdapterEvent[][] = [];
 let buildRequestCalls = 0;
+
+const defaultFulfillResult: ImageCallResult = {
+  ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
+  files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
+};
+beforeEach(() => {
+  fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
+  buildRequestCalls = 0;
+});
+
 const mockAdapter: ProviderAdapter = {
   name: "test",
   buildRequest: async () => { buildRequestCalls++; return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }; },
@@ -136,26 +146,21 @@ describe("runWithImageBridge", () => {
     expect(clampImageMaxRounds(undefined)).toBe(DEFAULT_MAX_ROUNDS);
   });
 
-  test("maxRounds: 10000 is clamped — does not run unbounded iterations", async () => {
+  test("maxRounds: 10000 is clamped — hits hard limit when every round calls image_gen", async () => {
     buildRequestCalls = 0;
-    // Provide only two streams; an unclamped 10000 would hang waiting for more.
-    streamQueue = [
-      [...imageCallEvents],
-      [{ type: "text_delta" as const, text: "clamped final" }, { type: "done" as const }],
-    ];
-    // Fill remaining slots so force-final after hard limit still has events if clamp failed.
-    for (let i = 0; i < 20; i++) {
-      streamQueue.push([{ type: "text_delta" as const, text: `extra ${i}` }, { type: "done" as const }]);
+    streamQueue = [];
+    for (let i = 0; i < MAX_ROUNDS_HARD_LIMIT; i++) {
+      streamQueue.push([...imageCallEvents]);
     }
+    // Forced-final pass after the hard cap.
+    streamQueue.push([{ type: "text_delta" as const, text: "clamped final" }, { type: "done" as const }]);
     const response = await runWithImageBridge({
       parsed: makeParsed(), adapter: mockAdapter, plan, maxRounds: 10000,
     });
     const sse = await response.text();
     expect(sse).toContain("clamped final");
-    // Clamped to 10 → at most 11 upstream requests (maxRounds+1), plus the first image round
-    // that triggers a loop: image call + up to 10 more. With only one image call then text,
-    // we stop early at 2.
-    expect(buildRequestCalls).toBe(2);
+    // Clamped to 10 → HARD_CAP = 11 upstream requests (10 image rounds + 1 forced final).
+    expect(buildRequestCalls).toBe(MAX_ROUNDS_HARD_LIMIT + 1);
   });
 
   test("forced-final strips image aliases from plan.toolNames, not only imageGeneration flag", async () => {

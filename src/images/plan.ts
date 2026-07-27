@@ -23,10 +23,21 @@ export function findXaiProvider(config: OcxConfig): { name: string; provider: Oc
 }
 
 export async function resolveXaiToken(providerName: string, provider: OcxProviderConfig): Promise<string | undefined> {
+  // Honor the selected auth mode (same rules as resolveModelsAuthToken): oauth must not
+  // prefer a stale apiKey, and key mode must not silently fall back to stored OAuth.
+  if (provider.authMode === "oauth") {
+    if (providerName !== "xai") return undefined;
+    try {
+      return await getValidAccessToken("xai");
+    } catch {
+      return undefined;
+    }
+  }
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
   if (apiKey) return apiKey;
-  // Built-in OAuth token only for the canonical "xai" provider — never for custom-named configs.
+  // Legacy / unset authMode: key-first, then built-in OAuth only for the canonical "xai" name.
   if (providerName !== "xai") return undefined;
+  if (provider.authMode === "key" || provider.authMode === "forward") return undefined;
   try {
     return await getValidAccessToken("xai");
   } catch {
@@ -55,11 +66,16 @@ export async function planImageBridge(
   // which is what the model will actually call. Merge it with any original hosted tool names.
   const toolNames = new Set(parsed._imageGeneration.toolNames);
   toolNames.add(IMAGE_GEN_TOOL_NAME);
+  const original = parsed._imageGeneration.originalTool;
+  const hostedSize = typeof original?.size === "string" ? original.size : undefined;
+  const hostedQuality = typeof original?.quality === "string" ? original.quality : undefined;
   return {
     provider: found.provider,
     auth: { baseUrl: pinnedBaseUrl, token },
     model: config.images?.bridgeModel ?? DEFAULT_MODEL,
     toolNames,
+    ...(hostedSize ? { defaultSize: hostedSize } : {}),
+    ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),
     ...(typeof config.images?.timeoutMs === "number" && Number.isFinite(config.images.timeoutMs) && config.images.timeoutMs > 0
       ? { timeoutMs: Math.floor(config.images.timeoutMs) }
       : {}),

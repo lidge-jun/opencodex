@@ -7,6 +7,9 @@ export interface ImageBridgePlan {
   toolNames: Set<string>;
   /** Per-call xAI deadline (ms). Defaults inside callXaiImages when omitted. */
   timeoutMs?: number;
+  /** Defaults from the hosted image_generation tool when the model omits size/quality. */
+  defaultSize?: string;
+  defaultQuality?: string;
 }
 
 export interface ImageCallResult {

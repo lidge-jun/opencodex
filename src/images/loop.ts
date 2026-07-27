@@ -10,7 +10,7 @@
  * Removed vs web-search: no sidecar backend selection, no forced-answer nudge, no failed-query
  * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
-import type { ProviderAdapter } from "../adapters/base";
+import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
@@ -35,6 +35,8 @@ const STALL_TIMEOUT_MS = 200_000;
 export const DEFAULT_MAX_ROUNDS = 3;
 /** Absolute ceiling so a hand-edited `images.maxRounds: 10000` cannot unbound paid xAI calls. */
 export const MAX_ROUNDS_HARD_LIMIT = 10;
+/** Cap paid xAI fulfillments per turn (parallel calls in one round count separately). */
+export const MAX_IMAGE_CALLS_PER_TURN = 10;
 
 /**
  * Clamp a configured maxRounds value to a safe integer in [0, MAX_ROUNDS_HARD_LIMIT].
@@ -67,7 +69,12 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
   let hasRealToolCall = false;
   let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[] } | null = null;
   const flushPending = (): void => {
-    if (pending && !toolNames.has(pending.name)) {
+    if (!pending) return;
+    if (toolNames.has(pending.name)) {
+      // Unterminated image call still carries buffered args — fulfill so malformed JSON
+      // becomes a normal tool_result error instead of silently vanishing.
+      calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf });
+    } else {
       passthrough.push(...pending.events);
       hasRealToolCall = true;
     }
@@ -149,10 +156,18 @@ export interface ImageBridgeDeps {
   forwardHeaders?: Headers;
   /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. */
   onAttemptSend?: () => void;
+  /** Called after each upstream request is built (parity with web-search / normal path). */
+  onRequestBuilt?: (request: AdapterRequest) => void;
   abortSignal?: AbortSignal;
   onFirstOutput?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
+  /** Connect / response-header budget for non-runTurn iterations. */
+  connectTimeoutMs?: number;
+  /** Stall budget (seconds) forwarded to bridgeToResponsesSSE; also bounds runTurn collect. */
+  stallTimeoutSec?: number;
+  /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
+  fetchImpl?: typeof globalThis.fetch;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
@@ -173,6 +188,45 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
+  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
+    ? Math.floor(deps.connectTimeoutMs)
+    : CONNECT_TIMEOUT_MS;
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+    ? Math.floor(deps.stallTimeoutSec * 1000)
+    : STALL_TIMEOUT_MS;
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+  let paidImageCalls = 0;
+  let hiddenUsage: OcxUsage | undefined;
+
+  const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
+    if (!a) return b;
+    if (!b) return a;
+    return {
+      inputTokens: a.inputTokens + b.inputTokens,
+      outputTokens: a.outputTokens + b.outputTokens,
+      ...(a.contextTotalTokens !== undefined || b.contextTotalTokens !== undefined
+        ? { contextTotalTokens: Math.max(a.contextTotalTokens ?? 0, b.contextTotalTokens ?? 0) }
+        : {}),
+      ...(a.cachedInputTokens !== undefined || b.cachedInputTokens !== undefined
+        ? { cachedInputTokens: (a.cachedInputTokens ?? 0) + (b.cachedInputTokens ?? 0) }
+        : {}),
+      ...(a.cacheReadInputTokens !== undefined || b.cacheReadInputTokens !== undefined
+        ? { cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0) }
+        : {}),
+      ...(a.cacheCreationInputTokens !== undefined || b.cacheCreationInputTokens !== undefined
+        ? { cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) }
+        : {}),
+      ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
+        ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
+        : {}),
+      ...(a.estimated || b.estimated ? { estimated: true } : {}),
+    };
+  };
+  const takeUsageFrom = (events: AdapterEvent[]): void => {
+    for (const e of events) {
+      if (e.type === "done" && e.usage) hiddenUsage = addUsage(hiddenUsage, e.usage);
+    }
+  };
 
   const messages: OcxMessage[] = [...parsed.context.messages];
   const allTools = parsed.context.tools ?? [];
@@ -232,20 +286,25 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           queue.close();
         });
 
-      // Yield heartbeats to the live SSE stream while the turn collects — clients already hold
-      // response headers (eager drain is skipped for runTurn) and must not starve on a slow first turn.
+      // Bound collect with a real inactivity deadline. Do NOT manufacture adapter heartbeats
+      // here — bridgeToResponsesSSE treats those as upstream activity and would defeat the stall
+      // guard. SSE keepalives come from the bridge heartbeat interval instead.
       const collectPromise = queue.collect();
-      let events: AdapterEvent[] | undefined;
-      while (events === undefined) {
-        const raced = await Promise.race([
-          collectPromise.then(value => ({ done: true as const, value })),
-          new Promise<{ done: false }>(resolve => {
-            const timer = setTimeout(() => resolve({ done: false }), 15_000);
-            void collectPromise.finally(() => clearTimeout(timer));
+      const collectDeadline = clearableDeadline(stallTimeoutMs, signal);
+      let events: AdapterEvent[];
+      try {
+        events = await Promise.race([
+          collectPromise,
+          new Promise<never>((_, reject) => {
+            const onAbort = (): void => {
+              reject(new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`));
+            };
+            if (collectDeadline.signal.aborted) onAbort();
+            else collectDeadline.signal.addEventListener("abort", onAbort, { once: true });
           }),
         ]);
-        if (raced.done) events = raced.value;
-        else yield { type: "heartbeat" };
+      } finally {
+        collectDeadline.clear();
       }
 
       // Preserve Cursor conversation continuity across image-loop iterations. runTurn mutates
@@ -271,18 +330,19 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: wrappedAdapter };
     }
 
-    const headerDeadline = clearableDeadline(CONNECT_TIMEOUT_MS, signal);
+    const headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     try {
       const fetchOnce = async (requestAdapter: ProviderAdapter): Promise<IterationResponse> => {
         const request = await requestAdapter.buildRequest(iterParsed, {
           headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
           abortSignal: headerDeadline.signal,
         });
+        try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best-effort */ }
         deps.onAttemptSend?.();
         const response = requestAdapter.fetchResponse
           ? await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
-              timeoutMs: CONNECT_TIMEOUT_MS,
+              timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
             })
@@ -290,7 +350,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               () => {
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-                return fetch(request.url, {
+                return fetchImpl(request.url, {
                   method: request.method,
                   headers: h,
                   body: request.body,
@@ -339,7 +399,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       return prepared;
     } catch (error) {
       if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${CONNECT_TIMEOUT_MS}ms during image-bridge`);
+        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
       if (error instanceof LoopError) throw error;
@@ -364,7 +424,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
         signal,
-        inactivityTimeoutMs: STALL_TIMEOUT_MS,
+        inactivityTimeoutMs: stallTimeoutMs,
       })) {
         if (event.type === "heartbeat") yield event;
         else events.push(event);
@@ -433,9 +493,21 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Codex. forceFinal also finalizes.
           const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal;
           if (!shouldLoop) {
+            if (hiddenUsage) {
+              for (let i = split.passthrough.length - 1; i >= 0; i--) {
+                const e = split.passthrough[i];
+                if (e?.type === "done") {
+                  split.passthrough[i] = { ...e, usage: addUsage(hiddenUsage, e.usage) };
+                  break;
+                }
+              }
+            }
             yield* replay(split.passthrough);
             return;
           }
+
+          // Discarded iteration still contributed tokens — accumulate for the final onUsage.
+          takeUsageFrom(split.passthrough);
 
           // Fulfill each image call, then inject ONE assistant turn (thinking once + all tool
           // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.
@@ -443,10 +515,23 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           const fulfilled: Array<{ call: ImageCall; result: Awaited<ReturnType<typeof fulfillImageCall>>; args: Record<string, unknown> }> = [];
           for (const call of split.calls) {
             yield { type: "heartbeat" };
-            const result = await fulfillImageCall(
-              { id: call.id, name: call.name, arguments: call.args },
-              plan, budget, signal,
-            );
+            let result: Awaited<ReturnType<typeof fulfillImageCall>>;
+            if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
+              result = {
+                ok: false,
+                model: plan.model,
+                prompt: "",
+                files: [],
+                count: 0,
+                error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
+              };
+            } else {
+              paidImageCalls += 1;
+              result = await fulfillImageCall(
+                { id: call.id, name: call.name, arguments: call.args },
+                plan, budget, signal,
+              );
+            }
             if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
             let parsedArgs: Record<string, unknown> = {};
             try {
@@ -498,12 +583,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   const sse = bridgeToResponsesSSE(
     produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       internalAbort.abort("client closed responses stream");
-    }, undefined,
+    }, 2_000,
     {
       responseId: "",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+      ...(deps.onUsage ? {
+        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(addUsage(hiddenUsage, usage)),
+      } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });

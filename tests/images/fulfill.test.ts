@@ -18,8 +18,14 @@ let dlIdx = 0;
 let materializeFn: (i: number) => Promise<string> = async (i) => `/test/img-${i}.png`;
 let downloadFn: (i: number) => Promise<string> = async (i) => `/test/dl-${i}.png`;
 
+let capturedTimeoutMs: number | undefined;
 mock.module("../../src/images/xai-client", () => ({
-  callXaiImages: async (req: XaiImageRequest) => { xaiCalls.push(req); if (xaiError) throw xaiError; return xaiResult; },
+  callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
+    xaiCalls.push(req);
+    capturedTimeoutMs = timeoutMs;
+    if (xaiError) throw xaiError;
+    return xaiResult;
+  },
 }));
 mock.module("../../src/images/artifacts", () => ({
   createImageBudget: () => ({ spent: 0 }),
@@ -40,6 +46,7 @@ function reset(): void {
   xaiResult = { images: [{ b64_json: "dGVzdA==" }] };
   xaiError = null;
   xaiCalls.length = 0;
+  capturedTimeoutMs = undefined;
   matIdx = 0;
   dlIdx = 0;
   materializeFn = async (i) => `/test/img-${i}.png`;
@@ -55,6 +62,16 @@ describe("fulfillImageCall", () => {
     );
     expect(r.ok).toBe(true);
     expect(r.files.length).toBe(1);
+  });
+
+  test("plan.timeoutMs is forwarded to callXaiImages", async () => {
+    reset();
+    const timedPlan = { ...plan, timeoutMs: 12_345 } as ImageBridgePlan;
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "a cat" }) },
+      timedPlan, { spent: 0 },
+    );
+    expect(capturedTimeoutMs).toBe(12_345);
   });
 
   test("missing prompt → ok:false 'missing prompt'", async () => {

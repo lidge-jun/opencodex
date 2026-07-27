@@ -14,10 +14,21 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
 
 - **Enable the bridge** by setting `images.bridgeEnabled: true` in your config (it is off by
   default to avoid unexpected xAI charges — see [Configuration](#configuration) below).
-- An xAI provider configured in settings with `baseUrl: "https://api.x.ai/v1"` and the
-  `openai-chat` adapter.
+- An `xai` provider entry with credentials. The bridge pins fulfillment to the registry xAI
+  endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is ignored for image calls.
+  A minimal key-mode entry is enough:
+
+  ```json
+  {
+    "providers": {
+      "xai": { "adapter": "openai-chat", "apiKey": "xai-…" }
+    }
+  }
+  ```
+
 - Authentication via `authMode: "oauth"` (`ocx login xai` — uses a stored, auto-refreshed
-  bearer token) or `authMode: "key"` (a configured API key).
+  bearer token) or `authMode: "key"` (a configured API key). See
+  [Providers](/reference/providers/) for the shared auth modes.
 - A non-OpenAI model selected as your active provider. (When the active provider is OpenAI,
   the native hosted tool is used directly and the bridge is bypassed.)
 
@@ -31,7 +42,8 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
   "images": {
     "bridgeEnabled": true,
     "bridgeModel": "grok-imagine-image-quality",
-    "maxRounds": 3
+    "maxRounds": 3,
+    "timeoutMs": 60000
   }
 }
 ```
@@ -40,7 +52,8 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Master switch. Set `true` to enable bridging. Off by default to avoid unexpected xAI charges. |
 | `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
-| `maxRounds` | `3` | Maximum number of image-generation loop iterations per turn. |
+| `maxRounds` | `3` | Maximum image-generation loop iterations per turn. Floored to an integer and clamped to `[0, 10]`; non-finite values fall back to `3`. |
+| `timeoutMs` | `60000` | Per-call xAI deadline in milliseconds. Finite positive values are floored and passed to the xAI request. |
 
 ## How It Works
 
@@ -60,8 +73,10 @@ perspective, image generation works with any routed provider instead of silently
 ## Limitations
 
 - **Only xAI Grok Imagine is supported.** DALL-E and other image providers may be added later.
-- **Web search takes priority.** If both web search and image generation are requested in the same
-  turn, the web-search bridge runs and image generation is skipped for that turn.
+- **Web search takes priority** on adapters that support the web-search sidecar loop. If both web
+  search and image generation are requested in the same turn, web-search runs and image
+  generation is skipped. Cursor/`runTurn` adapters cannot use that sidecar today, so the image
+  bridge may still run for those dual-tool turns.
 - **xAI costs apply.** Image generation via xAI requires an active xAI subscription or API credits.
 - **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
   `stream: false` are rejected with a 400 error.

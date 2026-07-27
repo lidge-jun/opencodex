@@ -100,7 +100,9 @@ export async function callXaiImages(
   });
 
   if (!resp.ok) {
-    throw new Error("xAI images API returned " + resp.status);
+    const err = new Error("xAI images API returned " + resp.status) as Error & { status: number };
+    err.status = resp.status;
+    throw err;
   }
 
   // Read the body as text under the linked signal, then parse. The 60 s timeout

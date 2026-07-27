@@ -149,4 +149,25 @@ describe("planImageBridge", () => {
     expect(plan).toBeUndefined();
     tokenResult = null;
   });
+
+  test("authMode oauth prefers OAuth over a stale apiKey", async () => {
+    tokenResult = "oauth-token";
+    const cfg = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "stale-key", authMode: "oauth" } },
+      { bridgeEnabled: true },
+    );
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan!.auth.token).toBe("oauth-token");
+    tokenResult = null;
+  });
+
+  test("authMode key does not fall back to stored OAuth", async () => {
+    tokenResult = "oauth-token";
+    const cfg = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "", authMode: "key" } },
+      { bridgeEnabled: true },
+    );
+    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
+    tokenResult = null;
+  });
 });
