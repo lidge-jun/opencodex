@@ -668,6 +668,8 @@ describe("executeArchivedCleanup", () => {
     expect(Buffer.compare(beforeState, readFileSync(join(home, "state_5.sqlite")))).toBe(0);
   });
 
+  // Windows CI: injected satellite rollback paths (especially goals) can measure 6–13s
+  // there and trip bun's default 5s harness timeout.
   test.each([
     ["failAfterLogsMutation", { failAfterLogsMutation: true }],
     ["failAfterMemoriesMutation", { failAfterMemoriesMutation: true }],
