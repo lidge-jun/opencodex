@@ -31,6 +31,10 @@ afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
 // --- Activation spies, flipped by the stubbed runners ---
 let imageBridgeRun = false;
 let webSearchRun = false;
+/** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
+let useRunTurnAdapter = false;
+/** Spy: flipped when the stubbed runTurn is actually invoked. */
+let runTurnCalled = false;
 /** Controlled return value for the stubbed planWebSearch (truthy ⇒ web-search plan active). */
 let mockWsPlan: unknown = undefined;
 
@@ -39,7 +43,7 @@ const actualResolver = await import("../../src/server/adapter-resolve");
 mock.module("../../src/server/adapter-resolve", () => ({
   ...actualResolver,
   resolveAdapter(provider: OcxProviderConfig) {
-    return {
+    const base = {
       name: "test",
       buildRequest: async () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
       async fetchResponse() {
@@ -48,7 +52,17 @@ mock.module("../../src/server/adapter-resolve", () => ({
         });
       },
       async *parseStream() { yield { type: "done" as const }; },
-    } as ProviderAdapter;
+    };
+    if (useRunTurnAdapter) {
+      return {
+        ...base,
+        async runTurn(_parsed: unknown, _incoming: unknown, emit: (event: { type: string }) => void) {
+          runTurnCalled = true;
+          emit({ type: "done" });
+        },
+      } as ProviderAdapter;
+    }
+    return base as ProviderAdapter;
   },
 }));
 
@@ -139,5 +153,48 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(webSearchRun).toBe(true);
     expect(imageBridgeRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+  });
+
+  test("routed compaction with image_generation tool → image bridge does NOT hijack compaction (#424)", async () => {
+    imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
+    // A routed-compaction request carries both _compactionRequest and _imageGeneration:
+    // compaction clears tools/_webSearch but leaves _imageGeneration, so without the
+    // routedCompaction guard planImageBridge would activate and return a normal Responses
+    // completion instead of the synthetic compaction item Codex expects.
+    const res = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: [{ type: "compaction_trigger" }],
+          stream: true,
+          tools: [{ type: "image_generation" }],
+        }),
+      }),
+      makeConfig(),
+      { model: "", provider: "" } as never,
+      {},
+    );
+    expect(imageBridgeRun).toBe(false);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+  });
+
+  test("dual-tool on a runTurn adapter → web-search path wins, runTurn does not eat the request (#424)", async () => {
+    imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
+    useRunTurnAdapter = true;
+    mockWsPlan = { backend: "openai" };
+    try {
+      const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
+      // Web-search sidecar must handle the turn.
+      expect(webSearchRun).toBe(true);
+      // Image bridge must not activate (design: image defers to web-search).
+      expect(imageBridgeRun).toBe(false);
+      // runTurn must NOT be reached — the web-search dispatch now runs before the runTurn early-return.
+      expect(runTurnCalled).toBe(false);
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+    } finally {
+      useRunTurnAdapter = false;
+    }
   });
 });

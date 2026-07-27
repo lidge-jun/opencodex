@@ -37,6 +37,15 @@ describe("SSRF: assessUrlDestination", () => {
   test("public IP → public", () => {
     expect(assessUrlDestination("https://8.8.8.8/image.png")?.kind).toBe("public");
   });
+  test("IPv4-mapped IPv6 dotted-decimal [::ffff:127.0.0.1] → loopback", () => {
+    expect(assessUrlDestination("https://[::ffff:127.0.0.1]/image.png")?.kind).toBe("loopback");
+  });
+  test("IPv4-mapped IPv6 hex [::ffff:7f00:1] → loopback", () => {
+    expect(assessUrlDestination("https://[::ffff:7f00:1]/image.png")?.kind).toBe("loopback");
+  });
+  test("IPv4-mapped IPv6 hex private [::ffff:0a00:1] (10.0.0.1) → private", () => {
+    expect(assessUrlDestination("https://[::ffff:0a00:1]/image.png")?.kind).toBe("private");
+  });
   test("invalid URL → null", () => {
     expect(assessUrlDestination("not a url")).toBeNull();
   });
@@ -64,6 +73,36 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
 
   test("ftp:// → rejects", async () => {
     await expect(downloadImageToArtifact("ftp://host/path")).rejects.toThrow(/HTTPS/);
+  });
+
+  test("gopher:// → rejects (non-HTTPS)", async () => {
+    await expect(downloadImageToArtifact("gopher://host/path")).rejects.toThrow(/HTTPS/);
+  });
+
+  test("private 10.x via download helper → rejects", async () => {
+    await expect(downloadImageToArtifact("https://10.0.0.1/img.png")).rejects.toThrow();
+  });
+
+  test("IPv4-mapped IPv6 [::ffff:127.0.0.1] via download helper → rejects", async () => {
+    await expect(downloadImageToArtifact("https://[::ffff:127.0.0.1]/image.png")).rejects.toThrow();
+  });
+
+  test("IPv4-mapped IPv6 hex [::ffff:7f00:1] via download helper → rejects", async () => {
+    await expect(downloadImageToArtifact("https://[::ffff:7f00:1]/image.png")).rejects.toThrow();
+  });
+
+  test(`3xx redirect response → rejects (redirect: 'error')`, async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        return new Response("", { status: 301, headers: { Location: "https://evil.example/redirect" } });
+      }) as typeof fetch;
+      await expect(downloadImageToArtifact("https://public-host/redirect-img")).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+      lookupMock.mockClear();
+    }
   });
 
   test("https:// public host → succeeds with mocked fetch", async () => {
