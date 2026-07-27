@@ -133,8 +133,18 @@ export function bridgeToResponsesSSE(
      * from this callback instead of re-parsing the bridged SSE.
      */
     onUsage?: (usage: OcxUsage | undefined) => void;
+    /**
+     * Test seam for the wire/stall beat loop. Production omits this and uses the
+     * global timers; injecting here must not change scheduling semantics.
+     */
+    timers?: {
+      setInterval: (handler: () => void, ms: number) => unknown;
+      clearInterval: (id: unknown) => void;
+    };
   },
 ): ReadableStream<Uint8Array> {
+  const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
+  const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
   // function with `{input:string}`, so unwrap it here when relaying back as a custom_tool_call.
   const freeformInput = (args: string): string => {
@@ -194,7 +204,7 @@ export function bridgeToResponsesSSE(
   // buffering + raw-byte progress). Upstream activity only resets the stall watchdog.
   let upstreamActivity = false;
   let wireActivity = false;
-  let beat: ReturnType<typeof setInterval> | undefined;
+  let beat: unknown;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   let emittedFrames = 0;
   let gated = false;
@@ -813,7 +823,7 @@ export function bridgeToResponsesSSE(
         stepping = false;
         return;
       }
-      if (beat) { clearInterval(beat); beat = undefined; }
+      if (beat !== undefined) { clearBeatInterval(beat); beat = undefined; }
 
       if (!terminated) {
         // The adapter generator ended without an explicit done/error event. Mark as incomplete
@@ -852,7 +862,7 @@ export function bridgeToResponsesSSE(
         // The default ReadableStream strategy has HWM=1. Once one event's frames fill that
         // queue, pull stepping pauses; no custom FIFO or queuing strategy is layered on top.
         gated = true;
-        beat = setInterval(() => {
+        beat = setBeatInterval(() => {
           if (closed || gated) return;
           if (upstreamActivity) {
             upstreamActivity = false;
@@ -875,7 +885,7 @@ export function bridgeToResponsesSSE(
             terminated = true;
             returnIterator();
             emitDone();
-            if (beat) clearInterval(beat);
+            if (beat !== undefined) clearBeatInterval(beat);
             beat = undefined;
             try { controller.close(); } catch { /* already closed */ }
             closed = true;
@@ -906,14 +916,14 @@ export function bridgeToResponsesSSE(
     cancel() {
       // Client (Codex) disconnected. Stop emitting and let the caller abort the upstream fetch so a
       // cancelled turn does not leak the upstream stream or keep draining tokens (RC2).
-      clientCancelled = true;
-      closed = true;
-      if (beat) clearInterval(beat);
-      onCancel?.();
-      returnIterator();
-    },
-  });
-}
+        clientCancelled = true;
+        closed = true;
+        if (beat !== undefined) clearBeatInterval(beat);
+        onCancel?.();
+        returnIterator();
+      },
+    });
+  }
 
 export function buildResponseJSON(
   events: AdapterEvent[],

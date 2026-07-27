@@ -712,21 +712,74 @@ describe("Responses bridge reasoning and usage parity", () => {
     // calls, the adapter emits `heartbeat` events. They must keep the stall watchdog alive (no
     // upstream_stall_timeout). Adapter heartbeats themselves are not translated into Responses
     // protocol items; wire keepalives use a separate `response.heartbeat` frame (see next test).
+    //
+    // resolveStallTimeoutSec ceils to a minimum of 1s, so sub-second stallTimeoutSec values cannot
+    // prove the reset. Drive the beat loop through a test clock seam and run adapter-only progress
+    // past the effective deadline.
+    const heartbeatMs = 50;
+    const stallTimeoutSec = 1; // effective after resolveStallTimeoutSec
+    const maxStallTicks = Math.ceil((stallTimeoutSec * 1000) / heartbeatMs);
+    const cycles = maxStallTicks + 5; // wall-clock equivalent >> stall deadline
+
+    let beatTick: (() => void) | undefined;
+    const timers = {
+      setInterval(handler: () => void, _ms: number) {
+        beatTick = handler;
+        return 1;
+      },
+      clearInterval(_id: unknown) {
+        beatTick = undefined;
+      },
+    };
+
+    let waitResolve: (() => void) | undefined;
+    const waitDelay = () => new Promise<void>(resolve => { waitResolve = resolve; });
+    const releaseDelay = () => {
+      const resolve = waitResolve;
+      waitResolve = undefined;
+      resolve?.();
+    };
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
     async function* heartbeatsThenDone(): AsyncGenerator<AdapterEvent> {
-      // More heartbeats than maxStallTicks would allow if they did NOT reset the counter.
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < cycles; i++) {
         yield { type: "heartbeat" };
-        await new Promise(r => setTimeout(r, 12));
+        await waitDelay();
       }
       yield { type: "text_delta", text: "ok" };
       yield { type: "done" };
     }
-    // heartbeatMs=10ms, stallTimeoutSec=0.03s -> maxStallTicks=3. 6 spaced heartbeats only survive
-    // if each one resets stallTicks.
-    const frames = await collectSse(bridgeToResponsesSSE(
-      heartbeatsThenDone(), "model", undefined, undefined, undefined, undefined, 10, { stallTimeoutSec: 0.03 },
+
+    const framesPromise = collectSse(bridgeToResponsesSSE(
+      heartbeatsThenDone(),
+      "model",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      heartbeatMs,
+      { stallTimeoutSec, timers },
     ));
-    expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
+
+    // First heartbeat is pulled; step blocks on the delay gate with gated=false.
+    await flush();
+    for (let i = 0; i < cycles; i++) {
+      // maxStallTicks silent ticks would trip the watchdog if the preceding heartbeat did not
+      // count as upstream activity (first tick clears the flag; the rest must not reach the limit).
+      // Heartbeats between cycles reset the counter, so the stream must survive the full run.
+      for (let t = 0; t < maxStallTicks; t++) beatTick?.();
+      releaseDelay();
+      await flush();
+    }
+
+    const frames = await framesPromise;
+    expect(frames.some(f => {
+      const response = f.data.response as Record<string, unknown> | undefined;
+      const details = response?.incomplete_details as Record<string, unknown> | undefined;
+      return details?.reason === "upstream_stall_timeout";
+    })).toBe(false);
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
     // Adapter heartbeats must not be mis-translated into a protocol event of their own.
     expect(frames.some(f => f.data.type === "heartbeat")).toBe(false);
@@ -736,20 +789,69 @@ describe("Responses bridge reasoning and usage parity", () => {
     // Issue #521: web-search buffers semantic events and yields invisible adapter heartbeats from
     // raw-byte progress. Those must not suppress wire keepalives, or Codex Desktop idle-timeouts
     // (~5 min) while OCX still considers the upstream alive.
+    const heartbeatMs = 50;
+    const stallTimeoutSec = 1;
+    const cycles = 4;
+
+    let beatTick: (() => void) | undefined;
+    const timers = {
+      setInterval(handler: () => void, _ms: number) {
+        beatTick = handler;
+        return 1;
+      },
+      clearInterval(_id: unknown) {
+        beatTick = undefined;
+      },
+    };
+
+    let waitResolve: (() => void) | undefined;
+    const waitDelay = () => new Promise<void>(resolve => { waitResolve = resolve; });
+    const releaseDelay = () => {
+      const resolve = waitResolve;
+      waitResolve = undefined;
+      resolve?.();
+    };
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
     async function* adapterHeartbeatsOnly(): AsyncGenerator<AdapterEvent> {
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < cycles; i++) {
         yield { type: "heartbeat" };
-        await new Promise(r => setTimeout(r, 15));
+        await waitDelay();
       }
       yield { type: "text_delta", text: "ok" };
       yield { type: "done" };
     }
-    const frames = await collectSse(bridgeToResponsesSSE(
-      adapterHeartbeatsOnly(), "model", undefined, undefined, undefined, undefined, 10, { stallTimeoutSec: 1 },
+
+    const framesPromise = collectSse(bridgeToResponsesSSE(
+      adapterHeartbeatsOnly(),
+      "model",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      heartbeatMs,
+      { stallTimeoutSec, timers },
     ));
-    expect(frames.some(f => f.event === "response.heartbeat" && f.data.type === "response.heartbeat")).toBe(true);
+
+    await flush();
+    for (let i = 0; i < cycles; i++) {
+      // Several silent beat ticks per adapter-only gap → multiple wire keepalives.
+      for (let t = 0; t < 3; t++) beatTick?.();
+      releaseDelay();
+      await flush();
+    }
+
+    const frames = await framesPromise;
+    const wireHeartbeats = frames.filter(f =>
+      f.event === "response.heartbeat" && f.data.type === "response.heartbeat"
+    );
+    expect(wireHeartbeats.length).toBeGreaterThan(1);
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
     expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
+    // Reject every adapter-shaped heartbeat payload, regardless of event name or field count.
+    expect(frames.some(f => f.data.type === "heartbeat")).toBe(false);
   });
 });
 
@@ -907,6 +1009,7 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     ], "routed/model", { compaction: true });
     expect(json.status).toBe("incomplete");
     expect(json.incomplete_details).toEqual({ reason: "content_filter" });
+    // Truncated turns must not install a compaction replacement (#422).
     expect((json.output as Record<string, unknown>[]).some(item => item.type === "compaction")).toBe(false);
   });
 
