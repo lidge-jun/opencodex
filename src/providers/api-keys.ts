@@ -39,6 +39,13 @@ export function isKeyAuthProvider(provider: OcxProviderConfig): boolean {
   return provider.authMode !== "oauth" && provider.authMode !== "forward";
 }
 
+/** Trim and reject blank / CRLF-bearing secrets. Shared by pool writes and OAuth upsert. */
+export function sanitizeApiKeyValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && !/[\r\n]/.test(trimmed) ? trimmed : undefined;
+}
+
 /** Seed the pool from a legacy bare `apiKey`, and keep `apiKey` mirrored to the active entry. */
 function ensurePool(provider: OcxProviderConfig): NonNullable<OcxProviderConfig["apiKeyPool"]> {
   if (!provider.apiKeyPool) provider.apiKeyPool = [];
@@ -75,9 +82,9 @@ export function listProviderApiKeys(config: OcxConfig, name: string): { activeId
 export function addProviderApiKey(config: OcxConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return { error: "provider does not use API-key auth" };
-  const trimmed = key.trim();
-  if (!trimmed) return { error: "key is required" };
-  if (/[\r\n]/.test(trimmed)) return { error: "key must not include line breaks" };
+  if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
+  const trimmed = sanitizeApiKeyValue(key);
+  if (!trimmed) return { error: "key must not include line breaks" };
   const pool = ensurePool(provider);
   const id = keyId(trimmed);
   const existing = pool.find(e => e.id === id);

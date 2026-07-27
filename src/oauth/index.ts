@@ -13,6 +13,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
+import { sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -567,12 +568,6 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
 }
 
 /** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
-function normalizePreservableApiKey(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed && !/[\r\n]/.test(trimmed) ? trimmed : undefined;
-}
-
 function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
   if (!Array.isArray(value)) return undefined;
   const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
@@ -582,7 +577,7 @@ function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["a
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const candidate = entry as Record<string, unknown>;
     const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-    const key = normalizePreservableApiKey(candidate.key);
+    const key = sanitizeApiKeyValue(candidate.key);
     if (!id || !key || ids.has(id) || keys.has(key)) continue;
     const label = typeof candidate.label === "string" ? candidate.label : undefined;
     const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
@@ -610,10 +605,9 @@ function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["a
  * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
  * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
  * flips billing back to the subscription without the user asking. Carry the key fields over
- * and keep an explicitly chosen `authMode: "key"` while an active stored key remains, so
- * logging in does not change which credential bills the request. If the final key was removed
- * and only the old key mode remains, let the OAuth preset restore `authMode: "oauth"` so the
- * newly saved OAuth credential can be used.
+ * and keep key billing while usable key material remains and the user was not explicitly on
+ * oauth. If the final key was removed and only the old key mode remains, let the OAuth
+ * preset restore `authMode: "oauth"` so the newly saved OAuth credential can be used.
  */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
@@ -622,11 +616,19 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
-    const storedApiKey = normalizePreservableApiKey(existing.apiKey);
+    // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
+    let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
     const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
+    // Unsafe/blank active key with a usable pool: promote the first safe pool entry so
+    // key billing keeps working instead of falling back to oauth while pool keys remain.
+    if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
+      storedApiKey = storedApiKeyPool[0]!.key;
+    }
     if (storedApiKey !== undefined) next.apiKey = storedApiKey;
     if (storedApiKeyPool !== undefined) next.apiKeyPool = storedApiKeyPool;
-    if (existing.authMode === "key" && storedApiKey !== undefined) next.authMode = "key";
+    // Router only honors key override when authMode is explicitly "key". Keep key mode
+    // when material survives and the user was not explicitly on oauth billing.
+    if (storedApiKey !== undefined && existing.authMode !== "oauth") next.authMode = "key";
   }
   config.providers[provider] = next;
 }

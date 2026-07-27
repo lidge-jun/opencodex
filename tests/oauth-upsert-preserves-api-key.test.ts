@@ -56,6 +56,16 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("oauth");
   });
 
+  test("sets key mode when authMode was omitted but a stored key remains", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    delete config.providers.xai!.authMode;
+    upsertOAuthProvider(config, "xai");
+    const provider = config.providers.xai!;
+    expect(provider.apiKey).toBe("stored-key-sentinel");
+    expect(provider.authMode).toBe("key");
+    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("key");
+  });
+
   test("treats an API key environment reference as stored key material", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.apiKey = "${OCX_TEST_XAI_API_KEY}";
@@ -88,7 +98,7 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("oauth");
   });
 
-  test("rejects an unsafe active key but keeps valid alternate pool entries", () => {
+  test("rejects an unsafe active key and promotes the first safe pool entry", () => {
     const config = {
       port: 10100,
       defaultProvider: "xai",
@@ -107,10 +117,10 @@ describe("upsertOAuthProvider credential preservation", () => {
     } as OcxConfig;
     upsertOAuthProvider(config, "xai");
     const provider = config.providers.xai!;
-    expect(provider.authMode).toBe("oauth");
-    expect(provider.apiKey).toBeUndefined();
+    expect(provider.authMode).toBe("key");
+    expect(provider.apiKey).toBe("safe-alternate");
     expect(provider.apiKeyPool).toEqual([{ id: "safe", key: "safe-alternate" }]);
-    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("oauth");
+    expect(routeModel(config, "xai/grok-4.5").provider.authMode).toBe("key");
   });
 
   test("filters malformed and duplicate pool data without deleting valid keys", () => {
