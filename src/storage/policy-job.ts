@@ -285,7 +285,6 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
   if (!gate.acquired) {
     if (generation === runGeneration) {
       applyMutationBusy();
-      inflight = null;
     }
     return;
   }
@@ -319,7 +318,6 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
     applyFailed(err instanceof Error ? err.message : "worker_failed");
   } finally {
     releaseHeldMutationSlot();
-    if (generation === runGeneration) inflight = null;
   }
 }
 
@@ -341,7 +339,11 @@ export function requestStorageCleanupPolicyRun(
     ...(state.lastOutcome ? { lastOutcome: state.lastOutcome } : {}),
   };
 
-  inflight = executeJob(opts);
+  const job = executeJob(opts);
+  inflight = job;
+  void job.finally(() => {
+    if (inflight === job) inflight = null;
+  });
   return { accepted: true, state: getStorageCleanupPolicyJobState() };
 }
 
