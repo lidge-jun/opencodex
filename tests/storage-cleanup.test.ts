@@ -15,8 +15,10 @@ import {
   computePreviewDigest,
   executeArchivedCleanup,
   listArchivedCandidates,
+  listTrashEntries,
   normalizeArchivedRolloutPath,
   previewArchivedCleanup,
+  restoreTrashEntry,
   selectOldestPercent,
   type ExecuteCleanupOptions,
 } from "../src/storage/cleanup";
@@ -904,5 +906,86 @@ describe("executeArchivedCleanup", () => {
       "active", "tmid", "tnew", "told",
     ]);
     state.close();
+  });
+});
+
+describe("listTrashEntries + restoreTrashEntry", () => {
+  test("round-trip quarantine → restore returns files and threads", () => {
+    home = buildHome();
+    const original = readFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "utf8");
+    const quarantined = runWithDigest(50, "quarantine", home, { now: 1_700_000_000_100 });
+    expect(quarantined.ok).toBe(true);
+    expect(quarantined.trashDir).toBe(".trash/1700000000100");
+
+    const listed = listTrashEntries(home);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.id).toBe(".trash/1700000000100");
+    expect(listed[0]!.fileCount).toBe(1);
+    expect(listed[0]!.mode).toBe("quarantine");
+    expect(listed[0]!.quarantinedAt).toBe(1_700_000_000_100);
+    expect(JSON.stringify(listed)).not.toContain(home.replaceAll("\\", "\\\\"));
+
+    const restored = restoreTrashEntry(".trash/1700000000100", { codexHome: home });
+    expect(restored.ok).toBe(true);
+    expect(restored.count).toBe(1);
+    expect(restored.restoredPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(readFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "utf8")).toBe(original);
+    expect(existsSync(join(home, ".trash", "1700000000100"))).toBe(false);
+    expect(listTrashEntries(home)).toEqual([]);
+
+    const db = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    const row = db.query<{ id: string; rollout_path: string; archived: number | null }, []>(
+      "SELECT id, rollout_path, archived FROM threads WHERE id='told'",
+    ).get();
+    db.close();
+    expect(row).toEqual({
+      id: "told",
+      rollout_path: "archived_sessions/rollout-old.jsonl",
+      archived: 1,
+    });
+    expect(existsSync(join(home, "sessions", "2026", "05", "27", "rollout-active.jsonl"))).toBe(true);
+  });
+
+  test("restore refuses when Codex DB is busy", () => {
+    home = buildHome();
+    const quarantined = runWithDigest(50, "quarantine", home, { now: 1_700_000_000_200 });
+    expect(quarantined.ok).toBe(true);
+
+    const locker = new Database(join(home, "state_5.sqlite"));
+    locker.exec("BEGIN EXCLUSIVE");
+    try {
+      const restored = restoreTrashEntry(".trash/1700000000200", {
+        codexHome: home,
+        busyTimeoutMs: 1,
+      });
+      expect(restored.ok).toBe(false);
+      expect(restored.error).toBe("codex_busy");
+      expect(existsSync(join(home, ".trash", "1700000000200", "rollout-old.jsonl"))).toBe(true);
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
+  });
+
+  test("rejects missing, invalid, and path-escaping trash ids", () => {
+    home = buildHome();
+    expect(restoreTrashEntry(".trash/999", { codexHome: home }).error).toBe("missing_trash");
+    expect(restoreTrashEntry("../etc/passwd", { codexHome: home }).error).toBe("invalid_trash");
+    expect(restoreTrashEntry(".trash/../sessions", { codexHome: home }).error).toBe("invalid_trash");
+    expect(restoreTrashEntry(".trash/not-an-epoch", { codexHome: home }).error).toBe("invalid_trash");
+    expect(restoreTrashEntry("", { codexHome: home }).error).toBe("invalid_trash");
+  });
+
+  test("refuses restore when destination archived file already exists", () => {
+    home = buildHome();
+    const quarantined = runWithDigest(50, "quarantine", home, { now: 1_700_000_000_300 });
+    expect(quarantined.ok).toBe(true);
+    writeFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "COLLISION");
+    const restored = restoreTrashEntry(".trash/1700000000300", { codexHome: home });
+    expect(restored.ok).toBe(false);
+    expect(restored.error).toBe("dest_exists");
+    expect(existsSync(join(home, ".trash", "1700000000300", "rollout-old.jsonl"))).toBe(true);
   });
 });

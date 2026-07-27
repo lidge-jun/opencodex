@@ -34,7 +34,7 @@ import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
-import { executeArchivedCleanup, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode } from "../../storage/cleanup";
+import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, restoreTrashEntry, type CleanupMode } from "../../storage/cleanup";
 import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
@@ -322,6 +322,72 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         ok: false,
         error: "cleanup_failed",
         message: "Cleanup failed.",
+      }, 500);
+    }
+  }
+
+  if (url.pathname === "/api/storage/trash" && req.method === "GET") {
+    try {
+      const entries = listTrashEntries();
+      return jsonResponse({
+        entries: entries.map(({ id, epoch, fileCount, bytes, quarantinedAt, mode }) => ({
+          id,
+          epoch,
+          fileCount,
+          bytes,
+          ...(quarantinedAt !== undefined ? { quarantinedAt } : {}),
+          ...(mode ? { mode } : {}),
+        })),
+      });
+    } catch {
+      return jsonResponse({ error: "trash_list_failed", entries: [] }, 500);
+    }
+  }
+
+  if (url.pathname === "/api/storage/trash/restore" && req.method === "POST") {
+    let body: { id?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid_json" }, 400); }
+    const id = typeof body?.id === "string" ? body.id : "";
+    if (!id.trim()) {
+      return jsonResponse({ error: "invalid_trash", message: "Trash entry id is required." }, 400);
+    }
+    try {
+      const result = restoreTrashEntry(id);
+      if (!result.ok) {
+        const status =
+          result.error === "codex_busy" || result.error === "dest_exists"
+            ? 409
+            : result.error === "invalid_trash" || result.error === "missing_trash"
+              ? 400
+              : 500;
+        const messages: Record<string, string> = {
+          invalid_trash: "Trash entry id is missing or invalid.",
+          missing_trash: "Trash entry was not found.",
+          codex_busy: "Codex is using state.sqlite — try again after quitting Codex.",
+          dest_exists: "Restore destination already exists — remove or rename the archived file and retry.",
+          fs_failed: "Filesystem restore failed. Some files may already be restored — check archived_sessions and .trash.",
+          db_reconcile_failed: "Could not restore Codex state database rows.",
+          restore_failed: "Restore failed.",
+        };
+        return jsonResponse({
+          ok: false,
+          error: result.error ?? "restore_failed",
+          message: messages[result.error ?? ""] ?? messages.restore_failed,
+          ...(result.trashDir ? { trashDir: result.trashDir } : {}),
+        }, status);
+      }
+      return jsonResponse({
+        ok: true,
+        trashDir: result.trashDir,
+        count: result.count,
+        bytes: result.bytes,
+        restoredPaths: result.restoredPaths,
+      });
+    } catch {
+      return jsonResponse({
+        ok: false,
+        error: "restore_failed",
+        message: "Restore failed.",
       }, 500);
     }
   }

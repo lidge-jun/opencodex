@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
@@ -1534,5 +1535,395 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     count: removedPaths.length,
     bytes,
     removedPaths,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.1 — quarantine list + restore
+// ---------------------------------------------------------------------------
+
+export type RestoreErrorCode =
+  | "invalid_trash"
+  | "missing_trash"
+  | "codex_busy"
+  | "fs_failed"
+  | "db_reconcile_failed"
+  | "dest_exists"
+  | "restore_failed";
+
+export interface TrashEntrySummary {
+  /** CODEX_HOME-relative path, e.g. `.trash/1700000000000`. */
+  id: string;
+  /** Epoch directory name (may include collision suffix, e.g. `1700-1`). */
+  epoch: string;
+  fileCount: number;
+  bytes: number;
+  quarantinedAt?: number;
+  mode?: CleanupMode;
+}
+
+export interface RestoreResult {
+  ok: boolean;
+  trashDir?: string;
+  count: number;
+  bytes: number;
+  restoredPaths: string[];
+  error?: RestoreErrorCode;
+}
+
+interface TrashManifest {
+  quarantinedAt?: number;
+  mode?: CleanupMode;
+  entries?: CleanupManifestEntry[];
+}
+
+/** Epoch dir names: digits, optionally `-N` from createExclusiveStageDir collision. */
+const TRASH_EPOCH_DIR = /^(\d+)(-\d+)?$/;
+
+function parseTrashManifest(raw: string): TrashManifest | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const o = parsed as Record<string, unknown>;
+    const out: TrashManifest = {};
+    if (typeof o.quarantinedAt === "number" && Number.isFinite(o.quarantinedAt)) {
+      out.quarantinedAt = o.quarantinedAt;
+    }
+    if (o.mode === "quarantine" || o.mode === "permanent") out.mode = o.mode;
+    if (Array.isArray(o.entries)) {
+      out.entries = o.entries.filter((e): e is CleanupManifestEntry => {
+        if (!e || typeof e !== "object") return false;
+        const entry = e as Record<string, unknown>;
+        return typeof entry.relPath === "string" && Array.isArray(entry.physicalRelPaths);
+      }).map(e => {
+        const entry = e as CleanupManifestEntry & Record<string, unknown>;
+        return {
+          relPath: String(entry.relPath),
+          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
+          mtimeMs: typeof entry.mtimeMs === "number" ? entry.mtimeMs : 0,
+          physicalRelPaths: (entry.physicalRelPaths as unknown[])
+            .filter((p): p is string => typeof p === "string"),
+          ...(typeof entry.threadId === "string" ? { threadId: entry.threadId } : {}),
+          ...(typeof entry.rolloutPath === "string" ? { rolloutPath: entry.rolloutPath } : {}),
+          ...(entry.archived === null || typeof entry.archived === "number"
+            ? { archived: entry.archived as number | null }
+            : {}),
+        };
+      });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate a trash entry id as a single `.trash/<epoch>` segment under CODEX_HOME.
+ * Returns the absolute stage directory, or null when the id is unsafe / missing.
+ */
+export function resolveTrashStageDir(
+  trashId: string,
+  codexHome: string,
+): { ok: true; stageDir: string; id: string } | { ok: false; error: RestoreErrorCode } {
+  const normalized = toForwardSlash(trashId.trim()).replace(/\/+$/, "");
+  if (!normalized.startsWith(`${TRASH_DIR}/`)) return { ok: false, error: "invalid_trash" };
+  const rest = normalized.slice(TRASH_DIR.length + 1);
+  if (!rest || rest.includes("/") || rest.includes("\\") || rest.includes("..")) {
+    return { ok: false, error: "invalid_trash" };
+  }
+  if (!TRASH_EPOCH_DIR.test(rest)) return { ok: false, error: "invalid_trash" };
+  let stageDir: string;
+  try {
+    stageDir = absFromRel(codexHome, `${TRASH_DIR}/${rest}`);
+  } catch {
+    return { ok: false, error: "invalid_trash" };
+  }
+  if (!existsSync(stageDir)) return { ok: false, error: "missing_trash" };
+  try {
+    if (!statSync(stageDir).isDirectory()) return { ok: false, error: "invalid_trash" };
+  } catch {
+    return { ok: false, error: "missing_trash" };
+  }
+  return { ok: true, stageDir, id: `${TRASH_DIR}/${rest}` };
+}
+
+function sumTrashEntryBytes(stageDir: string, manifest: TrashManifest | null): {
+  fileCount: number;
+  bytes: number;
+} {
+  let fileCount = 0;
+  let bytes = 0;
+  let names: string[] = [];
+  try {
+    names = readdirSync(stageDir);
+  } catch {
+    return { fileCount: 0, bytes: 0 };
+  }
+  for (const name of names) {
+    if (name === "manifest.json" || name === SATELLITE_BACKUP_FILE) continue;
+    if (!isRolloutFileName(name)) continue;
+    try {
+      const st = statSync(join(stageDir, name));
+      if (!st.isFile()) continue;
+      fileCount += 1;
+      bytes += st.size;
+    } catch { /* */ }
+  }
+  // Prefer live FS counts; fall back to manifest totals when the stage is empty of rollouts.
+  if (fileCount === 0 && manifest?.entries?.length) {
+    fileCount = manifest.entries.reduce((n, e) => n + Math.max(1, e.physicalRelPaths.length), 0);
+    bytes = manifest.entries.reduce((n, e) => n + (e.bytes || 0), 0);
+  }
+  return { fileCount, bytes };
+}
+
+/** List quarantine entries under `CODEX_HOME/.trash/` (relative ids only). */
+export function listTrashEntries(
+  codexHome: string = resolveCodexHomeDir(),
+): TrashEntrySummary[] {
+  const trashRoot = join(codexHome, TRASH_DIR);
+  let names: string[] = [];
+  try {
+    names = readdirSync(trashRoot);
+  } catch {
+    return [];
+  }
+  const out: TrashEntrySummary[] = [];
+  for (const name of names) {
+    if (!TRASH_EPOCH_DIR.test(name)) continue;
+    const stageDir = join(trashRoot, name);
+    try {
+      if (!statSync(stageDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    let manifest: TrashManifest | null = null;
+    try {
+      manifest = parseTrashManifest(readFileSync(join(stageDir, "manifest.json"), "utf8"));
+    } catch {
+      manifest = null;
+    }
+    const { fileCount, bytes } = sumTrashEntryBytes(stageDir, manifest);
+    // Skip empty collision placeholders left behind without a manifest or rollouts.
+    if (fileCount === 0 && !manifest?.entries?.length) {
+      try {
+        if (!existsSync(join(stageDir, "manifest.json"))) continue;
+      } catch {
+        continue;
+      }
+    }
+    out.push({
+      id: `${TRASH_DIR}/${name}`,
+      epoch: name,
+      fileCount,
+      bytes,
+      ...(manifest?.quarantinedAt !== undefined ? { quarantinedAt: manifest.quarantinedAt } : {}),
+      ...(manifest?.mode ? { mode: manifest.mode } : {}),
+    });
+  }
+  out.sort((a, b) => {
+    const aq = a.quarantinedAt ?? (Number(a.epoch.split("-")[0]) || 0);
+    const bq = b.quarantinedAt ?? (Number(b.epoch.split("-")[0]) || 0);
+    return bq - aq || b.epoch.localeCompare(a.epoch);
+  });
+  return out;
+}
+
+function readSatelliteBackupFile(stageDir: string): SatelliteBackup | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(stageDir, SATELLITE_BACKUP_FILE), "utf8")) as unknown;
+    if (!raw || typeof raw !== "object") return null;
+    const o = raw as SatelliteBackup;
+    if (!Array.isArray(o.threadIds)) return null;
+    return o;
+  } catch {
+    return null;
+  }
+}
+
+/** Re-insert threads rows from quarantine manifest fields (ON CONFLICT DO NOTHING). */
+function restoreThreadsFromManifest(
+  stateDbPath: string | null,
+  entries: CleanupManifestEntry[],
+  busyTimeoutMs: number,
+): { ok: true } | ReconcileErr {
+  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true };
+  const toRestore = entries.filter(e => typeof e.threadId === "string" && typeof e.rolloutPath === "string");
+  if (toRestore.length === 0) return { ok: true };
+
+  return withWritableDb(stateDbPath, busyTimeoutMs, db => {
+    if (!tableExists(db, "threads")) throw new Error("missing_threads_table");
+    const hasArchived = columnExists(db, "threads", "archived");
+    const hasArchivedAt = columnExists(db, "threads", "archived_at");
+    for (const entry of toRestore) {
+      const archived = entry.archived ?? 1;
+      if (hasArchived && hasArchivedAt) {
+        db.run(
+          `INSERT INTO threads (id, rollout_path, archived, archived_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          [entry.threadId!, entry.rolloutPath!, archived, null],
+        );
+      } else if (hasArchived) {
+        db.run(
+          `INSERT INTO threads (id, rollout_path, archived) VALUES (?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          [entry.threadId!, entry.rolloutPath!, archived],
+        );
+      } else {
+        db.run(
+          `INSERT INTO threads (id, rollout_path) VALUES (?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          [entry.threadId!, entry.rolloutPath!],
+        );
+      }
+    }
+  });
+}
+
+function isSafeArchivedPhysicalRel(rel: string): boolean {
+  const normalized = toForwardSlash(rel);
+  if (!normalized.startsWith(`${ARCHIVED_SESSIONS_DIR}/`)) return false;
+  if (normalized.includes("..")) return false;
+  const rest = normalized.slice(ARCHIVED_SESSIONS_DIR.length + 1);
+  if (!rest || rest.includes("/")) return false;
+  return isRolloutFileName(rest);
+}
+
+/**
+ * Restore one quarantine entry: move JSONL back, re-insert threads (+ satellites
+ * when satellite-backup.json is present), then remove the trash directory.
+ */
+export function restoreTrashEntry(
+  trashId: string,
+  options?: {
+    codexHome?: string;
+    busyTimeoutMs?: number;
+  },
+): RestoreResult {
+  const codexHome = options?.codexHome ?? resolveCodexHomeDir();
+  const busyTimeoutMs = options?.busyTimeoutMs ?? 100;
+
+  const resolved = resolveTrashStageDir(trashId, codexHome);
+  if (!resolved.ok) {
+    return { ok: false, count: 0, bytes: 0, restoredPaths: [], error: resolved.error };
+  }
+  const { stageDir, id } = resolved;
+
+  let manifestRaw: string;
+  try {
+    manifestRaw = readFileSync(join(stageDir, "manifest.json"), "utf8");
+  } catch {
+    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
+  }
+  const manifest = parseTrashManifest(manifestRaw);
+  if (!manifest?.entries?.length) {
+    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
+  }
+
+  for (const entry of manifest.entries) {
+    if (!entry.physicalRelPaths.every(isSafeArchivedPhysicalRel)) {
+      return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
+    }
+  }
+
+  const probe = probeStateDbWritable(codexHome, busyTimeoutMs);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: probe.error === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+    };
+  }
+
+  // Plan renames: staged basename → original archived_sessions path.
+  const moves: StagedFile[] = [];
+  for (const entry of manifest.entries) {
+    for (const rel of entry.physicalRelPaths) {
+      const base = basename(rel);
+      const from = join(stageDir, base);
+      let to: string;
+      try {
+        to = absFromRel(codexHome, rel);
+      } catch {
+        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
+      }
+      if (!existsSync(from)) {
+        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+      }
+      if (existsSync(to)) {
+        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "dest_exists" };
+      }
+      moves.push({ from, to, relPath: rel });
+    }
+  }
+
+  const moved: StagedFile[] = [];
+  try {
+    mkdirSync(join(codexHome, ARCHIVED_SESSIONS_DIR), { recursive: true });
+    for (const item of moves) {
+      renameSync(item.from, item.to);
+      moved.push(item);
+    }
+  } catch {
+    // Roll files that already moved back into the stage dir.
+    for (let i = moved.length - 1; i >= 0; i--) {
+      const item = moved[i]!;
+      try {
+        if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
+      } catch { /* */ }
+    }
+    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+  }
+
+  const paths = discoverRuntimeDbPaths(codexHome);
+  const threadsRestored = restoreThreadsFromManifest(paths.state, manifest.entries, busyTimeoutMs);
+  if (!threadsRestored.ok) {
+    for (let i = moved.length - 1; i >= 0; i--) {
+      const item = moved[i]!;
+      try {
+        if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
+      } catch { /* */ }
+    }
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: threadsRestored.error === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+    };
+  }
+
+  const satelliteBackup = readSatelliteBackupFile(stageDir);
+  if (satelliteBackup) {
+    const satellitesOk = restoreSatelliteBackup(satelliteBackup, busyTimeoutMs);
+    if (!satellitesOk) {
+      // Files + threads are already restored; keep trash for manual satellite recovery.
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: "db_reconcile_failed",
+      };
+    }
+  }
+
+  const restoredPaths = [...new Set(manifest.entries.map(e => e.relPath))];
+  const bytes = manifest.entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
+
+  try { rmSync(stageDir, { recursive: true, force: true }); } catch { /* */ }
+  removeEmptyTrashRoot(codexHome);
+
+  return {
+    ok: true,
+    trashDir: id,
+    count: restoredPaths.length,
+    bytes,
+    restoredPaths,
   };
 }
