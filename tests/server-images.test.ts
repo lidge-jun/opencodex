@@ -1305,6 +1305,88 @@ test("CCA image fallback preserves upstream 400 (not collapsed to 502)", async (
   }
 });
 
+test("CCA image response with malformed inlineData.data (non-string) returns 502, not fake image data", async () => {
+  // Regression for codex1-malformed-inlinedata: inlineData.data that is not a
+  // non-empty string (e.g. a number, object, or empty string) used to pass the
+  // truthiness check and was forwarded as a fake b64_json. Now it must be
+  // silently skipped, and when no valid images remain the response is 502.
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          content: { parts: [
+            { inlineData: { mimeType: "image/png", data: 12345 } },          // number
+            { inlineData: { mimeType: "image/png", data: { foo: "bar" } } }, // object
+            { inlineData: { mimeType: "image/png", data: "" } },             // empty string
+            { inlineData: { mimeType: "image/png", data: null } },           // null
+          ] },
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("no image data");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA image response skips malformed inlineData.data but keeps valid string image", async () => {
+  // When some parts have non-string data and at least one has a valid non-empty
+  // string, the valid image is extracted and the malformed ones are skipped.
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          content: { parts: [
+            { inlineData: { mimeType: "image/png", data: 42 } },
+            { inlineData: { mimeType: "image/png", data: "aGVsbG8=" } },
+            { inlineData: { mimeType: "image/png", data: "" } },
+          ] },
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data: { b64_json: string }[] };
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("CCA image response with non-array parts returns 502 (envelope validation)", async () => {
   const registryHits: CcaFetchRequest[] = [];
   const otherHits: CcaFetchRequest[] = [];
@@ -1327,6 +1409,279 @@ test("CCA image response with non-array parts returns 502 (envelope validation)"
     expect(response.status).toBe(502);
     const json = await response.json() as { error: { message: string } };
     expect(json.error.message).toContain("no valid parts array");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+// ── OAuth preflight cancellation (finding2-oauth-signal) ──
+// getValidAccessToken chains through 4 layers of non-cancellable OAuth functions.
+// The fix wraps it in abortableRace against linkedSignal so client cancellation
+// and deadline expiry are surfaced promptly instead of hanging on the refresh.
+
+/** Expired credential that forces getValidAccessToken to trigger a token refresh. */
+const CCA_CREDENTIAL_EXPIRED = {
+  access: "cca-expired-token",
+  refresh: "cca-refresh-token",
+  expires: Date.now() - 60_000,
+  projectId: "cca-project-123",
+} as const;
+
+/**
+ * Mock fetch so the Google OAuth token endpoint (oauth2.googleapis.com/token)
+ * hangs indefinitely — simulating a hung OAuth refresh. The registry host and
+ * all other hosts pass through to the real network stack (they should never be
+ * reached during these tests).
+ */
+function hungOauthFetchMock() {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "oauth2.googleapis.com") {
+      // Never resolve until the fetch signal aborts (just like production).
+      return new Promise<Response>((_resolve, reject) => {
+        const sig = init?.signal;
+        if (sig) {
+          if (sig.aborted) reject(new DOMException("The operation was aborted.", "AbortError"));
+          else sig.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        }
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+}
+
+test("CCA client abort during OAuth preflight returns 499, not a hung response", async () => {
+  // Regression for finding2-oauth-signal: when the client disconnects while
+  // getValidAccessToken is refreshing the token, the request must return 499
+  // promptly, not hang waiting for the refresh HTTP call to complete.
+  const { handleImages } = await import("../src/server/images");
+  hungOauthFetchMock();
+
+  // Long timeout so the deadline does NOT fire — only the client abort triggers.
+  const cfg = { ...ccaConfig(), images: { timeoutMs: 30_000 } } as OcxConfig;
+  saveConfig(cfg);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL_EXPIRED });
+
+  const ctrl = new AbortController();
+  const req = new Request("http://localhost:0/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+    signal: ctrl.signal,
+  });
+  const logCtx = { model: "", provider: "" } as never;
+
+  // Start the handler — it enters getValidAccessToken which hangs on the token refresh.
+  const responsePromise = handleImages(req, cfg, "generations", logCtx);
+  // Abort the parent signal after the OAuth preflight has started.
+  setTimeout(() => ctrl.abort(), 100);
+  const response = await responsePromise;
+  expect(response.status).toBe(499);
+  const json = await response.json() as { error: { message: string } };
+  expect(json.error.message).toContain("canceled");
+}, 5_000);
+
+test("CCA deadline expiry during OAuth preflight returns 504, not a hung response", async () => {
+  // Regression for finding2-oauth-signal: when the deadline fires while
+  // getValidAccessToken is refreshing the token, the request must return 504
+  // promptly, not hang waiting for the refresh HTTP call to complete.
+  const { handleImages } = await import("../src/server/images");
+  hungOauthFetchMock();
+
+  // Short timeout so the deadline fires during the hung OAuth refresh.
+  const cfg = { ...ccaConfig(), images: { timeoutMs: 100 } } as OcxConfig;
+  saveConfig(cfg);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL_EXPIRED });
+
+  const req = new Request("http://localhost:0/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+  });
+  const logCtx = { model: "", provider: "" } as never;
+
+  const response = await handleImages(req, cfg, "generations", logCtx);
+  expect(response.status).toBe(504);
+  const json = await response.json() as { error: { message: string } };
+  expect(json.error.message).toContain("timed out");
+}, 5_000);
+
+// ── codex4-cca-safety-blocks ──
+// Safety blocks are permanent for the same prompt. Returning 502 (upstream_error)
+// causes codex to retry up to 5 times, wasting paid quota on a prompt that will
+// never succeed. These must return 400 (invalid_request_error, non-retryable).
+
+test("CCA finishReason SAFETY returns 400 (non-retryable), not 502", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          content: { parts: [] },
+          finishReason: "SAFETY",
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toContain("safety filter");
+    expect(json.error.message).toContain("SAFETY");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA promptFeedback.blockReason returns 400 (non-retryable)", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        promptFeedback: { blockReason: "SAFETY" },
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toContain("safety filter");
+    expect(json.error.message).toContain("promptFeedback");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA finishReason BLOCKLIST returns 400 (non-retryable)", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{ finishReason: "BLOCKLIST" }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toContain("BLOCKLIST");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA blocked candidate with empty content.parts returns 400, not 502", async () => {
+  // When content is blocked, candidates may exist but content/parts is missing
+  // or empty. The safety check must fire before the "no valid parts" 502 path.
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          finishReason: "PROHIBITED_CONTENT",
+          // content is entirely absent — common when generation is blocked
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toContain("PROHIBITED_CONTENT");
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA finishReason STOP with valid image is not affected by safety block logic", async () => {
+  // Regression: a normal STOP finishReason with a valid inline image must still
+  // return 200 — the safety check must not false-positive on non-blocking reasons.
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+          finishReason: "STOP",
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data: { b64_json: string }[] };
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0].b64_json).toBe("aGVsbG8=");
     expect(registryHits).toHaveLength(1);
     expect(otherHits).toHaveLength(0);
   } finally {

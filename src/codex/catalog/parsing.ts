@@ -141,9 +141,21 @@ export function isMediaGenerationModelId(id: string): boolean {
   return MEDIA_GEN_ID_RE.test(id);
 }
 
+/**
+ * Gemini image-capable chat models (e.g. gemini-3.1-flash-image,
+ * gemini-3-pro-image-preview) produce inline images within text responses via
+ * the Responses API — they are NOT standalone media-generation models like
+ * DALL-E or Sora and should appear in the routed catalog despite "image" in
+ * their id.  Mirrors the same id heuristic used by isImageCapableModel in
+ * src/adapters/google.ts.
+ */
+function isGeminiImageChatModel(id: string): boolean {
+  return /gemini/i.test(id) && /image/i.test(id);
+}
+
 export function shouldExposeRoutedModel(model: CatalogModel): boolean {
   if (isRoutedModelCompatibilityExcluded(`${model.provider}/${model.id}`)) return false;
-  if (model.provider === "cursor" && model.id === "gemini-3-pro-image-preview") return true;
+  if (isGeminiImageChatModel(model.id)) return true;
   return !isMediaGenerationModelId(model.id);
 }
 

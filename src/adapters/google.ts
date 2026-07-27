@@ -235,6 +235,16 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
   };
 }
 
+/**
+ * Cap on the buffered non-streaming response body (100 MiB), matching
+ * IMAGES_RESPONSE_MAX_BYTES in src/server/images.ts. Checked via the
+ * Content-Length header before response.json() so an oversized or malicious
+ * body is rejected without ever being fully buffered into memory. Streaming
+ * responses need no such guard — SSE chunks are processed incrementally and
+ * each inline image is capped by MAX_ENCODED_BYTES_PER_IMAGE before decode.
+ */
+const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
+
 // Note: imagen-* models use a different API surface (prediction/image-generation
 // schema) and must NOT be treated as responseModalities-capable Gemini models.
 const IMAGE_CAPABLE_MODELS = new Set([
@@ -406,6 +416,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         yield { type: "error", message: "No response body" };
         return;
       }
+      // Streaming responses are processed incrementally (SSE chunks), so the full body
+      // is never buffered — no Content-Length pre-check is needed here. Per-image size
+      // protection is enforced on each chunk via MAX_ENCODED_BYTES_PER_IMAGE before
+      // materializeInlineImage is called (see the inline.data check below).
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -571,6 +585,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     },
 
     async parseResponse(response: Response): Promise<AdapterEvent[]> {
+      // Reject oversized responses before buffering: check Content-Length so an
+      // oversized or malicious body is never fully read into memory.
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+        return [{ type: "error", message: `google response too large (content-length ${contentLength} exceeds ${MAX_RESPONSE_BYTES} bytes)` }];
+      }
       const raw = await response.json() as Record<string, unknown>;
       if (raw.error) {
         const err = raw.error as { message?: string };

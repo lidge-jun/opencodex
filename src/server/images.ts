@@ -49,6 +49,39 @@ const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 
+/**
+ * Google Gemini finishReasons that indicate a permanent content/safety block.
+ * When any of these is present, the same prompt will always fail — retrying
+ * wastes paid quota. The response is surfaced as 400 (non-retryable) instead
+ * of 502 (which codex retries up to 5 times).
+ */
+const CCA_BLOCKING_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "SAFETY",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+]);
+
+/**
+ * Race a promise against an abort signal. If the signal aborts first, reject
+ * immediately — our code stops awaiting the underlying operation even though
+ * the HTTP request behind it may still complete. Used to make the non-cancellable
+ * OAuth refresh chain responsive to client cancellation and deadline expiry.
+ */
+function abortableRace<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (val) => { signal.removeEventListener("abort", onAbort); resolve(val); },
+      (err) => { signal.removeEventListener("abort", onAbort); reject(err); },
+    );
+  });
+}
+
 async function tryCcaImageGeneration(
   body: unknown,
   config: OcxConfig,
@@ -71,26 +104,32 @@ async function tryCcaImageGeneration(
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
   let token: string;
   try {
-    token = await getValidAccessToken("google-antigravity");
+    // Race the OAuth refresh against the deadline signal. getValidAccessToken
+    // chains through 4 layers (resolveAccessSnapshotForAccount →
+    // refreshAndPersistAccessToken → refreshGenericAccountWithLock →
+    // def.refresh()) that do HTTP calls without accepting a signal. Rather than
+    // threading signal through the entire chain, race the whole call against
+    // linkedSignal: when the signal aborts we stop awaiting and surface the
+    // cancellation immediately instead of hanging on the refresh HTTP call.
+    token = await abortableRace(getValidAccessToken("google-antigravity"), linkedSignal.signal);
   } catch (err) {
     linkedSignal.cleanup();
+    // abortableRace rejects immediately when the signal fires, so client
+    // cancellation and deadline expiry surface here. Parent abort propagates
+    // into the linked signal, so check parent first (499) before the linked
+    // signal (504).
+    if (signal.aborted) {
+      return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
+    }
+    if (linkedSignal.signal.aborted) {
+      return formatErrorResponse(504, "upstream_error", "CCA image generation timed out during authentication");
+    }
     // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
     const errName = err instanceof Error ? err.name : "";
     if (errName === "OAuthLoginRequiredError") {
       return formatErrorResponse(401, "invalid_request_error", "Google Antigravity login required: run 'ocx login google-antigravity'");
     }
     return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
-  }
-  // Client cancellation or deadline expiry during OAuth preflight.
-  // Parent abort propagates into the linked signal, so check parent first (499)
-  // before the linked signal (504).
-  if (signal.aborted) {
-    linkedSignal.cleanup();
-    return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
-  }
-  if (linkedSignal.signal.aborted) {
-    linkedSignal.cleanup();
-    return formatErrorResponse(504, "upstream_error", "CCA image generation timed out during authentication");
   }
   const project = getOAuthCredentialProjectId("google-antigravity");
   if (!project) {
@@ -213,15 +252,32 @@ async function tryCcaImageGeneration(
     } catch {
       return formatErrorResponse(502, "upstream_error", "CCA image response was not valid JSON");
     }
-    const resp = (json.response ?? json) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[] } }[] };
-    const parts = resp.candidates?.[0]?.content?.parts;
+    const resp = (json.response ?? json) as {
+      candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[] }; finishReason?: string }[];
+      promptFeedback?: { blockReason?: string };
+    };
+    // Safety blocks are permanent for the same prompt — return 400 (non-retryable)
+    // instead of 502 (which codex retries up to 5 times, wasting paid quota on a
+    // prompt that will never succeed). Two blocking signals exist in the Gemini
+    // API: promptFeedback.blockReason (prompt rejected before generation) and
+    // candidate.finishReason (generation cut off by a content filter).
+    const blockReason = resp.promptFeedback?.blockReason;
+    if (typeof blockReason === "string" && blockReason.trim()) {
+      return formatErrorResponse(400, "invalid_request_error", `CCA image generation blocked by safety filter (promptFeedback.blockReason: ${blockReason})`);
+    }
+    const candidate = resp.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+    if (typeof finishReason === "string" && CCA_BLOCKING_FINISH_REASONS.has(finishReason)) {
+      return formatErrorResponse(400, "invalid_request_error", `CCA image generation blocked by safety filter (finishReason: ${finishReason})`);
+    }
+    const parts = candidate?.content?.parts;
     if (!Array.isArray(parts)) {
       return formatErrorResponse(502, "upstream_error", "CCA image response had no valid parts array");
     }
     const images: { b64_json: string }[] = [];
     for (const part of parts) {
       if (!part || typeof part !== "object") continue;
-      if (part.inlineData?.data) images.push({ b64_json: part.inlineData.data });
+      if (typeof part.inlineData?.data === "string" && part.inlineData.data.length > 0) images.push({ b64_json: part.inlineData.data });
     }
     if (images.length === 0) {
       return formatErrorResponse(502, "upstream_error", "CCA image model returned no image data");

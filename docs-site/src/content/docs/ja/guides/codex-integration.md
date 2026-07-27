@@ -45,8 +45,6 @@ ChatGPT bearer 認証で直接 POST します。注入された `base_url` が o
   API キー方式 `openai-responses` プロバイダーを指定できます。明示的な選択が失敗しても、別の
   有料上流へフォールバックしません。組み込みプロバイダー id には使わず、既定の OpenAI 経路を
   使う場合は省略してください。
-- **両方なし:** 曖昧な 404 の代わりに明確なエラーを返します。ルーティングされる他のプロバイダー(Cursor、
-  Gemini、Kiro など)は既定では画像生成を提供できません。ツール自体をオフにしたい場合は Codex で
 - **Google Antigravity (CCA) フォールバック:** OpenAI forward 候補も API キープロバイダーもない場合、
   `/v1/images/generations`(`/images/edits` を除く)は Antigravity **Cloud Code Assist** エンドポイントに
   フォールバックし、`gemini-3.1-flash-image` モデルを使用します。OpenAI 認証の解決に失敗した場合
