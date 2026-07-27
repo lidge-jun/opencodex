@@ -171,6 +171,9 @@ export async function runUpdate(): Promise<void> {
       console.error(`⚠️  ${formatNpmCacheOwnershipFailure(cacheOwnership)}`);
       process.exit(1);
     }
+    if (cacheOwnership.ok === "skipped") {
+      console.warn(`⚠️  npm cache ownership pre-flight skipped: ${cacheOwnership.reason}. Proceeding best-effort.`);
+    }
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`

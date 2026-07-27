@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -139,6 +139,58 @@ describe("GUI update execution decisions", () => {
     expect(await findNpmRecoveryLauncher(join(currentRoot, "bin", "ocx.mjs"), "2.7.40")).toBeNull();
   });
 
+  test("rejects a recovery package with an untrusted-writable imported file", async () => {
+    if (process.getuid?.() === undefined) return;
+    const scopeRoot = join(dir, "global", "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    mkdirSync(join(currentRoot, "bin"), { recursive: true });
+    mkdirSync(join(currentRoot, "src"), { recursive: true });
+    writeFileSync(join(currentRoot, "package.json"), JSON.stringify({
+      name: "@bitkyc08/opencodex",
+      version: "2.7.40",
+    }));
+    writeFileSync(join(currentRoot, "bin", "ocx.mjs"), 'import "../src/runtime.mjs";\n');
+    const imported = join(currentRoot, "src", "runtime.mjs");
+    writeFileSync(imported, "process.exit(0);\n");
+    chmodSync(imported, 0o666);
+    let probed = false;
+
+    expect(await findNpmRecoveryLaunchers(
+      join(currentRoot, "bin", "ocx.mjs"),
+      "2.7.40",
+      async () => {
+        probed = true;
+        return true;
+      },
+    )).toEqual([]);
+    expect(probed).toBe(false);
+  });
+
+  test("rejects a recovery package below an untrusted-writable path component", async () => {
+    if (process.getuid?.() === undefined) return;
+    const unsafeParent = join(dir, "world-writable-global");
+    const scopeRoot = join(unsafeParent, "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    mkdirSync(join(currentRoot, "bin"), { recursive: true });
+    writeFileSync(join(currentRoot, "package.json"), JSON.stringify({
+      name: "@bitkyc08/opencodex",
+      version: "2.7.40",
+    }));
+    writeFileSync(join(currentRoot, "bin", "ocx.mjs"), "process.exit(0);\n");
+    chmodSync(unsafeParent, 0o777);
+    let probed = false;
+
+    expect(await findNpmRecoveryLaunchers(
+      join(currentRoot, "bin", "ocx.mjs"),
+      "2.7.40",
+      async () => {
+        probed = true;
+        return true;
+      },
+    )).toEqual([]);
+    expect(probed).toBe(false);
+  });
+
   test("skips a matching current package whose complete launcher runtime cannot load", async () => {
     const scopeRoot = join(dir, "global", "@bitkyc08");
     const currentRoot = join(scopeRoot, "opencodex");
@@ -190,9 +242,11 @@ describe("GUI update execution decisions", () => {
   });
 
   test("only recovers after a clean installer exit", () => {
-    expect(installerFailureAllowsRecovery({ status: 1, signal: null, timedOut: false })).toBe(true);
-    expect(installerFailureAllowsRecovery({ status: 75, signal: null, timedOut: false })).toBe(false);
-    expect(installerFailureAllowsRecovery({ status: null, signal: "SIGTERM", timedOut: true })).toBe(false);
+    expect(installerFailureAllowsRecovery("npm", { status: 1, signal: null, timedOut: false })).toBe(true);
+    expect(installerFailureAllowsRecovery("npm", { status: 75, signal: null, timedOut: false })).toBe(false);
+    expect(installerFailureAllowsRecovery("bun", { status: 75, signal: null, timedOut: false })).toBe(true);
+    expect(installerFailureAllowsRecovery("npm", { status: null, signal: "SIGTERM", timedOut: false })).toBe(false);
+    expect(installerFailureAllowsRecovery("npm", { status: 1, signal: null, timedOut: true })).toBe(false);
   });
 
   test("proxy restart pins --port so post-update start does not hop to an ephemeral port", () => {
@@ -779,6 +833,44 @@ describe("GUI update execution decisions", () => {
     expect(recovery).toBe("restarted");
     expect(attempted).toEqual(["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"]);
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("trying candidate 2 of 2"))).toBe(true);
+  });
+
+  test("failed install reports remediation when no runnable recovery package remains", async () => {
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-no-candidate",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        verifyPidIdentityFn: () => null,
+        sleepMs: async () => {},
+        recoveryLaunchersFn: () => [],
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+
+    expect(recovery).toBe("failed");
+    expect(restartCalls).toBe(0);
+    const log = readUpdateJob(job.id)?.log ?? [];
+    expect(log.some(line => line.includes("Could not find a runnable current or npm-retired launcher"))).toBe(true);
+    expect(log.some(line => line.includes("ocx start --port 10100"))).toBe(true);
   });
 
   test("restart confirmation fails when the proxy never becomes healthy", async () => {

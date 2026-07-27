@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -192,6 +192,29 @@ describe("npm cache ownership pre-flight", () => {
       reason: "npm cache inspection exceeded its 250ms time budget",
     });
   });
+
+  test("force-kills an npm cache lookup that ignores SIGTERM", () => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    const blockingNpm = join(dir, "blocking-npm.mjs");
+    writeFileSync(
+      blockingNpm,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 60_000);\n",
+    );
+    chmodSync(blockingNpm, 0o755);
+
+    const startedAt = Date.now();
+    const result = checkNpmCacheOwnership({
+      getuid: () => uid,
+      lookupTimeoutMs: 250,
+      npmBin: blockingNpm,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "could not resolve the npm cache (ETIMEDOUT)",
+    });
+  }, 5_000);
 
   test("fails closed before shutdown when npm cannot resolve its cache", () => {
     let inspected = false;

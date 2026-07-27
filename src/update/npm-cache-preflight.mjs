@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_MAX_CACHE_ENTRIES = 50_000;
 const DEFAULT_CACHE_SCAN_TIMEOUT_MS = 10_000;
+const DEFAULT_CACHE_LOOKUP_TIMEOUT_MS = 12_000;
 const CACHE_SCAN_WORKER_ARG = "__scan-npm-cache-ownership";
 
 function positiveInteger(value, fallback) {
@@ -187,11 +188,13 @@ export function checkNpmCacheOwnership(options = {}) {
   const expectedUid = getuid();
   const npmBin = options.npmBin ?? "npm";
   const spawn = options.spawn ?? spawnSync;
+  const lookupTimeoutMs = positiveInteger(options.lookupTimeoutMs, DEFAULT_CACHE_LOOKUP_TIMEOUT_MS);
   let result;
   try {
     result = spawn(npmBin, ["config", "get", "cache"], {
       encoding: "utf8",
-      timeout: 12_000,
+      timeout: lookupTimeoutMs,
+      killSignal: "SIGKILL",
       windowsHide: true,
       shell: options.shell ?? false,
     });

@@ -39,6 +39,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherGateAt).toBeLessThan(launcherStopAt);
     expect(updateSource).toContain("formatNpmCacheOwnershipFailure(cacheOwnership)");
     expect(launcherSource).toContain("formatNpmCacheOwnershipFailure(cacheOwnership)");
+    expect(updateSource).toContain("npm cache ownership pre-flight skipped");
+    expect(launcherSource).toContain("npm cache ownership pre-flight skipped");
   });
 
   test("npm launcher update path stops via its own launcher path before npm install", () => {
@@ -109,8 +111,10 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain('if (readPidForRestart("after service port reclaim").refused) return');
     expect(updateJobSource).toContain('const directPid = readPidForRestart("before direct restart")');
     expect(updateJobSource).toContain('if (readPidForRestart("after direct port reclaim").refused) return');
-    expect(updateJobSource).toContain("hasTrustedRecoveryOwner(rootStat.uid)");
+    expect(updateJobSource).toContain("hasTrustedRecoveryPermissions(rootStat)");
     expect(updateJobSource).toContain("uid === currentUid || uid === 0");
+    expect(updateJobSource).toContain("hasTrustedRecoveryTree(packageRoot)");
+    expect(updateJobSource).toContain("(stat.mode & 0o022) === 0");
   });
 
   test("GUI recovery waits beyond the nested npm install deadline", () => {
@@ -123,8 +127,9 @@ describe("update stops the running proxy before replacing files", () => {
     expect(outerMs).toBeGreaterThanOrEqual(innerMs + 60_000);
     expect(launcherSource).toContain("timeoutMs: NPM_INSTALL_TIMEOUT_MS");
     expect(launcherSource).toContain("await runProcessTreeCommand(npm");
-    expect(updateJobSource).toContain("installerFailureAllowsRecovery(result)");
+    expect(updateJobSource).toContain("installerFailureAllowsRecovery(check.installer, result)");
     expect(updateJobSource).toContain("if (trayWasRunning && mayRecover)");
+    expect(updateJobSource).toContain("The Windows tray also remains stopped");
     expect(updateJobSource).toContain("candidates.slice(0, MAX_NPM_RECOVERY_CANDIDATES)");
   });
 

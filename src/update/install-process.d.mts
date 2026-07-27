@@ -21,9 +21,23 @@ export interface ProcessTreeCommandResult {
   treeExited: boolean;
 }
 
+export interface ProcessGroupInspection {
+  hasRunningMember: boolean;
+  hasRunningLeader: boolean;
+}
+
+export type ProcessGroupForceDecision = "exited" | "signal" | "refuse";
+
+export function processGroupForceDecision(
+  inspection: ProcessGroupInspection | null,
+  originalLeaderConfirmed: boolean,
+): ProcessGroupForceDecision;
+
 export function terminateInstallerProcessTree(
   pid: number | undefined,
-  options?: Pick<ProcessTreeCommandOptions, "terminationGraceMs" | "forceWaitMs">,
+  options?: Pick<ProcessTreeCommandOptions, "terminationGraceMs" | "forceWaitMs"> & {
+    isOriginalLeader?: () => boolean;
+  },
 ): Promise<boolean>;
 
 export function runProcessTreeCommand(

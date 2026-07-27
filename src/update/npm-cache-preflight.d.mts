@@ -8,6 +8,7 @@ export interface NpmCachePreflightOptions {
   getuid?: () => number;
   npmBin?: string;
   shell?: boolean;
+  lookupTimeoutMs?: number;
   spawn?: typeof import("node:child_process").spawnSync;
   scanSpawn?: typeof import("node:child_process").spawnSync;
   scanBin?: string;

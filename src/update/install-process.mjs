@@ -67,6 +67,13 @@ function inspectProcessGroup(groupId) {
   return null;
 }
 
+export function processGroupForceDecision(inspection, originalLeaderConfirmed) {
+  if (!inspection) return "refuse";
+  if (!inspection.hasRunningMember) return "exited";
+  if (inspection.hasRunningLeader && !originalLeaderConfirmed) return "refuse";
+  return "signal";
+}
+
 function processGroupHasRunningMember(groupId) {
   return inspectProcessGroup(groupId)?.hasRunningMember ?? null;
 }
@@ -115,6 +122,7 @@ export async function terminateInstallerProcessTree(
   {
     terminationGraceMs = DEFAULT_TERMINATION_GRACE_MS,
     forceWaitMs = DEFAULT_FORCE_WAIT_MS,
+    isOriginalLeader,
   } = {},
 ) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return true;
@@ -144,6 +152,23 @@ export async function terminateInstallerProcessTree(
     return false;
   }
   if (await waitForProcessTreeExit(pid, terminationGraceMs)) return true;
+
+  const forceInspection = inspectProcessGroup(pid);
+  const originalLeaderConfirmed = forceInspection?.hasRunningLeader === true
+    && isOriginalLeader?.() === true;
+  const forceDecision = processGroupForceDecision(forceInspection, originalLeaderConfirmed);
+  if (forceDecision === "exited") return true;
+  if (forceDecision === "refuse") return false;
+
+  // Reinspect at the force-signal boundary. The original group can exit and its
+  // ID can be reused after the grace-period inspection above; a replacement
+  // leader must never receive the pending SIGKILL.
+  const signalInspection = inspectProcessGroup(pid);
+  const signalLeaderConfirmed = signalInspection?.hasRunningLeader === true
+    && isOriginalLeader?.() === true;
+  const signalDecision = processGroupForceDecision(signalInspection, signalLeaderConfirmed);
+  if (signalDecision === "exited") return true;
+  if (signalDecision === "refuse") return false;
 
   try {
     process.kill(-pid, "SIGKILL");
@@ -234,6 +259,7 @@ export async function runProcessTreeCommand(
     cleanupPromise = terminateInstallerProcessTree(child.pid, {
       terminationGraceMs,
       forceWaitMs,
+      isOriginalLeader: () => child.exitCode === null && child.signalCode === null,
     });
     void cleanupPromise.then(treeExited => {
       if (treeExited) return;

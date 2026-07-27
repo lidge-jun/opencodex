@@ -144,6 +144,9 @@ async function runNpmSelfUpdate() {
     console.error(`opencodex: ${formatNpmCacheOwnershipFailure(cacheOwnership)}`);
     process.exit(1);
   }
+  if (cacheOwnership.ok === "skipped") {
+    console.warn(`opencodex: npm cache ownership pre-flight skipped: ${cacheOwnership.reason}. Proceeding best-effort.`);
+  }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it permanently, so a successful update must reinstall it afterwards.
@@ -242,6 +245,7 @@ async function runNpmSelfUpdate() {
   });
   if (!res.treeExited) {
     console.error("\nopencodex: installer process-tree cleanup could not be confirmed; automatic recovery is unsafe until those processes exit.");
+    console.error(`  The proxy is stopped. Once no '${npm}' installer processes remain, run 'ocx start' or re-run 'ocx update'.${trayBeforeUpdate.restoreOnFailure ? " The Windows tray also remains stopped; run 'ocx tray start' after the installer processes exit." : ""}`);
     process.exit(INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE);
   }
   if (res.interruptedSignal) {

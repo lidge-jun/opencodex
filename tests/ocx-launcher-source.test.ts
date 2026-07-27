@@ -20,15 +20,17 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
   });
 
   test("unsafe installer cleanup never restarts the tray, while confirmed interruption does", () => {
-    const cleanupFailure = source.slice(
-      source.indexOf("if (!res.treeExited)"),
-      source.indexOf("if (res.interruptedSignal)"),
-    );
-    const interruption = source.slice(
-      source.indexOf("if (res.interruptedSignal)"),
-      source.indexOf("if (res.status === 0)"),
-    );
+    const cleanupAt = source.indexOf("if (!res.treeExited)");
+    const interruptAt = source.indexOf("if (res.interruptedSignal)");
+    const successAt = source.indexOf("if (res.status === 0)");
+    expect(cleanupAt).toBeGreaterThan(-1);
+    expect(interruptAt).toBeGreaterThan(cleanupAt);
+    expect(successAt).toBeGreaterThan(interruptAt);
+    const cleanupFailure = source.slice(cleanupAt, interruptAt);
+    const interruption = source.slice(interruptAt, successAt);
     expect(cleanupFailure).not.toContain('runTrayLifecycle(launcher, "start")');
+    expect(cleanupFailure).toContain("The proxy is stopped");
+    expect(cleanupFailure).toContain("ocx tray start");
     expect(interruption).toContain('runTrayLifecycle(launcher, "start")');
     expect(interruption).toContain("process.exit(exitCode)");
     expect(source).toContain("res.error.message");

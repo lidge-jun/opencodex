@@ -50,6 +50,8 @@ const RESTART_STABILITY_WINDOW_MS = 15_000;
 const UPDATE_LIVENESS_PROBE_ATTEMPTS = 3;
 const UPDATE_LIVENESS_PROBE_DELAY_MS = 250;
 const MAX_NPM_RECOVERY_CANDIDATES = 2;
+const MAX_NPM_RECOVERY_TREE_ENTRIES = 50_000;
+const MAX_NPM_RECOVERY_TREE_SCAN_MS = 5_000;
 /** How long update restart waits for the captured port to become bindable after stop. */
 export const RESTART_PORT_RECLAIM_MS = 30_000;
 
@@ -136,6 +138,61 @@ function hasTrustedRecoveryOwner(uid: number): boolean {
   return currentUid === undefined || uid === currentUid || uid === 0;
 }
 
+function hasTrustedRecoveryPermissions(stat: { uid: number; mode: number }): boolean {
+  if (!hasTrustedRecoveryOwner(stat.uid)) return false;
+  // POSIX group/other write bits make even a trusted-owner entry mutable by a
+  // different local account. Windows ACLs are not represented by these bits;
+  // npm failed-root recovery is already disabled there when tree exit is unknown.
+  return process.getuid === undefined || (stat.mode & 0o022) === 0;
+}
+
+function hasTrustedRecoveryPath(packageRoot: string): boolean {
+  let path = packageRoot;
+  while (true) {
+    const stat = lstatSync(path);
+    if (
+      !stat.isDirectory()
+      || stat.isSymbolicLink()
+      || !hasTrustedRecoveryOwner(stat.uid)
+      || (
+        process.getuid !== undefined
+        && (stat.mode & 0o022) !== 0
+        && (stat.mode & 0o1000) === 0
+      )
+    ) return false;
+    const parent = dirname(path);
+    if (parent === path) return true;
+    path = parent;
+  }
+}
+
+function hasTrustedRecoveryTree(packageRoot: string): boolean {
+  const canonicalRoot = realpathSync(packageRoot);
+  const scopeRoot = dirname(canonicalRoot);
+  const scopeStat = lstatSync(scopeRoot);
+  if (
+    !scopeStat.isDirectory()
+    || scopeStat.isSymbolicLink()
+    || !hasTrustedRecoveryPermissions(scopeStat)
+    || !hasTrustedRecoveryPath(canonicalRoot)
+  ) return false;
+
+  const deadline = Date.now() + MAX_NPM_RECOVERY_TREE_SCAN_MS;
+  const pending = [canonicalRoot];
+  let inspected = 0;
+  while (pending.length > 0) {
+    if (Date.now() > deadline || inspected >= MAX_NPM_RECOVERY_TREE_ENTRIES) return false;
+    const path = pending.pop()!;
+    inspected += 1;
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || !hasTrustedRecoveryPermissions(stat)) return false;
+    if (stat.isFile()) continue;
+    if (!stat.isDirectory()) return false;
+    for (const name of readdirSync(path, { encoding: "utf8" })) pending.push(join(path, name));
+  }
+  return true;
+}
+
 /** Validate the on-disk identity before any candidate code is executed. */
 function inspectNpmRecoveryPackage(packageRoot: string, expectedVersion: string): ValidatedNpmLauncher | null {
   try {
@@ -143,27 +200,28 @@ function inspectNpmRecoveryPackage(packageRoot: string, expectedVersion: string)
     if (
       !rootStat.isDirectory()
       || rootStat.isSymbolicLink()
-      || !hasTrustedRecoveryOwner(rootStat.uid)
+      || !hasTrustedRecoveryPermissions(rootStat)
     ) return null;
+    if (!hasTrustedRecoveryTree(packageRoot)) return null;
 
-    const manifestPath = join(packageRoot, "package.json");
+    const canonicalRoot = realpathSync(packageRoot);
+    const manifestPath = join(canonicalRoot, "package.json");
     const manifestStat = lstatSync(manifestPath);
     if (
       !manifestStat.isFile()
       || manifestStat.isSymbolicLink()
-      || !hasTrustedRecoveryOwner(manifestStat.uid)
+      || !hasTrustedRecoveryPermissions(manifestStat)
     ) return null;
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown; version?: unknown };
     if (manifest.name !== PKG || manifest.version !== expectedVersion) return null;
 
-    const launcherPath = join(packageRoot, "bin", "ocx.mjs");
+    const launcherPath = join(canonicalRoot, "bin", "ocx.mjs");
     const launcherStat = lstatSync(launcherPath);
     if (
       !launcherStat.isFile()
       || launcherStat.isSymbolicLink()
-      || !hasTrustedRecoveryOwner(launcherStat.uid)
+      || !hasTrustedRecoveryPermissions(launcherStat)
     ) return null;
-    const canonicalRoot = realpathSync(packageRoot);
     const canonicalLauncher = realpathSync(launcherPath);
     if (!isPathInside(canonicalRoot, canonicalLauncher)) return null;
     return { launcher: canonicalLauncher, mtimeMs: rootStat.mtimeMs };
@@ -423,10 +481,10 @@ function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], time
   };
 }
 
-export function installerFailureAllowsRecovery(result: LoggedCommandResult): boolean {
+export function installerFailureAllowsRecovery(installer: Installer, result: LoggedCommandResult): boolean {
   return !result.timedOut
     && result.signal === null
-    && result.status !== INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE;
+    && (installer !== "npm" || result.status !== INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE);
 }
 
 function spawnDetachedStart(
@@ -1072,7 +1130,7 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
     */
     const result = runLoggedCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
     if (result.status !== 0) {
-      const mayRecover = installerFailureAllowsRecovery(result);
+      const mayRecover = installerFailureAllowsRecovery(check.installer, result);
       if (trayWasRunning && mayRecover) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
@@ -1081,7 +1139,7 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
       }
       let recovery: FailedUpdateRecovery | null = null;
       if (!mayRecover) {
-        updateJob(job, {}, "Automatic proxy recovery was skipped because installer process-tree shutdown was not confirmed. Wait for installer processes to exit before restoring the package or proxy.");
+        updateJob(job, {}, `Automatic proxy recovery was skipped because installer process-tree shutdown was not confirmed. Wait for installer processes to exit before restoring the package or proxy.${trayWasRunning ? " The Windows tray also remains stopped; run 'ocx tray start' after the installer processes exit." : ""}`);
       } else {
         recovery = await recoverFailedGuiUpdate(job, captured, proxyWasActive);
       }

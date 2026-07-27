@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProcessTreeCommand } from "../src/update/install-process.mjs";
+import {
+  processGroupForceDecision,
+  runProcessTreeCommand,
+} from "../src/update/install-process.mjs";
 
 const cleanupPids = new Set<number>();
 const cleanupDirs = new Set<string>();
@@ -34,6 +37,14 @@ afterEach(() => {
 });
 
 describe("update installer process isolation", () => {
+  test("force cleanup refuses a reused or uninspectable process group", () => {
+    expect(processGroupForceDecision(null, false)).toBe("refuse");
+    expect(processGroupForceDecision({ hasRunningMember: false, hasRunningLeader: false }, false)).toBe("exited");
+    expect(processGroupForceDecision({ hasRunningMember: true, hasRunningLeader: false }, false)).toBe("signal");
+    expect(processGroupForceDecision({ hasRunningMember: true, hasRunningLeader: true }, false)).toBe("refuse");
+    expect(processGroupForceDecision({ hasRunningMember: true, hasRunningLeader: true }, true)).toBe("signal");
+  });
+
   test("spawn failures report their cause without inventing a live process tree", async () => {
     const result = await runProcessTreeCommand(join(tmpdir(), "ocx-command-that-does-not-exist"), [], {
       stdio: "ignore",
