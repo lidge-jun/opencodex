@@ -1220,7 +1220,7 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     ["failAfterFirstSatelliteCommit", { failAfterFirstSatelliteCommit: true }, "db_reconcile_failed"],
     ["failAtLeftoverStageGate", { failAtLeftoverStageGate: true }, "fs_failed"],
   ] as const)(
-    "injected %s compensates DB rows, restages files, and retry succeeds",
+    "injected %s leaves partial restore with pending marker and retry succeeds",
     (_name, hook, error) => {
       home = buildHome({
         withSatelliteStores: true,
@@ -1235,37 +1235,25 @@ describe("listTrashEntries + restoreTrashEntry", () => {
       const failed = restoreTrashEntry(trashId, { codexHome: home, _test: { ...hook } });
       expect(failed.ok).toBe(false);
       expect(failed.error).toBe(error);
-      expect(failed.count).toBe(0);
-      expect(failed.restoredPaths).toEqual([]);
-
-      // Files restaged into trash — retryable quarantine shape.
-      expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
+      // Files stay restored — accurate partial counts, no restage.
+      expect(failed.count).toBe(3);
+      expect(failed.restoredPaths).toEqual([
+        "archived_sessions/rollout-old.jsonl",
+        "archived_sessions/rollout-mid.jsonl",
+        "archived_sessions/rollout-new.jsonl",
+      ]);
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+      expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
       expect(existsSync(join(stage, "manifest.json"))).toBe(true);
-      expect(existsSync(join(stage, "satellite-backup.json"))).toBe(true);
-      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
-      expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(false);
-      expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(false);
+      expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
 
-      // No orphan state / satellite rows from the aborted restore.
-      const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
-      expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('told','tmid','tnew')").get())
-        .toEqual({ n: 0 });
-      expect(state.query("SELECT COUNT(*) AS n FROM thread_dynamic_tools").get()).toEqual({ n: 0 });
-      expect(state.query("SELECT COUNT(*) AS n FROM thread_spawn_edges").get()).toEqual({ n: 0 });
-      state.close();
-
-      const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
-      expect(logs.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id IN ('told','tmid','tnew')").get())
-        .toEqual({ n: 0 });
-      logs.close();
-      const mem = new Database(join(home, "memories_1.sqlite"), { readonly: true });
-      expect(mem.query("SELECT COUNT(*) AS n FROM stage1_outputs WHERE thread_id IN ('told','tmid','tnew')").get())
-        .toEqual({ n: 0 });
-      mem.close();
-      const goals = new Database(join(home, "goals_1.sqlite"), { readonly: true });
-      expect(goals.query("SELECT COUNT(*) AS n FROM thread_goals WHERE thread_id IN ('told','tmid','tnew')").get())
-        .toEqual({ n: 0 });
-      goals.close();
+      const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+        filesRestored: boolean;
+        acceptedDestRels: string[];
+        pending: { state: boolean; logs: boolean; memories: boolean; goals: boolean };
+      };
+      expect(pending.filesRestored).toBe(true);
+      expect(pending.acceptedDestRels).toContain("archived_sessions/rollout-old.jsonl");
 
       const retried = restoreTrashEntry(trashId, { codexHome: home });
       expect(retried.ok).toBe(true);
@@ -1282,9 +1270,12 @@ describe("listTrashEntries + restoreTrashEntry", () => {
       expect(logsAfter.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id='told'").get()).toEqual({ n: 1 });
       logsAfter.close();
     },
+    { timeout: 20_000 },
   );
 
-  test("compensation busy on state leaves partial restore with accurate counts and keeps pre-existing rows", () => {
+  test("late failure after logs commit keeps metadata, persists pending sections, and resume preserves pre-existing rows", () => {
+    // Regression for the old non-atomic path: compensate logs then hit busy on
+    // state — which deleted logs while leaving state+files. Prefer partial+resume.
     home = buildHome({
       withSatelliteStores: true,
       withDynamicTools: true,
@@ -1295,7 +1286,6 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     const trashId = quarantined.trashDir!;
     const stage = join(home, ...trashId.split("/"));
 
-    // Conflict-ignored pre-existing thread + satellite rows (same keys as backup).
     const stateSeed = new Database(join(home, "state_5.sqlite"));
     stateSeed.exec(`INSERT INTO threads VALUES (
       'told','archived_sessions/rollout-old.jsonl',1,1,'legacy'
@@ -1304,7 +1294,7 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     stateSeed.close();
     const logsSeed = new Database(join(home, "logs_2.sqlite"));
     logsSeed.exec(
-      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,1,'INFO','t','told',10)`,
+      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,1,'INFO','pre','told',10)`,
     );
     logsSeed.close();
     const memSeed = new Database(join(home, "memories_1.sqlite"));
@@ -1314,173 +1304,133 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     goalsSeed.exec(`INSERT INTO thread_goals VALUES ('told','g1','pre','complete',0,0,1,1)`);
     goalsSeed.close();
 
-    let locker: Database | undefined;
-    let failed: ReturnType<typeof restoreTrashEntry>;
-    try {
-      failed = restoreTrashEntry(trashId, {
-        codexHome: home,
-        busyTimeoutMs: 1,
-        _test: {
-          failAfterStateCommit: true,
-          beforeCompensate: () => {
-            locker = new Database(join(home, "state_5.sqlite"));
-            locker.exec("BEGIN EXCLUSIVE");
-          },
-        },
-      });
-    } finally {
-      try { locker?.exec("ROLLBACK"); } catch { /* */ }
-      try { locker?.close(); } catch { /* */ }
-    }
-
-    expect(failed!.ok).toBe(false);
-    expect(failed!.error).toBe("codex_busy");
-    // Do NOT restage + report zero — keep accurate partial counts.
-    expect(failed!.count).toBe(3);
-    expect(failed!.restoredPaths).toEqual([
-      "archived_sessions/rollout-old.jsonl",
-      "archived_sessions/rollout-mid.jsonl",
-      "archived_sessions/rollout-new.jsonl",
-    ]);
-
-    // Files stay restored (no restage when compensation is busy).
-    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(true);
-    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
-
-    // Metadata remains consistent with restored files (including newly inserted mid/new).
-    const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
-    expect(state.query("SELECT id FROM threads WHERE id='told'").get()).toEqual({ id: "told" });
-    expect(state.query("SELECT id FROM threads WHERE id='tmid'").get()).toEqual({ id: "tmid" });
-    expect(state.query("SELECT id FROM threads WHERE id='tnew'").get()).toEqual({ id: "tnew" });
-    expect(
-      state.query("SELECT name FROM thread_dynamic_tools WHERE thread_id='told' AND position=0").get(),
-    ).toEqual({ name: "pre" });
-    state.close();
-  });
-
-  test("compensation busy on satellite leaves partial restore and does not delete pre-existing satellite rows", () => {
-    home = buildHome({ withSatelliteStores: true });
-    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_200 });
-    expect(quarantined.ok).toBe(true);
-    const trashId = quarantined.trashDir!;
-    const stage = join(home, ...trashId.split("/"));
-
-    // Pre-seed the log PK that the backup will conflict-ignore on restore.
-    const logsSeed = new Database(join(home, "logs_2.sqlite"));
-    logsSeed.exec(
-      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,42,'INFO','pre','told',99)`,
-    );
-    logsSeed.close();
-
-    let locker: Database | undefined;
-    let failed: ReturnType<typeof restoreTrashEntry>;
-    try {
-      failed = restoreTrashEntry(trashId, {
-        codexHome: home,
-        busyTimeoutMs: 1,
-        _test: {
-          failAfterFirstSatelliteCommit: true,
-          beforeCompensate: () => {
-            locker = new Database(join(home, "logs_2.sqlite"));
-            locker.exec("BEGIN EXCLUSIVE");
-          },
-        },
-      });
-    } finally {
-      try { locker?.exec("ROLLBACK"); } catch { /* */ }
-      try { locker?.close(); } catch { /* */ }
-    }
-
-    expect(failed!.ok).toBe(false);
-    expect(failed!.error).toBe("codex_busy");
-    expect(failed!.count).toBe(3);
-    expect(failed!.restoredPaths.length).toBe(3);
-
-    // No missing files — stay partially restored.
-    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
-
-    // Pre-existing log row (id=1) must not be deleted; newly inserted mid/new may remain.
-    const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
-    expect(
-      logs.query("SELECT ts, target, estimated_bytes FROM logs WHERE id=1").get(),
-    ).toEqual({ ts: 42, target: "pre", estimated_bytes: 99 });
-    logs.close();
-
-    // Thread rows stay (consistent with restored files).
-    const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
-    expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('told','tmid','tnew')").get())
-      .toEqual({ n: 3 });
-    state.close();
-  });
-
-  test("successful compensation deletes only inserted rows and preserves conflict-ignored pre-existing rows", () => {
-    home = buildHome({
-      withSatelliteStores: true,
-      withDynamicTools: true,
-    });
-    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_300 });
-    expect(quarantined.ok).toBe(true);
-    const trashId = quarantined.trashDir!;
-    const stage = join(home, ...trashId.split("/"));
-
-    const stateSeed = new Database(join(home, "state_5.sqlite"));
-    stateSeed.exec(`INSERT INTO threads VALUES (
-      'told','archived_sessions/rollout-old.jsonl',1,1,'legacy'
-    )`);
-    stateSeed.exec(`INSERT INTO thread_dynamic_tools VALUES ('told',0,'keep-me','d','{}')`);
-    stateSeed.close();
-    const logsSeed = new Database(join(home, "logs_2.sqlite"));
-    logsSeed.exec(
-      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,77,'WARN','keep','told',5)`,
-    );
-    logsSeed.close();
-    const memSeed = new Database(join(home, "memories_1.sqlite"));
-    memSeed.exec(`INSERT INTO stage1_outputs VALUES ('told',9,'keep-m','keep-s',9,0)`);
-    memSeed.close();
-    const goalsSeed = new Database(join(home, "goals_1.sqlite"));
-    goalsSeed.exec(`INSERT INTO thread_goals VALUES ('told','g-keep','keep','complete',0,0,9,9)`);
-    goalsSeed.close();
-
     const failed = restoreTrashEntry(trashId, {
       codexHome: home,
       _test: { failAfterFirstSatelliteCommit: true },
     });
     expect(failed.ok).toBe(false);
     expect(failed.error).toBe("db_reconcile_failed");
-    expect(failed.count).toBe(0);
-    expect(failed.restoredPaths).toEqual([]);
+    expect(failed.count).toBe(3);
 
-    // Fully restaged — retryable trash shape, no orphan inserted rows.
-    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
-    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+    // Files stay; no restage; no metadata compensation.
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
 
+    const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      pending: { state: boolean; logs: boolean; memories: boolean; goals: boolean };
+    };
+    expect(pending.pending).toEqual({
+      state: false,
+      logs: false,
+      memories: true,
+      goals: true,
+    });
+
+    // Pre-existing conflict-ignored rows stay; newly restored mid/new rows stay.
     const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
-    expect(state.query("SELECT id FROM threads WHERE id='told'").get()).toEqual({ id: "told" });
-    expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('tmid','tnew')").get())
-      .toEqual({ n: 0 });
+    expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('told','tmid','tnew')").get())
+      .toEqual({ n: 3 });
     expect(
       state.query("SELECT name FROM thread_dynamic_tools WHERE thread_id='told' AND position=0").get(),
-    ).toEqual({ name: "keep-me" });
+    ).toEqual({ name: "pre" });
     state.close();
-
     const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
-    expect(logs.query("SELECT ts, target FROM logs WHERE id=1").get()).toEqual({ ts: 77, target: "keep" });
+    expect(
+      logs.query("SELECT ts, target, estimated_bytes FROM logs WHERE id=1").get(),
+    ).toEqual({ ts: 1, target: "pre", estimated_bytes: 10 });
     expect(logs.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id IN ('tmid','tnew')").get())
-      .toEqual({ n: 0 });
+      .toEqual({ n: 2 });
     logs.close();
+
+    // State locked after logs would have been compensated under the old design —
+    // resume must still finish without dest_exists and without deleting pre rows.
+    let locker: Database | undefined;
+    let retried: ReturnType<typeof restoreTrashEntry>;
+    try {
+      locker = new Database(join(home, "state_5.sqlite"));
+      locker.exec("BEGIN EXCLUSIVE");
+      // State already done in pending — busy state must not block satellite resume.
+      retried = restoreTrashEntry(trashId, { codexHome: home, busyTimeoutMs: 1 });
+    } finally {
+      try { locker?.exec("ROLLBACK"); } catch { /* */ }
+      try { locker?.close(); } catch { /* */ }
+    }
+    expect(retried!.ok).toBe(true);
+    expect(retried!.count).toBe(3);
+    expect(existsSync(stage)).toBe(false);
 
     const mem = new Database(join(home, "memories_1.sqlite"), { readonly: true });
     expect(mem.query("SELECT raw_memory FROM stage1_outputs WHERE thread_id='told'").get())
-      .toEqual({ raw_memory: "keep-m" });
+      .toEqual({ raw_memory: "pre-m" });
+    expect(
+      mem.query("SELECT COUNT(*) AS n FROM stage1_outputs WHERE thread_id IN ('told','tmid','tnew')").get(),
+    ).toEqual({ n: 2 }); // fixture seeds told+tmid only
     mem.close();
-
     const goals = new Database(join(home, "goals_1.sqlite"), { readonly: true });
     expect(goals.query("SELECT objective FROM thread_goals WHERE thread_id='told'").get())
-      .toEqual({ objective: "keep" });
-    expect(goals.query("SELECT COUNT(*) AS n FROM thread_goals WHERE thread_id='tmid'").get())
-      .toEqual({ n: 0 });
+      .toEqual({ objective: "pre" });
+    expect(
+      goals.query("SELECT COUNT(*) AS n FROM thread_goals WHERE thread_id IN ('told','tmid','tnew')").get(),
+    ).toEqual({ n: 2 }); // fixture seeds told+tmid only
     goals.close();
-  });
+  }, { timeout: 20_000 });
+
+  test("leftover-stage failure never restages files and retry accepts destinations", () => {
+    // Regression for reverse-move failure after metadata compensation: restage
+    // could leave metadata deleted while files remained at dest. We never restage.
+    home = buildHome({ withSatelliteStores: true, withDynamicTools: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_200 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const logsSeed = new Database(join(home, "logs_2.sqlite"));
+    logsSeed.exec(
+      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,42,'INFO','pre','told',99)`,
+    );
+    logsSeed.close();
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAtLeftoverStageGate: true },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(failed.count).toBe(3);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      pending: { state: boolean; logs: boolean; memories: boolean; goals: boolean };
+    };
+    expect(pending.pending).toEqual({
+      state: false,
+      logs: false,
+      memories: false,
+      goals: false,
+    });
+
+    // Pre-existing log preserved; satellite rows from this restore remain.
+    const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    expect(
+      logs.query("SELECT ts, target, estimated_bytes FROM logs WHERE id=1").get(),
+    ).toEqual({ ts: 42, target: "pre", estimated_bytes: 99 });
+    expect(logs.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id IN ('told','tmid','tnew')").get())
+      .toEqual({ n: 3 });
+    logs.close();
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(retried.count).toBe(3);
+    expect(existsSync(stage)).toBe(false);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+
+    const logsAfter = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    expect(
+      logsAfter.query("SELECT ts, target FROM logs WHERE id=1").get(),
+    ).toEqual({ ts: 42, target: "pre" });
+    logsAfter.close();
+  }, { timeout: 20_000 });
 });
