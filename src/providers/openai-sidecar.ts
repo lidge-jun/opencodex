@@ -15,7 +15,7 @@ import {
   OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "./openai-tiers";
-import { providerCodexAccountMode } from "./registry";
+import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 
 export interface OpenAiForwardSidecarCandidate {
   providerName: typeof OPENAI_CODEX_PROVIDER_ID;
@@ -32,10 +32,11 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
 export interface OpenAiImagesProviderSelection {
   forwardCandidates: OpenAiForwardSidecarCandidate[];
   keyed?: {
-    providerName: typeof OPENAI_API_PROVIDER_ID;
+    providerName: string;
     provider: OcxProviderConfig;
     apiKey: string;
   };
+  error?: string;
 }
 
 export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiForwardSidecarCandidate[] {
@@ -125,4 +126,47 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
     if (apiKey) selection.keyed = { providerName: OPENAI_API_PROVIDER_ID, provider, apiKey };
   }
   return selection;
+}
+
+/** Resolve an explicit custom Images provider, otherwise preserve the existing OpenAI fallback. */
+export function selectImagesProvider(config: OcxConfig): OpenAiImagesProviderSelection {
+  const configuredProvider = config.images?.provider;
+  if (configuredProvider === undefined) return selectOpenAiImagesProvider(config);
+  if (typeof configuredProvider !== "string" || !configuredProvider.trim()) {
+    return { forwardCandidates: [], error: "images.provider must be a nonblank provider name" };
+  }
+  const providerName = configuredProvider.trim();
+
+  if (getProviderRegistryEntry(providerName)) {
+    return {
+      forwardCandidates: [],
+      error: `images.provider "${providerName}" must name a custom provider; omit it to use built-in OpenAI tiers`,
+    };
+  }
+
+  const provider = Object.prototype.hasOwnProperty.call(config.providers, providerName)
+    ? config.providers[providerName]
+    : undefined;
+  if (!provider) {
+    return { forwardCandidates: [], error: `images.provider "${providerName}" is not configured` };
+  }
+  if (provider.disabled === true) {
+    return { forwardCandidates: [], error: `images.provider "${providerName}" is disabled` };
+  }
+  if (provider.adapter !== "openai-responses" || (provider.authMode !== undefined && provider.authMode !== "key")) {
+    return {
+      forwardCandidates: [],
+      error: `images.provider "${providerName}" must be an API-key openai-responses provider`,
+    };
+  }
+
+  const apiKey = resolveEnvValue(provider.apiKey)?.trim();
+  if (!apiKey) {
+    return { forwardCandidates: [], error: `images.provider "${providerName}" has no usable API key` };
+  }
+
+  return {
+    forwardCandidates: [],
+    keyed: { providerName, provider, apiKey },
+  };
 }

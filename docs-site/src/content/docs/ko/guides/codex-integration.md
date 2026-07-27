@@ -41,8 +41,11 @@ ChatGPT bearer 인증으로 직접 POST합니다. 주입된 `base_url`이 openco
   bearer를 사용합니다. 설정된 모드는 이미지 요청에도 동일하게 적용됩니다.
 - **OpenAI API key:** forward 후보가 인증 실패를 소유하지 않을 때만 사용합니다. 깨진 Pool 인증을
   별도 과금 API 사용으로 숨기지 않습니다.
+- **명시적 커스텀 프로바이더:** `images.provider`에 OpenAI Images API를 구현한 커스텀 API-key
+  `openai-responses` 프로바이더를 지정할 수 있습니다. 명시적 선택이 실패해도 다른 유료 업스트림으로
+  fallback하지 않습니다. 내장 프로바이더 id에는 사용하지 말고, 기본 OpenAI 경로를 쓰려면 생략하세요.
 - **둘 다 없음:** 모호한 404 대신 명확한 오류를 반환합니다. 라우팅되는 다른 프로바이더(Cursor,
-  Gemini, Kiro 등)는 이미지 생성을 제공할 수 없습니다. 도구 자체를 끄고 싶다면 Codex에서
+  Gemini, Kiro 등)는 기본적으로 이미지 생성을 제공할 수 없습니다. 도구 자체를 끄고 싶다면 Codex에서
   `codex features disable image_generation`(`config.toml`의 `[features] image_generation = false`)을
   사용하세요.
 

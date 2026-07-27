@@ -41,8 +41,12 @@ ChatGPT bearer 認証で直接 POST します。注入された `base_url` が o
   bearer を使います。設定されたモードは画像リクエストにも同じく適用されます。
 - **OpenAI API キー:** forward 候補が認証失敗を所有しないときのみ使います。壊れた Pool 認証を
   別課金 API 使用で隠しません。
+- **明示的なカスタムプロバイダー:** `images.provider` に、OpenAI Images API を実装するカスタムの
+  API キー方式 `openai-responses` プロバイダーを指定できます。明示的な選択が失敗しても、別の
+  有料上流へフォールバックしません。組み込みプロバイダー id には使わず、既定の OpenAI 経路を
+  使う場合は省略してください。
 - **両方なし:** 曖昧な 404 の代わりに明確なエラーを返します。ルーティングされる他のプロバイダー(Cursor、
-  Gemini、Kiro など)は画像生成を提供できません。ツール自体をオフにしたい場合は Codex で
+  Gemini、Kiro など)は既定では画像生成を提供できません。ツール自体をオフにしたい場合は Codex で
   `codex features disable image_generation`(`config.toml` の `[features] image_generation = false`)を
   使ってください。
 

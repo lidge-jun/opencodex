@@ -42,10 +42,38 @@ points at opencodex, the proxy relays those calls to the OpenAI upstream:
   caller OAuth bearer. The configured mode applies consistently to the image request.
 - **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
   failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
+- **Explicit custom provider:** set `images.provider` to the id of a custom API-key
+  `openai-responses` provider whose endpoint implements the OpenAI Images API. Explicit selection
+  fails closed and never falls back to a different paid upstream. Registry-managed provider ids
+  are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
   (Cursor, Gemini, Kiro, …) cannot serve image generation; if you don't want the tool offered at
   all, disable it in Codex with `codex features disable image_generation`
   (`[features] image_generation = false` in `config.toml`).
+
+For an OpenAI-compatible custom gateway, configure a dedicated provider and select it only for
+standalone Images requests:
+
+```json
+{
+  "providers": {
+    "custom-images": {
+      "adapter": "openai-responses",
+      "baseUrl": "https://gateway.example.com/v1",
+      "authMode": "key",
+      "apiKey": "${IMAGE_GATEWAY_API_KEY}"
+    }
+  },
+  "images": {
+    "provider": "custom-images",
+    "timeoutMs": 300000
+  }
+}
+```
+
+The custom endpoint must accept `POST /v1/images/generations` and `/v1/images/edits` and return the
+OpenAI Images response shape expected by Codex. The provider's configured key replaces any caller
+bearer before the upstream request.
 
 For a non-loopback `hostname`, Codex must send the generated API auth header. The injector therefore
 uses a dedicated provider instead:

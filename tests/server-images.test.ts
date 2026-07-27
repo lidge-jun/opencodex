@@ -10,6 +10,7 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
+import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -17,6 +18,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const previousImagesApiKey = process.env.OPENCODEX_TEST_IMAGES_API_KEY;
 const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-images-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -27,6 +29,7 @@ beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  process.env.OPENCODEX_TEST_IMAGES_API_KEY = "custom-images-key";
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-images-codex-");
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
@@ -41,6 +44,8 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  if (previousImagesApiKey === undefined) delete process.env.OPENCODEX_TEST_IMAGES_API_KEY;
+  else process.env.OPENCODEX_TEST_IMAGES_API_KEY = previousImagesApiKey;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
@@ -281,6 +286,142 @@ test("falls back to a keyed openai-responses provider when no forward provider e
     await server.stop(true);
     await upstream.stop(true);
   }
+});
+
+test("an explicit custom Images provider uses its configured endpoint, key, and headers", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({
+        path: new URL(req.url).pathname,
+        headers: req.headers,
+        body: await req.json(),
+      });
+      return Response.json({ created: 1_767_000_000, data: [{ b64_json: "aGVsbG8=" }] });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "custom-images",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "custom-images": {
+        adapter: "openai-responses",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        allowPrivateNetwork: true,
+        authMode: "key",
+        apiKey: "${OPENCODEX_TEST_IMAGES_API_KEY}",
+        headers: { "x-provider-route": "images" },
+      },
+    },
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/v1/images/generations");
+    expect(captured[0].headers.get("authorization")).toBe("Bearer custom-images-key");
+    expect(captured[0].headers.get("x-provider-route")).toBe("images");
+    expect(captured[0].body).toMatchObject({ prompt: "a cat", model: "gpt-image-2" });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("an invalid explicit Images provider fails closed instead of using another upstream", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: disabledOpenAiProvider,
+      "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+      "custom-images": {
+        adapter: "openai-chat",
+        baseUrl: "https://images.example.test/v1",
+        apiKey: "custom-images-key",
+      },
+    },
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    expect(captured).toHaveLength(0);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("must be an API-key openai-responses provider");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("an explicit Images provider cannot reuse a registry-managed provider id", async () => {
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: disabledOpenAiProvider,
+      "openai-apikey": keyedProvider(),
+    },
+    images: { provider: "openai-apikey" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("must name a custom provider");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test.each([
+  ["missing", undefined, "is not configured"],
+  ["disabled", { adapter: "openai-responses", baseUrl: "https://images.example.test/v1", apiKey: "key", disabled: true }, "is disabled"],
+  ["wrong adapter", { adapter: "openai-chat", baseUrl: "https://images.example.test/v1", apiKey: "key" }, "must be an API-key openai-responses provider"],
+  ["forward auth", { adapter: "openai-responses", baseUrl: "https://images.example.test/v1", apiKey: "key", authMode: "forward" }, "must be an API-key openai-responses provider"],
+  ["oauth auth", { adapter: "openai-responses", baseUrl: "https://images.example.test/v1", apiKey: "key", authMode: "oauth" }, "must be an API-key openai-responses provider"],
+  ["local auth", { adapter: "openai-responses", baseUrl: "https://images.example.test/v1", apiKey: "key", authMode: "local" }, "must be an API-key openai-responses provider"],
+  ["missing key", { adapter: "openai-responses", baseUrl: "https://images.example.test/v1", authMode: "key" }, "has no usable API key"],
+] as const)("explicit Images provider rejects %s configuration", (_case, provider, expectedError) => {
+  const selection = selectImagesProvider({
+    port: 0,
+    defaultProvider: "custom-images",
+    providers: provider ? { "custom-images": provider } : {},
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  expect(selection.keyed).toBeUndefined();
+  expect(selection.forwardCandidates).toHaveLength(0);
+  expect(selection.error).toContain(expectedError);
 });
 
 test("keyed baseUrl with a /v1 suffix is normalized (no double /v1)", async () => {

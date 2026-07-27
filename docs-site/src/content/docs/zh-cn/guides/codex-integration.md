@@ -40,8 +40,11 @@ OpenAI 上游：
   OAuth bearer。图像请求遵循同一模式。
 - **OpenAI API key：** 仅当 forward 候选没有拥有认证失败时使用。不会用单独计费的 API 调用掩盖
   损坏或过期的 Pool 凭证。
+- **显式自定义 provider：** 可将 `images.provider` 设为一个自定义 API-key
+  `openai-responses` provider；该 endpoint 必须实现 OpenAI Images API。显式选择失败时不会
+  fallback 到其他付费上游。内置 provider id 不适用于此字段；省略它即可使用默认 OpenAI 路径。
 - **两者都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、
-  Kiro 等）无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
+  Kiro 等）默认无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
   `codex features disable image_generation`（即 `config.toml` 的
   `[features] image_generation = false`）。
 

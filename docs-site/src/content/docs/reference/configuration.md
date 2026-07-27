@@ -62,6 +62,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | Web-search sidecar options (see below). |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | Vision sidecar options (see below). |
+| `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex's built-in `image_gen` tool (see below). |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy; fields are listed below. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. |
 
@@ -418,6 +419,17 @@ with those explicit additions, or set it to `false` to expose only `models`.
 ```
 
 ## Sidecars
+
+### `images` (`OcxImagesConfig`)
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider for `/v1/images/generations` and `/v1/images/edits`. Registry-managed ids are rejected; omit this field to use the built-in ChatGPT/OpenAI fallback. |
+| `timeoutMs?` | `number` | `300000` | Whole-request upstream timeout for one standalone Images request. |
+
+Explicit provider selection fails closed when the provider is missing, disabled, incompatible, or
+has no usable key. It never falls back to another paid upstream. The custom endpoint must implement
+the OpenAI Images API paths and response shape expected by Codex.
 
 ### `webSearchSidecar` (`OcxWebSearchSidecarConfig`)
 

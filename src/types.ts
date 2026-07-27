@@ -712,6 +712,8 @@ export interface OcxTokenGuardianConfig {
 }
 
 export interface OcxImagesConfig {
+  /** Optional custom API-key provider for /v1/images relays. Built-in OpenAI tiers remain automatic. */
+  provider?: string;
   /** Upstream timeout (ms) for one /v1/images relay. Default 300000 — generation is slow. */
   timeoutMs?: number;
 }

@@ -7,7 +7,8 @@
  * without a route the tool died on the /v1/* JSON-404 guard. Only an OpenAI-family upstream
  * can serve these endpoints — routed providers (Cursor, Kiro, Gemini, …) have no image
  * generation surface — so the handler relays the body verbatim to the ChatGPT forward
- * provider (or an OpenAI API-key provider) and passes the response through untouched:
+ * provider, an OpenAI API-key provider, or an explicitly selected compatible custom provider and
+ * passes the response through untouched:
  * codex's images client parses `{created, data:[{b64_json}]}` strictly and Debug-prints
  * error bodies into the model-visible failure, so upstream errors must stay legible.
  */
@@ -23,7 +24,7 @@ import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
-import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
+import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
@@ -61,7 +62,10 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  const candidates = selectOpenAiImagesProvider(config);
+  const candidates = selectImagesProvider(config);
+  if (candidates.error) {
+    return formatErrorResponse(400, "invalid_request_error", candidates.error);
+  }
   if (candidates.forwardCandidates.length === 0 && !candidates.keyed) {
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
     // configuration state that must surface on the first attempt.

@@ -47,11 +47,13 @@ Codex's local `image_gen.imagegen` tool makes a second Images request after the 
 `POST /v1/images/generations` for generation or `POST /v1/images/edits` for reference-image edits.
 These are standalone Images API routes, not the hosted Responses `image_generation` tool.
 
-`src/server/images.ts` selects only an enabled forward-mode `openai-responses` provider, resolves
-the same thread-affined Codex account as Responses, and relays the bounded opaque body without
-rewriting Codex's JSON edit schema or a compatible multipart body. Each paid Images POST receives
-one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
-existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+`src/server/images.ts` uses the existing ChatGPT/OpenAI fallback unless `images.provider` explicitly
+selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
+provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
+falls through to another paid upstream. The relay passes the bounded opaque body without rewriting
+Codex's JSON edit schema or a compatible multipart body. Each paid Images POST receives one upstream
+attempt; client cancellation aborts the upstream and pool-only failures update the existing
+account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
 On non-loopback binds, data-plane authentication and origin policy cover both Images routes just as
 they cover `/v1/responses`; clients must send the configured `x-opencodex-api-key`.
