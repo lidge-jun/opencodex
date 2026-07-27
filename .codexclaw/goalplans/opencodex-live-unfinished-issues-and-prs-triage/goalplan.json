@@ -2,13 +2,13 @@
   "objective": "OpenCodex live unfinished issues and PRs triage against current GitHub state. Scope: repository lidge-jun/opencodex, dev target only, worktree /Users/jun/.codex/worktrees/260727-live-triage/opencodex. First work-phase is docs-only manifest/devlog: fetch live open PRs and open issues via gh, record current number/title/state/base/head/mergeable/checks/reviews/labels, classify every item into merge now, takeover-fix, comment/request-changes, needs-author-rebase, needs-human/security, later/enhancement, upstream-tracking, or close, and produce a priority table. Later work-phases process exactly one PR or one issue per full PABCD cycle. Allowed: directly fix bugfix/simple safe items on dev, create PRs, wait for CI, squash merge, and close linked issues when live evidence proves safety. Out of scope: main/preview/release branches, automatic merge of security/auth/permission/data-migration/privilege-boundary work, and unapproved GUI/UX decisions except the approved OpenRouter Free separate-provider direction. Terminal outcomes: DONE when all safe live items are processed and manifest evidence is current; NOOP when an item needs no action after live check; NEEDS_HUMAN or UNSAFE for risk-bound/security/UX-decision items; BLOCKED for external author/rebase/CI or upstream dependency; BUDGET_EXHAUSTED only if explicit runtime bounds are hit. Verification: gh live snapshots, code/diff review for candidate PRs, CI/check URLs where actions occur, comments/merge/close URLs for external state changes, and devlog evidence committed locally before completion.",
   "slug": "opencodex-live-unfinished-issues-and-prs-triage",
   "createdAt": "2026-07-27T10:35:02.724Z",
-  "updatedAt": "2026-07-27T10:43:20.000Z",
-  "activeWorkPhaseId": "WP0",
+  "updatedAt": "2026-07-27T10:46:14.883Z",
+  "activeWorkPhaseId": "WP1",
   "workPhases": [
     {
       "id": "WP0",
       "title": "Live GitHub triage manifest and priority table",
-      "status": "pending",
+      "status": "done",
       "tasks": [
         {
           "id": "WP0-T1",
@@ -38,7 +38,7 @@
     {
       "id": "WP1",
       "title": "PR #526 catalog write signal rebase and coverage decision",
-      "status": "pending",
+      "status": "in_progress",
       "tasks": [
         {
           "id": "WP1-T1",
@@ -201,8 +201,8 @@
       "id": "C-WP0-LIVE-MANIFEST",
       "scenario": "Live GitHub state has been refreshed and every open PR/open issue is classified into the requested triage buckets.",
       "expectedEvidence": "devlog/_plan/260727_live_unfinished_triage/ numbered manifest files with gh snapshot timestamp, PR/issue lists, classification rationale, and priority table.",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "WP0 closed by cxc D at 2026-07-27T10:46:14Z. Commit 58b247ac records devlog/_plan/260727_live_unfinished_triage. C check: open PR count 14 with numbers 355,424,429,447,461,491,493,495,498,512,526,527,528,533; open issue count 23 with numbers 42,92,95,177,178,201,241,294,386,401,414,415,417,418,425,462,476,509,521,540,543,545,547; manifest has unsafe merge-now entries 0.",
+      "status": "met"
     },
     {
       "id": "C-WP1-PR526",
