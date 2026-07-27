@@ -353,8 +353,41 @@ describe("GET /api/storage/trash + POST restore", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: ".trash/999999999" }),
       });
-      expect(missing.status).toBe(400);
+      expect(missing.status).toBe(404);
       expect((await missing.json()).error).toBe("missing_trash");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("restore returns 409 when destination archived file already exists", async () => {
+    seedArchived(isolatedCodexHome!.path);
+    const server = startServer(0);
+    try {
+      const previewRes = await fetch(new URL("/api/storage/cleanup/preview", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 50 }),
+      });
+      const preview = await previewRes.json();
+      const cleanupRes = await fetch(new URL("/api/storage/cleanup", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 50, mode: "quarantine", digest: preview.digest }),
+      });
+      const cleanup = await cleanupRes.json();
+      expect(cleanup.ok).toBe(true);
+
+      writeFileSync(join(isolatedCodexHome!.path, "archived_sessions", "rollout-old.jsonl"), "COLLISION");
+      const restoreRes = await fetch(new URL("/api/storage/trash/restore", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: cleanup.trashDir }),
+      });
+      expect(restoreRes.status).toBe(409);
+      const body = await restoreRes.json();
+      expect(body.ok).toBe(false);
+      expect(body.error).toBe("dest_exists");
     } finally {
       await server.stop(true);
     }

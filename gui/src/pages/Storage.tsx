@@ -80,6 +80,21 @@ const BUCKET_TKEYS: Record<string, TKey> = {
 
 const PRESETS = [10, 25, 50] as const;
 
+const localizedCatch = (e: unknown, fallback: string): string => {
+  if (!(e instanceof Error)) return fallback;
+  const msg = e.message;
+  if (
+    msg === "Failed to fetch"
+    || msg.includes("NetworkError")
+    || msg.includes("network error")
+    || msg.includes("JSON")
+    || msg.includes("Unexpected end of")
+  ) {
+    return fallback;
+  }
+  return msg || fallback;
+};
+
 function bucketLabel(bucket: StorageBucket, t: TFn): string {
   const tkey = BUCKET_TKEYS[bucket.key];
   return tkey ? t(tkey) : bucket.label;
@@ -219,21 +234,6 @@ function ArchivedCleanupPanel({
     t("storage.cleanup.preset", {
       percent: new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(value / 100),
     });
-
-  const localizedCatch = (e: unknown, fallback: string): string => {
-    if (!(e instanceof Error)) return fallback;
-    const msg = e.message;
-    if (
-      msg === "Failed to fetch"
-      || msg.includes("NetworkError")
-      || msg.includes("network error")
-      || msg.includes("JSON")
-      || msg.includes("Unexpected end of")
-    ) {
-      return fallback;
-    }
-    return msg || fallback;
-  };
 
   const runPreview = async () => {
     setBusy(true);
@@ -405,12 +405,14 @@ function QuarantineTrashPanel({
   t,
   onDone,
   reloadToken,
+  onEntriesChange,
 }: {
   apiBase: string;
   locale: Locale;
   t: TFn;
   onDone: () => void;
   reloadToken: number;
+  onEntriesChange?: (entries: TrashEntry[]) => void;
 }) {
   const [entries, setEntries] = useState<TrashEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -451,22 +453,28 @@ function QuarantineTrashPanel({
       const json = await res.json() as TrashList & { error?: string };
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       if (!res.ok) throw new Error(json.error ?? "list_failed");
-      setEntries(Array.isArray(json.entries) ? json.entries : []);
+      const next = Array.isArray(json.entries) ? json.entries : [];
+      setEntries(next);
+      onEntriesChange?.(next);
       setError(null);
     } catch (e) {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
       setEntries([]);
-      setError(t("storage.trash.listFailed"));
+      onEntriesChange?.([]);
+      setError(localizedCatch(e, t("storage.trash.listFailed")));
     } finally {
       if (generation === loadGenerationRef.current) setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, t, onEntriesChange]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadTrash(controller.signal);
+    const timeout = window.setTimeout(() => {
+      void loadTrash(controller.signal);
+    }, 0);
     return () => {
+      window.clearTimeout(timeout);
       loadGenerationRef.current += 1;
       controller.abort();
     };
@@ -504,11 +512,9 @@ function QuarantineTrashPanel({
         count: String(json.count),
         size: formatBytes(json.bytes, locale),
       }));
-      await loadTrash();
       onDone();
     } catch (e) {
-      const msg = e instanceof Error && e.message ? e.message : t("storage.trash.restoreFailed");
-      setError(msg);
+      setError(localizedCatch(e, t("storage.trash.restoreFailed")));
     } finally {
       setBusy(false);
     }
@@ -628,7 +634,8 @@ export default function Storage({ apiBase }: { apiBase: string }) {
   const [data, setData] = useState<StorageReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [trashReloadToken, setTrashReloadToken] = useState(0);
-  const [trashHasEntries, setTrashHasEntries] = useState(false);
+  // Stamp trash awareness with apiBase so a base change invalidates without an effect.
+  const [trashInfo, setTrashInfo] = useState({ apiBase, settled: false, hasEntries: false });
   const loadGenerationRef = useRef(0);
 
   const fetchStorage = useCallback(async (signal?: AbortSignal) => {
@@ -648,41 +655,36 @@ export default function Storage({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase]);
 
-  const probeTrash = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const res = await fetch(`${apiBase}/api/storage/trash`, { signal });
-      if (!res.ok) return;
-      const json = await res.json() as TrashList;
-      if (signal?.aborted) return;
-      setTrashHasEntries(Array.isArray(json.entries) && json.entries.length > 0);
-    } catch {
-      if (signal?.aborted) return;
-    }
-  }, [apiBase]);
-
   useEffect(() => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
       void fetchStorage(controller.signal);
-      void probeTrash(controller.signal);
     }, 0);
     return () => {
       window.clearTimeout(timeout);
       loadGenerationRef.current += 1;
       controller.abort();
     };
-  }, [fetchStorage, probeTrash]);
+  }, [fetchStorage]);
 
   const refreshAll = useCallback(() => {
     void fetchStorage();
     setTrashReloadToken(n => n + 1);
-    void probeTrash();
-  }, [fetchStorage, probeTrash]);
+  }, [fetchStorage]);
 
+  const onTrashEntriesChange = useCallback((entries: TrashEntry[]) => {
+    setTrashInfo({ apiBase, settled: true, hasEntries: entries.length > 0 });
+  }, [apiBase]);
+
+  const trashSettled = trashInfo.apiBase === apiBase && trashInfo.settled;
+  const trashHasEntries = trashInfo.apiBase === apiBase && trashInfo.hasEntries;
   const failed = !loading && (!data || data.error !== undefined);
-  const empty = !loading && !failed && data!.total.fileCount === 0 && !trashHasEntries;
+  const empty = !loading && !failed && data!.total.fileCount === 0 && trashSettled && !trashHasEntries;
   const archivedCount = data?.buckets.find(b => b.key === "archived_sessions")?.fileCount ?? 0;
-  const showBody = !loading || data;
+  const showBody = Boolean(data) && !failed;
+  // While storage is empty, keep the trash panel mounted until it reports so we
+  // do not flash the empty state over a non-empty quarantine.
+  const showTrashWhileSettling = showBody && (data!.total.fileCount > 0 || !trashSettled || trashHasEntries);
 
   return (
     <>
@@ -721,12 +723,13 @@ export default function Storage({ apiBase }: { apiBase: string }) {
               onDone={() => refreshAll()}
             />
           )}
-          {showBody && (
+          {showTrashWhileSettling && (
             <QuarantineTrashPanel
               apiBase={apiBase}
               locale={locale}
               t={t}
               reloadToken={trashReloadToken}
+              onEntriesChange={onTrashEntriesChange}
               onDone={() => refreshAll()}
             />
           )}

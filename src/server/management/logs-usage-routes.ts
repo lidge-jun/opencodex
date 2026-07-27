@@ -34,7 +34,7 @@ import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
-import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, restoreTrashEntry, type CleanupMode } from "../../storage/cleanup";
+import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, restoreTrashEntry, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
 import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
@@ -357,10 +357,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         const status =
           result.error === "codex_busy" || result.error === "dest_exists"
             ? 409
-            : result.error === "invalid_trash" || result.error === "missing_trash"
-              ? 400
-              : 500;
-        const messages: Record<string, string> = {
+            : result.error === "missing_trash"
+              ? 404
+              : result.error === "invalid_trash"
+                ? 400
+                : 500;
+        const messages: Record<RestoreErrorCode, string> = {
           invalid_trash: "Trash entry id is missing or invalid.",
           missing_trash: "Trash entry was not found.",
           codex_busy: "Codex is using state.sqlite — try again after quitting Codex.",
@@ -372,7 +374,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         return jsonResponse({
           ok: false,
           error: result.error ?? "restore_failed",
-          message: messages[result.error ?? ""] ?? messages.restore_failed,
+          message: messages[result.error ?? "restore_failed"] ?? messages.restore_failed,
           ...(result.trashDir ? { trashDir: result.trashDir } : {}),
         }, status);
       }

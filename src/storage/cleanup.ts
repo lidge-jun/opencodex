@@ -553,6 +553,10 @@ type SqlRow = Record<string, string | number | bigint | null | Uint8Array>;
 
 interface SatelliteBackup {
   threadIds: string[];
+  /** Full `threads` row images (SELECT *) captured under the state write lock. */
+  threads?: SqlRow[];
+  dynamicTools?: SqlRow[];
+  spawnEdges?: SqlRow[];
   logs?: { path: string; rows: SqlRow[] };
   memories?: {
     path: string;
@@ -570,6 +574,11 @@ interface SatelliteBackup {
   };
 }
 
+type SatelliteBackupRead =
+  | { status: "missing" }
+  | { status: "ok"; backup: SatelliteBackup }
+  | { status: "invalid" };
+
 interface ReconcileTestHooks {
   failAfterLogsMutation?: boolean;
   failAfterMemoriesMutation?: boolean;
@@ -583,6 +592,8 @@ interface ReconcileTestHooks {
 
 const SATELLITE_BACKUP_FILE = "satellite-backup.json";
 
+type StagedFile = { from: string; to: string; relPath: string };
+
 function quoteIdent(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
@@ -591,14 +602,104 @@ function selectRows(db: Database, sql: string, params: Array<string | number>): 
   return db.query<SqlRow, Array<string | number>>(sql).all(...params) as SqlRow[];
 }
 
+function tableColumnNames(db: Database, table: string): Set<string> {
+  if (!tableExists(db, table)) return new Set();
+  const rows = db.query<{ name: string }, []>(
+    `PRAGMA table_info("${table.replaceAll('"', '""')}")`,
+  ).all();
+  return new Set(rows.map(r => r.name));
+}
+
 function insertRowsConflictIgnore(db: Database, table: string, rows: SqlRow[]): void {
+  if (rows.length === 0) return;
+  const allowed = tableColumnNames(db, table);
   for (const row of rows) {
-    const cols = Object.keys(row);
+    const cols = Object.keys(row).filter(c => allowed.has(c));
     if (cols.length === 0) continue;
     db.run(
       `INSERT INTO ${quoteIdent(table)} (${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
       cols.map(c => row[c] as string | number | bigint | null | Uint8Array),
     );
+  }
+}
+
+/** Snapshot state-DB dependents that cleanup deletes with the thread rows. */
+function snapshotStateDependents(
+  db: Database,
+  threadIds: string[],
+): Pick<SatelliteBackup, "threads" | "dynamicTools" | "spawnEdges"> {
+  const out: Pick<SatelliteBackup, "threads" | "dynamicTools" | "spawnEdges"> = {};
+  if (threadIds.length === 0 || !tableExists(db, "threads")) return out;
+
+  const threads: SqlRow[] = [];
+  for (const chunk of chunkIds(threadIds, SQLITE_ID_CHUNK * 2)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    threads.push(...selectRows(db, `SELECT * FROM threads WHERE id IN (${placeholders})`, chunk));
+  }
+  out.threads = threads;
+
+  if (tableExists(db, "thread_dynamic_tools")) {
+    const dynamicTools: SqlRow[] = [];
+    for (const chunk of chunkIds(threadIds, SQLITE_ID_CHUNK * 2)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      dynamicTools.push(...selectRows(
+        db,
+        `SELECT * FROM thread_dynamic_tools WHERE thread_id IN (${placeholders})`,
+        chunk,
+      ));
+    }
+    out.dynamicTools = dynamicTools;
+  }
+
+  if (tableExists(db, "thread_spawn_edges")) {
+    const spawnEdges: SqlRow[] = [];
+    for (const chunk of chunkIds(threadIds, SQLITE_ID_CHUNK)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      spawnEdges.push(...selectRows(
+        db,
+        `SELECT * FROM thread_spawn_edges
+         WHERE parent_thread_id IN (${placeholders}) OR child_thread_id IN (${placeholders})`,
+        [...chunk, ...chunk],
+      ));
+    }
+    out.spawnEdges = spawnEdges;
+  }
+
+  return out;
+}
+
+/** Remap serialized absolute DB paths onto the newest DBs under the current Codex home. */
+function remapSatelliteBackupPaths(
+  backup: SatelliteBackup,
+  paths: RuntimeDbPaths,
+): { ok: true; backup: SatelliteBackup } | { ok: false } {
+  const next: SatelliteBackup = {
+    threadIds: backup.threadIds,
+    ...(backup.threads ? { threads: backup.threads } : {}),
+    ...(backup.dynamicTools ? { dynamicTools: backup.dynamicTools } : {}),
+    ...(backup.spawnEdges ? { spawnEdges: backup.spawnEdges } : {}),
+  };
+  if (backup.logs) {
+    if (!paths.logs) return { ok: false };
+    next.logs = { ...backup.logs, path: paths.logs };
+  }
+  if (backup.memories) {
+    if (!paths.memories) return { ok: false };
+    next.memories = { ...backup.memories, path: paths.memories };
+  }
+  if (backup.goals) {
+    if (!paths.goals) return { ok: false };
+    next.goals = { ...backup.goals, path: paths.goals };
+  }
+  return { ok: true, backup: next };
+}
+
+function rollbackMoves(moved: StagedFile[]): void {
+  for (let i = moved.length - 1; i >= 0; i--) {
+    const item = moved[i]!;
+    try {
+      if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
+    } catch { /* best-effort */ }
   }
 }
 
@@ -999,6 +1100,39 @@ function restoreSatelliteBackup(
   }
 }
 
+/** Insert snapshotted satellite rows into already-open write transactions. */
+function restoreSatelliteBackupInLocks(
+  locks: SatelliteWriteLocks,
+  backup: SatelliteBackup,
+): void {
+  if (backup.logs) {
+    if (!locks.logs) throw new Error("missing_logs_lock");
+    if (!tableExists(locks.logs.db, "logs")) throw new Error("missing_logs_table");
+    insertRowsConflictIgnore(locks.logs.db, "logs", backup.logs.rows);
+  }
+  if (backup.memories) {
+    if (!locks.memories) throw new Error("missing_memories_lock");
+    const mem = backup.memories;
+    if (!tableExists(locks.memories.db, "stage1_outputs")) throw new Error("missing_stage1_outputs_table");
+    insertRowsConflictIgnore(locks.memories.db, "stage1_outputs", mem.stage1);
+    if (tableExists(locks.memories.db, "jobs")) {
+      insertRowsConflictIgnore(locks.memories.db, "jobs", mem.stage1Jobs);
+      if (mem.consolidateTouched) {
+        restoreConsolidateGlobalJob(locks.memories.db, mem.consolidateJob, mem.consolidatePostImage);
+      }
+    }
+  }
+  if (backup.goals) {
+    if (!locks.goals) throw new Error("missing_goals_lock");
+    const g = backup.goals;
+    if (!tableExists(locks.goals.db, "thread_goals")) throw new Error("missing_thread_goals_table");
+    insertRowsConflictIgnore(locks.goals.db, "thread_goals", g.goals);
+    if (tableExists(locks.goals.db, "thread_goal_continuation_deferrals")) {
+      insertRowsConflictIgnore(locks.goals.db, "thread_goal_continuation_deferrals", g.deferrals);
+    }
+  }
+}
+
 function withWritableDb(
   path: string,
   busyTimeoutMs: number,
@@ -1104,6 +1238,10 @@ function reconcileDeletedThreads(
     satelliteLocks = beginSatelliteWriteLocks(paths, busyTimeoutMs);
     try {
       backup = snapshotSatelliteBackupInLocks(satelliteLocks, threadIds);
+      const stateDeps = snapshotStateDependents(stateDb, threadIds);
+      backup.threads = stateDeps.threads;
+      backup.dynamicTools = stateDeps.dynamicTools;
+      backup.spawnEdges = stateDeps.spawnEdges;
       try {
         if (hooks?.failSatelliteBackupWrite) {
           throw new Error("test_fail_satellite_backup_write");
@@ -1135,7 +1273,7 @@ function reconcileDeletedThreads(
       deleteThreadsAndDependents(stateDb, threadIds);
       if (hooks?.failBeforeStateCommit) throw new Error("test_fail_before_state_commit");
       stateDb.exec("COMMIT");
-      clearSatelliteBackup(stageDir);
+      // Keep satellite-backup.json for quarantine restore; permanent purge removes the stage.
       return { ok: true, threads };
     } catch (error) {
       if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
@@ -1148,8 +1286,6 @@ function reconcileDeletedThreads(
     try { stateDb?.close(); } catch { /* */ }
   }
 }
-
-type StagedFile = { from: string; to: string; relPath: string };
 
 function absFromRel(codexHome: string, relPath: string): string {
   if (relPath.includes("..") || isAbsolute(relPath) || /^[A-Za-z]:[\\/]/.test(relPath)) {
@@ -1506,9 +1642,12 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
           digest: preview.digest,
           purgeIncomplete: true,
           purgedRelPaths: purge.purged.map(item => item.relPath),
-          entries: manifestEntries.filter(entry =>
-            entry.physicalRelPaths.some(rel => survivingRelPaths.has(rel)),
-          ),
+          entries: manifestEntries
+            .map(entry => ({
+              ...entry,
+              physicalRelPaths: entry.physicalRelPaths.filter(rel => survivingRelPaths.has(rel)),
+            }))
+            .filter(entry => entry.physicalRelPaths.length > 0),
         }, null, 2),
       );
     } catch { /* best-effort: the pre-commit manifest is still on disk */ }
@@ -1594,7 +1733,10 @@ function parseTrashManifest(raw: string): TrashManifest | null {
       out.entries = o.entries.filter((e): e is CleanupManifestEntry => {
         if (!e || typeof e !== "object") return false;
         const entry = e as Record<string, unknown>;
-        return typeof entry.relPath === "string" && Array.isArray(entry.physicalRelPaths);
+        if (typeof entry.relPath !== "string" || !Array.isArray(entry.physicalRelPaths)) return false;
+        const physical = (entry.physicalRelPaths as unknown[])
+          .filter((p): p is string => typeof p === "string" && p.length > 0);
+        return physical.length > 0;
       }).map(e => {
         const entry = e as CleanupManifestEntry & Record<string, unknown>;
         return {
@@ -1602,7 +1744,7 @@ function parseTrashManifest(raw: string): TrashManifest | null {
           bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
           mtimeMs: typeof entry.mtimeMs === "number" ? entry.mtimeMs : 0,
           physicalRelPaths: (entry.physicalRelPaths as unknown[])
-            .filter((p): p is string => typeof p === "string"),
+            .filter((p): p is string => typeof p === "string" && p.length > 0),
           ...(typeof entry.threadId === "string" ? { threadId: entry.threadId } : {}),
           ...(typeof entry.rolloutPath === "string" ? { rolloutPath: entry.rolloutPath } : {}),
           ...(entry.archived === null || typeof entry.archived === "number"
@@ -1729,53 +1871,85 @@ export function listTrashEntries(
   return out;
 }
 
-function readSatelliteBackupFile(stageDir: string): SatelliteBackup | null {
+function readSatelliteBackupFile(stageDir: string): SatelliteBackupRead {
+  const path = join(stageDir, SATELLITE_BACKUP_FILE);
+  if (!existsSync(path)) return { status: "missing" };
   try {
-    const raw = JSON.parse(readFileSync(join(stageDir, SATELLITE_BACKUP_FILE), "utf8")) as unknown;
-    if (!raw || typeof raw !== "object") return null;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!raw || typeof raw !== "object") return { status: "invalid" };
     const o = raw as SatelliteBackup;
-    if (!Array.isArray(o.threadIds)) return null;
-    return o;
+    if (!Array.isArray(o.threadIds)) return { status: "invalid" };
+    return { status: "ok", backup: o };
   } catch {
-    return null;
+    // File exists but is truncated / malformed — distinct from a missing backup.
+    return { status: "invalid" };
   }
 }
 
-/** Re-insert threads rows from quarantine manifest fields (ON CONFLICT DO NOTHING). */
+function isSqlRowArray(value: unknown): value is SqlRow[] {
+  return Array.isArray(value) && value.every(row => row && typeof row === "object" && !Array.isArray(row));
+}
+
+/** Re-insert threads (+ dependents) from satellite snapshot or manifest fallback fields. */
 function restoreThreadsFromManifest(
   stateDbPath: string | null,
   entries: CleanupManifestEntry[],
+  backup: SatelliteBackup | null,
   busyTimeoutMs: number,
 ): { ok: true } | ReconcileErr {
+  const manifestThreadIds = entries
+    .map(e => e.threadId)
+    .filter((id): id is string => typeof id === "string");
+  const backupThreadIds = backup?.threadIds ?? [];
+  const needsThreads = manifestThreadIds.length > 0
+    || backupThreadIds.length > 0
+    || Boolean(backup?.threads?.length);
+
+  if (needsThreads && (!stateDbPath || !existsSync(stateDbPath))) {
+    return { ok: false, error: "db_reconcile_failed" };
+  }
   if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true };
-  const toRestore = entries.filter(e => typeof e.threadId === "string" && typeof e.rolloutPath === "string");
-  if (toRestore.length === 0) return { ok: true };
 
   return withWritableDb(stateDbPath, busyTimeoutMs, db => {
     if (!tableExists(db, "threads")) throw new Error("missing_threads_table");
-    const hasArchived = columnExists(db, "threads", "archived");
-    const hasArchivedAt = columnExists(db, "threads", "archived_at");
-    for (const entry of toRestore) {
-      const archived = entry.archived ?? 1;
-      if (hasArchived && hasArchivedAt) {
-        db.run(
-          `INSERT INTO threads (id, rollout_path, archived, archived_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(id) DO NOTHING`,
-          [entry.threadId!, entry.rolloutPath!, archived, null],
-        );
-      } else if (hasArchived) {
-        db.run(
-          `INSERT INTO threads (id, rollout_path, archived) VALUES (?, ?, ?)
-           ON CONFLICT(id) DO NOTHING`,
-          [entry.threadId!, entry.rolloutPath!, archived],
-        );
-      } else {
-        db.run(
-          `INSERT INTO threads (id, rollout_path) VALUES (?, ?)
-           ON CONFLICT(id) DO NOTHING`,
-          [entry.threadId!, entry.rolloutPath!],
-        );
+
+    if (backup?.threads && isSqlRowArray(backup.threads) && backup.threads.length > 0) {
+      insertRowsConflictIgnore(db, "threads", backup.threads);
+    } else {
+      const toRestore = entries.filter(
+        e => typeof e.threadId === "string" && typeof e.rolloutPath === "string",
+      );
+      const hasArchived = columnExists(db, "threads", "archived");
+      const hasArchivedAt = columnExists(db, "threads", "archived_at");
+      for (const entry of toRestore) {
+        const archived = entry.archived ?? 1;
+        if (hasArchived && hasArchivedAt) {
+          db.run(
+            `INSERT INTO threads (id, rollout_path, archived, archived_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(id) DO NOTHING`,
+            [entry.threadId!, entry.rolloutPath!, archived, null],
+          );
+        } else if (hasArchived) {
+          db.run(
+            `INSERT INTO threads (id, rollout_path, archived) VALUES (?, ?, ?)
+             ON CONFLICT(id) DO NOTHING`,
+            [entry.threadId!, entry.rolloutPath!, archived],
+          );
+        } else {
+          db.run(
+            `INSERT INTO threads (id, rollout_path) VALUES (?, ?)
+             ON CONFLICT(id) DO NOTHING`,
+            [entry.threadId!, entry.rolloutPath!],
+          );
+        }
       }
+    }
+
+    if (backup?.dynamicTools && isSqlRowArray(backup.dynamicTools) && tableExists(db, "thread_dynamic_tools")) {
+      insertRowsConflictIgnore(db, "thread_dynamic_tools", backup.dynamicTools);
+    }
+    if (backup?.spawnEdges && isSqlRowArray(backup.spawnEdges) && tableExists(db, "thread_spawn_edges")) {
+      insertRowsConflictIgnore(db, "thread_spawn_edges", backup.spawnEdges);
     }
   });
 }
@@ -1820,10 +1994,18 @@ export function restoreTrashEntry(
     return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
   }
 
+  // Partial permanent purges may leave only a subset of physical files on disk —
+  // trim to survivors rather than failing the whole entry for a purged twin.
+  const entries: CleanupManifestEntry[] = [];
   for (const entry of manifest.entries) {
     if (!entry.physicalRelPaths.every(isSafeArchivedPhysicalRel)) {
       return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
     }
+    const surviving = entry.physicalRelPaths.filter(rel => existsSync(join(stageDir, basename(rel))));
+    if (surviving.length === 0) {
+      return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+    }
+    entries.push({ ...entry, physicalRelPaths: surviving });
   }
 
   const probe = probeStateDbWritable(codexHome, busyTimeoutMs);
@@ -1838,9 +2020,65 @@ export function restoreTrashEntry(
     };
   }
 
+  const paths = discoverRuntimeDbPaths(codexHome);
+  const backupRead = readSatelliteBackupFile(stageDir);
+  if (backupRead.status === "invalid") {
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: "db_reconcile_failed",
+    };
+  }
+
+  let satelliteBackup: SatelliteBackup | null = null;
+  if (backupRead.status === "ok") {
+    const remapped = remapSatelliteBackupPaths(backupRead.backup, paths);
+    if (!remapped.ok) {
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: "db_reconcile_failed",
+      };
+    }
+    satelliteBackup = remapped.backup;
+  }
+
+  const hasSatelliteRows = Boolean(
+    satelliteBackup?.logs || satelliteBackup?.memories || satelliteBackup?.goals,
+  );
+
+  // Acquire satellite locks before moving files so a busy/failed satellite DB
+  // stays retryable (nothing has left the stage yet).
+  let satelliteLocks: SatelliteWriteLocks | undefined;
+  if (hasSatelliteRows) {
+    try {
+      satelliteLocks = beginSatelliteWriteLocks(paths, busyTimeoutMs);
+    } catch (error) {
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+      };
+    }
+  }
+
+  const failBeforeMoves = (error: RestoreErrorCode): RestoreResult => {
+    if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
+    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error };
+  };
+
   // Plan renames: staged basename → original archived_sessions path.
   const moves: StagedFile[] = [];
-  for (const entry of manifest.entries) {
+  for (const entry of entries) {
     for (const rel of entry.physicalRelPaths) {
       const base = basename(rel);
       const from = join(stageDir, base);
@@ -1848,13 +2086,13 @@ export function restoreTrashEntry(
       try {
         to = absFromRel(codexHome, rel);
       } catch {
-        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "invalid_trash" };
+        return failBeforeMoves("invalid_trash");
       }
       if (!existsSync(from)) {
-        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+        return failBeforeMoves("fs_failed");
       }
       if (existsSync(to)) {
-        return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "dest_exists" };
+        return failBeforeMoves("dest_exists");
       }
       moves.push({ from, to, relPath: rel });
     }
@@ -1864,29 +2102,29 @@ export function restoreTrashEntry(
   try {
     mkdirSync(join(codexHome, ARCHIVED_SESSIONS_DIR), { recursive: true });
     for (const item of moves) {
+      // Same-volume rename (.trash ↔ archived_sessions); rollbackMoves undoes a partial run.
       renameSync(item.from, item.to);
       moved.push(item);
     }
   } catch {
-    // Roll files that already moved back into the stage dir.
-    for (let i = moved.length - 1; i >= 0; i--) {
-      const item = moved[i]!;
-      try {
-        if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
-      } catch { /* */ }
-    }
+    rollbackMoves(moved);
+    if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
     return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
   }
 
-  const paths = discoverRuntimeDbPaths(codexHome);
-  const threadsRestored = restoreThreadsFromManifest(paths.state, manifest.entries, busyTimeoutMs);
+  const restoredPaths = [...new Set(entries.map(e => e.relPath))];
+  const bytes = entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
+  const partialCounts = { count: restoredPaths.length, bytes, restoredPaths };
+
+  const threadsRestored = restoreThreadsFromManifest(
+    paths.state,
+    entries,
+    satelliteBackup,
+    busyTimeoutMs,
+  );
   if (!threadsRestored.ok) {
-    for (let i = moved.length - 1; i >= 0; i--) {
-      const item = moved[i]!;
-      try {
-        if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
-      } catch { /* */ }
-    }
+    rollbackMoves(moved);
+    if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
     return {
       ok: false,
       trashDir: id,
@@ -1897,33 +2135,62 @@ export function restoreTrashEntry(
     };
   }
 
-  const satelliteBackup = readSatelliteBackupFile(stageDir);
-  if (satelliteBackup) {
-    const satellitesOk = restoreSatelliteBackup(satelliteBackup, busyTimeoutMs);
-    if (!satellitesOk) {
-      // Files + threads are already restored; keep trash for manual satellite recovery.
+  if (satelliteLocks && satelliteBackup) {
+    const locks = satelliteLocks;
+    try {
+      restoreSatelliteBackupInLocks(locks, satelliteBackup);
+      commitSatelliteLock(locks.logs);
+      commitSatelliteLock(locks.memories);
+      commitSatelliteLock(locks.goals);
+      satelliteLocks = undefined;
+    } catch (error) {
+      rollbackAllSatelliteLocks(locks);
+      satelliteLocks = undefined;
+      rollbackMoves(moved);
+      const unrestored = moved.filter(m => existsSync(m.to) && !existsSync(m.from));
+      // If rollback could not restage every file, report what remains restored.
+      if (unrestored.length > 0) {
+        return {
+          ok: false,
+          trashDir: id,
+          ...partialCounts,
+          error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
+        };
+      }
       return {
         ok: false,
         trashDir: id,
         count: 0,
         bytes: 0,
         restoredPaths: [],
-        error: "db_reconcile_failed",
+        error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
       };
     }
   }
 
-  const restoredPaths = [...new Set(manifest.entries.map(e => e.relPath))];
-  const bytes = manifest.entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
-
-  try { rmSync(stageDir, { recursive: true, force: true }); } catch { /* */ }
+  try {
+    rmSync(stageDir, { recursive: true, force: true });
+  } catch {
+    return {
+      ok: false,
+      trashDir: id,
+      ...partialCounts,
+      error: "fs_failed",
+    };
+  }
+  if (existsSync(stageDir)) {
+    return {
+      ok: false,
+      trashDir: id,
+      ...partialCounts,
+      error: "fs_failed",
+    };
+  }
   removeEmptyTrashRoot(codexHome);
 
   return {
     ok: true,
     trashDir: id,
-    count: restoredPaths.length,
-    bytes,
-    restoredPaths,
+    ...partialCounts,
   };
 }
