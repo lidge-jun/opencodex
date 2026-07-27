@@ -26,8 +26,10 @@ Before an npm updater stops the proxy, it resolves the configured npm cache and 
 entry is owned by the current Unix user. A foreign-owned entry (commonly left by an older `sudo npm`
 invocation) aborts the update with an actionable error while the existing proxy and service remain
 running. The scan fails closed when the cache root is absent, an entry cannot be inspected, or its
-50,000-entry / 10-second traversal budget is exhausted. The blocking filesystem walk runs in a
-child process so the parent can enforce the deadline even when a filesystem call itself stalls.
+50,000-entry / 10-second traversal budget is exhausted. Only the configured cache-root symlink is
+canonicalized; nested cache symlinks are rejected fail-closed so a foreign-owned target cannot be
+hidden behind one. The blocking filesystem walk runs in a child process so the parent can enforce
+the deadline even when a filesystem call itself stalls.
 Failure logs omit both cache and entry paths; users can locate the cache explicitly with
 `npm config get cache`. Platforms without Unix uid ownership skip this gate.
 
@@ -43,7 +45,9 @@ entries, and symlinks that leave the candidate tree before any code executes. Tr
 links whose immediate and final targets remain inside the candidate tree are allowed. The tree walk
 is bounded by entry count and elapsed time. Candidate inspection and restart are bounded to at most
 two candidates, preferring the current package and then the newest retired copies, and it tries those runnable
-candidates in order until one restores health. A recovery launcher is always started directly: it
+candidates in order until one restores health. The recovery-tree walk runs in its own short-lived
+worker, and the GUI worker force-kills that child at the wall-clock deadline even if one filesystem
+call blocks. A recovery launcher is always started directly: it
 may restore availability, but its potentially temporary path is never persisted into launchd,
 systemd, or Task Scheduler. If a candidate starts but does not become healthy, the worker records
 its PID, revalidates its OpenCodex identity, and stops it before trying the next candidate.

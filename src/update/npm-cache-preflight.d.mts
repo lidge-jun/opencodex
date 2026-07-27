@@ -1,6 +1,7 @@
 export interface NpmCacheEntryStat {
   uid?: number;
   isDirectory(): boolean;
+  isSymbolicLink(): boolean;
 }
 
 export interface NpmCachePreflightOptions {

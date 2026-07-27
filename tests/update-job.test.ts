@@ -15,6 +15,7 @@ import {
   recoverFailedGuiUpdateForTests,
   restartCommand,
   restartAfterUpdateForTests,
+  scanTrustedRecoveryTreeForTests,
   startUpdateJob,
   updateExecutionCommand,
   updateJobPath,
@@ -292,6 +293,24 @@ describe("GUI update execution decisions", () => {
     expect(launchers).toEqual(probed);
     expect(launchers[0]).toBe(realpathSync(join(currentRoot, "bin", "ocx.mjs")));
   });
+
+  test("fails closed when the recovery-tree worker exceeds its hard deadline", () => {
+    const blockingScan = join(dir, "blocking-recovery-tree-scan.mjs");
+    writeFileSync(blockingScan, [
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 60_000);",
+      "",
+    ].join("\n"));
+
+    const startedAt = Date.now();
+    const result = scanTrustedRecoveryTreeForTests(join(dir, "candidate"), {
+      scanScript: blockingScan,
+      timeoutMs: 250,
+    });
+
+    expect(result).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  }, 5_000);
 
   test("only recovers after a clean installer exit", () => {
     expect(installerFailureAllowsRecovery("npm", { status: 1, signal: null, timedOut: false })).toBe(true);

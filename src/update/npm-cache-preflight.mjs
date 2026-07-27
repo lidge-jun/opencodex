@@ -30,8 +30,8 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
   const startedAt = now();
   let cacheRoot;
   try {
-    // npm follows a configured cache-root symlink. Resolve only that root; nested
-    // symlinks remain lstat-only and are never traversed.
+    // npm follows a configured cache-root symlink. Resolve only that root;
+    // nested symlinks are rejected below and never traversed.
     cacheRoot = realpath(resolve(cachePath));
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
@@ -80,6 +80,15 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
 
     if (Number.isInteger(stat.uid) && stat.uid !== expectedUid) {
       return { kind: "foreign-owner", path, actualUid: stat.uid };
+    }
+    if (stat.isSymbolicLink()) {
+      // Only the configured cache root is canonicalized. Traversing a nested
+      // link could hide a foreign-owned target, so fail closed instead.
+      return {
+        kind: "error",
+        path,
+        reason: "npm cache contains a nested symbolic link",
+      };
     }
     if (path === cacheRoot && !stat.isDirectory()) {
       return { kind: "error", path, reason: "npm cache root is not a directory" };

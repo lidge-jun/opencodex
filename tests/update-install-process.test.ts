@@ -15,6 +15,16 @@ const cleanupDirs = new Set<string>();
 
 function isRunning(pid: number): boolean {
   try {
+    if (process.platform === "linux") {
+      // Linux keeps a killed orphan as a zombie until its parent (often PID 1)
+      // reaps it. `kill(pid, 0)` still succeeds for that interval, so inspect
+      // the proc state before treating the descendant as live.
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closingParen = stat.lastIndexOf(")");
+      if (closingParen >= 0 && stat.slice(closingParen + 2, closingParen + 3) === "Z") {
+        return false;
+      }
+    }
     process.kill(pid, 0);
     return true;
   } catch {

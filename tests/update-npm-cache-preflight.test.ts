@@ -54,6 +54,7 @@ describe("npm cache ownership pre-flight", () => {
         return {
           uid: path === foreign ? uid + 1 : stat.uid,
           isDirectory: () => stat.isDirectory(),
+          isSymbolicLink: () => stat.isSymbolicLink(),
         };
       },
       readdir: path => readdirSync(path, { encoding: "utf8" }),
@@ -61,7 +62,7 @@ describe("npm cache ownership pre-flight", () => {
     expect(issue).toEqual({ kind: "foreign-owner", path: foreign, actualUid: uid + 1 });
   });
 
-  test("follows a configured cache-root symlink but not nested symlinks", () => {
+  test("follows a configured cache-root symlink but rejects nested symlinks", () => {
     const uid = process.getuid?.();
     if (uid === undefined) return;
     const cacheLink = `${dir}-link`;
@@ -71,7 +72,6 @@ describe("npm cache ownership pre-flight", () => {
     writeFileSync(join(outside, "foreign"), "outside");
     symlinkSync(dir, cacheLink, "dir");
     symlinkSync(outside, join(dir, "nested-link"), "dir");
-    const foreign = join(realpathSync(dir), "_cacache", "index-v5", "entry");
     const outsideRoot = realpathSync(outside);
     let inspectedOutside = false;
     const issue = findForeignOwnedNpmCacheEntry(cacheLink, uid, {
@@ -79,13 +79,18 @@ describe("npm cache ownership pre-flight", () => {
         if (path.startsWith(outsideRoot)) inspectedOutside = true;
         const stat = lstatSync(path);
         return {
-          uid: path === foreign ? uid + 1 : stat.uid,
+          uid: stat.uid,
           isDirectory: () => stat.isDirectory(),
+          isSymbolicLink: () => stat.isSymbolicLink(),
         };
       },
       readdir: path => readdirSync(path, { encoding: "utf8" }),
     });
-    expect(issue).toEqual({ kind: "foreign-owner", path: foreign, actualUid: uid + 1 });
+    expect(issue).toEqual({
+      kind: "error",
+      path: join(realpathSync(dir), "nested-link"),
+      reason: "npm cache contains a nested symbolic link",
+    });
     expect(inspectedOutside).toBe(false);
   });
 

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -52,6 +52,7 @@ const UPDATE_LIVENESS_PROBE_DELAY_MS = 250;
 const MAX_NPM_RECOVERY_CANDIDATES = 2;
 const MAX_NPM_RECOVERY_TREE_ENTRIES = 50_000;
 const MAX_NPM_RECOVERY_TREE_SCAN_MS = 5_000;
+const RECOVERY_TREE_SCAN_WORKER_ARG = "__scan-recovery-tree";
 /** How long update restart waits for the captured port to become bindable after stop. */
 export const RESTART_PORT_RECLAIM_MS = 30_000;
 
@@ -146,68 +147,49 @@ function hasTrustedRecoveryPermissions(stat: { uid: number; mode: number }): boo
   return process.getuid === undefined || (stat.mode & 0o022) === 0;
 }
 
-function hasTrustedRecoveryPath(packageRoot: string): boolean {
-  let path = packageRoot;
-  while (true) {
-    const stat = lstatSync(path);
-    if (
-      !stat.isDirectory()
-      || stat.isSymbolicLink()
-      || !hasTrustedRecoveryOwner(stat.uid)
-      || (
-        process.getuid !== undefined
-        && (stat.mode & 0o022) !== 0
-        && (stat.mode & 0o1000) === 0
-      )
-    ) return false;
-    const parent = dirname(path);
-    if (parent === path) return true;
-    path = parent;
+interface RecoveryTreeScanOptions {
+  scanSpawn?: typeof spawnSync;
+  scanBin?: string;
+  scanScript?: string;
+  timeoutMs?: number;
+}
+
+function hasTrustedRecoveryTree(packageRoot: string, options: RecoveryTreeScanOptions = {}): boolean {
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs! > 0
+    ? Math.trunc(options.timeoutMs!)
+    : MAX_NPM_RECOVERY_TREE_SCAN_MS;
+  const scanSpawn = options.scanSpawn ?? spawnSync;
+  try {
+    const result = scanSpawn(
+      options.scanBin ?? process.execPath,
+      [
+        options.scanScript ?? fileURLToPath(new URL("./recovery-tree-scan.mjs", import.meta.url)),
+        RECOVERY_TREE_SCAN_WORKER_ARG,
+      ],
+      {
+        encoding: "utf8",
+        input: JSON.stringify({
+          packageRoot,
+          maxEntries: MAX_NPM_RECOVERY_TREE_ENTRIES,
+          maxDurationMs: timeoutMs,
+        }),
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        windowsHide: true,
+        shell: false,
+      },
+    );
+    return result.status === 0 && String(result.stdout ?? "").trim() === "1";
+  } catch {
+    return false;
   }
 }
 
-function hasTrustedRecoveryTree(packageRoot: string): boolean {
-  const canonicalRoot = realpathSync(packageRoot);
-  const scopeRoot = dirname(canonicalRoot);
-  const scopeStat = lstatSync(scopeRoot);
-  if (
-    !scopeStat.isDirectory()
-    || scopeStat.isSymbolicLink()
-    || !hasTrustedRecoveryPermissions(scopeStat)
-    || !hasTrustedRecoveryPath(canonicalRoot)
-  ) return false;
-
-  const deadline = Date.now() + MAX_NPM_RECOVERY_TREE_SCAN_MS;
-  const pending = [canonicalRoot];
-  const visited = new Set<string>();
-  let inspected = 0;
-  while (pending.length > 0) {
-    if (Date.now() > deadline || inspected >= MAX_NPM_RECOVERY_TREE_ENTRIES) return false;
-    const path = pending.pop()!;
-    inspected += 1;
-    const entryStat = lstatSync(path);
-    let canonicalPath = path;
-    let canonicalStat = entryStat;
-    if (entryStat.isSymbolicLink()) {
-      // npm creates node_modules/.bin links. Permit only trusted-owner links whose
-      // immediate and final targets both remain inside this candidate package.
-      if (!hasTrustedRecoveryOwner(entryStat.uid)) return false;
-      const directTarget = resolve(dirname(path), readlinkSync(path));
-      if (!isPathInside(canonicalRoot, directTarget)) return false;
-      canonicalPath = realpathSync(path);
-      if (!isPathInside(canonicalRoot, canonicalPath)) return false;
-      canonicalStat = lstatSync(canonicalPath);
-    }
-    if (!hasTrustedRecoveryPermissions(canonicalStat)) return false;
-    if (visited.has(canonicalPath)) continue;
-    visited.add(canonicalPath);
-    if (canonicalStat.isFile()) continue;
-    if (!canonicalStat.isDirectory()) return false;
-    for (const name of readdirSync(canonicalPath, { encoding: "utf8" })) {
-      pending.push(join(canonicalPath, name));
-    }
-  }
-  return true;
+export function scanTrustedRecoveryTreeForTests(
+  packageRoot: string,
+  options: RecoveryTreeScanOptions = {},
+): boolean {
+  return hasTrustedRecoveryTree(packageRoot, options);
 }
 
 /** Validate the on-disk identity before any candidate code is executed. */
