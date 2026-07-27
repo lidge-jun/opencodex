@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
+import { isCodexAccountPaused } from "./account-pause";
 import { isCodexAccountUsable } from "./account-usability";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
@@ -389,7 +390,8 @@ export function isCodexAccountSoftAvoided(accountId: string, now = Date.now()): 
 }
 
 function isCodexAccountSelectable(config: OcxConfig, accountId: string, now: number): boolean {
-  return !isCodexAccountInCooldown(accountId, now)
+  return !isCodexAccountPaused(config, accountId)
+    && !isCodexAccountInCooldown(accountId, now)
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId);
 }
@@ -441,7 +443,7 @@ function bindThreadAffinity(threadId: string, accountId: string, now: number): v
 
 function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Date.now()): string[] {
   const ids = (config.codexAccounts ?? [])
-    .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
+    .filter(account => !account.isMain && account.id !== excludeId && !isCodexAccountPaused(config, account.id) && !isAccountNeedsReauth(account.id))
     .filter(account => !isCodexAccountInCooldown(account.id, now))
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id))
@@ -450,6 +452,7 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
+    && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && !isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now)
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
@@ -590,7 +593,7 @@ export function previewCodexAccountForRequest(
   if (!isCodexAccountSelectable(config, active, now)) {
     const fallback = pickLowestUsageCodexAccount(config, active, now);
     if (fallback) active = fallback;
-    else if (hasConfiguredPoolAccount(config, active)) return active;
+    else if (hasConfiguredPoolAccount(config, active) && !isCodexAccountPaused(config, active)) return active;
     else return null;
   }
 
@@ -608,6 +611,7 @@ export function previewCodexAccountForRequest(
   if (!isCodexAccountUsable(config, active)) {
     return hasConfiguredPoolAccount(config, active) ? active : null;
   }
+  if (isCodexAccountPaused(config, active)) return null;
   if (isCodexAccountInCooldown(active, now)) {
     return hasConfiguredPoolAccount(config, active) ? active : null;
   }
@@ -671,7 +675,7 @@ export function resolveCodexAccountForThreadDetailed(
     if (fallback) {
       setActiveCodexAccount(config, fallback);
       active = fallback;
-    } else if (hasConfiguredPoolAccount(config, active)) {
+    } else if (hasConfiguredPoolAccount(config, active) && !isCodexAccountPaused(config, active)) {
       return { status: "selected", accountId: active };
     } else {
       return { status: "none" };
@@ -682,6 +686,7 @@ export function resolveCodexAccountForThreadDetailed(
   if (!isCodexAccountUsable(config, active)) {
     return hasConfiguredPoolAccount(config, active) ? { status: "selected", accountId: active } : { status: "none" };
   }
+  if (isCodexAccountPaused(config, active)) return { status: "none" };
   if (isCodexAccountInCooldown(active, now)) {
     return hasConfiguredPoolAccount(config, active) ? { status: "selected", accountId: active } : { status: "none" };
   }

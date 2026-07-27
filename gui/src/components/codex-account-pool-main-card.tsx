@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { IconLock, IconRefresh } from "../icons";
+import { IconLock, IconPause, IconPlay, IconRefresh } from "../icons";
 import QuotaBars from "./QuotaBars";
 import { CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
@@ -24,6 +24,8 @@ export function CodexAccountPoolMainCard({
   threshold,
   switchActionLabel,
   onSwitch,
+  onTogglePause,
+  pauseUpdatingId,
   onOpenReset,
   onCopyDoctor,
   copiedDoctorFor,
@@ -35,6 +37,8 @@ export function CodexAccountPoolMainCard({
   threshold: number;
   switchActionLabel: string;
   onSwitch: (entry: CodexAccountEntry) => void;
+  onTogglePause: (entry: CodexAccountEntry) => void;
+  pauseUpdatingId: string | null;
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   copiedDoctorFor?: DoctorCopyFeedback | null;
@@ -46,6 +50,7 @@ export function CodexAccountPoolMainCard({
     email: main?.email || mainFallbackLabel,
     plan: main?.plan,
     isMain: true,
+    paused: main?.paused ?? false,
     hasCredential: true,
     quota: main?.quota ?? null,
   };
@@ -63,17 +68,20 @@ export function CodexAccountPoolMainCard({
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
           {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
+          {main?.paused && <span className="badge badge-muted">{t("codexAuth.paused")}</span>}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
           {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
-          <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
-            {isMainActive
-              ? t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")
-              : t("codexAuth.current")}
-          </span>
+          {!main?.paused && (
+            <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
+              {isMainActive
+                ? t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")
+                : t("codexAuth.current")}
+            </span>
+          )}
         </span>
-        {!isMainActive && !showReauth && !inCooldown && (
+        {!main?.paused && !isMainActive && !showReauth && !inCooldown && (
           <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(mainSwitchEntry)}>
             {switchActionLabel}
           </button>
@@ -83,12 +91,24 @@ export function CodexAccountPoolMainCard({
             {doctorCopyButtonLabel(t, copiedDoctorFor, mainId)}
           </button>
         )}
+        {main && (
+          <button
+            type="button"
+            className={`btn btn-sm ${main.paused ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => onTogglePause(mainSwitchEntry)}
+            disabled={pauseUpdatingId !== null}
+          >
+            {main.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
+            {pauseUpdatingId === main.id ? t("common.saving") : t(main.paused ? "codexAuth.resume" : "codexAuth.pause")}
+          </button>
+        )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
       </div>
       <div className="card-sub">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
+      {main?.paused && <div className="card-sub faint">{t("codexAuth.pausedHint")}</div>}
       {inCooldown && (
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
       )}

@@ -53,7 +53,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
-  const { accounts, activeId, loadState, switchingId, load } = controller;
+  const { accounts, activeId, loadState, switchingId, pauseUpdatingId, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -163,6 +163,20 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setToast(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"));
   };
 
+  const togglePaused = async (account: CodexAccountEntry) => {
+    const paused = !account.paused;
+    const result = await controller.setAccountPaused(account.id, paused);
+    if (!result.ok && result.reason === "busy") return;
+    setConfirm(current => current?.id === account.id ? null : current);
+    setToastError(!result.ok);
+    setToast(t(result.ok
+      ? paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded"
+      : paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", {
+      email: account.alias ?? account.email,
+    }));
+    setTimeout(() => setToast(""), 5000);
+  };
+
   const remove = async (id: string) => {
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!window.confirm(t("codexAuth.removeConfirm", { id: label }))) return;
@@ -223,7 +237,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const main = accounts.find(a => a.isMain);
   const pool = accounts.filter(a => !a.isMain);
-  const isMainActive = !activeId || activeId === "__main__";
+  const isMainActive = !main?.paused && (!activeId || activeId === "__main__");
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
 
   return (
@@ -254,6 +268,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         threshold={autoSwitch.threshold ?? 0}
         switchActionLabel={switchActionLabel}
         onSwitch={setConfirm}
+        onTogglePause={togglePaused}
+        pauseUpdatingId={pauseUpdatingId}
         onOpenReset={openResetPopup}
         onCopyDoctor={copyDoctor}
         copiedDoctorFor={copiedDoctorFor}
@@ -281,6 +297,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         threshold={autoSwitch.threshold ?? 0}
         onOpenReset={openResetPopup}
         onSwitch={setConfirm}
+        onTogglePause={togglePaused}
+        pauseUpdatingId={pauseUpdatingId}
         onReauth={openReauth}
         onEditAlias={editAlias}
         onRemove={remove}

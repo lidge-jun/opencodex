@@ -1103,6 +1103,84 @@ describe("codex-auth API", () => {
     expect(config.activeCodexAccountId).toBe("pool-next");
   });
 
+  test("PUT /api/codex-auth/accounts/pause persists exclusion and applies to the next request", async () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "pool-active", email: "active@example.test", isMain: false },
+        { id: "pool-next", email: "next@example.test", isMain: false },
+      ],
+      activeCodexAccountId: "pool-active",
+    });
+    seedPoolAccount(config, { id: "pool-extra", email: "extra@example.test" });
+    saveCodexAccountCredential("pool-active", {
+      accessToken: "access-active",
+      refreshToken: "refresh-active",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-active",
+    });
+    saveCodexAccountCredential("pool-next", {
+      accessToken: "access-next",
+      refreshToken: "refresh-next",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-next",
+    });
+    updateAccountQuota("pool-active", 5);
+    updateAccountQuota("pool-next", 10);
+    updateAccountQuota("pool-extra", 20);
+    expect(resolveCodexAccountForThread("pause-thread", config)).toBe("pool-active");
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "pool-active", paused: true }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({ id: "pool-active", paused: true, activeCodexAccountId: null });
+    expect(config.pausedCodexAccountIds).toEqual(["pool-active"]);
+    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(resolveCodexAccountForThread("pause-thread", config)).toBe("pool-next");
+  });
+
+  test("resuming restores eligibility and manual activation rejects paused accounts", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "work", email: "work@example.test", isMain: false }],
+      pausedCodexAccountIds: ["work", MAIN_CODEX_ACCOUNT_ID],
+    });
+    const activateReq = new Request("http://localhost/api/codex-auth/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: "work" }),
+    });
+    const activateResp = await handleCodexAuthAPI(activateReq, new URL(activateReq.url), config);
+    expect(activateResp!.status).toBe(409);
+    expect(config.activeCodexAccountId).toBeUndefined();
+
+    const resumeReq = new Request("http://localhost/api/codex-auth/accounts/pause", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "work", paused: false }),
+    });
+    const resumeResp = await handleCodexAuthAPI(resumeReq, new URL(resumeReq.url), config);
+
+    expect(resumeResp!.status).toBe(200);
+    expect(config.pausedCodexAccountIds).toEqual([MAIN_CODEX_ACCOUNT_ID]);
+  });
+
+  test("account list exposes persisted pause state for main and added accounts", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "work", email: "work@example.test", isMain: false }],
+      pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID, "work"],
+    });
+    const req = new Request("http://localhost/api/codex-auth/accounts");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as { accounts: Array<{ id: string; paused: boolean }> };
+
+    expect(data.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)?.paused).toBe(true);
+    expect(data.accounts.find(account => account.id === "work")?.paused).toBe(true);
+  });
+
   test("PUT /api/codex-auth/accounts/alias changes display metadata only", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "work", email: "work@example.test", plan: "plus", isMain: false }],
@@ -1148,6 +1226,7 @@ describe("codex-auth API", () => {
     recordCodexUpstreamOutcome(config, "pool-delete", 500);
     expect(getCodexUpstreamHealth("pool-delete")).not.toBeNull();
     markAccountNeedsReauth("pool-delete");
+    config.pausedCodexAccountIds = ["pool-delete"];
     const closed: { code?: number; reason?: string }[] = [];
     let cancelled = false;
     const ws = {
@@ -1176,6 +1255,7 @@ describe("codex-auth API", () => {
     expect(resp!.status).toBe(200);
     expect(config.codexAccounts).toEqual([]);
     expect(config.activeCodexAccountId).toBeUndefined();
+    expect(config.pausedCodexAccountIds).toBeUndefined();
     expect(getCodexAccountCredential("pool-delete")).toBeNull();
     expect(getAccountQuota("pool-delete")).toBeNull();
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);

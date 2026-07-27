@@ -36,12 +36,21 @@ beforeEach(() => {
 
   originalFetch = globalThis.fetch;
   calls = [];
-  accounts = [{ id: "a1", email: "account-one", isMain: true, hasCredential: true, quota: null }];
+  accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       const path = String(url).split("/api/")[1] ?? String(url);
       calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path === "codex-auth/accounts/pause") {
+        const body = JSON.parse(String(init?.body)) as { id: string; paused: boolean };
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account && account.id === body.id
+            ? { ...account, paused: body.paused }
+            : account
+        ));
+        return { ok: true, json: async () => ({ activeCodexAccountId: null }) } as unknown as Response;
+      }
       if (path.startsWith("codex-auth/accounts")) {
         return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
       }
@@ -103,6 +112,19 @@ test("the controller loads once on mount", async () => {
 test("an inert controller issues no requests at all", async () => {
   await mountController(false);
   expect(calls.length).toBe(0);
+});
+
+test("pausing an account writes the persisted endpoint and updates shared state", async () => {
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.setAccountPaused("a1", true)).toEqual({ ok: true });
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause");
+  expect(seen.current!.accounts[0]?.paused).toBe(true);
+  expect(seen.current!.activeId).toBeNull();
 });
 
 test("two pause holders both have to release before polling resumes", async () => {

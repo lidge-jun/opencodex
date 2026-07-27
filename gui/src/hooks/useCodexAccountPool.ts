@@ -21,6 +21,8 @@ export interface CodexAccountEntry {
   plan?: string;
   /** Required, not optional: the API always distinguishes the app-login row. */
   isMain: boolean;
+  /** Persisted routing exclusion. Paused accounts remain visible but cannot be selected. */
+  paused: boolean;
   hasCredential: boolean;
   quota: AccountQuota | null;
   needsReauth?: boolean;
@@ -56,10 +58,12 @@ export interface CodexAccountPoolController {
   activeId: string | null;
   loadState: CodexAccountLoadState;
   switchingId: string | null;
+  pauseUpdatingId: string | null;
   activeNeedsReauth: boolean;
 
   load(refreshQuota?: boolean): Promise<boolean>;
   switchAccount(id: string | null): Promise<CodexAccountActionResult<{ activeId: string | null }>>;
+  setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult>;
   syncAfterAccountAdded(): Promise<CodexAccountActionResult>;
@@ -78,6 +82,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<CodexAccountLoadState>("loading");
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   // Pause leases live in a ref: pausing must not re-render, and the effect below reads
   // the live set rather than a captured snapshot.
   const [pauseCount, setPauseCount] = useState(0);
@@ -91,6 +96,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // load already finished read it to seed their UI instead of waiting a poll interval.
   const lastThresholdRef = useRef<{ value: unknown } | null>(null);
   const switchingRef = useRef<string | null>(null);
+  const pauseUpdatingRef = useRef<string | null>(null);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current.add(observer);
@@ -230,6 +236,32 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
+  const setAccountPaused = useCallback(async (id: string, paused: boolean) => {
+    if (pauseUpdatingRef.current) return { ok: false, reason: "busy" } as const;
+    pauseUpdatingRef.current = id;
+    setPauseUpdatingId(id);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, paused }),
+      });
+      if (!response.ok) return { ok: false, reason: "request" } as const;
+      const result = await response.json() as { activeCodexAccountId?: string | null };
+      setAccounts(current => current.map(account => account.id === id ? { ...account, paused } : account));
+      const nextActiveId = result.activeCodexAccountId ?? null;
+      pendingActiveIdRef.current = { id: nextActiveId };
+      setActiveId(nextActiveId);
+      void load();
+      return { ok: true } as const;
+    } catch {
+      return { ok: false, reason: "request" } as const;
+    } finally {
+      pauseUpdatingRef.current = null;
+      setPauseUpdatingId(null);
+    }
+  }, [apiBase, load]);
+
   const removeAccount = useCallback(async (id: string) => {
     try {
       const response = await fetch(
@@ -261,9 +293,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     activeId,
     loadState,
     switchingId,
+    pauseUpdatingId,
     activeNeedsReauth,
     load,
     switchAccount,
+    setAccountPaused,
     saveAlias,
     removeAccount,
     syncAfterAccountAdded,

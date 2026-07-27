@@ -10,7 +10,8 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
-import { clearCodexAccountCooldown, resetCodexRoutingForManualSelection } from "./routing";
+import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
+import { clearCodexAccountCooldown, clearThreadAccountMapForAccount, resetCodexRoutingForManualSelection } from "./routing";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -95,6 +96,7 @@ function poolAccountDto(
   account: CodexAccount,
   quotaResult: PoolQuotaResult,
   hasCredential: boolean,
+  paused: boolean,
 ): CodexAuthAccountDto {
   const quota = quotaForPlan(quotaResult.quota, account.plan);
   const needsReauth = !hasCredential || quotaResult.needsReauth || isAccountNeedsReauth(account.id);
@@ -106,6 +108,7 @@ function poolAccountDto(
     ...(account.plan !== undefined ? { plan: account.plan } : {}),
     ...(account.logLabel !== undefined ? { logLabel: account.logLabel } : {}),
     isMain: false,
+    paused,
     quota: quota ? { ...quota } : null,
     needsReauth,
     hasCredential,
@@ -371,6 +374,7 @@ export interface CodexAuthAccountDto {
   plan?: string | null;
   logLabel?: string;
   isMain: boolean;
+  paused: boolean;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
   hasCredential: boolean;
@@ -480,7 +484,7 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
     const quotaResult = cred
       ? await fetchPoolAccountQuota(a.id, forceRefresh, a.plan)
       : { quota: null, needsReauth: true };
-    return poolAccountDto(a, quotaResult, !!cred);
+    return poolAccountDto(a, quotaResult, !!cred, isCodexAccountPaused(runtimeConfig, a.id));
   });
   const hasMainCredential = readCodexTokens() !== null;
   const mainNeedsReauth = !hasMainCredential || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
@@ -493,6 +497,7 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
     email: maskEmail(mainInfo.email) ?? "Codex App login",
     plan: mainInfo.plan,
     isMain: true,
+    paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
     quota: mainInfo.quota ? { ...quotaForPlan({ ...mainInfo.quota, updatedAt: Date.now() }, mainInfo.plan) } : null,
@@ -583,6 +588,32 @@ export async function handleCodexAuthAPI(
     return jsonResponse({ ok: true, id, alias: alias || null });
   }
 
+  if (url.pathname === "/api/codex-auth/accounts/pause" && req.method === "PUT") {
+    const body = await req.json().catch(() => ({})) as { id?: unknown; paused?: unknown };
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (!id || !ACCOUNT_ID_RE.test(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
+    if (typeof body.paused !== "boolean") return jsonResponse({ error: "paused must be a boolean" }, 400);
+
+    const runtimeConfig = getRuntimeConfig(config);
+    const exists = id === MAIN_CODEX_ACCOUNT_ID
+      || (runtimeConfig.codexAccounts ?? []).some(account => account.id === id && !account.isMain);
+    if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+
+    setCodexAccountPaused(runtimeConfig, id, body.paused);
+    if (body.paused) {
+      clearThreadAccountMapForAccount(id);
+      if (runtimeConfig.activeCodexAccountId === id) runtimeConfig.activeCodexAccountId = undefined;
+    }
+    saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({
+      ok: true,
+      id,
+      paused: body.paused,
+      activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
+      appliesImmediately: true,
+    });
+  }
+
   // Manual escape from a quota cooldown. Injected Codex routing makes this proxy the only
   // model path for Codex Desktop, so a cooldown that outlives the real upstream limit
   // otherwise leaves editing config.toml as the user's only recovery.
@@ -602,6 +633,9 @@ export async function handleCodexAuthAPI(
     let body: { accountId: string | null };
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     const runtimeConfig = getRuntimeConfig(config);
+    if (body.accountId != null && isCodexAccountPaused(runtimeConfig, body.accountId)) {
+      return jsonResponse({ error: "Account is paused" }, 409);
+    }
     if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
       const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === body.accountId);
       if (!exists) return jsonResponse({ error: "Account not found" }, 400);

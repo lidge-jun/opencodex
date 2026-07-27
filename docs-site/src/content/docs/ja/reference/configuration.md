@@ -50,6 +50,7 @@ namespaced selected id を bare id に変えます。
 | `codexShimAutoRestore?` | `boolean` | `true` | 完了した外部 Codex 更新で以前にインストールした shim が置換された場合に復元します。無効にするには `false`、またはプロセスで `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。 |
 | `syncResumeHistory?` | `boolean` | `true` | 戻せる Codex App 履歴互換モード。opencodex は元の Codex thread metadata をバックアップし、旧 OpenAI interactive row を `opencodex` に再マッピングし、opencodex が作成した `exec` row を App に見えるソースとして一時的に昇格します。`ocx stop` / `ocx restore` はバックアップした OpenAI row を復元し、残った opencodex user thread を OpenAI に戻し、ネイティブ Codex が `config.toml` からプロキシを削除した後でも開き続けられるようにします。オフにするには `false` に設定します。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth ダッシュボードが管理する ChatGPT/Codex pool アカウント metadata。secret は `codex-accounts.json` に別途置きます。 |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | Codex Auth で再開するまで、今後のすべての Pool 選択から除外するアカウント ID。メインを一時停止した場合は `__main__` も含みます。 |
 | `activeCodexAccountId?` | `string` | — | 手動選択した pool アカウント。既存 thread affinity を消去して次のリクエストから適用し、処理中のリクエストは現在のアカウントを維持します。 |
 | `autoSwitchThreshold?` | `number` | `80` | 新しいセッション自動切替用の使用量百分率 threshold。既知の 5 時間、週次、30 日 quota window のうち最も高いスコアを使います。`0` なら quota 自動切替をオフにします。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 一時的な上流失敗が連続して起きたのち、以降の新しいセッションを別の適合 pool アカウントに failover する回数。`0` なら失敗ベースの failover をオフにします。 |
@@ -72,6 +73,8 @@ pool アカウントの追加と quota 更新はダッシュボードの **Codex
 ないアカウント metadata だけを保存し、access/refresh token は強化された Codex アカウント credential store に別途
 保管します。既存 thread id はアカウント affinity を維持し、新しいセッションは quota、cooldown、health に
 応じて自動ルーティングされる場合があります。
+一時停止したアカウントと quota metadata は表示されたままですが、自動切り替え、再試行/failover 選択、cooldown 復旧プローブ、手動有効化の対象外です。
+状態は再起動後も保持され、すべてのアカウントが一時停止中なら Pool ルーティングは別のアカウントを暗黙に選ばず失敗します。
 :::
 
 ### 管理型レコード形式
