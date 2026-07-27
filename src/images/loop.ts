@@ -224,7 +224,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   };
   const takeUsageFrom = (events: AdapterEvent[]): void => {
     for (const e of events) {
-      if (e.type === "done" && e.usage) hiddenUsage = addUsage(hiddenUsage, e.usage);
+      if ((e.type === "done" || e.type === "incomplete") && e.usage) {
+        hiddenUsage = addUsage(hiddenUsage, e.usage);
+      }
     }
   };
 
@@ -274,6 +276,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       const queue = createAdapterEventQueue({
         onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
       });
+      // Attempt telemetry must fire at dispatch time (parity with fetchOnce), not after collect.
+      deps.onAttemptSend?.();
       void adapter
         .runTurn(
           iterParsed,
@@ -297,6 +301,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           collectPromise,
           new Promise<never>((_, reject) => {
             const onAbort = (): void => {
+              // Cancel the fire-and-forget runTurn so a stalled Cursor session does not keep
+              // running after the bridge has already failed the iteration with 504.
+              internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
               reject(new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`));
             };
             if (collectDeadline.signal.aborted) onAbort();
@@ -312,8 +319,6 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       if (iterParsed._cursorConversationId) {
         parsed._cursorConversationId = iterParsed._cursorConversationId;
       }
-
-      deps.onAttemptSend?.();
 
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
       const errorEvent = events.find(e => e.type === "error");
@@ -496,7 +501,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             if (hiddenUsage) {
               for (let i = split.passthrough.length - 1; i >= 0; i--) {
                 const e = split.passthrough[i];
-                if (e?.type === "done") {
+                if (e?.type === "done" || e?.type === "incomplete") {
                   split.passthrough[i] = { ...e, usage: addUsage(hiddenUsage, e.usage) };
                   break;
                 }
