@@ -34,6 +34,8 @@ function getArtifactsDir(): string {
  * of files. All errors are swallowed and logged so a prune failure never breaks an image write.
  */
 export function pruneOldArtifacts(dir: string, maxFiles: number): void {
+  // A non-positive maxFiles disables pruning entirely (do not delete everything).
+  if (maxFiles <= 0) return;
   let entries: string[];
   try {
     entries = readdirSync(dir);

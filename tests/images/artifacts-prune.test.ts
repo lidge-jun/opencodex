@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -53,6 +53,16 @@ describe("pruneOldArtifacts", () => {
     const { DEFAULT_ARTIFACT_KEEP_COUNT } = await import("../../src/images/artifacts");
     expect(DEFAULT_ARTIFACT_KEEP_COUNT).toBe(200);
   });
+
+  test("maxFiles <= 0 disables pruning (does not delete everything)", () => {
+    const { pruneOldArtifacts } = require("../../src/images/artifacts");
+    const dir = mkdtempSync(join(tmpdir(), "ocx-prune-zero-"));
+    for (let i = 0; i < 5; i++) writeFileSync(join(dir, `f${i}.png`), "x");
+    pruneOldArtifacts(dir, 0);
+    expect(readdirSync(dir).length).toBe(5);
+    pruneOldArtifacts(dir, -1);
+    expect(readdirSync(dir).length).toBe(5);
+  });
 });
 
 describe("pruneOldArtifacts: integration with materializeInlineImage", () => {
@@ -71,12 +81,12 @@ describe("pruneOldArtifacts: integration with materializeInlineImage", () => {
       // Small delay so mtimes are distinct.
       await new Promise(r => setTimeout(r, 5));
     }
-    const dir = written[0]!.substring(0, written[0]!.lastIndexOf("/"));
+    const dir = dirname(written[0]!);
     const remaining = readdirSync(dir);
     expect(remaining.length).toBe(KEEP);
     // The newest KEEP files should be the last ones written.
     for (let i = 0; i < TOTAL; i++) {
-      const fname = written[i]!.substring(written[i]!.lastIndexOf("/") + 1);
+      const fname = basename(written[i]!);
       const shouldExist = i >= TOTAL - KEEP;
       const exists = remaining.includes(fname);
       expect(exists).toBe(shouldExist);
