@@ -515,7 +515,11 @@ export function bridgeToResponsesSSE(
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (currentToolCall) closeCurrentToolCall();
-              if (currentMsg && currentMsg.phase !== event.phase) closeCurrentMessage("commentary");
+              // Only flush on an explicit phase change. A later delta that omits `phase` must
+              // keep appending to the current message rather than wiping the earlier phase.
+              if (currentMsg && event.phase !== undefined && currentMsg.phase !== event.phase) {
+                closeCurrentMessage("commentary");
+              }
               if (!currentMsg) {
                 const itemId = `msg_${uuid()}`;
                 const item = {
@@ -1048,7 +1052,9 @@ export function buildResponseJSON(
         flushToolCall();
         break;
       case "text_delta":
-        if (currentText && currentTextPhase !== e.phase) flushText("commentary");
+        // Only flush on an explicit phase change. A later delta that omits `phase` must keep
+        // appending under the previously established phase.
+        if (currentText && e.phase !== undefined && currentTextPhase !== e.phase) flushText("commentary");
         if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
         if (currentToolCallId) flushToolCall();
@@ -1056,7 +1062,7 @@ export function buildResponseJSON(
         // bridgeToResponsesSSE); it ships only inside the synthetic compaction item below.
         if (options?.compaction) compactionText += e.text;
         else {
-          currentTextPhase = e.phase;
+          if (e.phase !== undefined) currentTextPhase = e.phase;
           currentText += e.text;
         }
         break;
@@ -1131,7 +1137,8 @@ export function buildResponseJSON(
         endTurn = e.endTurn;
         cleanDone = e.stopReason === undefined;
         if (e.providerState) options?.onProviderState?.(e.providerState);
-        if (e.stopReason === "max_tokens") stopReason = "max_tokens";
+        // Match streaming: max_tokens and content_filter both terminate as incomplete.
+        if (e.stopReason === "max_tokens" || e.stopReason === "content_filter") stopReason = e.stopReason;
         break;
     }
   }
@@ -1141,14 +1148,20 @@ export function buildResponseJSON(
   flushToolCall();
   // A truncated turn must never be installed as replacement history: emit the
   // compaction item only when the turn actually completed (#422).
-  if (options?.compaction && !errorEvent && !incompleteEvent && stopReason !== "max_tokens") {
+  if (
+    options?.compaction
+    && !errorEvent
+    && !incompleteEvent
+    && stopReason !== "max_tokens"
+    && stopReason !== "content_filter"
+  ) {
     output.push({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) });
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;
   const status = errorEvent
     ? "failed"
-    : incompleteEvent || stopReason === "max_tokens"
+    : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
       ? "incomplete"
       : "completed";
   options?.onUsage?.(incompleteEvent?.usage ?? usage);
@@ -1168,6 +1181,8 @@ export function buildResponseJSON(
       },
     } : stopReason === "max_tokens" ? {
       incomplete_details: { reason: "max_output_tokens" },
+    } : stopReason === "content_filter" ? {
+      incomplete_details: { reason: "content_filter" },
     } : {}),
     usage: responsesUsage(incompleteEvent?.usage ?? usage),
   };

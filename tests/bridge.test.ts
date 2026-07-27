@@ -529,6 +529,34 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect((explicit.output as Record<string, unknown>[])[0]).toMatchObject({ phase: "commentary" });
   });
 
+  test("later text_delta omitting phase keeps the prior explicit phase", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "Hello ", phase: "final_answer" },
+      { type: "text_delta", text: "world." },
+      { type: "done" },
+    ]), "routed/chat-model"));
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      type: "message",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Hello world." }],
+    });
+
+    const batch = buildResponseJSON([
+      { type: "text_delta", text: "Hello ", phase: "final_answer" },
+      { type: "text_delta", text: "world." },
+      { type: "done" },
+    ], "routed/chat-model");
+    expect((batch.output as Record<string, unknown>[])).toHaveLength(1);
+    expect((batch.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "message",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Hello world." }],
+    });
+  });
+
   test("structured adapter errors override message heuristics", () => {
     const json = buildResponseJSON([
       {
@@ -700,8 +728,8 @@ describe("Responses bridge reasoning and usage parity", () => {
     ));
     expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
-    // Adapter heartbeats must not be mis-translated into a rich protocol event of their own.
-    expect(frames.some(f => f.event === "response.heartbeat" && f.data.type === "heartbeat" && Object.keys(f.data).length > 2)).toBe(false);
+    // Adapter heartbeats must not be mis-translated into a protocol event of their own.
+    expect(frames.some(f => f.data.type === "heartbeat")).toBe(false);
   });
 
   test("wire response.heartbeat keeps firing while only adapter heartbeats flow", async () => {
@@ -870,6 +898,15 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     ], "routed/model");
     expect(json.status).toBe("incomplete");
     expect(json.incomplete_details).toEqual({ reason: "max_output_tokens" });
+  });
+
+  test("batch buildResponseJSON with stopReason content_filter returns incomplete status", () => {
+    const json = buildResponseJSON([
+      { type: "text_delta", text: "partial" },
+      { type: "done", stopReason: "content_filter" },
+    ], "routed/model");
+    expect(json.status).toBe("incomplete");
+    expect(json.incomplete_details).toEqual({ reason: "content_filter" });
   });
 
   test("batch buildResponseJSON without stopReason returns completed status", () => {
