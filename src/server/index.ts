@@ -505,15 +505,23 @@ export function startServer(port?: number) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
         const id = decodeURIComponent(url.pathname.slice("/v1/opencodex/artifacts/".length));
-        const { readArtifactBytes } = await import("../images/artifacts");
-        const artifact = readArtifactBytes(id);
-        if (!artifact) {
+        const { resolveArtifactPath } = await import("../images/artifacts");
+        const artifactPath = resolveArtifactPath(id);
+        if (!artifactPath) {
           return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
         }
-        return withCors(new Response(new Uint8Array(artifact.bytes), {
+        const file = Bun.file(artifactPath);
+        const ext = artifactPath.split(".").pop()?.toLowerCase();
+        const contentType =
+          ext === "png" ? "image/png"
+            : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+              : ext === "webp" ? "image/webp"
+                : ext === "gif" ? "image/gif"
+                  : "application/octet-stream";
+        return withCors(new Response(file, {
           status: 200,
           headers: {
-            "content-type": artifact.contentType,
+            "content-type": contentType,
             "cache-control": "private, max-age=3600",
             "x-content-type-options": "nosniff",
           },

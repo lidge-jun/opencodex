@@ -530,6 +530,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
+          // Cap incomplete frames before waiting for a newline — otherwise a single
+          // unterminated data: payload can grow without bound.
+          if (buffer.length > MAX_SSE_FRAME_BYTES) {
+            yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
+            try { await reader.cancel(); } catch { /* ignore */ }
+            return;
+          }
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -591,6 +598,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // or lying Content-Length cannot force a full in-memory buffer + parse.
       const contentLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+        try { await response.body?.cancel(); } catch { /* ignore */ }
         return [{ type: "error", message: `google response too large (content-length ${contentLength} exceeds ${MAX_RESPONSE_BYTES} bytes)` }];
       }
       let rawText: string;
