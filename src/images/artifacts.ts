@@ -38,6 +38,15 @@ export function createImageBudget(): ImageBudget {
   return { spent: 0 };
 }
 
+/** Atomically reserve `bytes` against the per-response budget (no await between check and charge). */
+export function chargeImageBudget(budget: ImageBudget | undefined, bytes: number): void {
+  if (!budget) return;
+  if (budget.spent + bytes > MAX_DECODED_BYTES_PER_RESPONSE) {
+    throw new Error(`image response exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response cap`);
+  }
+  budget.spent += bytes;
+}
+
 function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
 }
@@ -136,12 +145,9 @@ export async function materializeInlineImage(
   const decodedBytes = (normalized.length / 4) * 3 - padding;
   if (decodedBytes === 0) throw new Error("inline image data is empty after base64 decode");
   if (decodedBytes > MAX_DECODED_BYTES_PER_IMAGE) throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
-  if (budget && budget.spent + decodedBytes > MAX_DECODED_BYTES_PER_RESPONSE) {
-    throw new Error(`inline image response exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response cap`);
-  }
+  chargeImageBudget(budget, decodedBytes);
 
   const buf = Buffer.from(normalized, "base64");
-  if (budget) budget.spent += buf.length;
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = sniffImageExtension(buf);
@@ -362,13 +368,10 @@ export async function downloadImageToArtifact(
   const ext = sniffImageExtension(bytes);
   if (!ext) throw new Error("image download did not contain a recognized image");
 
-  if (budget && budget.spent + bytes.length > MAX_DECODED_BYTES_PER_RESPONSE) {
-    throw new Error(`image download exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response budget`);
-  }
+  chargeImageBudget(budget, bytes.length);
 
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  if (budget) budget.spent += bytes.length;
 
   const filePath = join(dir, `dl-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
   await writeFile(filePath, bytes, { mode: 0o600 });

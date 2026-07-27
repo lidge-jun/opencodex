@@ -252,7 +252,9 @@ export async function resolvePublicAddresses(url: string): Promise<{
   }
   const publicAddresses: { address: string; family: number }[] = [];
   for (const { address, family } of addresses) {
-    const ipKind = family === 4 || family === 6 ? family : isIP(address);
+    // Prefer classifying from the address string itself — do not trust a mislabeled
+    // resolver `family` that could skip IPv4/IPv6 private checks.
+    const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind !== "public") {
       throw new Error(`image URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
