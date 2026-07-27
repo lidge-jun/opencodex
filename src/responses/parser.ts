@@ -16,7 +16,7 @@ import { compactionItemToText } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
-import { extractHostedImageGeneration } from "../images/synthetic-tool";
+import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -125,7 +125,7 @@ function allowedToolName(tool: unknown): string | undefined {
   if (!isObj(tool)) return undefined;
   if (typeof tool.name === "string" && tool.name.length > 0) return tool.name;
   if (tool.type === "web_search" || tool.type === "web_search_preview") return WEB_SEARCH_TOOL_NAME;
-  if (tool.type === "image_generation" || tool.type === "image_gen") return "image_gen";
+  if (tool.type === "image_generation" || tool.type === "image_gen") return IMAGE_GEN_TOOL_NAME;
   if (tool.type === "tool_search") return "tool_search";
   return undefined;
 }

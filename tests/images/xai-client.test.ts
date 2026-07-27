@@ -84,6 +84,28 @@ describe("callXaiImages", () => {
     expect(passed.aborted).toBe(false);
   });
 
+  test("timeoutMs composes a deadline that aborts the fetch signal", async () => {
+    let seenSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      seenSignal = init?.signal;
+      return new Response(JSON.stringify({ data: [{ b64_json: "dGVzdA==" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    await callXaiImages({ prompt: "x" }, AUTH, undefined, 50);
+    expect(seenSignal).toBeDefined();
+    expect(seenSignal!.aborted).toBe(false);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(seenSignal!.aborted).toBe(true);
+  });
+
+  test("trailing slash on baseUrl does not produce double-slash URL", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x" }, { baseUrl: "https://api.x.ai/v1/", token: "test-token" });
+    expect(calls[0]!.url).toBe("https://api.x.ai/v1/images/generations");
+  });
+
   test("size/quality mapped to aspect_ratio/resolution, no passthrough", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
     await callXaiImages({ prompt: "x", size: "1024x1792", quality: "hd" }, AUTH);

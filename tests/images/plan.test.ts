@@ -1,20 +1,30 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../src/types";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
+let planImageBridge: typeof import("../../src/images/plan")["planImageBridge"];
+let MAX_IMAGE_TIMEOUT_MS: typeof import("../../src/images/plan")["MAX_IMAGE_TIMEOUT_MS"];
 
 /** Mutable token that the mocked getValidAccessToken resolves to. */
 let tokenResult: string | null = null;
-mock.module("../../src/oauth/index", () => ({
-  getValidAccessToken: async () => tokenResult,
-}));
 
-const { planImageBridge } = await import("../../src/images/plan");
+beforeAll(async () => {
+  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  const actualOauth = await import("../../src/oauth/index");
+  mock.module("../../src/oauth/index", () => ({
+    ...actualOauth,
+    getValidAccessToken: async () => tokenResult,
+  }));
+  ({ planImageBridge, MAX_IMAGE_TIMEOUT_MS } = await import("../../src/images/plan"));
+});
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+
+beforeEach(() => {
+  tokenResult = null;
+});
 
 function makeConfig(
   providers: Record<string, Partial<OcxProviderConfig>>,
@@ -24,7 +34,7 @@ function makeConfig(
     port: 0,
     defaultProvider: "test",
     providers: Object.fromEntries(
-      Object.entries(providers).map(([k, v]) => [k, { adapter: "openai", baseUrl: "https://api.test.com", ...v }]),
+      Object.entries(providers).map(([k, v]) => [k, { adapter: "openai-chat", baseUrl: "https://api.test.com", ...v }]),
     ),
     ...(images ? { images } : {}),
   } as OcxConfig;
@@ -40,8 +50,8 @@ function makeParsed(withImageGen: boolean): OcxParsedRequest {
   } as OcxParsedRequest;
 }
 
-const routed = { adapter: "openai", baseUrl: "https://api.anthropic.com" } as OcxProviderConfig;
-const openaiRouted = { adapter: "openai", baseUrl: "https://api.openai.com" } as OcxProviderConfig;
+const routed = { adapter: "openai-chat", baseUrl: "https://api.anthropic.com" } as OcxProviderConfig;
+const openaiRouted = { adapter: "openai-chat", baseUrl: "https://api.openai.com" } as OcxProviderConfig;
 
 describe("planImageBridge", () => {
   test("bridgeEnabled false → undefined", async () => {
@@ -113,6 +123,15 @@ describe("planImageBridge", () => {
     );
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan!.timeoutMs).toBe(120_000);
+  });
+
+  test("images.timeoutMs above ceiling is clamped", async () => {
+    const cfg = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } },
+      { bridgeEnabled: true, timeoutMs: 999_999_999 },
+    );
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan!.timeoutMs).toBe(MAX_IMAGE_TIMEOUT_MS);
   });
 
   test("toolNames includes IMAGE_GEN_TOOL_NAME so the loop can intercept synthetic calls", async () => {

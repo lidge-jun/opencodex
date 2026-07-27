@@ -1611,6 +1611,13 @@ export async function handleResponses(
         );
       },
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onCompletedResponse: (response, providerState) =>
+        rememberResponseState(
+          parsed._rawBody,
+          response,
+          continuationStateForResponse(providerState),
+          adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
+        ),
     });
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();

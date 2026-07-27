@@ -12,7 +12,7 @@
  */
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxThinkingContent, OcxUsage } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
@@ -175,6 +175,8 @@ export interface ImageBridgeDeps {
    * rotated key, or null when the pool is exhausted.
    */
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
+  onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
 }
 
 /**
@@ -606,6 +608,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         // add it again here or request logs double-count multi-iteration image turns.
         onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
       } : {}),
+      ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });
