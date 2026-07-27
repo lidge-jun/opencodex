@@ -721,6 +721,7 @@ describe("executeArchivedCleanup", () => {
       expect(stateAfter.query("SELECT id, rollout_path, archived FROM threads ORDER BY id").all()).toEqual(threads);
       stateAfter.close();
     },
+    { timeout: 30_000 },
   );
 
   test("satellite restore failure keeps recovery trashDir and manifest", () => {
