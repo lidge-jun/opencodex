@@ -1,13 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import https from "node:https";
-import type { IncomingMessage, RequestOptions } from "node:http";
+import type { RequestOptions } from "node:https";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
-const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
+/** Hard cap for remote image downloads (also enforced inside pinnedHttpsGet). */
+export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
+/** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
+export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -93,16 +97,26 @@ export async function materializeInlineImage(
  * HTTPS GET that connects to a previously validated address while keeping the
  * original hostname for SNI / Host. The custom `lookup` never asks the OS
  * resolver again, so a rebinding answer cannot redirect the TCP peer.
+ *
+ * Returns a streaming Response so callers can enforce byte caps while reading;
+ * the transport also destroys the request if `maxBytes` is exceeded mid-stream.
  */
 export function pinnedHttpsGet(
   url: string,
   pinned: PinnedAddress,
   signal?: AbortSignal,
+  options?: {
+    maxBytes?: number;
+    idleTimeoutMs?: number;
+    rejectUnauthorized?: boolean;
+  },
 ): Promise<Response> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`image URL must use HTTPS, got ${parsed.protocol}`);
   }
+  const maxBytes = options?.maxBytes ?? MAX_DOWNLOAD_BYTES;
+  const idleTimeoutMs = options?.idleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS;
 
   return new Promise<Response>((resolve, reject) => {
     if (signal?.aborted) {
@@ -110,7 +124,15 @@ export function pinnedHttpsGet(
       return;
     }
 
-    const options: RequestOptions & { servername?: string } = {
+    let settled = false;
+    const fail = (err: unknown) => {
+      try { req.destroy(); } catch { /* ignore */ }
+      if (settled) return;
+      settled = true;
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+
+    const optionsHttps: RequestOptions & { servername?: string } = {
       protocol: "https:",
       hostname: parsed.hostname,
       servername: parsed.hostname,
@@ -118,51 +140,92 @@ export function pinnedHttpsGet(
       path: `${parsed.pathname}${parsed.search}`,
       method: "GET",
       headers: { Host: parsed.host },
+      rejectUnauthorized: options?.rejectUnauthorized,
       lookup(_hostname, lookupOptions, callback) {
-        const cb = typeof lookupOptions === "function"
-          ? lookupOptions
-          : callback;
+        const opts = typeof lookupOptions === "function" ? undefined : lookupOptions;
+        const cb = typeof lookupOptions === "function" ? lookupOptions : callback;
         if (!cb) return;
         // Pin the validated peer — do not call dns.lookup again.
-        cb(null, pinned.address, pinned.family as 4 | 6);
+        // Honor `{ all: true }` array shape used by some Node/Bun https paths.
+        if (opts && typeof opts === "object" && "all" in opts && opts.all) {
+          (cb as (err: NodeJS.ErrnoException | null, addresses: PinnedAddress[]) => void)(
+            null,
+            [{ address: pinned.address, family: pinned.family }],
+          );
+          return;
+        }
+        (cb as (err: NodeJS.ErrnoException | null, address: string, family: 4 | 6) => void)(
+          null,
+          pinned.address,
+          pinned.family as 4 | 6,
+        );
       },
     };
 
-    const req = https.request(options, (res: IncomingMessage) => {
+    const req = https.request(optionsHttps, (res: IncomingMessage) => {
       const status = res.statusCode ?? 0;
       // Match fetch({ redirect: "error" }): never follow 3xx.
       if (status >= 300 && status < 400) {
         res.resume();
-        reject(new Error("image download failed: " + status));
+        fail(new Error("image download failed: " + status));
         return;
       }
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer | string) => {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      });
-      res.on("end", () => {
-        const body = Buffer.concat(chunks);
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (value === undefined) continue;
-          if (Array.isArray(value)) {
-            for (const item of value) headers.append(key, item);
-          } else {
-            headers.set(key, value);
-          }
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) headers.append(key, String(item));
+        } else {
+          headers.set(key, String(value));
         }
-        resolve(new Response(body, { status, headers }));
+      }
+
+      let received = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          res.setTimeout(idleTimeoutMs, () => {
+            fail(new Error("image download stalled"));
+            try { controller.error(new Error("image download stalled")); } catch { /* closed */ }
+          });
+          res.on("data", (chunk: Buffer | string) => {
+            const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+            received += buf.byteLength;
+            if (received > maxBytes) {
+              const err = new Error(`image download exceeds ${maxBytes} byte cap`);
+              fail(err);
+              try { controller.error(err); } catch { /* closed */ }
+              return;
+            }
+            try { controller.enqueue(buf); } catch { /* closed */ }
+          });
+          res.on("end", () => {
+            try { controller.close(); } catch { /* closed */ }
+          });
+          res.on("error", (err: Error) => {
+            fail(err);
+            try { controller.error(err); } catch { /* closed */ }
+          });
+        },
+        cancel() {
+          req.destroy();
+        },
       });
-      res.on("error", reject);
+
+      if (settled) return;
+      settled = true;
+      resolve(new Response(stream, { status, headers }));
     });
 
     const onAbort = () => {
-      req.destroy(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
+      fail(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+    req.setTimeout(idleTimeoutMs, () => {
+      fail(new Error("image download timed out"));
+    });
     req.on("error", (err) => {
       signal?.removeEventListener("abort", onAbort);
-      reject(err);
+      fail(err);
     });
     req.on("close", () => signal?.removeEventListener("abort", onAbort));
     req.end();

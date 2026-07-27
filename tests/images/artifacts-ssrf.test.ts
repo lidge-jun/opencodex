@@ -118,7 +118,7 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
     await expect(downloadImageToArtifact("https://[::ffff:7f00:1]/image.png")).rejects.toThrow();
   });
 
-  test(`3xx redirect response → rejects (redirect: 'error')`, async () => {
+  test(`3xx redirect response → rejects without following`, async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     try {
       await expect(downloadImageToArtifact("https://public-host/redirect-img", undefined, undefined, {
@@ -126,7 +126,7 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
           status: 301,
           headers: { Location: "https://evil.example/redirect" },
         }),
-      })).rejects.toThrow();
+      })).rejects.toThrow(/301|failed/);
     } finally {
       lookupMock.mockClear();
     }
@@ -154,6 +154,7 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
   test("DNS rebinding: connection uses the validated public address, not a later private resolve", async () => {
     // Validation lookup returns public; any subsequent OS resolve would return loopback.
     // The download must pin the first answer and must not call dns.lookup again.
+    // (Transport lookup-shape + byte-cap coverage lives in pinned-https-get.test.ts.)
     let lookups = 0;
     lookupMock.mockImplementation(async () => {
       lookups += 1;

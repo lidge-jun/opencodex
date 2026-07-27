@@ -229,9 +229,6 @@ export async function resolvePublicAddresses(url: string): Promise<{
   if (literalKind !== 0) {
     return { hostname, addresses: [{ address: hostname, family: literalKind }] };
   }
-  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
-    throw new Error(`image URL targets localhost destination`);
-  }
   let addresses: { address: string; family: number }[];
   try {
     addresses = await lookup(hostname, { all: true, verbatim: true });
