@@ -7,3 +7,14 @@
 {"ts":"2026-07-27T11:11:58.894Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP2"}
 {"ts":"2026-07-27T11:46:27.214Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_done","detail":"closed WP10"}
 {"ts":"2026-07-27T11:46:27.214Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP2"}
+{"ts":"2026-07-27T11:47:00.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP11"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"task_done","detail":"WP11-T1 rebased codex/catalog-written-signal onto origin/dev@7c74e0a22ec96dd5849d3d7253758f0ab15d9737"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"task_done","detail":"WP11-T2 verified locally and pushed ce716cc117ab23e4420c8c9fe860959968f66cdc"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"task_done","detail":"WP11-T3 hosted checks passed and PR #526 squash-merged as 9dd3c42dae2e7feda3581c6d477cf5a0d6e646bf"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"criterion_met","detail":"C-WP11-PR526-FINAL evidence in devlog/_plan/260727_wp11-pr526-final-rerun-merge/011_phase1_evidence.md"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_done","detail":"closed WP11"}
+{"ts":"2026-07-27T12:05:44.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP2"}
+{"ts":"2026-07-27T12:08:50.093Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_done","detail":"closed WP11"}
+{"ts":"2026-07-27T12:08:50.093Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP3"}
+{"ts":"2026-07-27T12:09:30.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"steering","detail":"corrected next active work-phase from WP3 to WP6 because PR #527 explicitly depends on the PR #526 decision; WP2 and WP3 remain pending"}
+{"ts":"2026-07-27T12:09:30.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP6"}

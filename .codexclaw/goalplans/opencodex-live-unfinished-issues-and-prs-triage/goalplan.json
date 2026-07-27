@@ -2,8 +2,8 @@
   "objective": "OpenCodex live unfinished issues and PRs triage against current GitHub state. Scope: repository lidge-jun/opencodex, dev target only, worktree /Users/jun/.codex/worktrees/260727-live-triage/opencodex. First work-phase is docs-only manifest/devlog: fetch live open PRs and open issues via gh, record current number/title/state/base/head/mergeable/checks/reviews/labels, classify every item into merge now, takeover-fix, comment/request-changes, needs-author-rebase, needs-human/security, later/enhancement, upstream-tracking, or close, and produce a priority table. Later work-phases process exactly one PR or one issue per full PABCD cycle. Allowed: directly fix bugfix/simple safe items on dev, create PRs, wait for CI, squash merge, and close linked issues when live evidence proves safety. Out of scope: main/preview/release branches, automatic merge of security/auth/permission/data-migration/privilege-boundary work, and unapproved GUI/UX decisions except the approved OpenRouter Free separate-provider direction. Terminal outcomes: DONE when all safe live items are processed and manifest evidence is current; NOOP when an item needs no action after live check; NEEDS_HUMAN or UNSAFE for risk-bound/security/UX-decision items; BLOCKED for external author/rebase/CI or upstream dependency; BUDGET_EXHAUSTED only if explicit runtime bounds are hit. Verification: gh live snapshots, code/diff review for candidate PRs, CI/check URLs where actions occur, comments/merge/close URLs for external state changes, and devlog evidence committed locally before completion.",
   "slug": "opencodex-live-unfinished-issues-and-prs-triage",
   "createdAt": "2026-07-27T10:35:02.724Z",
-  "updatedAt": "2026-07-27T11:46:27.213Z",
-  "activeWorkPhaseId": "WP11",
+  "updatedAt": "2026-07-27T12:08:50.093Z",
+  "activeWorkPhaseId": "WP6",
   "workPhases": [
     {
       "id": "WP0",
@@ -128,22 +128,22 @@
     {
       "id": "WP11",
       "title": "PR #526 final rerun and merge after dev baseline fixes",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "WP11-T1",
           "title": "Rebase PR #526 branch onto current origin/dev after WP9/WP10",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "WP11-T2",
           "title": "Run local targeted verification and push the rebased PR head",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "WP11-T3",
           "title": "Wait for hosted checks and squash merge PR #526 if the latest head is clean",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
@@ -213,7 +213,7 @@
     {
       "id": "WP6",
       "title": "PR #527 wrong-base handling",
-      "status": "pending",
+      "status": "in_progress",
       "tasks": [
         {
           "id": "WP6-T1",
@@ -311,8 +311,8 @@
       "id": "C-WP11-PR526-FINAL",
       "scenario": "PR #526 is rebased after dev baseline blockers, verified on the latest head, and merged if clean.",
       "expectedEvidence": "rebase head SHA, local test/typecheck/diff-check output, pushed head SHA, hosted check list, merge commit URL/SHA or blocker evidence.",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "WP11 closed by cxc D at 2026-07-27T12:05:44Z merge evidence. Branch codex/catalog-written-signal was rebased on origin/dev@7c74e0a22ec96dd5849d3d7253758f0ab15d9737 and pushed at ce716cc117ab23e4420c8c9fe860959968f66cdc. Local targeted verification passed: bun test tests/codex-refresh.test.ts tests/codex-sync-api.test.ts tests/injection-model-api.test.ts = 24 pass/0 fail/112 assertions; bun x tsc --noEmit exit 0; git diff --check origin/dev exit 0. Pre-push full gate passed: bun run test = 5051 pass/0 fail/24881 assertions, privacy scan passed, GUI doctor skipped. Hosted checks on PR #526 head ce716cc117ab23e4420c8c9fe860959968f66cdc all succeeded: CodeRabbit, label, react-doctor, ubuntu-latest, macos-latest, windows-latest, and npm-global ubuntu/macos/windows. Pre-merge gate passed: remote dev stayed 7c74e0a22ec96dd5849d3d7253758f0ab15d9737, PR head matched ce716cc117ab23e4420c8c9fe860959968f66cdc, mergeable MERGEABLE/CLEAN and REST mergeable_state clean. PR #526 https://github.com/lidge-jun/opencodex/pull/526 was squash-merged into dev at 2026-07-27T12:05:44Z as 9dd3c42dae2e7feda3581c6d477cf5a0d6e646bf. Remote codex/catalog-written-signal branch was preserved at ce716cc117ab23e4420c8c9fe860959968f66cdc.",
+      "status": "met"
     },
     {
       "id": "C-WP3-ISSUE543",

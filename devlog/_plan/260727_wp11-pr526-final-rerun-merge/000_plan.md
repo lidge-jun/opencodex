@@ -9,9 +9,10 @@ Finish PR #526 after its two dev-baseline blockers were repaired:
   that made the rebased PR #526 hosted `windows-latest` job red.
 
 This work-phase targets PR #526 only. It must rebase the existing
-`codex/catalog-written-signal` branch onto the current `origin/dev`, push the
-current head, wait for the latest hosted checks on PR #526, and squash merge only
-if the latest head is clean.
+`codex/catalog-written-signal` branch onto the current `origin/dev`, repair any
+direct PR #526 test-contract drift exposed by audit, push the current head, wait
+for the latest hosted checks on PR #526, and squash merge only if the latest head
+is clean.
 
 ## Loop-spec
 
@@ -19,6 +20,9 @@ if the latest head is clean.
   checks plus already-audited local targeted tests from WP1.
 - Write scope: existing PR #526 branch `codex/catalog-written-signal`; no new
   production code unless the rebase exposes a conflict or direct regression.
+  Test-only repair is allowed for direct #526 contract drift. Current allowed
+  repair: add required `comboOmissions: []` to the
+  `tests/injection-model-api.test.ts` `syncCatalogModels` mock return.
 - Out-of-scope: PR #527 process restart behavior, PR #528 image bridge,
   security/auth/permission/data migration, main/preview/release branches.
 - Remote branch handling: do not delete `codex/catalog-written-signal` on merge
@@ -40,3 +44,9 @@ if the latest head is clean.
 - PR #526 is squash-merged to `dev` only if latest head/checks remain clean at
   merge time.
 - The remote `codex/catalog-written-signal` branch is preserved.
+- Immediate pre-merge stale-base gate passes:
+  - PR head equals the pushed rebased SHA.
+  - remote `refs/heads/dev` still equals the rebase base SHA.
+  - all checks are completed successfully for that exact head.
+  - `mergeable` is `MERGEABLE` and `mergeStateStatus` is `CLEAN`.
+  - If dev advanced, restart from fetch/rebase/local tests/push/hosted checks.
