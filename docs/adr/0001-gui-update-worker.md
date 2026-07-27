@@ -19,8 +19,9 @@ detached hidden CLI worker, and the worker performs the install command and opti
 
 For npm installs, the worker runs the Node launcher path (`node bin/ocx.mjs update --tag <tag>`) so
 the existing npm self-update guard is reused. For Bun global installs, it runs the existing Bun
-global update command. Source checkouts remain manual-only and show `git pull && bun install &&
-bun run build:gui`.
+global update command. The outer GUI installer command also runs through the shared process-tree
+runner; a failed npm or Bun update is recoverable only when that runner confirms the installer tree
+has exited. Source checkouts remain manual-only and show `git pull && bun install && bun run build:gui`.
 
 Before an npm updater stops the proxy, it resolves the configured npm cache and checks that every
 entry is owned by the current Unix user. A foreign-owned entry (commonly left by an older `sudo npm`
@@ -49,8 +50,11 @@ candidates in order until one restores health. The recovery-tree walk runs in it
 worker, and the GUI worker force-kills that child at the wall-clock deadline even if one filesystem
 call blocks. A recovery launcher is always started directly: it
 may restore availability, but its potentially temporary path is never persisted into launchd,
-systemd, or Task Scheduler. If a candidate starts but does not become healthy, the worker records
-its PID, revalidates its OpenCodex identity, and stops it before trying the next candidate.
+systemd, Task Scheduler, or the update job log; the log stores only a path-free candidate label.
+If a candidate starts but does not become healthy, the worker retains the detached child handle,
+then requires both the same process generation and a fresh OpenCodex identity before stopping that
+PID and trying the next candidate. An exited child or missing generation proof fails closed so PID
+reuse can never terminate a concurrent replacement proxy.
 Service and direct restart paths also stop when the pidfile has changed to a different identity-checked
 proxy, and every such identity decision re-reads the process command line instead of trusting a
 PID-only cache across the update boundary. The update job remains failed either way because restoring

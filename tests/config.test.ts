@@ -13,6 +13,7 @@ import {
   isValidProviderName,
   isOcxStartCommandLine,
   loadConfig,
+  lookupOcxStartProcessForTests,
   multiAgentGuidanceEnabled,
   parsePidFile,
   positiveIntegerConfigError,
@@ -892,6 +893,18 @@ describe("opencodex config defaults", () => {
     expect(freshCheck).not.toContain("isLikelyOcxStartProcess(candidatePid)");
     expect(freshCheck).toContain("ocxStartProcessCache.set(candidatePid, isOcx)");
     expect(freshCheck).toContain("ocxStartProcessCache.delete(candidatePid)");
+  });
+
+  test("retries a transient command-line lookup instead of caching unknown as false", () => {
+    const cache = new Map<number, boolean>();
+    let reads = 0;
+    const readCommandLine = () => (++reads === 1 ? undefined : "opencodex start");
+
+    expect(lookupOcxStartProcessForTests(4242, readCommandLine, cache)).toBeUndefined();
+    expect(cache.has(4242)).toBe(false);
+    expect(lookupOcxStartProcessForTests(4242, readCommandLine, cache)).toBe(true);
+    expect(reads).toBe(2);
+    expect(cache.get(4242)).toBe(true);
   });
 
   test("writes pid file as a numeric pid", () => {

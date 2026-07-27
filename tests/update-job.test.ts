@@ -9,6 +9,7 @@ import {
   findNpmRecoveryLauncher,
   findNpmRecoveryLaunchers,
   finishGuiUpdateRestart,
+  formatProxyStartLog,
   installerFailureAllowsRecovery,
   npmSelfUpdateRestartEvidence,
   readUpdateJob,
@@ -107,6 +108,15 @@ describe("GUI update execution decisions", () => {
       mode: "proxy",
       args: ["/pkg/bin/ocx.mjs", "start"],
     });
+  });
+
+  test("recovery start logs label candidates without persisting launcher paths", () => {
+    const retiredLauncher = "/Users/test/.npm-global/lib/node_modules/@bitkyc08/.opencodex-Ab12Cd34/bin/ocx.mjs";
+    const line = formatProxyStartLog("npm", retiredLauncher, 10100);
+
+    expect(line).toBe("Starting npm proxy from validated recovery candidate on port 10100.");
+    expect(line).not.toContain(retiredLauncher);
+    expect(line).not.toContain("/Users/test/");
   });
 
   test("finds a validated npm-retired launcher when the current package is partial", async () => {
@@ -313,11 +323,24 @@ describe("GUI update execution decisions", () => {
   }, 5_000);
 
   test("only recovers after a clean installer exit", () => {
-    expect(installerFailureAllowsRecovery("npm", { status: 1, signal: null, timedOut: false })).toBe(true);
-    expect(installerFailureAllowsRecovery("npm", { status: 75, signal: null, timedOut: false })).toBe(false);
-    expect(installerFailureAllowsRecovery("bun", { status: 75, signal: null, timedOut: false })).toBe(true);
-    expect(installerFailureAllowsRecovery("npm", { status: null, signal: "SIGTERM", timedOut: false })).toBe(false);
-    expect(installerFailureAllowsRecovery("npm", { status: 1, signal: null, timedOut: true })).toBe(false);
+    expect(installerFailureAllowsRecovery("npm", {
+      status: 1, signal: null, timedOut: false, treeExited: true,
+    })).toBe(true);
+    expect(installerFailureAllowsRecovery("npm", {
+      status: 75, signal: null, timedOut: false, treeExited: true,
+    })).toBe(false);
+    expect(installerFailureAllowsRecovery("bun", {
+      status: 75, signal: null, timedOut: false, treeExited: true,
+    })).toBe(true);
+    expect(installerFailureAllowsRecovery("bun", {
+      status: 1, signal: null, timedOut: false, treeExited: false,
+    })).toBe(false);
+    expect(installerFailureAllowsRecovery("npm", {
+      status: null, signal: "SIGTERM", timedOut: false, treeExited: true,
+    })).toBe(false);
+    expect(installerFailureAllowsRecovery("npm", {
+      status: 1, signal: null, timedOut: true, treeExited: true,
+    })).toBe(false);
   });
 
   test("proxy restart pins --port so post-update start does not hop to an ephemeral port", () => {
@@ -942,7 +965,11 @@ describe("GUI update execution decisions", () => {
           attempted.push(launcher);
           activePid = launcher === "/current/bin/ocx.mjs" ? 222 : 333;
           runningPids.add(activePid);
-          return activePid;
+          const startedPid = activePid;
+          return {
+            pid: startedPid,
+            sameGeneration: () => runningPids.has(startedPid),
+          };
         },
         killProxyFn: pid => {
           killed.push(pid);
@@ -993,7 +1020,7 @@ describe("GUI update execution decisions", () => {
         probeProxy: async () => false,
         restartAfterUpdateFn: async (_job, captured) => {
           attempted.push(captured?.recoveryLauncher);
-          return 222;
+          return { pid: 222, sameGeneration: () => true };
         },
         killProxyFn: pid => { killed.push(pid); },
         now: () => now,
@@ -1006,6 +1033,53 @@ describe("GUI update execution decisions", () => {
     expect(killed).toEqual([]);
     expect(readUpdateJob(job.id)?.log.some(line =>
       line.includes("without a matching OpenCodex identity"),
+    )).toBe(true);
+  });
+
+  test("failed install never kills a reused PID after the spawned process generation exits", async () => {
+    let now = 0;
+    const attempted: Array<string | undefined> = [];
+    const killed: number[] = [];
+    const job: UpdateJobState = {
+      id: "failed-install-reused-generation",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        verifyPidIdentityFn: pid => pid === 222 ? pid : null,
+        recoveryLaunchersFn: () => ["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"],
+        probeProxy: async () => false,
+        restartAfterUpdateFn: async (_job, captured) => {
+          attempted.push(captured?.recoveryLauncher);
+          return { pid: 222, sameGeneration: () => false };
+        },
+        killProxyFn: pid => { killed.push(pid); },
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+
+    expect(recovery).toBe("failed");
+    expect(attempted).toEqual(["/current/bin/ocx.mjs"]);
+    expect(killed).toEqual([]);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("no longer matches the spawned process generation"),
     )).toBe(true);
   });
 
@@ -1513,7 +1587,7 @@ describe("immutable update target (WP160)", () => {
 
     const gateAt = source.indexOf("const integrity = checkUpdatePackageIntegrity(check.latestVersion);");
     const failAt = source.indexOf('updateJob(job, { status: "failed", error: integrity.reason });');
-    const spawnAt = source.indexOf("const result = runLoggedCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);");
+    const spawnAt = source.indexOf("const result = await runLoggedProcessTreeCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);");
     expect(gateAt).toBeGreaterThan(-1);
     expect(failAt).toBeGreaterThan(-1);
     expect(spawnAt).toBeGreaterThan(-1);

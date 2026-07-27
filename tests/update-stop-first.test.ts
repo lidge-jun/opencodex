@@ -127,10 +127,18 @@ describe("update stops the running proxy before replacing files", () => {
     expect(outerMs).toBeGreaterThanOrEqual(innerMs + 60_000);
     expect(launcherSource).toContain("timeoutMs: NPM_INSTALL_TIMEOUT_MS");
     expect(launcherSource).toContain("await runProcessTreeCommand(npm");
+    expect(updateJobSource).toContain("await runLoggedProcessTreeCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS)");
+    expect(updateJobSource).toContain("if (result.status !== 0 || !result.treeExited)");
+    expect(updateJobSource).toContain("return result.treeExited");
     expect(updateJobSource).toContain("installerFailureAllowsRecovery(check.installer, result)");
     expect(updateJobSource).toContain("if (trayWasRunning && mayRecover)");
     expect(updateJobSource).toContain("The Windows tray also remains stopped");
     expect(updateJobSource).toContain("candidates.slice(0, MAX_NPM_RECOVERY_CANDIDATES)");
+  });
+
+  test("GUI recovery scan imports the worker argument contract from the worker module", () => {
+    expect(updateJobSource).toContain('import { RECOVERY_TREE_SCAN_WORKER_ARG } from "./recovery-tree-scan.mjs"');
+    expect(updateJobSource).not.toContain('const RECOVERY_TREE_SCAN_WORKER_ARG = "__scan-recovery-tree"');
   });
 
   test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {

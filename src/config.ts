@@ -1225,21 +1225,39 @@ export function isOcxStartCommandLine(commandLine: string): boolean {
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }
 
-function isLikelyOcxStartProcessUncached(pid: number): boolean {
+function isLikelyOcxStartProcessUncached(pid: number): boolean | undefined {
   const commandLine = readProcessCommandLine(pid);
-  if (commandLine === undefined) return false;
+  if (commandLine === undefined) return undefined;
   return isOcxStartCommandLine(commandLine);
 }
 
 /** Per-process memo: waitForProxy/findLiveProxy used to spawn powershell on every 150ms poll. */
 const ocxStartProcessCache = new Map<number, boolean>();
 
-function isLikelyOcxStartProcess(pid: number): boolean {
-  const cached = ocxStartProcessCache.get(pid);
+function lookupOcxStartProcess(
+  pid: number,
+  readCommandLine: (pid: number) => string | undefined,
+  cache: Map<number, boolean>,
+): boolean | undefined {
+  const cached = cache.get(pid);
   if (cached !== undefined) return cached;
-  const ok = isLikelyOcxStartProcessUncached(pid);
-  ocxStartProcessCache.set(pid, ok);
+  const commandLine = readCommandLine(pid);
+  if (commandLine === undefined) return undefined;
+  const ok = isOcxStartCommandLine(commandLine);
+  cache.set(pid, ok);
   return ok;
+}
+
+function isLikelyOcxStartProcess(pid: number): boolean | undefined {
+  return lookupOcxStartProcess(pid, readProcessCommandLine, ocxStartProcessCache);
+}
+
+export function lookupOcxStartProcessForTests(
+  pid: number,
+  readCommandLine: (pid: number) => string | undefined,
+  cache = new Map<number, boolean>(),
+): boolean | undefined {
+  return lookupOcxStartProcess(pid, readCommandLine, cache);
 }
 
 /**
@@ -1272,7 +1290,7 @@ export function verifyPidIdentity(candidatePid: number): number | null {
   } catch (e: unknown) {
     if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
   }
-  return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
+  return isLikelyOcxStartProcess(candidatePid) === true ? candidatePid : null;
 }
 
 /**
@@ -1289,6 +1307,10 @@ export function verifyPidIdentityFresh(candidatePid: number): number | null {
     }
   }
   const isOcx = isLikelyOcxStartProcessUncached(candidatePid);
+  if (isOcx === undefined) {
+    ocxStartProcessCache.delete(candidatePid);
+    return null;
+  }
   // This read is authoritative across a PID-reuse boundary. Reconcile the
   // polling memo so later short-lived checks cannot serve the old identity.
   ocxStartProcessCache.set(candidatePid, isOcx);
