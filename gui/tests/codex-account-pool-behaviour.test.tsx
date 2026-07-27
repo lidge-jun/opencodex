@@ -22,6 +22,7 @@ let calls: string[] = [];
 let originalFetch: typeof globalThis.fetch;
 let accounts: unknown[] = [];
 let threshold = 80;
+let nextAccountsResponseGate: Promise<void> | null = null;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -36,6 +37,7 @@ beforeEach(() => {
 
   originalFetch = globalThis.fetch;
   calls = [];
+  nextAccountsResponseGate = null;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -45,7 +47,8 @@ beforeEach(() => {
       if (path === "codex-auth/accounts/pause") {
         const body = JSON.parse(String(init?.body)) as { id: string; paused: boolean };
         accounts = accounts.map(account => (
-          typeof account === "object" && account !== null && "id" in account && account.id === body.id
+          typeof account === "object" && account !== null && "id" in account
+            && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
             ? { ...account, paused: body.paused }
             : account
         ));
@@ -63,6 +66,9 @@ beforeEach(() => {
         } as unknown as Response;
       }
       if (path.startsWith("codex-auth/accounts")) {
+        const gate = nextAccountsResponseGate;
+        nextAccountsResponseGate = null;
+        if (gate) await gate;
         return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
       }
       if (path.startsWith("codex-auth/active")) {
@@ -136,6 +142,25 @@ test("pausing an account writes the persisted endpoint and updates shared state"
   expect(calls).toContain("PUT codex-auth/accounts/pause");
   expect(seen.current!.accounts[0]?.paused).toBe(true);
   expect(seen.current!.activeId).toBeNull();
+});
+
+test("pausing the main sentinel updates its distinct account row before reload", async () => {
+  const seen = await mountController();
+  let releaseReload!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseReload = resolve; });
+
+  await act(async () => {
+    expect(await seen.current!.setAccountPaused("__main__", true)).toEqual({ ok: true });
+  });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause");
+  expect(seen.current!.accounts.find(account => account.isMain)?.id).toBe("a1");
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+
+  await act(async () => {
+    releaseReload();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
 });
 
 test("bulk pausing writes one endpoint and updates every returned account", async () => {

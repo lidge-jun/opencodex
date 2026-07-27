@@ -101,7 +101,7 @@ export function CodexAccountPoolMainCard({
             disabled={pauseBusy}
           >
             {main.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
-            {pauseUpdatingId === main.id ? t("common.saving") : t(main.paused ? "codexAuth.resume" : "codexAuth.pause")}
+            {pauseUpdatingId === "__main__" ? t("common.saving") : t(main.paused ? "codexAuth.resume" : "codexAuth.pause")}
           </button>
         )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
