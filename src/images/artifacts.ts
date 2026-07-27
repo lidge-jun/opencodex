@@ -90,7 +90,13 @@ export async function downloadImageToArtifact(
   }
 
   // SSRF protection: validate the provider-returned URL before fetching.
-  // Reject non-HTTP(S) schemes, literal private/loopback/link-local/metadata addresses.
+  // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  // Reject literal private/loopback/link-local/metadata addresses.
   const assessment = assessUrlDestination(url);
   if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
     throw new Error(`image URL targets ${assessment.detail}`);

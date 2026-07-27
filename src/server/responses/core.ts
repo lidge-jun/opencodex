@@ -1532,29 +1532,33 @@ export async function handleResponses(
   // internally supports both standard and runTurn adapter paths.
   const imgPlan = await planImageBridge(config, parsed, route.provider);
   if (imgPlan) {
-    // The bridge forces stream:true internally and returns SSE. Non-streaming requests can't be
-    // served — reject explicitly rather than returning SSE to a client expecting JSON.
-    if (!parsed.stream) {
-      return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
-    }
-    parsed.context.tools = [...(parsed.context.tools ?? []), buildImageTool()];
-    const imgResponse = await runWithImageBridge({
-      parsed, adapter,
-      plan: imgPlan,
-      forwardHeaders: selectedForwardHeaders,
-      onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
-      abortSignal: options.abortSignal,
-      ...(config.images?.maxRounds != null ? { maxRounds: config.images.maxRounds } : {}),
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
-    });
-    if (imgResponse.body) {
-      const imgTurnAc = new AbortController();
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc), {
-        status: imgResponse.status,
-        headers: imgResponse.headers,
+    // Web-search takes priority when both are eligible (design: image defers to web-search).
+    const wsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
+    if (!wsPlan) {
+      // The bridge forces stream:true internally and returns SSE. Non-streaming requests can't be
+      // served — reject explicitly rather than returning SSE to a client expecting JSON.
+      if (!parsed.stream) {
+        return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
+      }
+      parsed.context.tools = [...(parsed.context.tools ?? []), buildImageTool()];
+      const imgResponse = await runWithImageBridge({
+        parsed, adapter,
+        plan: imgPlan,
+        forwardHeaders: selectedForwardHeaders,
+        onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
+        abortSignal: options.abortSignal,
+        ...(config.images?.maxRounds != null ? { maxRounds: config.images.maxRounds } : {}),
+        ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       });
+      if (imgResponse.body) {
+        const imgTurnAc = new AbortController();
+        return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc), {
+          status: imgResponse.status,
+          headers: imgResponse.headers,
+        });
+      }
+      return imgResponse;
     }
-    return imgResponse;
   }
 
   if (adapter.runTurn) {

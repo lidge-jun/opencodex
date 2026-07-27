@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { assessUrlDestination, assertUrlResolvesPublic } from "../../src/lib/destination-policy";
+import { rm } from "node:fs/promises";
+import { describe, expect, mock, test } from "bun:test";
+
+// Mock DNS before importing destination-policy — it binds `lookup` at load time.
+const lookupMock = mock(async (_hostname: string, _opts: unknown): Promise<{ address: string; family: number }[]> => []);
+mock.module("node:dns/promises", () => ({ lookup: lookupMock }));
+
+const { assessUrlDestination, assertUrlResolvesPublic } = await import("../../src/lib/destination-policy");
+const { downloadImageToArtifact } = await import("../../src/images/artifacts");
 
 describe("SSRF: assessUrlDestination", () => {
   test("loopback IPv4 → loopback", () => {
@@ -47,5 +54,38 @@ describe("SSRF: assertUrlResolvesPublic", () => {
   });
   test("invalid URL → throws", async () => {
     await expect(assertUrlResolvesPublic("not-a-url")).rejects.toThrow();
+  });
+});
+
+describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
+  test("http:// → rejects (non-HTTPS)", async () => {
+    await expect(downloadImageToArtifact("http://public-host/path")).rejects.toThrow(/HTTPS/);
+  });
+
+  test("ftp:// → rejects", async () => {
+    await expect(downloadImageToArtifact("ftp://host/path")).rejects.toThrow(/HTTPS/);
+  });
+
+  test("https:// public host → succeeds with mocked fetch", async () => {
+    // Stub DNS so public-host resolves to a public address.
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const originalFetch = globalThis.fetch;
+    let downloadedPath: string | undefined;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (!raw.startsWith("https://")) throw new Error("fetch must only be called over HTTPS");
+        // Minimal PNG signature so guessExtFromMagic returns "png".
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        return new Response(pngBytes, { status: 200 });
+      }) as typeof fetch;
+
+      downloadedPath = await downloadImageToArtifact("https://public-host/valid-image");
+      expect(downloadedPath).toMatch(/dl-.*\.png$/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      lookupMock.mockClear();
+      if (downloadedPath) await rm(downloadedPath).catch(() => {});
+    }
   });
 });
