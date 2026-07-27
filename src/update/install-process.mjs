@@ -4,6 +4,15 @@ import { readdirSync, readFileSync } from "node:fs";
 const TREE_POLL_INTERVAL_MS = 100;
 const DEFAULT_TERMINATION_GRACE_MS = 5_000;
 const DEFAULT_FORCE_WAIT_MS = 5_000;
+const MAX_CAPTURED_OUTPUT_CHARS = 4_000;
+
+function appendBoundedOutput(current, chunk) {
+  const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  const next = current + text;
+  return next.length > MAX_CAPTURED_OUTPUT_CHARS
+    ? next.slice(-MAX_CAPTURED_OUTPUT_CHARS)
+    : next;
+}
 
 /** Exit code used when the updater cannot prove that its installer tree is gone. */
 export const INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE = 75;
@@ -74,12 +83,12 @@ export function processGroupForceDecision(inspection, originalLeaderConfirmed) {
   return "signal";
 }
 
-function processGroupHasRunningMember(groupId) {
-  return inspectProcessGroup(groupId)?.hasRunningMember ?? null;
+function processGroupHasRunningMember(groupId, inspect = inspectProcessGroup) {
+  return inspect(groupId)?.hasRunningMember ?? null;
 }
 
-function inspectProcessGroupAfterLeaderExit(groupId) {
-  const inspection = inspectProcessGroup(groupId);
+function inspectProcessGroupAfterLeaderExit(groupId, inspect = inspectProcessGroup) {
+  const inspection = inspect(groupId);
   if (!inspection) return "unknown";
   // A new group cannot reuse this ID without a live leader whose PID equals the
   // group ID. Never signal that group; it is unrelated to the completed child.
@@ -87,13 +96,13 @@ function inspectProcessGroupAfterLeaderExit(groupId) {
   return inspection.hasRunningMember ? "running" : "exited";
 }
 
-function isProcessTreeAlive(pid) {
+function isProcessTreeAlive(pid, inspect = inspectProcessGroup) {
   try {
     process.kill(process.platform === "win32" ? pid : -pid, 0);
     if (process.platform === "win32") return true;
     // Zombies keep a process group addressable by signal 0 but cannot mutate the
     // package tree. Treat a zombie-only group as fully stopped.
-    return processGroupHasRunningMember(pid) ?? true;
+    return processGroupHasRunningMember(pid, inspect) ?? true;
   } catch (error) {
     return !isNoSuchProcess(error);
   }
@@ -103,13 +112,13 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForProcessTreeExit(pid, timeoutMs) {
+async function waitForProcessTreeExit(pid, timeoutMs, inspect = inspectProcessGroup) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!isProcessTreeAlive(pid)) return true;
+    if (!isProcessTreeAlive(pid, inspect)) return true;
     await sleep(TREE_POLL_INTERVAL_MS);
   }
-  return !isProcessTreeAlive(pid);
+  return !isProcessTreeAlive(pid, inspect);
 }
 
 /**
@@ -123,15 +132,17 @@ export async function terminateInstallerProcessTree(
     terminationGraceMs = DEFAULT_TERMINATION_GRACE_MS,
     forceWaitMs = DEFAULT_FORCE_WAIT_MS,
     isOriginalLeader,
+    inspectProcessGroup: inspectOverride,
   } = {},
 ) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  const inspect = inspectOverride ?? inspectProcessGroup;
 
   if (process.platform === "win32") {
     // Once the root has exited, Node has no job-object handle with which to prove
     // that background descendants also exited. Fail closed instead of treating a
     // missing root PID as proof that the complete installer tree is gone.
-    if (!isProcessTreeAlive(pid)) return false;
+    if (!isProcessTreeAlive(pid, inspect)) return false;
     const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
     const result = spawnSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
       stdio: "ignore",
@@ -141,19 +152,19 @@ export async function terminateInstallerProcessTree(
     // A non-zero taskkill result cannot distinguish an already-gone root from a
     // partially-killed tree. Recovery must remain disabled in either case.
     if (result.status !== 0) return false;
-    return waitForProcessTreeExit(pid, forceWaitMs);
+    return waitForProcessTreeExit(pid, forceWaitMs, inspect);
   }
 
-  if (!isProcessTreeAlive(pid)) return true;
+  if (!isProcessTreeAlive(pid, inspect)) return true;
   try {
     process.kill(-pid, "SIGTERM");
   } catch (error) {
     if (isNoSuchProcess(error)) return true;
     return false;
   }
-  if (await waitForProcessTreeExit(pid, terminationGraceMs)) return true;
+  if (await waitForProcessTreeExit(pid, terminationGraceMs, inspect)) return true;
 
-  const forceInspection = inspectProcessGroup(pid);
+  const forceInspection = inspect(pid);
   const originalLeaderConfirmed = forceInspection?.hasRunningLeader === true
     && isOriginalLeader?.() === true;
   const forceDecision = processGroupForceDecision(forceInspection, originalLeaderConfirmed);
@@ -163,7 +174,7 @@ export async function terminateInstallerProcessTree(
   // Reinspect at the force-signal boundary. The original group can exit and its
   // ID can be reused after the grace-period inspection above; a replacement
   // leader must never receive the pending SIGKILL.
-  const signalInspection = inspectProcessGroup(pid);
+  const signalInspection = inspect(pid);
   const signalLeaderConfirmed = signalInspection?.hasRunningLeader === true
     && isOriginalLeader?.() === true;
   const signalDecision = processGroupForceDecision(signalInspection, signalLeaderConfirmed);
@@ -176,7 +187,7 @@ export async function terminateInstallerProcessTree(
     if (isNoSuchProcess(error)) return true;
     return false;
   }
-  return waitForProcessTreeExit(pid, forceWaitMs);
+  return waitForProcessTreeExit(pid, forceWaitMs, inspect);
 }
 
 /**
@@ -194,8 +205,10 @@ export async function runProcessTreeCommand(
     env = process.env,
     terminationGraceMs = DEFAULT_TERMINATION_GRACE_MS,
     forceWaitMs = DEFAULT_FORCE_WAIT_MS,
+    inspectProcessGroup: inspectOverride,
   } = {},
 ) {
+  const inspect = inspectOverride ?? inspectProcessGroup;
   let child;
   try {
     child = spawn(bin, args, {
@@ -215,6 +228,13 @@ export async function runProcessTreeCommand(
       treeExited: true,
     };
   }
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding?.("utf8");
+  child.stderr?.setEncoding?.("utf8");
+  child.stdout?.on?.("data", chunk => { stdout = appendBoundedOutput(stdout, chunk); });
+  child.stderr?.on?.("data", chunk => { stderr = appendBoundedOutput(stderr, chunk); });
 
   let posixTreeAfterRootExit = "unknown";
   let windowsFailedExitTreeUnknown = false;
@@ -238,7 +258,7 @@ export async function runProcessTreeCommand(
       } else if (child.pid) {
         // Inspect group membership directly. A live process whose PID equals the
         // old group ID proves reuse, in which case cleanup must not signal it.
-        posixTreeAfterRootExit = inspectProcessGroupAfterLeaderExit(child.pid);
+        posixTreeAfterRootExit = inspectProcessGroupAfterLeaderExit(child.pid, inspect);
       }
       resolve({ status, signal });
     });
@@ -260,6 +280,7 @@ export async function runProcessTreeCommand(
       terminationGraceMs,
       forceWaitMs,
       isOriginalLeader: () => child.exitCode === null && child.signalCode === null,
+      inspectProcessGroup: inspect,
     });
     void cleanupPromise.then(treeExited => {
       if (treeExited) return;
@@ -299,6 +320,7 @@ export async function runProcessTreeCommand(
     treeExited = await terminateInstallerProcessTree(child.pid, {
       terminationGraceMs,
       forceWaitMs,
+      inspectProcessGroup: inspect,
     });
   } else if (posixTreeAfterRootExit !== "exited") {
     treeExited = false;
@@ -312,5 +334,7 @@ export async function runProcessTreeCommand(
     interruptedSignal,
     timedOut,
     treeExited,
+    stdout,
+    stderr,
   };
 }

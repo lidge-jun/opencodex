@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,17 +13,27 @@ const cleanupDirs = new Set<string>();
 function isRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    if (process.platform !== "win32") {
-      const state = spawnSync("/bin/ps", ["-o", "state=", "-p", String(pid)], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      if (state.status === 0 && /^[ZX]/.test(state.stdout.trim())) return false;
-    }
     return true;
   } catch {
     return false;
   }
+}
+
+function processGroupInspector(descendantPidPath: string) {
+  return (groupId: number) => {
+    const hasRunningLeader = isRunning(groupId);
+    let hasRunningDescendant = false;
+    try {
+      const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+      hasRunningDescendant = Number.isSafeInteger(descendantPid) && isRunning(descendantPid);
+    } catch {
+      // The child may not have written its pid before the root exits.
+    }
+    return {
+      hasRunningMember: hasRunningLeader || hasRunningDescendant,
+      hasRunningLeader,
+    };
+  };
 }
 
 afterEach(() => {
@@ -56,6 +65,18 @@ describe("update installer process isolation", () => {
     expect(result.treeExited).toBe(true);
   });
 
+  test("drains and bounds piped installer output", async () => {
+    const result = await runProcessTreeCommand(
+      process.execPath,
+      ["-e", "console.log('installer stdout'); console.error('installer stderr')"],
+      { stdio: "pipe", timeoutMs: 1_000 },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("installer stdout");
+    expect(result.stderr).toContain("installer stderr");
+  });
+
   test("timeout kills and awaits the installer descendant tree", async () => {
     const dir = join(tmpdir(), `ocx-installer-tree-${process.pid}-${Date.now()}`);
     const fixture = join(dir, "installer-parent.mjs");
@@ -76,6 +97,7 @@ describe("update installer process isolation", () => {
       stdio: "ignore",
       terminationGraceMs: 500,
       timeoutMs: 3_000,
+      inspectProcessGroup: processGroupInspector(descendantPidPath),
     });
 
     expect(existsSync(descendantPidPath)).toBe(true);
@@ -107,6 +129,7 @@ describe("update installer process isolation", () => {
       stdio: "ignore",
       terminationGraceMs: 500,
       timeoutMs: 5_000,
+      inspectProcessGroup: processGroupInspector(descendantPidPath),
     });
 
     expect(result.status).toBe(1);

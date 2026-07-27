@@ -143,6 +143,17 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("stdio: svcStdio");
     expect(updateSource).toContain("windowsHide: true");
   });
+
+  test("Bun/source installer cleanup is tree-aware before shim or service refresh", () => {
+    const installAt = updateSource.indexOf("await runProcessTreeCommand(target.bin, cmdArgs");
+    const cleanupGateAt = updateSource.indexOf("if (!r.treeExited)");
+    const successAt = updateSource.indexOf("if (r.status === 0)");
+    expect(installAt).toBeGreaterThan(-1);
+    expect(cleanupGateAt).toBeGreaterThan(installAt);
+    expect(cleanupGateAt).toBeLessThan(successAt);
+    expect(updateSource).toContain("timeoutMs: 180000");
+    expect(updateSource).toContain("INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE");
+  });
 });
 
 describe("ocx update --help has no side effects (#168)", () => {

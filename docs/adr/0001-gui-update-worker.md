@@ -48,8 +48,9 @@ proxy, and every such identity decision re-reads the process command line instea
 PID-only cache across the update boundary. The update job remains failed either way because restoring
 availability is not the same as installing the new version.
 
-The npm installer runs in an isolated process tree. On timeout, the launcher terminates and awaits
-the whole POSIX process group or a Windows `taskkill /T /F` tree before returning failure. POSIX
+The npm launcher and the Bun/source CLI installer paths run in an isolated process tree. On timeout,
+the updater terminates and awaits the whole POSIX process group or a Windows `taskkill /T /F` tree
+before returning failure; piped CLI output is drained and bounded before it is replayed. POSIX
 cleanup treats zombie-only groups as stopped and refuses to signal a process-group ID that has been
 reused by a new leader, including a second identity check immediately before force-killing after the
 grace period. Windows has no retained job-object handle after a normally failed installer

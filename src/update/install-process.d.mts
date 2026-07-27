@@ -10,6 +10,7 @@ export interface ProcessTreeCommandOptions {
   env?: NodeJS.ProcessEnv;
   terminationGraceMs?: number;
   forceWaitMs?: number;
+  inspectProcessGroup?: (groupId: number) => ProcessGroupInspection | null;
 }
 
 export interface ProcessTreeCommandResult {
@@ -19,6 +20,8 @@ export interface ProcessTreeCommandResult {
   interruptedSignal: NodeJS.Signals | null;
   timedOut: boolean;
   treeExited: boolean;
+  stdout?: string;
+  stderr?: string;
 }
 
 export interface ProcessGroupInspection {
@@ -37,6 +40,7 @@ export function terminateInstallerProcessTree(
   pid: number | undefined,
   options?: Pick<ProcessTreeCommandOptions, "terminationGraceMs" | "forceWaitMs"> & {
     isOriginalLeader?: () => boolean;
+    inspectProcessGroup?: (groupId: number) => ProcessGroupInspection | null;
   },
 ): Promise<boolean>;
 
