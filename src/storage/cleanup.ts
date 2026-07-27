@@ -739,6 +739,12 @@ interface ReconcileTestHooks {
   failBeforeStateCommit?: boolean;
   failSatelliteRestore?: boolean;
   failSatelliteBackupWrite?: boolean;
+  /**
+   * Fail a satellite-backup.json *replacement* after the temp is durable but before
+   * rename — exercises crash-safety of the post-memories rewrite without truncating
+   * the last valid backup.
+   */
+  failSatelliteBackupReplace?: boolean;
   /** Runs after satellite deletes are committed, before state thread deletion. */
   afterSatelliteMutations?: () => void;
 }
@@ -746,6 +752,7 @@ interface ReconcileTestHooks {
 const SATELLITE_BACKUP_FILE = "satellite-backup.json";
 /** Marks an incomplete restore so retries can accept dest files and resume metadata. */
 const RESTORE_PENDING_FILE = "restore-pending.json";
+let _satelliteBackupSeq = 0;
 
 type StagedFile = { from: string; to: string; relPath: string };
 
@@ -971,8 +978,62 @@ function restoreConsolidateGlobalJob(
   }
 }
 
-function writeSatelliteBackup(stageDir: string, backup: SatelliteBackup): void {
-  writePrivateFile(join(stageDir, SATELLITE_BACKUP_FILE), JSON.stringify(backup));
+/**
+ * Best-effort directory fsync so a preceding rename is durable on crash.
+ * Unsupported on some Windows setups — never treat failure as fatal.
+ */
+function fsyncDirectoryBestEffort(dirPath: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dirPath, "r");
+    fsyncSync(fd);
+  } catch {
+    /* best-effort */
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* */ }
+    }
+  }
+}
+
+/**
+ * Atomically replace satellite-backup.json: private temp in the stage, fsync, rename,
+ * then best-effort directory fsync. An interrupted update never truncates the last
+ * valid backup that was written before a satellite DB commit.
+ */
+function writeSatelliteBackup(
+  stageDir: string,
+  backup: SatelliteBackup,
+  options?: { failWrite?: boolean; failReplaceBeforeRename?: boolean },
+): void {
+  if (options?.failWrite) throw new Error("test_fail_satellite_backup_write");
+  const dest = join(stageDir, SATELLITE_BACKUP_FILE);
+  const replacing = existsSync(dest);
+  const tmp = join(stageDir, `${SATELLITE_BACKUP_FILE}.${process.pid}.${++_satelliteBackupSeq}.tmp`);
+  const payload = JSON.stringify(backup);
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, payload, null, "utf8");
+    fsyncSync(fd);
+  } catch (error) {
+    try { closeSync(fd); } catch { /* */ }
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw error;
+  }
+  closeSync(fd);
+  chmodPrivatePath(tmp, 0o600);
+  if (options?.failReplaceBeforeRename && replacing) {
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw new Error("test_fail_satellite_backup_replace");
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* */ }
+    throw error;
+  }
+  chmodPrivatePath(dest, 0o600);
+  fsyncDirectoryBestEffort(stageDir);
 }
 
 function clearSatelliteBackup(stageDir: string): void {
@@ -1240,15 +1301,17 @@ function deleteAndCommitSatellites(
       deleteMemoriesInTx(locks.memories.db, backup.memories);
       if (backup.memories.consolidateTouched) {
         // Capture under the write lock, but persist only after COMMIT+close.
-        // Holding BEGIN IMMEDIATE across writeFileSync lets Windows CI disk/AV
-        // latency stall the lock long enough for concurrent reopen hooks (and
-        // bun's default 5s test timeout) to hang — see PR #558 windows-latest.
+        // Holding BEGIN IMMEDIATE across a durable backup rewrite lets Windows CI
+        // disk/AV latency stall the lock long enough for concurrent reopen hooks
+        // (and bun's default 5s test timeout) to hang — see PR #558 windows-latest.
         backup.memories.consolidatePostImage = readConsolidateGlobalJob(locks.memories.db);
       }
       commitSatelliteLock(locks.memories);
       locks.memories = undefined;
       if (backup.memories.consolidateTouched) {
-        writeSatelliteBackup(stageDir, backup);
+        writeSatelliteBackup(stageDir, backup, {
+          failReplaceBeforeRename: hooks?.failSatelliteBackupReplace,
+        });
       }
       if (hooks?.failAfterMemoriesMutation) throw new Error("test_fail_after_memories");
     }
@@ -1420,10 +1483,9 @@ function reconcileDeletedThreads(
       backup.dynamicTools = stateDeps.dynamicTools;
       backup.spawnEdges = stateDeps.spawnEdges;
       try {
-        if (hooks?.failSatelliteBackupWrite) {
-          throw new Error("test_fail_satellite_backup_write");
-        }
-        writeSatelliteBackup(stageDir, backup);
+        writeSatelliteBackup(stageDir, backup, {
+          failWrite: hooks?.failSatelliteBackupWrite,
+        });
       } catch {
         rollbackAllSatelliteLocks(satelliteLocks);
         stateDb.exec("ROLLBACK");
@@ -1606,6 +1668,7 @@ export interface ExecuteCleanupOptions {
     failBeforeStateCommit?: boolean;
     failSatelliteRestore?: boolean;
     failSatelliteBackupWrite?: boolean;
+    failSatelliteBackupReplace?: boolean;
     afterSatelliteMutations?: () => void;
   };
 }
@@ -1635,6 +1698,7 @@ export function pickWireCleanupTestHooks(raw: unknown): CleanupWireTestHooks | u
   if (typeof o.failBeforeStateCommit === "boolean") out.failBeforeStateCommit = o.failBeforeStateCommit;
   if (typeof o.failSatelliteRestore === "boolean") out.failSatelliteRestore = o.failSatelliteRestore;
   if (typeof o.failSatelliteBackupWrite === "boolean") out.failSatelliteBackupWrite = o.failSatelliteBackupWrite;
+  if (typeof o.failSatelliteBackupReplace === "boolean") out.failSatelliteBackupReplace = o.failSatelliteBackupReplace;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -2350,16 +2414,30 @@ function restoreThreadsFromManifest(
     );
     const reconstructed: SqlRow[] = [];
     for (const entry of toReconstruct) {
-      let abs: string;
+      let abs: string | undefined;
       try {
         abs = absFromRel(codexHome, entry.rolloutPath!);
       } catch {
-        // Prefer the first restored physical path under archived_sessions.
-        const rel = entry.physicalRelPaths[0];
-        if (!rel) throw new Error("missing_rollout_for_thread");
-        abs = absFromRel(codexHome, rel);
+        abs = undefined;
       }
-      // .jsonl.zst cannot be parsed here — require a plain .jsonl sibling or path.
+      // Legacy compressed-only quarantine: manifest rolloutPath is often the logical
+      // `.jsonl` name while the only restored physical file is `.jsonl.zst`.
+      if (!abs || !existsSync(abs)) {
+        for (const rel of entry.physicalRelPaths) {
+          try {
+            const candidate = absFromRel(codexHome, rel);
+            if (existsSync(candidate)) {
+              abs = candidate;
+              break;
+            }
+          } catch {
+            /* try next physical path */
+          }
+        }
+      }
+      if (!abs) throw new Error("missing_rollout_for_thread");
+      // Prefer a plain .jsonl sibling when present; otherwise readThreadFieldsFromRollout
+      // decompresses a lone .jsonl.zst in memory (bounded) for legacy quarantine restores.
       if (abs.endsWith(ZST_SUFFIX)) {
         const plain = abs.slice(0, -".zst".length);
         if (existsSync(plain)) abs = plain;

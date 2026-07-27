@@ -1,9 +1,17 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { CODEX_HOME } from "./paths";
 import { atomicWriteFile, getConfigDir } from "../config";
+
+/**
+ * Cap for decompressing a lone `.jsonl.zst` rollout during quarantine restore.
+ * Bounds peak memory while reconstructing thread rows; never write the decoded
+ * JSONL to disk.
+ */
+export const MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 
 const STATE_DB_PATH = join(CODEX_HOME, "state_5.sqlite");
 function historyBackupPathFor(stateDbPath: string): string {
@@ -332,15 +340,39 @@ function extractUserMessagePreview(line: string): string | null {
 /**
  * Reconstruct thread identity + listing fields from a staged/restored rollout JSONL.
  * Returns null when the file is missing or has no parseable `session_meta`.
+ *
+ * Accepts plain `.jsonl` or a lone `.jsonl.zst` (legacy Phase-2 quarantine). Compressed
+ * rollouts are decompressed in memory with {@link MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES};
+ * no decompressed copy is written to disk.
  */
 export function readThreadFieldsFromRollout(path: string): RolloutThreadFields | null {
   if (!path || !existsSync(path)) return null;
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = path.endsWith(".zst")
+      ? decompressRolloutZstUtf8(path)
+      : readFileSync(path, "utf8");
   } catch {
     return null;
   }
+  return parseThreadFieldsFromRolloutText(raw);
+}
+
+function decompressRolloutZstUtf8(
+  path: string,
+  maxBytes: number = MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES,
+): string {
+  const compressed = readFileSync(path);
+  const decoded = zstdDecompressSync(compressed as Uint8Array<ArrayBuffer>, {
+    maxOutputLength: maxBytes,
+  });
+  if (decoded.byteLength > maxBytes) {
+    throw new Error("rollout_zst_too_large");
+  }
+  return new TextDecoder().decode(decoded);
+}
+
+function parseThreadFieldsFromRolloutText(raw: string): RolloutThreadFields | null {
   const lines = raw.split("\n");
   let latest: ParsedSessionMeta | null = null;
   let firstUserMessage = "";

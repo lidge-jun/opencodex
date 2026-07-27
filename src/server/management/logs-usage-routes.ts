@@ -362,13 +362,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     }
   }
 
-  if (
-    process.env.OPENCODEX_CLEANUP_TEST_HOOKS === "1" &&
-    url.pathname === "/api/storage/trash/restore/test-stream" &&
-    req.method === "GET"
-  ) {
-    const stream = getRestoreTrashTestStreamResponse();
-    if (stream) return stream;
+  if (url.pathname === "/api/storage/trash/restore/test-stream" && req.method === "GET") {
+    if (process.env.OPENCODEX_CLEANUP_TEST_HOOKS === "1") {
+      const stream = getRestoreTrashTestStreamResponse();
+      if (stream) return stream;
+    }
+    // Always answer this test-only path — never fall through to the GUI SPA (200 HTML).
     return jsonResponse({ error: "not_available" }, 404);
   }
 

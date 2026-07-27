@@ -789,6 +789,139 @@ describe("executeArchivedCleanup", () => {
     stateAfter.close();
   });
 
+  test("failed post-memories satellite-backup replace keeps prior backup parseable and restorable", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const logsBefore = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    const logs = logsBefore.query(
+      "SELECT id, ts, level, target, thread_id, estimated_bytes FROM logs ORDER BY id",
+    ).all();
+    logsBefore.close();
+    const goalsBefore = new Database(join(home, "goals_1.sqlite"), { readonly: true });
+    const goals = goalsBefore.query(
+      "SELECT thread_id, goal_id, objective, status FROM thread_goals ORDER BY thread_id",
+    ).all();
+    const deferrals = goalsBefore.query(
+      "SELECT thread_id FROM thread_goal_continuation_deferrals ORDER BY thread_id",
+    ).all();
+    goalsBefore.close();
+    const memBefore = new Database(join(home, "memories_1.sqlite"), { readonly: true });
+    const stage1 = memBefore.query(
+      "SELECT thread_id, raw_memory, rollout_summary, selected_for_phase2 FROM stage1_outputs ORDER BY thread_id",
+    ).all();
+    const jobs = memBefore.query(
+      "SELECT kind, job_key, status FROM jobs ORDER BY kind, job_key",
+    ).all();
+    memBefore.close();
+
+    // tmid has selected_for_phase2=1 → consolidateTouched forces a post-commit backup rewrite.
+    // failSatelliteRestore keeps the prior on-disk snapshot so we can prove it was never truncated.
+    const result = runWithDigest(100, "permanent", home, {
+      now: 96,
+      _test: { failSatelliteBackupReplace: true, failSatelliteRestore: true },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("db_reconcile_failed");
+    expect(result.trashDir).toBe(".trash/96");
+
+    const backupPath = join(home, ".trash", "96", "satellite-backup.json");
+    expect(existsSync(backupPath)).toBe(true);
+    const backup = JSON.parse(readFileSync(backupPath, "utf8")) as {
+      threadIds: string[];
+      logs?: { rows: Array<Record<string, unknown>> };
+      memories?: {
+        stage1: Array<Record<string, unknown>>;
+        stage1Jobs: Array<Record<string, unknown>>;
+        consolidateTouched?: boolean;
+        consolidateJob?: Record<string, unknown> | null;
+        consolidatePostImage?: unknown;
+      };
+      goals?: {
+        goals: Array<Record<string, unknown>>;
+        deferrals: Array<Record<string, unknown>>;
+      };
+    };
+    expect(backup.threadIds).toEqual(expect.arrayContaining(["told", "tmid", "tnew"]));
+    expect(backup.logs?.rows.length).toBeGreaterThan(0);
+    expect(backup.memories?.stage1.length).toBeGreaterThan(0);
+    expect(backup.memories?.consolidateTouched).toBe(true);
+    // Replacement never landed — prior snapshot must not carry the post-commit image.
+    expect(backup.memories?.consolidatePostImage).toBeUndefined();
+    expect(backup.goals?.goals.length).toBeGreaterThan(0);
+
+    // Injected restore failure left satellites deleted; re-apply the kept prior backup.
+    const logsDb = new Database(join(home, "logs_2.sqlite"));
+    logsDb.exec("BEGIN IMMEDIATE");
+    for (const row of backup.logs?.rows ?? []) {
+      const cols = Object.keys(row);
+      logsDb.run(
+        `INSERT INTO logs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
+        cols.map(c => row[c] as string | number | null),
+      );
+    }
+    logsDb.exec("COMMIT");
+    logsDb.close();
+
+    const memDb = new Database(join(home, "memories_1.sqlite"));
+    memDb.exec("BEGIN IMMEDIATE");
+    for (const row of backup.memories?.stage1 ?? []) {
+      const cols = Object.keys(row);
+      memDb.run(
+        `INSERT INTO stage1_outputs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
+        cols.map(c => row[c] as string | number | null),
+      );
+    }
+    for (const row of backup.memories?.stage1Jobs ?? []) {
+      const cols = Object.keys(row);
+      memDb.run(
+        `INSERT INTO jobs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
+        cols.map(c => row[c] as string | number | null),
+      );
+    }
+    memDb.exec("COMMIT");
+    memDb.close();
+
+    const goalsDb = new Database(join(home, "goals_1.sqlite"));
+    goalsDb.exec("BEGIN IMMEDIATE");
+    for (const row of backup.goals?.goals ?? []) {
+      const cols = Object.keys(row);
+      goalsDb.run(
+        `INSERT INTO thread_goals (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
+        cols.map(c => row[c] as string | number | null),
+      );
+    }
+    for (const row of backup.goals?.deferrals ?? []) {
+      const cols = Object.keys(row);
+      goalsDb.run(
+        `INSERT INTO thread_goal_continuation_deferrals (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
+        cols.map(c => row[c] as string | number | null),
+      );
+    }
+    goalsDb.exec("COMMIT");
+    goalsDb.close();
+
+    const logsAfter = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    expect(logsAfter.query("SELECT id, ts, level, target, thread_id, estimated_bytes FROM logs ORDER BY id").all()).toEqual(logs);
+    logsAfter.close();
+    const goalsAfter = new Database(join(home, "goals_1.sqlite"), { readonly: true });
+    expect(goalsAfter.query("SELECT thread_id, goal_id, objective, status FROM thread_goals ORDER BY thread_id").all()).toEqual(goals);
+    expect(goalsAfter.query("SELECT thread_id FROM thread_goal_continuation_deferrals ORDER BY thread_id").all()).toEqual(deferrals);
+    goalsAfter.close();
+    const memAfter = new Database(join(home, "memories_1.sqlite"), { readonly: true });
+    expect(memAfter.query("SELECT thread_id, raw_memory, rollout_summary, selected_for_phase2 FROM stage1_outputs ORDER BY thread_id").all()).toEqual(stage1);
+    // stage1 jobs restored; consolidate-global may have been mutated before the failed rewrite —
+    // only assert stage1 keys are present (every deleted satellite row from the prior backup).
+    const jobKeys = memAfter.query<{ kind: string; job_key: string }, []>(
+      "SELECT kind, job_key FROM jobs ORDER BY kind, job_key",
+    ).all();
+    memAfter.close();
+    for (const expected of jobs.filter(j => (j as { kind: string }).kind === "memory_stage1")) {
+      expect(jobKeys).toContainEqual({
+        kind: (expected as { kind: string }).kind,
+        job_key: (expected as { job_key: string }).job_key,
+      });
+    }
+  }, { timeout: 30_000 });
+
   test("permanent cleanup works with logs-only satellite store", () => {
     home = buildHome({ satellites: "logs" });
     const result = runWithDigest(100, "permanent", home);
@@ -1213,6 +1346,96 @@ describe("listTrashEntries + restoreTrashEntry", () => {
       model_provider: "openai",
       source: "cli",
       first_user_message: "restore me please",
+      has_user_event: 1,
+      archived: 1,
+    });
+  });
+
+  test("legacy compressed-only quarantine restores .jsonl.zst and reconstructs the thread row", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cleanup-legacy-zst-"));
+    home = dir;
+    mkdirSync(join(dir, "archived_sessions"), { recursive: true });
+
+    const rolloutBody = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        payload: {
+          id: "told",
+          model_provider: "openai",
+          source: "cli",
+          cwd: "/tmp/project",
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        payload: { type: "user_message", message: "compressed restore please" },
+      }),
+    ].join("\n") + "\n";
+    const compressed = Bun.zstdCompressSync(Buffer.from(rolloutBody, "utf8"));
+
+    const stage = join(dir, ".trash", "1700000000910");
+    mkdirSync(stage, { recursive: true });
+    // Sparse legacy manifest: no threads snapshot, only the compressed physical file.
+    writeFileSync(join(stage, "rollout-old.jsonl.zst"), compressed);
+    writeFileSync(join(stage, "manifest.json"), JSON.stringify({
+      quarantinedAt: 1_700_000_000_910,
+      mode: "quarantine",
+      entries: [
+        {
+          relPath: "archived_sessions/rollout-old.jsonl",
+          bytes: compressed.byteLength,
+          mtimeMs: OLD.getTime(),
+          physicalRelPaths: ["archived_sessions/rollout-old.jsonl.zst"],
+          threadId: "told",
+          rolloutPath: "archived_sessions/rollout-old.jsonl",
+          archived: 1,
+        },
+      ],
+    }));
+    // Intentionally no satellite-backup.json and no plain .jsonl sibling.
+
+    const db = new Database(join(dir, "state_5.sqlite"));
+    db.exec(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      rollout_path TEXT NOT NULL,
+      model_provider TEXT NOT NULL,
+      source TEXT NOT NULL,
+      first_user_message TEXT NOT NULL,
+      has_user_event INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER,
+      archived_at INTEGER
+    )`);
+    db.close();
+
+    const restored = restoreTrashEntry(".trash/1700000000910", { codexHome: home });
+    expect(restored.ok).toBe(true);
+    expect(existsSync(join(dir, "archived_sessions", "rollout-old.jsonl.zst"))).toBe(true);
+    // Must not materialize an unbounded plain decompressed sibling on disk.
+    expect(existsSync(join(dir, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+    expect(existsSync(stage)).toBe(false);
+
+    const state = new Database(join(dir, "state_5.sqlite"), { readonly: true });
+    const row = state.query<{
+      id: string;
+      rollout_path: string;
+      model_provider: string;
+      source: string;
+      first_user_message: string;
+      has_user_event: number;
+      archived: number | null;
+    }, []>(
+      `SELECT id, rollout_path, model_provider, source, first_user_message, has_user_event, archived
+       FROM threads WHERE id='told'`,
+    ).get();
+    state.close();
+    expect(row).toEqual({
+      id: "told",
+      rollout_path: "archived_sessions/rollout-old.jsonl",
+      model_provider: "openai",
+      source: "cli",
+      first_user_message: "compressed restore please",
       has_user_event: 1,
       archived: 1,
     });
