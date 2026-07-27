@@ -25,13 +25,18 @@ bun run build:gui`.
 Before an npm updater stops the proxy, it resolves the configured npm cache and checks that every
 entry is owned by the current Unix user. A foreign-owned entry (commonly left by an older `sudo npm`
 invocation) aborts the update with an actionable error while the existing proxy and service remain
-running. Failure to resolve or inspect the cache also aborts before shutdown; platforms without
-Unix uid ownership skip this gate.
+running. The scan fails closed when the cache root is absent, an entry cannot be inspected, or its
+50,000-entry / 10-second traversal budget is exhausted. Platforms without Unix uid ownership skip
+this gate.
 
-If the installer still exits nonzero, the GUI worker first checks whether the pre-update proxy is
-still healthy. It leaves that process alone when an early gate failed; when the updater already
-stopped it, the worker makes a best-effort restart and verifies health. The update job remains
-failed either way because restoring availability is not the same as installing the new version.
+The GUI worker retries its identity-checked pre-update liveness capture before deciding a service
+was inactive. If the installer still exits nonzero, it probes again and leaves the old process alone
+only when health or PID identity still proves it is OpenCodex. When npm already stopped the proxy
+and retired the old package, the worker validates the hidden package's name, version, and launcher,
+uses that launcher for a best-effort restart, and verifies health. The update job remains failed
+either way because restoring availability is not the same as installing the new version. The GUI
+worker's install timeout also exceeds the nested npm install deadline, so recovery cannot race a
+still-running npm replacement child.
 
 After an update requests a restart, the worker now waits for an identity-checked `/healthz` to
 return and remain healthy for a short stability window before marking the job successful. This

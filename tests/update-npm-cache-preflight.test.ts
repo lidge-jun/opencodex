@@ -102,6 +102,7 @@ describe("npm cache ownership pre-flight", () => {
       entryPath: realpathSync(dir),
       expectedUid: uid + 1,
       actualUid: uid,
+      reason: "npm cache entry ownership does not match the current user",
     });
     if (result.ok !== false) throw new Error("expected ownership failure");
     expect(formatNpmCacheOwnershipFailure(result)).toContain("before stopping the proxy");
@@ -116,10 +117,53 @@ describe("npm cache ownership pre-flight", () => {
       entryPath: join(cachePath, "_cacache", "foreign"),
       expectedUid: 502,
       actualUid: 0,
-      reason: "foreign owner",
+      reason: "npm cache entry ownership does not match the current user",
     });
     expect(output).toContain("~/.npm/_cacache/foreign");
     expect(output).not.toContain(homedir());
+    expect(output).not.toContain("502");
+    expect(output).not.toMatch(/\buid\b/i);
+  });
+
+  test("fails closed when the configured cache root does not exist", () => {
+    const missing = `${dir}-missing`;
+    const result = checkNpmCacheOwnership({
+      getuid: () => 501,
+      spawn: cacheLookup(missing),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      cachePath: missing,
+      entryPath: missing,
+      reason: "npm cache root does not exist",
+    });
+  });
+
+  test("fails closed when the cache exceeds the entry budget", () => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    const issue = findForeignOwnedNpmCacheEntry(dir, uid, { maxEntries: 2 });
+    expect(issue).toMatchObject({
+      kind: "error",
+      reason: "npm cache inspection exceeded its 2-entry budget",
+    });
+  });
+
+  test("fails closed when the cache exceeds the elapsed-time budget", () => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    let now = 0;
+    const issue = findForeignOwnedNpmCacheEntry(dir, uid, {
+      maxDurationMs: 10,
+      now: () => {
+        now += 6;
+        return now;
+      },
+    });
+    expect(issue).toMatchObject({
+      kind: "error",
+      reason: "npm cache inspection exceeded its 10ms time budget",
+    });
   });
 
   test("fails closed before shutdown when npm cannot resolve its cache", () => {

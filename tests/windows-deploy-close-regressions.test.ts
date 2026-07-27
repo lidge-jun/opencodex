@@ -27,7 +27,7 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     expect(src).toContain("OCX_BAKE_PORT");
     // Service reinstall still runs (with bake) even when reclaim warns; direct start refuses to hop.
     expect(src).toContain("refusing to hop");
-    expect(src).toContain("const liveBeforeUpdate = await findLiveProxy()");
+    expect(src).toContain("const liveBeforeUpdate = await findLiveProxyForUpdate()");
     expect(read("src/cli/index.ts")).toContain("allowEphemeralFallback: !hardPin");
     expect(read("src/cli/index.ts")).toContain("preferRetryMs: hardPin ? 0 : 750");
     expect(read("src/cli/index.ts")).toContain("Not opening the GUI");

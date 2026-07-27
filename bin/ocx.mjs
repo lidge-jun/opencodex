@@ -18,6 +18,7 @@ import { checkNpmCacheOwnership, formatNpmCacheOwnershipFailure } from "../src/u
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
 const PKG = "@bitkyc08/opencodex";
+const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, "..", "src", "cli", "index.ts");
@@ -231,7 +232,7 @@ function runNpmSelfUpdate() {
   console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ ${npm} install -g ${PKG}@${tag}`);
   const res = spawnSync(npm, ["install", "-g", `${PKG}@${tag}`], {
     stdio: "inherit",
-    timeout: 180000,
+    timeout: NPM_INSTALL_TIMEOUT_MS,
     windowsHide: true,
     shell: winShell,
   });

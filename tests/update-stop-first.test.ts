@@ -64,7 +64,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("OCX_BAKE_PORT");
     // Live runtime port 10100 must not be discarded as a missing-port sentinel.
     expect(launcherSource).toContain("sawRuntimePort");
-    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxy()");
+    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxyForUpdate()");
   });
 
   test("both update paths surface a skipped history restore after the stop", () => {
@@ -90,9 +90,27 @@ describe("update stops the running proxy before replacing files", () => {
   });
 
   test("GUI failure recovery is gated by identity-checked pre-update liveness", () => {
-    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxy()");
+    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxyForUpdate()");
     expect(updateJobSource).toContain("const proxyWasActive = liveBeforeUpdate !== null");
     expect(updateJobSource).not.toContain("const proxyWasActive = isServiceInstalled() || runtimeTrusted");
+  });
+
+  test("GUI failure recovery identity-checks the old PID and threads a validated launcher", () => {
+    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentity)(captured.oldPid)");
+    expect(updateJobSource).toContain("io.recoveryLauncherFn ?? findNpmRecoveryLauncher");
+    expect(updateJobSource).toContain("recoveryCaptured = { ...captured, recoveryLauncher }");
+    expect(updateJobSource).toContain("captured?.recoveryLauncher ?? packageLauncherPath()");
+  });
+
+  test("GUI recovery waits beyond the nested npm install deadline", () => {
+    const outerRaw = /const UPDATE_TIMEOUT_MS = ([\d_]+);/.exec(updateJobSource)?.[1];
+    const innerRaw = /const NPM_INSTALL_TIMEOUT_MS = ([\d_]+);/.exec(launcherSource)?.[1];
+    expect(outerRaw).toBeDefined();
+    expect(innerRaw).toBeDefined();
+    const outerMs = Number(outerRaw?.replaceAll("_", ""));
+    const innerMs = Number(innerRaw?.replaceAll("_", ""));
+    expect(outerMs).toBeGreaterThanOrEqual(innerMs + 60_000);
+    expect(launcherSource).toContain("timeout: NPM_INSTALL_TIMEOUT_MS");
   });
 
   test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {

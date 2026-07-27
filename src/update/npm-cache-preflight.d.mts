@@ -12,6 +12,9 @@ export interface NpmCachePreflightOptions {
   lstat?: (path: string) => NpmCacheEntryStat;
   readdir?: (path: string) => string[];
   realpath?: (path: string) => string;
+  now?: () => number;
+  maxEntries?: number;
+  maxDurationMs?: number;
 }
 
 export type NpmCacheOwnershipIssue =
@@ -33,7 +36,10 @@ export type NpmCacheOwnershipResult =
 export declare function findForeignOwnedNpmCacheEntry(
   cachePath: string,
   expectedUid: number,
-  io?: Pick<NpmCachePreflightOptions, "lstat" | "readdir" | "realpath">,
+  io?: Pick<
+    NpmCachePreflightOptions,
+    "lstat" | "readdir" | "realpath" | "now" | "maxEntries" | "maxDurationMs"
+  >,
 ): NpmCacheOwnershipIssue | null;
 
 export declare function checkNpmCacheOwnership(

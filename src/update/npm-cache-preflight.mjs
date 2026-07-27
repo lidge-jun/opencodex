@@ -3,6 +3,9 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
+const DEFAULT_MAX_CACHE_ENTRIES = 50_000;
+const DEFAULT_CACHE_SCAN_TIMEOUT_MS = 10_000;
+
 /** Extract a stable filesystem error code without serializing the full error. */
 function errorCode(error) {
   return error && typeof error === "object" && "code" in error
@@ -15,13 +18,27 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
   const lstat = io.lstat ?? lstatSync;
   const readdir = io.readdir ?? (path => readdirSync(path, { encoding: "utf8" }));
   const realpath = io.realpath ?? realpathSync;
+  const now = io.now ?? (() => Date.now());
+  const maxEntries = Number.isFinite(io.maxEntries) && io.maxEntries > 0
+    ? Math.trunc(io.maxEntries)
+    : DEFAULT_MAX_CACHE_ENTRIES;
+  const maxDurationMs = Number.isFinite(io.maxDurationMs) && io.maxDurationMs > 0
+    ? Math.trunc(io.maxDurationMs)
+    : DEFAULT_CACHE_SCAN_TIMEOUT_MS;
+  const startedAt = now();
   let cacheRoot;
   try {
     // npm follows a configured cache-root symlink. Resolve only that root; nested
     // symlinks remain lstat-only and are never traversed.
     cacheRoot = realpath(resolve(cachePath));
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return null;
+    if (errorCode(error) === "ENOENT") {
+      return {
+        kind: "error",
+        path: resolve(cachePath),
+        reason: "npm cache root does not exist",
+      };
+    }
     return {
       kind: "error",
       path: resolve(cachePath),
@@ -29,9 +46,22 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
     };
   }
   const stack = [cacheRoot];
+  let discoveredEntries = 1;
+
+  const elapsedBudgetIssue = path => (
+    now() - startedAt > maxDurationMs
+      ? {
+          kind: "error",
+          path,
+          reason: `npm cache inspection exceeded its ${maxDurationMs}ms time budget`,
+        }
+      : null
+  );
 
   while (stack.length > 0) {
     const path = stack.pop();
+    const beforeStatBudget = elapsedBudgetIssue(path);
+    if (beforeStatBudget) return beforeStatBudget;
     let stat;
     try {
       stat = lstat(path);
@@ -43,6 +73,8 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
         reason: `could not inspect npm cache entry (${errorCode(error)})`,
       };
     }
+    const afterStatBudget = elapsedBudgetIssue(path);
+    if (afterStatBudget) return afterStatBudget;
 
     if (Number.isInteger(stat.uid) && stat.uid !== expectedUid) {
       return { kind: "foreign-owner", path, actualUid: stat.uid };
@@ -52,6 +84,8 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
     }
     if (!stat.isDirectory()) continue;
 
+    const beforeReadBudget = elapsedBudgetIssue(path);
+    if (beforeReadBudget) return beforeReadBudget;
     let entries;
     try {
       entries = readdir(path);
@@ -62,7 +96,22 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
         reason: `could not read npm cache directory (${errorCode(error)})`,
       };
     }
-    for (const entry of entries) stack.push(resolve(path, entry));
+    const afterReadBudget = elapsedBudgetIssue(path);
+    if (afterReadBudget) return afterReadBudget;
+    for (const entry of entries) {
+      const entryPath = resolve(path, entry);
+      const iterationBudget = elapsedBudgetIssue(entryPath);
+      if (iterationBudget) return iterationBudget;
+      if (discoveredEntries >= maxEntries) {
+        return {
+          kind: "error",
+          path: entryPath,
+          reason: `npm cache inspection exceeded its ${maxEntries}-entry budget`,
+        };
+      }
+      discoveredEntries += 1;
+      stack.push(entryPath);
+    }
   }
 
   return null;
@@ -153,7 +202,7 @@ export function checkNpmCacheOwnership(options = {}) {
       entryPath: issue.path,
       expectedUid,
       actualUid: issue.actualUid,
-      reason: `npm cache entry is owned by uid ${issue.actualUid}; expected uid ${expectedUid}`,
+      reason: "npm cache entry ownership does not match the current user",
     };
   }
   return {
