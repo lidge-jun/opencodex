@@ -1,9 +1,9 @@
 {
-  "objective": "OpenCodex live unfinished issues and PRs triage against current GitHub state. Scope: repository lidge-jun/opencodex, dev target only, worktree /Users/jun/.codex/worktrees/260727-live-triage/opencodex. First work-phase is docs-only manifest/devlog: fetch live open PRs and open issues via gh, record current number/title/state/base/head/mergeable/checks/reviews/labels, classify every item into merge now, takeover-fix, comment/request-changes, needs-author-rebase, needs-human/security, later/enhancement, upstream-tracking, or close, and produce a priority table. Later work-phases process exactly one PR or one issue per full PABCD cycle. Allowed: directly fix bugfix/simple safe items on dev, create PRs, wait for CI, squash merge, and close linked issues when live evidence proves safety. Out of scope: main/preview/release branches, automatic merge of security/auth/permission/data-migration/privilege-boundary work, and unapproved GUI/UX decisions except the approved OpenRouter Free separate-provider direction. Terminal outcomes: DONE when all safe live items are processed and manifest evidence is current; NOOP when an item needs no action after live check; NEEDS_HUMAN or UNSAFE for risk-bound/security/UX-decision items; BLOCKED for external author/rebase/CI or upstream dependency; BUDGET_EXHAUSTED only if explicit runtime bounds are hit. Verification: gh live snapshots, code/diff review for candidate PRs, CI/check URLs where actions occur, comments/merge/close URLs for external state changes, and devlog evidence committed locally before completion.",
+  "objective": "OpenCodex live unfinished issues and PRs triage against current GitHub state. Scope: repository lidge-jun/opencodex, dev target only, worktree <local-worktree>. First work-phase is docs-only manifest/devlog: fetch live open PRs and open issues via gh, record current number/title/state/base/head/mergeable/checks/reviews/labels, classify every item into merge now, takeover-fix, comment/request-changes, needs-author-rebase, needs-human/security, later/enhancement, upstream-tracking, or close, and produce a priority table. Later work-phases process exactly one PR or one issue per full PABCD cycle. Allowed: directly fix bugfix/simple safe items on dev, create PRs, wait for CI, squash merge, and close linked issues when live evidence proves safety. Out of scope: main/preview/release branches, automatic merge of security/auth/permission/data-migration/privilege-boundary work, and unapproved GUI/UX decisions except the approved OpenRouter Free separate-provider direction. Terminal outcomes: DONE when all safe live items are processed and manifest evidence is current; NOOP when an item needs no action after live check; NEEDS_HUMAN or UNSAFE for risk-bound/security/UX-decision items; BLOCKED for external author/rebase/CI or upstream dependency; BUDGET_EXHAUSTED only if explicit runtime bounds are hit. Verification: gh live snapshots, code/diff review for candidate PRs, CI/check URLs where actions occur, comments/merge/close URLs for external state changes, and devlog evidence committed locally before completion.",
   "slug": "opencodex-live-unfinished-issues-and-prs-triage",
   "createdAt": "2026-07-27T10:35:02.724Z",
-  "updatedAt": "2026-07-27T12:16:35.216Z",
-  "activeWorkPhaseId": "WP7",
+  "updatedAt": "2026-07-27T12:25:15.899Z",
+  "activeWorkPhaseId": "WP8",
   "workPhases": [
     {
       "id": "WP0",
@@ -233,17 +233,17 @@
     {
       "id": "WP7",
       "title": "Issue #418 V2 custom delegation investigation",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "WP7-T1",
           "title": "Read custom-parent/custom-child delegation code path and issue evidence",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "WP7-T2",
           "title": "Fix or comment with code pointers and required reproduction evidence",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
@@ -253,7 +253,7 @@
     {
       "id": "WP8",
       "title": "Issue #509 JS heap watchdog investigation",
-      "status": "pending",
+      "status": "in_progress",
       "tasks": [
         {
           "id": "WP8-T1",
@@ -346,8 +346,8 @@
       "id": "C-WP7-ISSUE418",
       "scenario": "Issue #418 has a proven fix or a fresh investigation comment with code pointers.",
       "expectedEvidence": "test/command output if fixed, otherwise comment URL plus code pointers.",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "WP7 closed as NOOP/comment-request-changes at 2026-07-27. Live issue #418 remains OPEN with bug label. Existing comments already satisfy this phase's intended maintainer action: owner request https://github.com/lidge-jun/opencodex/issues/418#issuecomment-5069836945 asks for raw provider tool-call, Responses event, and child lifecycle trace; reporter acknowledgement https://github.com/lidge-jun/opencodex/issues/418#issuecomment-5070272410 says same-run failing spawn_agent trace is still unavailable until usage limit clears; collaborator cross-link https://github.com/lidge-jun/opencodex/issues/418#issuecomment-5085535548 keeps #418 separate from #92 pending the three-boundary capture. Code review found no proven local argument-drop path: parser copies tool parameters at src/responses/parser.ts:134-139; OpenAI-compatible adapter forwards parameters at src/adapters/openai-chat.ts:432-445; provider function.arguments fragments are accumulated at src/adapters/openai-chat.ts:749-768; bridge forwards deltas at src/bridge.ts:610-617 and materializes {} only when accumulated bytes are empty at src/bridge.ts:366-375. No GitHub comment, close, merge, or code change was performed.",
+      "status": "met"
     },
     {
       "id": "C-WP8-ISSUE509",
