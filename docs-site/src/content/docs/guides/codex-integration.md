@@ -36,7 +36,11 @@ The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension
 POSTs `{base_url}/images/generations` (or `/images/edits` when reference images are attached)
 directly, with the same ChatGPT bearer auth it uses for chat. Because the injected `base_url`
-points at opencodex, the proxy relays those calls to the OpenAI upstream:
+points at opencodex, the proxy relays those calls to the OpenAI upstream.
+
+This is separate from the [Image Bridge](/guides/image-bridge/), which only activates when a
+**Responses** turn lists the hosted `image_generation` tool while a non-OpenAI model is selected.
+Standalone `/images/generations` calls never enter that bridge.
 
 - **One mode-aware forward candidate:** Pool selects an eligible main/added account; Direct uses the
   caller OAuth bearer. The configured mode applies consistently to the image request.

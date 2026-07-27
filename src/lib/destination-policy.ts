@@ -92,10 +92,20 @@ function classifyIpv6(hostname: string): DestinationAssessment {
   if (hostname === "::1") return { kind: "loopback", detail: "loopback address" };
   if (hostname === "::") return { kind: "unspecified", detail: "unspecified address" };
   const hextet = firstIpv6Hextet(hostname);
-  if (hextet === null) return { kind: "public", detail: "public IP" };
-  if (hextet >= 0xfc00 && hextet <= 0xfdff) return { kind: "private", detail: "private-network address" };
+  if (hextet === null) return { kind: "private", detail: "non-global address" };
+  // Multicast ff00::/8, deprecated site-local fec0::/10, ULA fc00::/7, link-local fe80::/10.
+  if (hextet >= 0xff00) return { kind: "private", detail: "multicast address" };
   if (hextet >= 0xfe80 && hextet <= 0xfebf) return { kind: "link-local", detail: "link-local address" };
-  return { kind: "public", detail: "public IP" };
+  if (hextet >= 0xfec0 && hextet <= 0xfeff) return { kind: "private", detail: "site-local address" };
+  if (hextet >= 0xfc00 && hextet <= 0xfdff) return { kind: "private", detail: "private-network address" };
+  // Documentation 2001:db8::/32 (inside global-unicast 2000::/3).
+  if (hextet === 0x2001) {
+    const second = Number.parseInt(hostname.split(":")[1] || "0", 16);
+    if (second === 0xdb8) return { kind: "private", detail: "documentation address" };
+  }
+  // Only global unicast 2000::/3 is treated as a public image/CDN peer.
+  if (hextet >= 0x2000 && hextet <= 0x3fff) return { kind: "public", detail: "public IP" };
+  return { kind: "private", detail: "non-global address" };
 }
 
 function assessDestination(baseUrl: string): DestinationAssessment | null {

@@ -57,7 +57,13 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 
 ## How It Works
 
-1. When Codex sends a request with `image_generation` in the tools array, OpenCodex detects it
+The Image Bridge activates only on **Responses** turns that include the hosted
+`image_generation` tool in the `/v1/responses` tools array while a **non-OpenAI**
+model is selected. It does **not** intercept Codex's built-in `image_gen` tool,
+which POSTs directly to `/v1/images/generations` (or `/images/edits`) — that path
+is covered separately in [Codex Integration](/guides/codex-integration/#built-in-image-generation-image_gen).
+
+1. When a Responses request lists `image_generation` in `tools`, OpenCodex detects it
    during request preprocessing.
 2. The hosted tool is replaced with a **synthetic function tool** that the routed model can call
    normally — the model sees a callable tool rather than an opaque hosted tool it can't execute.

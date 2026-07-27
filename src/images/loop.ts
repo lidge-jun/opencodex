@@ -15,7 +15,7 @@ import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
-import { clearableDeadline } from "../lib/abort";
+import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../web-search/progress-stream";
@@ -290,28 +290,31 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           queue.close();
         });
 
-      // Bound collect with a real inactivity deadline. Do NOT manufacture adapter heartbeats
-      // here — bridgeToResponsesSSE treats those as upstream activity and would defeat the stall
-      // guard. SSE keepalives come from the bridge heartbeat interval instead.
-      const collectPromise = queue.collect();
-      const collectDeadline = clearableDeadline(stallTimeoutMs, signal);
-      let events: AdapterEvent[];
+      // Bound collect with a real *idle* deadline that resets on each emitted event.
+      // A fixed wall-clock race would abort legitimate long Cursor turns that keep
+      // producing tokens. Do NOT manufacture adapter heartbeats here — bridgeToResponsesSSE
+      // treats those as upstream activity and would defeat the stall guard. SSE keepalives
+      // come from the bridge heartbeat interval instead.
+      let timedOut = false;
+      const idle = idleDeadline(stallTimeoutMs, () => {
+        timedOut = true;
+        // Cancel the fire-and-forget runTurn so a stalled Cursor session does not keep
+        // running after the bridge has already failed the iteration with 504.
+        internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
+      });
+      const events: AdapterEvent[] = [];
       try {
-        events = await Promise.race([
-          collectPromise,
-          new Promise<never>((_, reject) => {
-            const onAbort = (): void => {
-              // Cancel the fire-and-forget runTurn so a stalled Cursor session does not keep
-              // running after the bridge has already failed the iteration with 504.
-              internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
-              reject(new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`));
-            };
-            if (collectDeadline.signal.aborted) onAbort();
-            else collectDeadline.signal.addEventListener("abort", onAbort, { once: true });
-          }),
-        ]);
+        idle.reset();
+        for await (const event of queue.stream()) {
+          if (timedOut) break;
+          idle.reset();
+          events.push(event);
+        }
       } finally {
-        collectDeadline.clear();
+        idle.cancel();
+      }
+      if (timedOut) {
+        throw new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`);
       }
 
       // Preserve Cursor conversation continuity across image-loop iterations. runTurn mutates
@@ -595,7 +598,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {
-        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(addUsage(hiddenUsage, usage)),
+        // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
+        // add it again here or request logs double-count multi-iteration image turns.
+        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
       } : {}),
     },
   );

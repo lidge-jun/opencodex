@@ -1584,6 +1584,12 @@ export async function handleResponses(
       fetchImpl: providerFetch(route.provider),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
       onUsage: usage => {
+        // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
+        // backfill so Logs can filter/total that opening request (parity with the normal
+        // runTurn branch).
+        if (!logCtx.conversationId && parsed._cursorConversationId) {
+          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
+        }
         logCtx.usageFromBridge = true;
         if (usage) {
           logCtx.usage = usage;
