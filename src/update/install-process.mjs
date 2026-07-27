@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 const TREE_POLL_INTERVAL_MS = 100;
 const DEFAULT_TERMINATION_GRACE_MS = 5_000;
 const DEFAULT_FORCE_WAIT_MS = 5_000;
-const MAX_CAPTURED_OUTPUT_CHARS = 4_000;
+export const MAX_CAPTURED_OUTPUT_CHARS = 4_000;
 
 function appendBoundedOutput(current, chunk) {
   const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -83,6 +83,15 @@ export function processGroupForceDecision(inspection, originalLeaderConfirmed) {
   return "signal";
 }
 
+function processGroupTerminationDecision(inspection, originalLeaderConfirmed) {
+  if (!inspection) return "refuse";
+  if (!inspection.hasRunningMember) return "exited";
+  // SIGTERM is sent only while the original root still anchors the group ID.
+  // Leaderless groups are handled fail-closed after root exit.
+  if (!inspection.hasRunningLeader || !originalLeaderConfirmed) return "refuse";
+  return "signal";
+}
+
 function processGroupHasRunningMember(groupId, inspect = inspectProcessGroup) {
   return inspect(groupId)?.hasRunningMember ?? null;
 }
@@ -155,7 +164,21 @@ export async function terminateInstallerProcessTree(
     return waitForProcessTreeExit(pid, forceWaitMs, inspect);
   }
 
-  if (!isProcessTreeAlive(pid, inspect)) return true;
+  // Inspect twice at the signal boundary. SIGTERM is allowed only while the
+  // original root still anchors the group; a leaderless or replaced group is
+  // never signaled by its reusable numeric PGID.
+  const terminationInspection = inspect(pid);
+  const terminationLeaderConfirmed = terminationInspection?.hasRunningLeader === true
+    && isOriginalLeader?.() === true;
+  const terminationDecision = processGroupTerminationDecision(terminationInspection, terminationLeaderConfirmed);
+  if (terminationDecision === "exited") return true;
+  if (terminationDecision === "refuse") return false;
+  const signalInspection = inspect(pid);
+  const signalLeaderConfirmed = signalInspection?.hasRunningLeader === true
+    && isOriginalLeader?.() === true;
+  const signalDecision = processGroupTerminationDecision(signalInspection, signalLeaderConfirmed);
+  if (signalDecision === "exited") return true;
+  if (signalDecision === "refuse") return false;
   try {
     process.kill(-pid, "SIGTERM");
   } catch (error) {
@@ -174,12 +197,12 @@ export async function terminateInstallerProcessTree(
   // Reinspect at the force-signal boundary. The original group can exit and its
   // ID can be reused after the grace-period inspection above; a replacement
   // leader must never receive the pending SIGKILL.
-  const signalInspection = inspect(pid);
-  const signalLeaderConfirmed = signalInspection?.hasRunningLeader === true
+  const forceSignalInspection = inspect(pid);
+  const forceSignalLeaderConfirmed = forceSignalInspection?.hasRunningLeader === true
     && isOriginalLeader?.() === true;
-  const signalDecision = processGroupForceDecision(signalInspection, signalLeaderConfirmed);
-  if (signalDecision === "exited") return true;
-  if (signalDecision === "refuse") return false;
+  const forceSignalDecision = processGroupForceDecision(forceSignalInspection, forceSignalLeaderConfirmed);
+  if (forceSignalDecision === "exited") return true;
+  if (forceSignalDecision === "refuse") return false;
 
   try {
     process.kill(-pid, "SIGKILL");
@@ -311,19 +334,22 @@ export async function runProcessTreeCommand(
 
   let treeExited = true;
   if (cleanupPromise) {
-    treeExited = await cleanupPromise;
+    const knownGroupExited = await cleanupPromise;
+    // taskkill /T is a retained Windows tree operation. A POSIX process group is
+    // not containment: a lifecycle child can leave it with setsid/setpgid, so a
+    // timeout/interruption can never prove complete descendant shutdown.
+    treeExited = process.platform === "win32" && knownGroupExited;
   } else if (spawnFailed) {
     treeExited = true;
   } else if (process.platform === "win32") {
     treeExited = !windowsFailedExitTreeUnknown;
-  } else if (child.pid && posixTreeAfterRootExit === "running") {
-    treeExited = await terminateInstallerProcessTree(child.pid, {
-      terminationGraceMs,
-      forceWaitMs,
-      inspectProcessGroup: inspect,
-    });
-  } else if (posixTreeAfterRootExit !== "exited") {
-    treeExited = false;
+  } else {
+    // A successful package-manager root exit is its completion contract. For a
+    // failed/signaled root, process groups cannot prove that a daemonized child
+    // did not escape, and signaling a leaderless group risks a reused PGID.
+    treeExited = result.status === 0
+      && result.signal === null
+      && posixTreeAfterRootExit === "exited";
   }
   for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
 

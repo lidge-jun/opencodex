@@ -1,6 +1,7 @@
 import type { StdioOptions } from "node:child_process";
 
 export const INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE: number;
+export const MAX_CAPTURED_OUTPUT_CHARS: number;
 
 export interface ProcessTreeCommandOptions {
   timeoutMs?: number;

@@ -42,22 +42,27 @@ platforms, the scope and complete package tree must also reject symlinks, foreig
 group/world-writable entries before any candidate code executes. The tree walk is bounded by entry
 count and elapsed time. Candidate inspection and restart are bounded to at most two candidates,
 preferring the current package and then the newest retired copies, and it tries those runnable
-candidates in order until one restores health.
+candidates in order until one restores health. A recovery launcher is always started directly: it
+may restore availability, but its potentially temporary path is never persisted into launchd,
+systemd, or Task Scheduler. If a candidate starts but does not become healthy, the worker records
+its PID, revalidates its OpenCodex identity, and stops it before trying the next candidate.
 Service and direct restart paths also stop when the pidfile has changed to a different identity-checked
 proxy, and every such identity decision re-reads the process command line instead of trusting a
 PID-only cache across the update boundary. The update job remains failed either way because restoring
 availability is not the same as installing the new version.
 
 The npm launcher and the Bun/source CLI installer paths run in an isolated process tree. On timeout,
-the updater terminates and awaits the whole POSIX process group or a Windows `taskkill /T /F` tree
-before returning failure; piped CLI output is drained and bounded before it is replayed. POSIX
-cleanup treats zombie-only groups as stopped and refuses to signal a process-group ID that has been
-reused by a new leader, including a second identity check immediately before force-killing after the
-grace period. Windows has no retained job-object handle after a normally failed installer
-root exits, so that case remains explicitly unconfirmed and automatic recovery (including tray
-restoration) stays disabled. The outer worker timeout remains longer than the nested deadline, and
-recovery is skipped whenever either layer cannot prove installer-tree shutdown, so recovery never
-races a lifecycle or replacement child that may still be writing package files.
+the updater terminates and awaits the known POSIX process group or a Windows `taskkill /T /F` tree;
+piped CLI output is drained and bounded before it is replayed. A POSIX process group is not an OS
+containment boundary because a lifecycle child can leave it with `setsid` or `setpgid`. Therefore a
+timeout, interruption, or nonzero POSIX root exit is always reported as unconfirmed even when the
+known group was successfully stopped, and automatic recovery stays disabled. Once a POSIX root has
+exited, the updater also refuses to signal its leaderless group by a reusable numeric PGID. While the
+root is live, cleanup treats zombie-only groups as stopped and rechecks the original leader twice at
+the SIGTERM boundary; force-kill retains its own second group inspection. Windows has no retained
+job-object handle after a normally failed installer root exits, so that case likewise remains
+explicitly unconfirmed. The outer worker timeout remains longer than the nested deadline, and
+recovery is skipped whenever either layer cannot prove installer-tree shutdown.
 
 After an update requests a restart, the worker now waits for an identity-checked `/healthz` to
 return and remain healthy for a short stability window before marking the job successful. This
@@ -83,7 +88,8 @@ restart path because `bun add -g` does not restart the proxy.
 - Update status survives a proxy restart because it is stored in the opencodex config directory.
 - Restart handling can branch between service-managed installs and direct detached proxy starts.
 - npm cache ownership failures are detected before service or proxy shutdown.
-- Failed installer process trees are terminated and confirmed gone before recovery starts.
+- Automatic recovery starts only when installer shutdown is confirmed; ambiguous POSIX failures and
+  escaped descendants remain fail-closed with manual remediation.
 - A failed install best-effort restores a previously-active proxy without claiming update success.
 - A completed install can still finish with `status: "failed"` when the replacement proxy never
   becomes healthy or flaps during the stability window; the job log then points the user at

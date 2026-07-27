@@ -501,7 +501,6 @@ describe("GUI update execution decisions", () => {
       await restartAfterUpdateForTests(job, {
         port: 18765,
         hostname: "127.0.0.1",
-        recoveryLauncher: "/retired/bin/ocx.mjs",
       }, {
         serviceInstalledFn: () => true,
         waitForPort: async (port, hostname) => {
@@ -517,12 +516,55 @@ describe("GUI update execution decisions", () => {
       });
       expect(waited).toEqual([{ port: 18765, hostname: "127.0.0.1" }]);
       expect(bakeDuringInstall).toEqual(["18765"]);
-      expect(launchersDuringInstall).toEqual(["/retired/bin/ocx.mjs"]);
+      expect(launchersDuringInstall).toHaveLength(1);
+      expect(launchersDuringInstall[0]?.endsWith("/bin/ocx.mjs")).toBe(true);
       expect(process.env.OCX_BAKE_PORT).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.OCX_BAKE_PORT;
       else process.env.OCX_BAKE_PORT = prev;
     }
+  });
+
+  test("retired recovery launchers never persist their path in an installed service", async () => {
+    const spawned: Array<{ port?: number; launcher?: string }> = [];
+    const job: UpdateJobState = {
+      id: "restart-retired-direct",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+
+    const startedPid = await restartAfterUpdateForTests(job, {
+      port: 10100,
+      hostname: "127.0.0.1",
+      recoveryLauncher: "/scope/.opencodex-Ab12Cd34/bin/ocx.mjs",
+    }, {
+      serviceInstalledFn: () => true,
+      waitForPort: async () => true,
+      runService: () => { throw new Error("must not persist a temporary recovery path"); },
+      spawnStart: (_job, _installer, port, launcher) => {
+        spawned.push({ port, launcher });
+        return 222;
+      },
+    });
+
+    expect(startedPid).toBe(222);
+    expect(spawned).toEqual([{
+      port: 10100,
+      launcher: "/scope/.opencodex-Ab12Cd34/bin/ocx.mjs",
+    }]);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("temporary") && line.includes("installed service stopped"),
+    )).toBe(true);
   });
 
   test("service reinstall failure falls back to a direct proxy start", async () => {
@@ -791,10 +833,12 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("update itself still failed"))).toBe(true);
   });
 
-  test("failed install tries the next runnable recovery package when the first does not start", async () => {
+  test("failed install stops an unhealthy recovery process before trying the next package", async () => {
     let now = 0;
-    let activeLauncher: string | undefined;
+    let activePid: number | null = null;
     const attempted: Array<string | undefined> = [];
+    const killed: number[] = [];
+    const runningPids = new Set<number>();
     const job: UpdateJobState = {
       id: "failed-install-recovery-fallback",
       status: "running",
@@ -817,13 +861,22 @@ describe("GUI update execution decisions", () => {
       true,
       {
         probeProxyIdentity: async () => null,
-        verifyPidIdentityFn: () => null,
+        serviceInstalledFn: () => false,
+        readPidFn: () => activePid,
+        verifyPidIdentityFn: pid => runningPids.has(pid) ? pid : null,
         recoveryLaunchersFn: () => ["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"],
-        probeProxy: async () => activeLauncher === "/retired/bin/ocx.mjs",
-        restartAfterUpdateFn: async (_job, captured) => {
-          activeLauncher = captured?.recoveryLauncher;
-          attempted.push(activeLauncher);
-          if (activeLauncher === "/current/bin/ocx.mjs") throw new Error("partial runtime");
+        probeProxy: async () => activePid === 333 && runningPids.has(333),
+        waitForPort: async () => true,
+        spawnStart: (_job, _installer, _port, launcher) => {
+          attempted.push(launcher);
+          activePid = launcher === "/current/bin/ocx.mjs" ? 222 : 333;
+          runningPids.add(activePid);
+          return activePid;
+        },
+        killProxyFn: pid => {
+          killed.push(pid);
+          runningPids.delete(pid);
+          if (activePid === pid) activePid = null;
         },
         now: () => now,
         sleepMs: async (ms) => { now += ms; },
@@ -832,6 +885,9 @@ describe("GUI update execution decisions", () => {
 
     expect(recovery).toBe("restarted");
     expect(attempted).toEqual(["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"]);
+    expect(killed).toEqual([222]);
+    expect(runningPids.has(222)).toBe(false);
+    expect(runningPids.has(333)).toBe(true);
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("trying candidate 2 of 2"))).toBe(true);
   });
 

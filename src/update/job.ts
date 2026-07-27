@@ -492,7 +492,7 @@ function spawnDetachedStart(
   installer: Installer,
   port?: number,
   launcher = packageLauncherPath(),
-): void {
+): number | null {
   const cmd = restartCommand(false, installer, launcher, port);
   const env = { ...process.env };
   delete env.OCX_SERVICE;
@@ -504,6 +504,7 @@ function spawnDetachedStart(
     env,
   });
   child.unref();
+  return child.pid ?? null;
 }
 
 /** Identity snapshot used to prove an npm self-update actually replaced the pre-update process. */
@@ -517,7 +518,7 @@ export type FailedUpdateRecovery = "not-needed" | "still-running" | "restarted" 
 /** Test seam: the wait/spawn pair is injectable so the restart path is verifiable. */
 export interface RestartIo {
   waitForPort?: typeof reclaimListenPort;
-  spawnStart?: (job: UpdateJobState, installer: Installer, port?: number, launcher?: string) => void;
+  spawnStart?: (job: UpdateJobState, installer: Installer, port?: number, launcher?: string) => number | null | void;
   serviceInstalledFn?: () => boolean;
   readPidFn?: () => number | null;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
@@ -525,6 +526,7 @@ export interface RestartIo {
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
   verifyPidIdentityFn?: (pid: number) => number | null;
   recoveryLaunchersFn?: (currentLauncher: string, expectedVersion: string) => Promise<string[]> | string[];
+  killProxyFn?: (pid: number) => void;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
@@ -538,15 +540,21 @@ export interface RestartIo {
     job: UpdateJobState,
     captured?: { port: number; hostname: string; oldPid?: number; recoveryLauncher?: string },
     io?: RestartIo,
-  ) => Promise<void>;
+  ) => Promise<number | null | void>;
 }
 
 async function restartAfterUpdate(
   job: UpdateJobState,
   captured?: { port: number; hostname: string; oldPid?: number; recoveryLauncher?: string },
   io: RestartIo = {},
-): Promise<void> {
+): Promise<number | null> {
   const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
+  // A failed npm install may leave only a hidden, npm-retired package runnable.
+  // It can restore availability, but must never be baked into launchd/systemd.
+  const persistentServiceRestart = serviceInstalled && captured?.recoveryLauncher === undefined;
+  if (serviceInstalled && !persistentServiceRestart) {
+    updateJob(job, {}, "Recovery launcher is temporary; starting the proxy directly and leaving the installed service stopped until the package is repaired.");
+  }
   const config = loadConfig();
   // The stop-first update flow has already cleared pid/runtime state by the time we run,
   // so the pre-update capture (taken before the update command) is the authoritative
@@ -567,16 +575,16 @@ async function restartAfterUpdate(
     updateJob(job, {}, `A different identity-checked proxy PID appeared ${context}; leaving it untouched.`);
     return { pid: null, refused: true };
   };
-  if (readPidForRestart("during restart handoff").refused) return;
+  if (readPidForRestart("during restart handoff").refused) return null;
   let svcArgs: string[] | undefined;
-  if (serviceInstalled) {
+  if (persistentServiceRestart) {
     try {
       const { serviceReinstallArgs } = await import("../service");
       svcArgs = serviceReinstallArgs();
     } catch { /* fallback to default service install */ }
   }
   const launcher = captured?.recoveryLauncher ?? packageLauncherPath();
-  const cmd = restartCommand(serviceInstalled, job.installer, launcher, port, svcArgs);
+  const cmd = restartCommand(persistentServiceRestart, job.installer, launcher, port, svcArgs);
   const waitFn = io.waitForPort ?? reclaimListenPort;
   const reclaimOpts = {
     timeoutMs: RESTART_PORT_RECLAIM_MS,
@@ -586,14 +594,14 @@ async function restartAfterUpdate(
     onlyKillPids: oldPid != null ? [oldPid] : [],
   };
 
-  if (serviceInstalled) {
+  if (persistentServiceRestart) {
     // Stop-first update already unloaded the service; reclaim the socket (only the
     // captured old PID when trusted), then reinstall wrappers that bake `--port`.
     const freed = await waitFn(port, hostname, reclaimOpts);
     if (!freed) {
       updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`);
     }
-    if (readPidForRestart("after service port reclaim").refused) return;
+    if (readPidForRestart("after service port reclaim").refused) return null;
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(Math.trunc(port));
     let serviceOk = false;
@@ -614,13 +622,13 @@ async function restartAfterUpdate(
       if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
       else process.env.OCX_BAKE_PORT = prevBake;
     }
-    if (serviceOk) return;
+    if (serviceOk) return null;
     // Fall through to the direct proxy start below so the update never leaves the
     // proxy stopped when the service reinstall could not run.
   }
 
   const directPid = readPidForRestart("before direct restart");
-  if (directPid.refused) return;
+  if (directPid.refused) return null;
   const pid = directPid.pid;
   if (pid !== null) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
@@ -632,10 +640,13 @@ async function restartAfterUpdate(
   const freed = await waitFn(port, hostname, reclaimOpts);
   if (!freed) {
     updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s (reclaim could not free the socket); not starting on another port. Retry 'ocx start --port ${port}'.`);
-    return;
+    return null;
   }
-  if (readPidForRestart("after direct port reclaim").refused) return;
-  (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port, launcher);
+  if (readPidForRestart("after direct port reclaim").refused) return null;
+  const startedPid = (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port, launcher);
+  return typeof startedPid === "number" && Number.isSafeInteger(startedPid) && startedPid > 0
+    ? startedPid
+    : null;
 }
 
 /** Exposed for tests: drives the non-service restart path with injected io. */
@@ -643,7 +654,7 @@ export function restartAfterUpdateForTests(
   job: UpdateJobState,
   captured: { port: number; hostname: string; oldPid?: number; recoveryLauncher?: string },
   io: RestartIo,
-): Promise<void> {
+): Promise<number | null> {
   return restartAfterUpdate(job, captured, io);
 }
 
@@ -860,11 +871,25 @@ async function recoverFailedGuiUpdate(
         updateJob(job, {}, `Recovery candidate ${index} did not restore the proxy; trying candidate ${index + 1} of ${recoveryLaunchers.length}.`);
       }
       try {
-        await restartFn(job, recoveryCaptured, io);
+        const startedPid = await restartFn(job, recoveryCaptured, io);
         const healthy = await awaitRestartedProxyHealthy(job, recoveryCaptured, io);
         if (healthy.ok) {
           updateJob(job, {}, `Previous proxy availability restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
           return "restarted";
+        }
+        if (typeof startedPid === "number" && Number.isSafeInteger(startedPid) && startedPid > 0) {
+          const verifyStartedPid = io.verifyPidIdentityFn ?? verifyPidIdentityFresh;
+          if (verifyStartedPid(startedPid) !== startedPid) {
+            updateJob(job, {}, `Recovery candidate ${index + 1} left PID ${startedPid} without a matching OpenCodex identity; refusing to kill or try another candidate.`);
+            break;
+          }
+          try {
+            (io.killProxyFn ?? killProxy)(startedPid);
+            updateJob(job, {}, `Stopped unhealthy recovery candidate ${index + 1} PID ${startedPid}.`);
+          } catch (error) {
+            updateJob(job, {}, `Could not stop unhealthy recovery candidate ${index + 1} PID ${startedPid}: ${error instanceof Error ? error.message : String(error)}`);
+            break;
+          }
         }
       } catch {
         updateJob(job, {}, `Recovery candidate ${index + 1} failed before health confirmation.`);
