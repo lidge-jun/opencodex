@@ -28,7 +28,7 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
 
 - Authentication via `authMode: "oauth"` (`ocx login xai` — uses a stored, auto-refreshed
   bearer token) or `authMode: "key"` (a configured API key). See
-  [Providers](/reference/providers/) for the shared auth modes.
+  [Providers](/guides/providers/) for the shared auth modes.
 - A non-OpenAI model selected as your active provider. (When the active provider is OpenAI,
   the native hosted tool is used directly and the bridge is bypassed.)
 
