@@ -13,11 +13,10 @@ import type { StorageCleanupPolicy } from "../types";
 import {
   computePreviewDigest,
   executeArchivedCleanup,
-  filterCandidatesExcludingPendingRestore,
   listArchivedCandidates,
-  previewArchivedCleanup,
   previewExactArchivedCleanup,
-  selectOldestPercent,
+  selectOldestPercentSkippingPendingRestore,
+  selectReduceToBytesSkippingPendingRestore,
   type CleanupMode,
   type CleanupResult,
   type ExecuteCleanupOptions,
@@ -352,9 +351,8 @@ export function selectPolicyPreview(
 
   if (reduceTo !== undefined) {
     // Exact candidate set — do not approximate via percent (would over-delete).
-    const desired = selectReduceToBytes(all, reduceTo);
-    const filtered = filterCandidatesExcludingPendingRestore(desired, codexHome);
-    const preview = previewExactArchivedCleanup(filtered, codexHome);
+    const desired = selectReduceToBytesSkippingPendingRestore(all, reduceTo, codexHome);
+    const preview = previewExactArchivedCleanup(desired, codexHome);
     return {
       archivedBytes,
       percent: 0,
@@ -367,7 +365,7 @@ export function selectPolicyPreview(
 
   // Reuse the already-listed candidates — avoid a second archive directory walk.
   const percent = Math.min(100, Math.max(0, Math.floor(removePct ?? 0)));
-  const selected = filterCandidatesExcludingPendingRestore(selectOldestPercent(all, percent), codexHome);
+  const selected = selectOldestPercentSkippingPendingRestore(all, percent, codexHome);
   return {
     archivedBytes,
     percent,

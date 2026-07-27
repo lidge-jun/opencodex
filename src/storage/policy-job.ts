@@ -6,6 +6,11 @@
  * proxy event loop stays responsive.
  */
 import type { CleanupMode, CleanupResult } from "./cleanup";
+import { resolveCodexHomeDir } from "../codex/home";
+import {
+  endStorageMutation,
+  tryBeginStorageMutation,
+} from "./storage-mutation-coordinator";
 import {
   isPolicyDue,
   readStorageCleanupPolicyFromConfig,
@@ -20,7 +25,7 @@ export interface PolicyJobOutcome {
   ok: boolean;
   skipped?: PolicySkipReason;
   deferred?: "codex_busy";
-  error?: CleanupResult["error"] | "evaluation_failed" | "worker_failed";
+  error?: CleanupResult["error"] | "evaluation_failed" | "worker_failed" | "storage_mutation_busy";
   mode?: CleanupMode;
   freedBytes?: number;
   removed?: number;
@@ -71,6 +76,14 @@ let livePolicyApply: ((policy: PolicyRunResult["policy"]) => void) | undefined;
 let cancelActiveRun: (() => void) | null = null;
 /** Bumped on abort/reset so a late worker completion cannot clobber newer job state. */
 let runGeneration = 0;
+/** CODEX_HOME whose mutation slot this job holds (parent thread only). */
+let heldMutationHome: string | undefined;
+
+function releaseHeldMutationSlot(): void {
+  if (heldMutationHome === undefined) return;
+  endStorageMutation(heldMutationHome);
+  heldMutationHome = undefined;
+}
 
 export function setStorageCleanupPolicyJobLiveApply(
   apply: ((policy: PolicyRunResult["policy"]) => void) | null,
@@ -119,6 +132,7 @@ export function resetStorageCleanupPolicyJobForTests(): void {
   }
   inflight = null;
   testHooks = null;
+  releaseHeldMutationSlot();
   state = { status: "idle" };
 }
 
@@ -129,6 +143,7 @@ export function abortStorageCleanupPolicyJob(): void {
     try { activeWorker.terminate(); } catch { /* */ }
     activeWorker = null;
   }
+  releaseHeldMutationSlot();
   if (state.status === "running") {
     state = {
       ...state,
@@ -184,6 +199,17 @@ function applyFailed(message: string): void {
     finishedAt: Date.now(),
     lastError: message,
     lastOutcome: { ok: false, error: "worker_failed" },
+  };
+}
+
+function applyMutationBusy(): void {
+  state = {
+    status: "idle",
+    reason: state.reason,
+    startedAt: state.startedAt,
+    finishedAt: Date.now(),
+    lastError: "storage_mutation_busy",
+    lastOutcome: { ok: false, error: "storage_mutation_busy" },
   };
 }
 
@@ -254,6 +280,16 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
 
 async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
   const generation = ++runGeneration;
+  const codexHome = opts.codexHome ?? resolveCodexHomeDir();
+  const gate = tryBeginStorageMutation("policy", codexHome);
+  if (!gate.acquired) {
+    if (generation === runGeneration) {
+      applyMutationBusy();
+      inflight = null;
+    }
+    return;
+  }
+  heldMutationHome = codexHome;
   try {
     const blockMs = testHooks?.blockMs;
     let result: PolicyRunResult;
@@ -264,13 +300,14 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
       result = runStorageCleanupPolicy({
         reason: opts.reason,
         force: opts.force === true,
-        ...(opts.codexHome ? { codexHome: opts.codexHome } : {}),
+        codexHome,
         ...(opts.busyTimeoutMs !== undefined ? { busyTimeoutMs: opts.busyTimeoutMs } : {}),
         ...(typeof blockMs === "number" && blockMs > 0 ? { holdAfterLoadMs: blockMs } : {}),
       });
     } else {
       result = await runInWorker({
         ...opts,
+        codexHome,
         ...(typeof blockMs === "number" && blockMs > 0 ? { blockMs } : {}),
       });
     }
@@ -281,6 +318,7 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
     if (generation !== runGeneration) return;
     applyFailed(err instanceof Error ? err.message : "worker_failed");
   } finally {
+    releaseHeldMutationSlot();
     if (generation === runGeneration) inflight = null;
   }
 }

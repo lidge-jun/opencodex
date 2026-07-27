@@ -1772,4 +1772,27 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     const retry = restoreTrashEntry(trashId, { codexHome: home });
     expect(retry.ok).toBe(true);
   }, { timeout: 20_000 });
+
+  test("percent preview backfills past pending oldest archive for manual cleanup", () => {
+    home = buildHome();
+    const stage = join(home, ".trash", "1700000");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "restore-pending.json"), JSON.stringify({
+      version: 1,
+      filesRestored: true,
+      acceptedDestRels: ["archived_sessions/rollout-old.jsonl"],
+      pending: { state: true, logs: false, memories: false, goals: false },
+    }));
+
+    const preview = previewArchivedCleanup(34, home);
+    expect(preview.count).toBe(1);
+    expect(preview.candidates.map(c => c.relPath)).toEqual(["archived_sessions/rollout-mid.jsonl"]);
+
+    const result = runWithDigest(34, "quarantine", home, { now: 1_700_000_001_000 });
+    expect(result.ok).toBe(true);
+    expect(result.count).toBe(1);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(false);
+    expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
+  });
 });

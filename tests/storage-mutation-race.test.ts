@@ -23,13 +23,16 @@ import {
   setArchivedCleanupJobTestHooks,
 } from "../src/storage/cleanup-job";
 import {
+  resetStorageCleanupPolicyJobForTests,
+  setStorageCleanupPolicyJobTestHooks,
+} from "../src/storage/policy-job";
+import {
   resetRestoreTrashJobForTests,
   runRestoreTrashEntryJob,
   setRestoreTrashJobTestHooks,
 } from "../src/storage/restore-job";
 import {
   resetStorageMutationCoordinatorForTests,
-  runPolicyStorageMutation,
 } from "../src/storage/storage-mutation-coordinator";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -91,6 +94,48 @@ async function previewDigest(serverUrl: string, percent: number): Promise<{ dige
   return { digest: body.digest, count: body.count };
 }
 
+async function enablePolicyAndRun(serverUrl: string): Promise<{ startedAt: number }> {
+  await fetch(new URL("/api/storage/cleanup-policy", serverUrl), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      enabled: true,
+      trigger: { archivedBytesOver: 50 },
+      target: { removeOldestPercent: 50 },
+      schedule: "manual",
+      mode: "quarantine",
+    }),
+  });
+  const run = await fetch(new URL("/api/storage/cleanup-policy/run", serverUrl), { method: "POST" });
+  expect(run.status).toBe(200);
+  const body = await run.json();
+  expect(body.started).toBe(true);
+  return { startedAt: body.job.startedAt as number };
+}
+
+async function waitForPolicyJob(
+  serverUrl: string,
+  startedAt: number,
+  timeoutMs = 20_000,
+): Promise<{ job: { lastOutcome?: { ok?: boolean; error?: string; removed?: number } } }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(new URL("/api/storage/cleanup-policy", serverUrl));
+    const body = await res.json() as {
+      job: {
+        status: string;
+        startedAt?: number;
+        lastOutcome?: { ok?: boolean; error?: string; removed?: number };
+      };
+    };
+    if (body.job.status === "idle" && body.job.lastOutcome && body.job.startedAt === startedAt) {
+      return body;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error("policy job did not finish");
+}
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-storage-mutation-race-codex-");
@@ -99,15 +144,18 @@ beforeEach(() => {
   saveConfig(baseConfig());
   resetRestoreTrashJobForTests();
   resetArchivedCleanupJobForTests();
+  resetStorageCleanupPolicyJobForTests();
   resetStorageMutationCoordinatorForTests();
 });
 
 afterEach(() => {
   resetRestoreTrashJobForTests();
   resetArchivedCleanupJobForTests();
+  resetStorageCleanupPolicyJobForTests();
   resetStorageMutationCoordinatorForTests();
   setRestoreTrashJobTestHooks(null);
   setArchivedCleanupJobTestHooks(null);
+  setStorageCleanupPolicyJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -117,7 +165,7 @@ afterEach(() => {
 });
 
 describe("storage mutation coordinator", () => {
-  test("runPolicyStorageMutation returns storage_mutation_busy when restore holds the slot", async () => {
+  test("policy run is rejected while restore holds the shared mutation slot", async () => {
     const home = isolatedCodexHome!.path;
     setRestoreTrashJobTestHooks({ blockMs: 400, runInProcess: true });
     seedArchivedPair(home);
@@ -130,22 +178,81 @@ describe("storage mutation coordinator", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ percent: 50, mode: "quarantine", digest: preview.digest }),
       });
-      expect(cleanupRes.status).toBe(200);
       const cleanup = await cleanupRes.json();
       const trashId = cleanup.trashDir as string;
 
       const restorePromise = runRestoreTrashEntryJob(trashId, { codexHome: home });
       await Bun.sleep(50);
 
-      const policyAttempt = await runPolicyStorageMutation(home, async () => ({ ok: true as const }));
-      expect(policyAttempt).toEqual({ ok: false, error: "storage_mutation_busy" });
+      const { startedAt } = await enablePolicyAndRun(server.url);
+      const done = await waitForPolicyJob(server.url, startedAt);
+      expect(done.job.lastOutcome?.ok).toBe(false);
+      expect(done.job.lastOutcome?.error).toBe("storage_mutation_busy");
 
       const restoreResult = await restorePromise;
       expect(restoreResult.ok).toBe(true);
     } finally {
       await server.stop(true);
     }
-  });
+  }, { timeout: 30_000 });
+
+  test("policy run is rejected while manual cleanup holds the shared mutation slot", async () => {
+    const home = isolatedCodexHome!.path;
+    setArchivedCleanupJobTestHooks({ blockMs: 1200 });
+    seedArchivedPair(home);
+
+    const server = startServer(0);
+    try {
+      const preview = await previewDigest(server.url, 50);
+      const cleanupPromise = fetch(new URL("/api/storage/cleanup", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 50, mode: "quarantine", digest: preview.digest }),
+      });
+      await Bun.sleep(80);
+
+      const { startedAt } = await enablePolicyAndRun(server.url);
+      const done = await waitForPolicyJob(server.url, startedAt);
+      expect(done.job.lastOutcome?.ok).toBe(false);
+      expect(done.job.lastOutcome?.error).toBe("storage_mutation_busy");
+
+      const cleanupRes = await cleanupPromise;
+      expect(cleanupRes.status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  }, { timeout: 30_000 });
+
+  test("manual cleanup and restore are rejected while policy job holds the shared mutation slot", async () => {
+    const home = isolatedCodexHome!.path;
+    setStorageCleanupPolicyJobTestHooks({ blockMs: 1200 });
+    seedArchivedPair(home);
+
+    const server = startServer(0);
+    try {
+      await enablePolicyAndRun(server.url);
+      await Bun.sleep(80);
+
+      const preview = await previewDigest(server.url, 50);
+      const cleanupRes = await fetch(new URL("/api/storage/cleanup", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 50, mode: "quarantine", digest: preview.digest }),
+      });
+      expect(cleanupRes.status).toBe(409);
+      expect((await cleanupRes.json()).error).toBe("storage_mutation_busy");
+
+      const restoreRes = await fetch(new URL("/api/storage/trash/restore", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: ".trash/missing" }),
+      });
+      expect(restoreRes.status).toBe(409);
+      expect((await restoreRes.json()).error).toBe("storage_mutation_busy");
+    } finally {
+      await server.stop(true);
+    }
+  }, { timeout: 30_000 });
 
   test("cleanup quarantine and permanent are rejected while restore holds slot after file moves", async () => {
     const home = isolatedCodexHome!.path;

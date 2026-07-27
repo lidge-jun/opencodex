@@ -156,6 +156,67 @@ describe("selection helpers", () => {
     expect(percentForAtLeastCount(4, 2)).toBe(50);
   });
 
+  test("selectPolicyPreview backfills percent past pending oldest archive", () => {
+    const dir = seedHome([
+      { name: "rollout-old.jsonl", bytes: 100, when: OLD },
+      { name: "rollout-mid.jsonl", bytes: 100, when: MID },
+      { name: "rollout-new.jsonl", bytes: 100, when: NEW },
+    ]);
+    const stage = join(dir, ".trash", "99000");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "restore-pending.json"), JSON.stringify({
+      version: 1,
+      filesRestored: true,
+      acceptedDestRels: ["archived_sessions/rollout-old.jsonl"],
+      pending: { state: true, logs: false, memories: false, goals: false },
+    }));
+
+    const preview = selectPolicyPreview(
+      policy({
+        enabled: true,
+        trigger: { archivedBytesOver: 1 },
+        target: { removeOldestPercent: 34 },
+        schedule: "manual",
+        mode: "quarantine",
+      }),
+      dir,
+    );
+    expect(preview.count).toBe(1);
+    expect(preview.bytes).toBe(100);
+  });
+
+  test("selectPolicyPreview reduceToBytes skips pending oldest and keeps backfilling", () => {
+    const dir = seedHome([
+      { name: "rollout-old.jsonl", bytes: 100, when: OLD },
+      { name: "rollout-mid.jsonl", bytes: 100, when: MID },
+      { name: "rollout-new.jsonl", bytes: 100, when: NEW },
+    ]);
+    const stage = join(dir, ".trash", "99001");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "restore-pending.json"), JSON.stringify({
+      version: 1,
+      filesRestored: true,
+      acceptedDestRels: ["archived_sessions/rollout-old.jsonl"],
+      pending: { state: true, logs: false, memories: false, goals: false },
+    }));
+
+    const preview = selectPolicyPreview(
+      policy({
+        enabled: true,
+        trigger: { archivedBytesOver: 1 },
+        target: { reduceToBytes: 100 },
+        schedule: "manual",
+        mode: "quarantine",
+      }),
+      dir,
+    );
+    expect(preview.count).toBe(2);
+    expect(preview.candidateRelPaths).toEqual([
+      "archived_sessions/rollout-mid.jsonl",
+      "archived_sessions/rollout-new.jsonl",
+    ]);
+  });
+
   test("selectPolicyPreview honors removeOldestPercent", () => {
     const dir = seedHome([
       { name: "rollout-old.jsonl", bytes: 50, when: OLD },

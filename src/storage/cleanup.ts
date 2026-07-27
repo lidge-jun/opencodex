@@ -336,8 +336,16 @@ export function selectOldestPercent(candidates: ArchivedCandidate[], percent: nu
   const pct = clampPercent(percent);
   if (pct <= 0 || candidates.length === 0) return [];
   if (pct >= 100) return [...candidates];
-  const n = Math.max(1, Math.floor((candidates.length * pct) / 100));
+  const n = percentSelectionTargetCount(candidates.length, pct);
   return candidates.slice(0, n);
+}
+
+/** Count implied by percent selection over the full candidate list. */
+export function percentSelectionTargetCount(totalCount: number, percent: number): number {
+  const pct = clampPercent(percent);
+  if (pct <= 0 || totalCount === 0) return 0;
+  if (pct >= 100) return totalCount;
+  return Math.max(1, Math.floor((totalCount * pct) / 100));
 }
 
 function candidateOverlapsPendingRestore(
@@ -361,6 +369,52 @@ export function filterCandidatesExcludingPendingRestore(
   return candidates.filter(c => !candidateOverlapsPendingRestore(c, pendingDestRels));
 }
 
+/**
+ * Oldest-first percent selection that skips pending-restore destinations without
+ * consuming the percent budget, backfilling with the next oldest safe candidates.
+ */
+export function selectOldestPercentSkippingPendingRestore(
+  candidates: ArchivedCandidate[],
+  percent: number,
+  codexHome: string = resolveCodexHomeDir(),
+): ArchivedCandidate[] {
+  const target = percentSelectionTargetCount(candidates.length, percent);
+  if (target === 0) return [];
+  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+  const out: ArchivedCandidate[] = [];
+  for (const c of candidates) {
+    if (candidateOverlapsPendingRestore(c, pendingDestRels)) continue;
+    out.push(c);
+    if (out.length >= target) break;
+  }
+  return out;
+}
+
+/**
+ * Reduce archived total toward `reduceToBytes` using oldest safe candidates only.
+ * Pending-restore destinations are skipped and do not count toward bytes freed.
+ */
+export function selectReduceToBytesSkippingPendingRestore(
+  candidates: ArchivedCandidate[],
+  reduceToBytes: number,
+  codexHome: string = resolveCodexHomeDir(),
+): ArchivedCandidate[] {
+  if (!Number.isFinite(reduceToBytes) || reduceToBytes < 0) return [];
+  const total = candidates.reduce((sum, c) => sum + c.bytes, 0);
+  if (total <= reduceToBytes) return [];
+  const need = total - reduceToBytes;
+  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+  const out: ArchivedCandidate[] = [];
+  let freed = 0;
+  for (const c of candidates) {
+    if (candidateOverlapsPendingRestore(c, pendingDestRels)) continue;
+    out.push(c);
+    freed += c.bytes;
+    if (freed >= need) break;
+  }
+  return out;
+}
+
 /** Accepted destination paths from every valid in-progress restore marker under `.trash`. */
 export function collectRestorePendingAcceptedDestRels(codexHome: string): Set<string> {
   const out = new Set<string>();
@@ -380,8 +434,7 @@ export function previewArchivedCleanup(
   codexHome: string = resolveCodexHomeDir(),
 ): CleanupPreview {
   const all = listArchivedCandidates(codexHome);
-  const selected = selectOldestPercent(all, percent);
-  const safe = filterCandidatesExcludingPendingRestore(selected, codexHome);
+  const safe = selectOldestPercentSkippingPendingRestore(all, percent, codexHome);
   const pct = clampPercent(percent);
   return {
     codexHome,
