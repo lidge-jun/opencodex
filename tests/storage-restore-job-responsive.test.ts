@@ -95,6 +95,7 @@ describe("storage trash restore job responsiveness", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ percent: 100 }),
       });
+      expect(previewRes.status).toBe(200);
       const preview = await previewRes.json();
       const cleanupRes = await fetch(new URL("/api/storage/cleanup", server.url), {
         method: "POST",
@@ -123,7 +124,8 @@ describe("storage trash restore job responsiveness", () => {
         const t0 = Date.now();
         const health = await fetch(new URL("/healthz", server.url));
         expect(health.status).toBe(200);
-        healthSamples.push(Date.now() - t0);
+        const elapsed = Date.now() - t0;
+        if (i > 0) healthSamples.push(elapsed);
         await Bun.sleep(40);
       }
 

@@ -1608,6 +1608,14 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(partial.ok).toBe(false);
     expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
     expect(existsSync(join(stage, "satellite-backup.json"))).toBe(true);
+    const pendingAfterPartial = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      pending: { logs: boolean; memories: boolean; goals: boolean };
+    };
+    expect(
+      pendingAfterPartial.pending.logs
+      || pendingAfterPartial.pending.memories
+      || pendingAfterPartial.pending.goals,
+    ).toBe(true);
 
     unlinkSync(join(stage, "satellite-backup.json"));
     const failed = restoreTrashEntry(trashId, { codexHome: home });
@@ -1690,5 +1698,76 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     const trashRoot = join(home, ".trash");
     const tombstones = readdirSync(trashRoot).filter(n => n.startsWith(".tombstone-"));
     expect(tombstones.length).toBe(1);
+  }, { timeout: 20_000 });
+
+  test("cleanup rejects overlap with accepted restore-pending destinations after state-commit failure", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_002_000 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+    const restoredRel = "archived_sessions/rollout-old.jsonl";
+
+    const partial = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterStateCommit: true },
+    });
+    expect(partial.ok).toBe(false);
+    expect(existsSync(join(home, restoredRel))).toBe(true);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const overlapDigest = computePreviewDigest(
+      selectOldestPercent(listArchivedCandidates(home), 100),
+      100,
+    );
+    const blocked = executeArchivedCleanup({
+      percent: 100,
+      mode: "quarantine",
+      digest: overlapDigest,
+      codexHome: home,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toBe("restore_pending_overlap");
+    expect(existsSync(join(home, restoredRel))).toBe(true);
+    expect(existsSync(stage)).toBe(true);
+
+    const retry = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retry.ok).toBe(true);
+    expect(existsSync(join(home, restoredRel))).toBe(true);
+  }, { timeout: 20_000 });
+
+  test("cleanup rejects overlap with accepted restore-pending destinations after file-move failure", () => {
+    home = buildHome();
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_002_100 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const partial = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterMoveCount: 1 },
+    });
+    expect(partial.ok).toBe(false);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-mid.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+
+    const overlapDigest = computePreviewDigest(
+      selectOldestPercent(listArchivedCandidates(home), 100),
+      100,
+    );
+    const blocked = executeArchivedCleanup({
+      percent: 100,
+      mode: "permanent",
+      digest: overlapDigest,
+      codexHome: home,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toBe("restore_pending_overlap");
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(stage)).toBe(true);
+
+    const retry = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retry.ok).toBe(true);
   }, { timeout: 20_000 });
 });

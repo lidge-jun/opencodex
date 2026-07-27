@@ -50,6 +50,7 @@ export type CleanupErrorCode =
   | "fs_failed"
   | "db_reconcile_failed"
   | "referenced_history"
+  | "restore_pending_overlap"
   | "cleanup_failed";
 
 export interface ArchivedCandidate {
@@ -326,20 +327,47 @@ export function selectOldestPercent(candidates: ArchivedCandidate[], percent: nu
   return candidates.slice(0, n);
 }
 
+function candidateOverlapsPendingRestore(
+  candidate: ArchivedCandidate,
+  pendingDestRels: ReadonlySet<string>,
+): boolean {
+  if (pendingDestRels.size === 0) return false;
+  for (const rel of candidate.physicalRelPaths) {
+    if (pendingDestRels.has(rel)) return true;
+  }
+  return pendingDestRels.has(candidate.relPath);
+}
+
+/** Accepted destination paths from every valid in-progress restore marker under `.trash`. */
+export function collectRestorePendingAcceptedDestRels(codexHome: string): Set<string> {
+  const out = new Set<string>();
+  const trashRoot = join(codexHome, TRASH_DIR);
+  if (!existsSync(trashRoot)) return out;
+  for (const name of readdirSync(trashRoot)) {
+    if (!TRASH_EPOCH_DIR.test(name)) continue;
+    const read = readRestorePending(join(trashRoot, name));
+    if (read.status !== "valid") continue;
+    for (const rel of read.state.acceptedDestRels) out.add(rel);
+  }
+  return out;
+}
+
 export function previewArchivedCleanup(
   percent: number,
   codexHome: string = resolveCodexHomeDir(),
 ): CleanupPreview {
   const all = listArchivedCandidates(codexHome);
   const selected = selectOldestPercent(all, percent);
+  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+  const safe = selected.filter(c => !candidateOverlapsPendingRestore(c, pendingDestRels));
   const pct = clampPercent(percent);
   return {
     codexHome,
     percent: pct,
-    count: selected.length,
-    bytes: selected.reduce((sum, c) => sum + c.bytes, 0),
-    digest: computePreviewDigest(selected, pct),
-    candidates: selected,
+    count: safe.length,
+    bytes: safe.reduce((sum, c) => sum + c.bytes, 0),
+    digest: computePreviewDigest(safe, pct),
+    candidates: safe,
   };
 }
 
@@ -1533,9 +1561,24 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return fail(mode, percent, "invalid_digest");
   }
 
+  const all = listArchivedCandidates(codexHome);
+  const unfilteredSelected = selectOldestPercent(all, percent);
   const preview = previewArchivedCleanup(percent, codexHome);
   if (preview.digest.toLowerCase() !== options.digest.toLowerCase()) {
+    const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+    const blocked = unfilteredSelected.filter(c => candidateOverlapsPendingRestore(c, pendingDestRels));
+    const unfilteredDigest = computePreviewDigest(unfilteredSelected, percent);
+    if (
+      unfilteredDigest.toLowerCase() === options.digest.toLowerCase()
+      && blocked.length > 0
+    ) {
+      return fail(mode, percent, "restore_pending_overlap");
+    }
     return fail(mode, percent, "stale_preview");
+  }
+  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+  if (preview.candidates.some(c => candidateOverlapsPendingRestore(c, pendingDestRels))) {
+    return fail(mode, percent, "restore_pending_overlap");
   }
 
   if (preview.candidates.length === 0) {
@@ -2704,6 +2747,15 @@ export function restoreTrashEntry(
         mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
       );
     }
+  }
+
+  if (
+    pendingSections.state
+    || pendingSections.logs
+    || pendingSections.memories
+    || pendingSections.goals
+  ) {
+    return abortAfterMoves("db_reconcile_failed");
   }
 
   // Completeness gate: every planned file must sit at its restored path, and the stage

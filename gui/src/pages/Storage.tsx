@@ -217,6 +217,7 @@ function ArchivedCleanupPanel({
     switch (code) {
       case "codex_busy": return t("storage.cleanup.err.codex_busy");
       case "stale_preview": return t("storage.cleanup.err.stale_preview");
+      case "restore_pending_overlap": return t("storage.cleanup.err.restore_pending_overlap");
       case "referenced_history": return t("storage.cleanup.err.referenced_history");
       case "invalid_digest": return t("storage.cleanup.err.invalid_digest");
       case "invalid_mode": return t("storage.cleanup.err.invalid_mode");
@@ -488,6 +489,7 @@ function QuarantineTrashPanel({
       case "dest_exists": return t("storage.trash.err.dest_exists");
       case "fs_failed": return t("storage.trash.err.fs_failed");
       case "db_reconcile_failed": return t("storage.trash.err.db_reconcile_failed");
+      case "storage_mutation_busy": return t("storage.trash.err.storage_mutation_busy");
       case "restore_failed": return t("storage.trash.err.restore_failed");
       case "restore_worker_timeout": return t("storage.trash.err.restore_worker_timeout");
       case "restore_worker_aborted": return t("storage.trash.err.restore_worker_aborted");

@@ -630,6 +630,7 @@ export const ja: Record<TKey, string> = {
   "storage.cleanup.cleanupFailed": "クリーンアップに失敗しました。",
   "storage.cleanup.err.codex_busy": "Codex が state.sqlite を使用中です — Codex を終了して再試行してください。",
   "storage.cleanup.err.stale_preview": "プレビュー以降にアーカイブが変わりました — プレビューをやり直してください。",
+  "storage.cleanup.err.restore_pending_overlap": "選択したアーカイブは未完了の隔離復元と重なっています — 復元を完了するか再試行してください。",
   "storage.cleanup.err.referenced_history": "選択したアーカイブはフォークまたはページング履歴から参照されています。",
   "storage.cleanup.err.invalid_digest": "プレビューのダイジェストが無い、または無効です。",
   "storage.cleanup.err.invalid_mode": "モードは quarantine または permanent である必要があります。",

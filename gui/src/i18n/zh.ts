@@ -931,6 +931,7 @@ export const zh: Record<TKey, string> = {
   "storage.cleanup.cleanupFailed": "清理失败。",
   "storage.cleanup.err.codex_busy": "Codex 正在使用 state.sqlite — 请退出 Codex 后重试。",
   "storage.cleanup.err.stale_preview": "预览后归档文件已变化 — 请重新预览。",
+  "storage.cleanup.err.restore_pending_overlap": "所选归档与未完成的隔离区恢复重叠 — 请先完成或重试恢复。",
   "storage.cleanup.err.referenced_history": "所选归档仍被 fork 或分页历史引用。",
   "storage.cleanup.err.invalid_digest": "预览摘要缺失或无效。",
   "storage.cleanup.err.invalid_mode": "模式必须是 quarantine 或 permanent。",

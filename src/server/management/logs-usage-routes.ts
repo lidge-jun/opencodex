@@ -292,6 +292,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
             || result.error === "stale_preview"
             || result.error === "referenced_history"
             || result.error === "storage_mutation_busy"
+            || result.error === "restore_pending_overlap"
             ? 409
             : result.error === "invalid_mode" || result.error === "invalid_digest"
               ? 400
@@ -300,6 +301,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           codex_busy: "Codex is using state.sqlite — try again after quitting Codex.",
           storage_mutation_busy: "Another storage cleanup or restore is in progress — try again shortly.",
           stale_preview: "Archived files changed since preview — run Preview again.",
+          restore_pending_overlap: "Selected archives overlap an incomplete trash restore — finish or retry restore first.",
           referenced_history: "Selected archives are still referenced by forked or paginated history.",
           invalid_digest: "Preview digest is missing or invalid.",
           invalid_mode: "mode must be quarantine or permanent.",

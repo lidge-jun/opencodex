@@ -931,6 +931,7 @@ export const ko: Record<TKey, string> = {
   "storage.cleanup.cleanupFailed": "정리에 실패했습니다.",
   "storage.cleanup.err.codex_busy": "Codex가 state.sqlite를 사용 중입니다 — Codex를 종료한 뒤 다시 시도하세요.",
   "storage.cleanup.err.stale_preview": "미리보기 이후 보관 파일이 변경되었습니다 — 미리보기를 다시 실행하세요.",
+  "storage.cleanup.err.restore_pending_overlap": "선택한 보관 파일이 미완료 휴지통 복원과 겹칩니다 — 복원을 완료하거나 다시 시도하세요.",
   "storage.cleanup.err.referenced_history": "선택한 보관본이 포크 또는 페이지 기록에서 아직 참조됩니다.",
   "storage.cleanup.err.invalid_digest": "미리보기 digest가 없거나 잘못되었습니다.",
   "storage.cleanup.err.invalid_mode": "모드는 quarantine 또는 permanent여야 합니다.",

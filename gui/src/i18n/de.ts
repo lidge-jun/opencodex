@@ -911,6 +911,7 @@ export const de: Record<TKey, string> = {
   "storage.cleanup.cleanupFailed": "Bereinigung fehlgeschlagen.",
   "storage.cleanup.err.codex_busy": "Codex verwendet state.sqlite — beende Codex und versuche es erneut.",
   "storage.cleanup.err.stale_preview": "Archivdateien haben sich seit der Vorschau geändert — führe Vorschau erneut aus.",
+  "storage.cleanup.err.restore_pending_overlap": "Ausgewählte Archive überschneiden sich mit einer unvollständigen Wiederherstellung — zuerst Wiederherstellung abschließen oder erneut versuchen.",
   "storage.cleanup.err.referenced_history": "Ausgewählte Archive werden noch von Fork- oder paginierter Historie referenziert.",
   "storage.cleanup.err.invalid_digest": "Vorschaudigest fehlt oder ist ungültig.",
   "storage.cleanup.err.invalid_mode": "Modus muss quarantine oder permanent sein.",

@@ -662,6 +662,7 @@ export const ru: Record<TKey, string> = {
   "storage.cleanup.cleanupFailed": "Не удалось выполнить очистку.",
   "storage.cleanup.err.codex_busy": "Codex использует state.sqlite — закройте Codex и повторите попытку.",
   "storage.cleanup.err.stale_preview": "Архивы изменились после предпросмотра — выполните предпросмотр снова.",
+  "storage.cleanup.err.restore_pending_overlap": "Выбранные архивы пересекаются с незавершённым восстановлением из корзины — завершите или повторите восстановление.",
   "storage.cleanup.err.referenced_history": "Выбранные архивы всё ещё ссылаются из forked или paginated history.",
   "storage.cleanup.err.invalid_digest": "Digest предпросмотра отсутствует или недействителен.",
   "storage.cleanup.err.invalid_mode": "Режим должен быть quarantine или permanent.",
