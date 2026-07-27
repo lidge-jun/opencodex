@@ -81,6 +81,18 @@ describe("Responses parser", () => {
     expect(parsed.options.toolChoice).toEqual({ allowedTools: ["web_search"], mode: "required" });
   });
 
+  test("maps type-only hosted image_generation tool_choice to required image_gen", () => {
+    const parsed = parseRequest({
+      model: "claude-opus-4-6",
+      input: "draw a cat",
+      tools: [{ type: "image_generation" }],
+      tool_choice: { type: "image_generation" },
+    });
+
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
+    expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
+  });
+
   test("preserves requested service_tier for request logging", () => {
     const parsed = parseRequest({
       model: "gpt-5.5",

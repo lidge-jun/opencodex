@@ -108,6 +108,10 @@ function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
     if ((t === "function" || t === "custom") && "name" in value) {
       return { name: (value as { name: string }).name };
     }
+    // Hosted image tool types (with or without a name) map to the synthetic image_gen wire name.
+    if (t === "image_generation" || t === "image_gen") {
+      return { name: IMAGE_GEN_TOOL_NAME };
+    }
     if (t === "allowed_tools" && Array.isArray(value.tools)) {
       const names = value.tools
         .map(allowedToolName)

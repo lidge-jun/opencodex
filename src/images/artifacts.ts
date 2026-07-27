@@ -1,3 +1,4 @@
+import { mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
@@ -12,6 +13,9 @@ const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 /** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+
+/** Default cap on files retained under artifacts/. Oldest files are pruned when exceeded. */
+export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -38,6 +42,47 @@ function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
 }
 
+/**
+ * Best-effort retention cap: when the artifact directory holds more than `maxFiles`,
+ * delete the oldest (by mtime) until the count is back under the limit. Synchronous
+ * on purpose — it runs right after each successful write and touches at most a handful
+ * of files. All errors are swallowed and logged so a prune failure never breaks an image write.
+ */
+export function pruneOldArtifacts(dir: string, maxFiles: number): void {
+  // A non-positive maxFiles disables pruning entirely (do not delete everything).
+  if (maxFiles <= 0) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (e) {
+    console.warn(`[images] prune: could not read ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+  if (entries.length <= maxFiles) return;
+
+  let stats: Array<{ name: string; mtime: number }>;
+  try {
+    stats = entries.map(name => {
+      const st = statSync(join(dir, name));
+      return { name, mtime: st.mtimeMs };
+    });
+  } catch (e) {
+    console.warn(`[images] prune: could not stat files in ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+
+  // Sort oldest-first, delete the excess.
+  stats.sort((a, b) => a.mtime - b.mtime);
+  const toDelete = stats.slice(0, stats.length - maxFiles);
+  for (const { name } of toDelete) {
+    try {
+      unlinkSync(join(dir, name));
+    } catch (e) {
+      console.warn(`[images] prune: could not delete ${name}:`, e instanceof Error ? e.message : e);
+    }
+  }
+}
+
 function timestampPrefix(): string {
   const now = new Date();
   return [
@@ -57,7 +102,8 @@ function timestampPrefix(): string {
 export function sniffImageExtension(bytes: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
   if (bytes.byteLength === 0) return null;
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
-  if (sig.startsWith("\x89PNG")) return "png";
+  // Full 8-byte PNG signature (89 50 4E 47 0D 0A 1A 0A) — reject truncated/malformed prefixes.
+  if (sig.startsWith("\x89PNG\r\n\x1a\n")) return "png";
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";
@@ -66,6 +112,11 @@ export function sniffImageExtension(bytes: Uint8Array): "png" | "jpg" | "webp" |
 
 export function guessExtFromMagic(bytes: Uint8Array): string {
   return sniffImageExtension(bytes) ?? "png";
+}
+
+/** Prune `OPENCODEX_HOME/artifacts` after a full image batch has been written. */
+export function pruneArtifacts(keepCount?: number): void {
+  pruneOldArtifacts(getArtifactsDir(), keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
 }
 
 export async function materializeInlineImage(

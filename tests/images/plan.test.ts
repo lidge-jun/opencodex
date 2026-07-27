@@ -92,12 +92,10 @@ describe("planImageBridge", () => {
     expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
   });
 
-  test("xAI provider with OAuth (getValidAccessToken) → returns plan", async () => {
+  test("xAI provider with OAuth only (no API key) → undefined (API-key-only bridge)", async () => {
     tokenResult = "fake-oauth-123";
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai" } }, { bridgeEnabled: true });
-    const plan = await planImageBridge(cfg, makeParsed(true), routed);
-    expect(plan).toBeDefined();
-    expect(plan!.auth.token).toBe("fake-oauth-123");
+    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
     tokenResult = null;
   });
 
@@ -169,14 +167,13 @@ describe("planImageBridge", () => {
     tokenResult = null;
   });
 
-  test("authMode oauth prefers OAuth over a stale apiKey", async () => {
+  test("authMode oauth does not arm the bridge even with a stale apiKey", async () => {
     tokenResult = "oauth-token";
     const cfg = makeConfig(
       { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "stale-key", authMode: "oauth" } },
       { bridgeEnabled: true },
     );
-    const plan = await planImageBridge(cfg, makeParsed(true), routed);
-    expect(plan!.auth.token).toBe("oauth-token");
+    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
     tokenResult = null;
   });
 

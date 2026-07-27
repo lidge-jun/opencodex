@@ -110,26 +110,40 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
 }
 
 /**
- * Collect the thinking block that preceded an image tool call, so the replayed assistant turn can
- * carry it. Anthropic extended thinking REQUIRES the assistant message containing tool_use to start
- * with its signed thinking blocks.
+ * Collect thinking / redacted_thinking blocks that preceded an image tool call, preserving
+ * stream order and per-block signatures. Anthropic extended thinking REQUIRES the assistant
+ * message containing tool_use to start with its signed thinking blocks — flattening multiple
+ * blocks into one signature 400s on replay.
  */
-function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent | null {
+function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] {
+  const parts: OcxThinkingContent[] = [];
   let thinking = "";
   let signature: string | undefined;
-  const redacted: string[] = [];
-  for (const e of events) {
-    if (e.type === "thinking_delta") thinking += e.thinking;
-    else if (e.type === "thinking_signature") signature = e.signature;
-    else if (e.type === "redacted_thinking") redacted.push(e.data);
-  }
-  if (!thinking && !signature && redacted.length === 0) return null;
-  return {
-    type: "thinking",
-    thinking,
-    ...(signature ? { signature } : {}),
-    ...(redacted.length > 0 ? { redacted } : {}),
+
+  const flushVisible = () => {
+    if (!thinking && !signature) return;
+    parts.push({
+      type: "thinking",
+      thinking,
+      ...(signature ? { signature } : {}),
+    });
+    thinking = "";
+    signature = undefined;
   };
+
+  for (const e of events) {
+    if (e.type === "thinking_delta") {
+      thinking += e.thinking;
+    } else if (e.type === "thinking_signature") {
+      signature = e.signature;
+      flushVisible();
+    } else if (e.type === "redacted_thinking") {
+      flushVisible();
+      parts.push({ type: "thinking", thinking: "", redacted: [e.data] });
+    }
+  }
+  flushVisible();
+  return parts;
 }
 
 function jsonError(status: number, message: string): Response {
@@ -560,7 +574,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           messages.push({
             role: "assistant",
             content: [
-              ...(iterationThinking ? [iterationThinking] : []),
+              ...iterationThinking,
               ...fulfilled.map(({ call, args }) => ({
                 type: "toolCall" as const,
                 id: call.id,

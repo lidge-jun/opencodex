@@ -26,20 +26,18 @@ describe("extractHostedImageGeneration", () => {
     expect(result!.toolNames.has("image_generation")).toBe(true);
   });
 
-  test("flat Responses function tool with 'image_gen' name → returns with that name", () => {
+  test("flat Responses function tool with 'image_gen' name alone → does not activate", () => {
     const result = extractHostedImageGeneration([
       { type: "function", name: "image_gen", parameters: { type: "object" } },
     ]);
-    expect(result).toBeDefined();
-    expect(result!.toolNames.has("image_gen")).toBe(true);
+    expect(result).toBeUndefined();
   });
 
-  test("nested Chat Completions function tool with 'image_gen' name → returns with that name", () => {
+  test("nested Chat Completions function tool with 'image_gen' name alone → does not activate", () => {
     const result = extractHostedImageGeneration([
       { type: "function", function: { name: "image_gen" } },
     ]);
-    expect(result).toBeDefined();
-    expect(result!.toolNames.has("image_gen")).toBe(true);
+    expect(result).toBeUndefined();
   });
 
   test("no matching tools → undefined", () => {
@@ -54,13 +52,23 @@ describe("extractHostedImageGeneration", () => {
     ).toBeUndefined();
   });
 
-  test("generate_image with hosted image_generation → matched", () => {
+  test("generate_image with hosted image_generation → matched for strip/replace", () => {
     const result = extractHostedImageGeneration([
       { type: "image_generation" },
       { type: "function", name: "generate_image", parameters: { type: "object" } },
     ]);
     expect(result).toBeDefined();
     expect(result!.toolNames.has("generate_image")).toBe(true);
+    expect(result!.toolNames.has("image_generation")).toBe(true);
+  });
+
+  test("client image_gen with hosted image_generation → both collected", () => {
+    const result = extractHostedImageGeneration([
+      { type: "image_generation" },
+      { type: "function", name: "image_gen", parameters: { type: "object" } },
+    ]);
+    expect(result).toBeDefined();
+    expect(result!.toolNames.has("image_gen")).toBe(true);
     expect(result!.toolNames.has("image_generation")).toBe(true);
   });
 

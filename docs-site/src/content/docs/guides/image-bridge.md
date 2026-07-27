@@ -14,21 +14,19 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
 
 - **Enable the bridge** by setting `images.bridgeEnabled: true` in your config (it is off by
   default to avoid unexpected xAI charges — see [Configuration](#configuration) below).
-- An `xai` provider entry with credentials. The bridge pins fulfillment to the registry xAI
-  endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is ignored for image calls.
-  A minimal key-mode entry is enough:
+- An `xai` provider entry with an **API key**. The bridge pins fulfillment to the registry xAI
+  Images endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is ignored for image
+  calls. OAuth / `ocx login xai` alone does **not** arm the bridge (the Grok CLI OAuth transport is
+  chat-oriented and is not used for `/images/*`).
 
   ```json
   {
     "providers": {
-      "xai": { "adapter": "openai-chat", "apiKey": "xai-…" }
+      "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
     }
   }
   ```
 
-- Authentication via `authMode: "oauth"` (`ocx login xai` — uses a stored, auto-refreshed
-  bearer token) or `authMode: "key"` (a configured API key). See
-  [Providers](/guides/providers/) for the shared auth modes.
 - A non-OpenAI model selected as your active provider. (When the active provider is OpenAI,
   the native hosted tool is used directly and the bridge is bypassed.)
 
@@ -54,6 +52,15 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 | `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
 | `maxRounds` | `3` | Maximum image-generation loop iterations per turn. Floored to an integer and clamped to `[0, 10]`; non-finite values fall back to `3`. |
 | `timeoutMs` | `60000` | Per-call xAI deadline in milliseconds. Finite positive values are floored and passed to the xAI request. |
+| `artifactsKeepCount` | `200` | Maximum number of files retained under `artifacts/`. When exceeded, the oldest files are deleted after each fulfilled call. Set to `0` or a negative value to disable pruning. |
+
+## Artifact Retention
+
+Generated images are written to `~/.opencodex/artifacts/`. To prevent unbounded disk
+growth in long-running sessions, the directory is pruned automatically after each fulfilled
+image call (once the full batch for that call is on disk) — the oldest files (by modification
+time) are deleted when the count exceeds the configured maximum (default 200, configurable via
+`images.artifactsKeepCount`). Only paths that survive pruning are returned to the model.
 
 ## How It Works
 

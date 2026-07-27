@@ -10,6 +10,8 @@ export interface ImageBridgePlan {
   /** Defaults from the hosted image_generation tool when the model omits size/quality. */
   defaultSize?: string;
   defaultQuality?: string;
+  /** Max artifact files to retain (from config.images.artifactsKeepCount). Default 200. ≤0 disables prune. */
+  artifactsKeepCount?: number;
 }
 
 export interface ImageCallResult {

@@ -249,6 +249,46 @@ describe("runWithImageBridge", () => {
     expect(assistants[0]!.contentTypes).toEqual(["thinking", "toolCall", "toolCall"]);
   });
 
+  test("multi-block thinking and redacted blocks preserve order and signatures", async () => {
+    const seenContent: Array<{ type?: string; thinking?: string; signature?: string; redacted?: string[] }>[] = [];
+    const capturingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async (parsed) => {
+        buildRequestCalls++;
+        const assistant = parsed.context.messages.find(m => m.role === "assistant");
+        if (assistant && Array.isArray(assistant.content)) {
+          seenContent.push(assistant.content as Array<{ type?: string; thinking?: string; signature?: string; redacted?: string[] }>);
+        }
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+    };
+    streamQueue = [
+      [
+        { type: "redacted_thinking", data: "redacted-a" },
+        { type: "thinking_delta", thinking: "first" },
+        { type: "thinking_signature", signature: "sig-1" },
+        { type: "thinking_delta", thinking: "second" },
+        { type: "thinking_signature", signature: "sig-2" },
+        { type: "tool_call_start", id: "call_1", name: "image_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ],
+      [{ type: "text_delta", text: "ready" }, { type: "done" }],
+    ];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), adapter: capturingAdapter, plan, maxRounds: 1,
+    });
+    await response.text();
+    expect(seenContent.length).toBeGreaterThan(0);
+    const thinkingParts = seenContent[0]!.filter(p => p.type === "thinking");
+    expect(thinkingParts).toEqual([
+      { type: "thinking", thinking: "", redacted: ["redacted-a"] },
+      { type: "thinking", thinking: "first", signature: "sig-1" },
+      { type: "thinking", thinking: "second", signature: "sig-2" },
+    ]);
+  });
+
   test("onUsage is forwarded from bridge terminal events", async () => {
     let seen: unknown = "unset";
     streamQueue = [

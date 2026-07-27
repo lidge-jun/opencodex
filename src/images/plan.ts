@@ -1,6 +1,5 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import type { ImageBridgePlan } from "./types";
-import { getValidAccessToken } from "../oauth/index";
 import { resolveEnvValue } from "../config";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME } from "./synthetic-tool";
@@ -29,27 +28,15 @@ export function findXaiProvider(config: OcxConfig): { name: string; provider: Oc
   return undefined;
 }
 
-export async function resolveXaiToken(providerName: string, provider: OcxProviderConfig): Promise<string | undefined> {
-  // Honor the selected auth mode (same rules as resolveModelsAuthToken): oauth must not
-  // prefer a stale apiKey, and key mode must not silently fall back to stored OAuth.
-  if (provider.authMode === "oauth") {
-    if (providerName !== "xai") return undefined;
-    try {
-      return await getValidAccessToken("xai");
-    } catch {
-      return undefined;
-    }
-  }
+/**
+ * Image Bridge fulfillment talks to the public Images API on api.x.ai with a Bearer API key.
+ * OAuth / Grok CLI proxy transport is not used here (that path is chat-oriented and not a
+ * supported Images transport), so oauth-only configs deliberately do not arm the bridge.
+ */
+export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | undefined {
+  if (provider.authMode === "oauth") return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
-  if (apiKey) return apiKey;
-  // Legacy / unset authMode: key-first, then built-in OAuth only for the canonical "xai" name.
-  if (providerName !== "xai") return undefined;
-  if (provider.authMode === "key" || provider.authMode === "forward") return undefined;
-  try {
-    return await getValidAccessToken("xai");
-  } catch {
-    return undefined;
-  }
+  return apiKey || undefined;
 }
 
 export async function planImageBridge(
@@ -64,7 +51,7 @@ export async function planImageBridge(
   if (host === "api.openai.com") return undefined;
   const found = findXaiProvider(config);
   if (!found) return undefined;
-  const token = await resolveXaiToken(found.name, found.provider);
+  const token = resolveXaiImageApiKey(found.provider);
   if (!token) return undefined;
   // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
   const registryEntry = getProviderRegistryEntry("xai");
@@ -77,6 +64,9 @@ export async function planImageBridge(
   const hostedSize = typeof original?.size === "string" ? original.size : undefined;
   const hostedQuality = typeof original?.quality === "string" ? original.quality : undefined;
   const timeoutMs = clampImageTimeoutMs(config.images?.timeoutMs);
+  const keepRaw = config.images?.artifactsKeepCount;
+  const artifactsKeepCount =
+    typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
     provider: found.provider,
     auth: { baseUrl: pinnedBaseUrl, token },
@@ -85,5 +75,6 @@ export async function planImageBridge(
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
     ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(artifactsKeepCount !== undefined ? { artifactsKeepCount } : {}),
   };
 }

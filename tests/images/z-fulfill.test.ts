@@ -2,14 +2,17 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { ImageBridgePlan } from "../../src/images/types";
 import type { XaiImageRequest } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
+let testHome = "";
 
 beforeAll(async () => {
-  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  testHome = join(tmpdir(), "ocx-test-" + randomUUID());
+  process.env.OPENCODEX_HOME = testHome;
   mock.restore();
   mock.module("../../src/images/xai-client", () => ({
     callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
@@ -23,6 +26,7 @@ beforeAll(async () => {
     createImageBudget: () => ({ spent: 0 }),
     materializeInlineImage: async () => materializeFn(matIdx++),
     downloadImageToArtifact: async () => downloadFn(dlIdx++),
+    pruneArtifacts: () => pruneImpl(),
   }));
   ({ fulfillImageCall } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
@@ -34,10 +38,20 @@ let xaiError: Error | null = null;
 const xaiCalls: XaiImageRequest[] = [];
 let matIdx = 0;
 let dlIdx = 0;
-let materializeFn: (i: number) => Promise<string> = async (i) => `/test/img-${i}.png`;
-let downloadFn: (i: number) => Promise<string> = async (i) => `/test/dl-${i}.png`;
+let pruneCalls = 0;
+let pruneImpl: () => void = () => { pruneCalls++; };
+let materializeFn: (i: number) => Promise<string> = async (i) => touchArtifact(`img-${i}.png`);
+let downloadFn: (i: number) => Promise<string> = async (i) => touchArtifact(`dl-${i}.png`);
 
 let capturedTimeoutMs: number | undefined;
+
+function touchArtifact(name: string): string {
+  const dir = join(testHome || process.env.OPENCODEX_HOME!, "artifacts");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(path, "x");
+  return path;
+}
 
 const plan = {
   provider: {} as never,
@@ -53,8 +67,10 @@ function reset(): void {
   capturedTimeoutMs = undefined;
   matIdx = 0;
   dlIdx = 0;
-  materializeFn = async (i) => `/test/img-${i}.png`;
-  downloadFn = async (i) => `/test/dl-${i}.png`;
+  pruneCalls = 0;
+  pruneImpl = () => { pruneCalls++; };
+  materializeFn = async (i) => touchArtifact(`img-${i}.png`);
+  downloadFn = async (i) => touchArtifact(`dl-${i}.png`);
 }
 
 describe("fulfillImageCall", () => {
@@ -129,10 +145,35 @@ describe("fulfillImageCall", () => {
   test("one of two images fails → ok:true with 1 file", async () => {
     reset();
     xaiResult = { images: [{ b64_json: "AAA=" }, { b64_json: "QkI=" }] };
-    materializeFn = async (i) => { if (i === 1) throw new Error("partial fail"); return `/test/img-${i}.png`; };
+    materializeFn = async (i) => { if (i === 1) throw new Error("partial fail"); return touchArtifact(`img-${i}.png`); };
     const r = await fulfillImageCall({ id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` }, plan, { spent: 0 });
     expect(r.ok).toBe(true);
     expect(r.files.length).toBe(1);
+  });
+
+  test("prunes once after the full batch and omits deleted paths", async () => {
+    reset();
+    const { unlinkSync } = await import("node:fs");
+    xaiResult = { images: [{ b64_json: "AAA=" }, { b64_json: "QkI=" }] };
+    const written: string[] = [];
+    materializeFn = async (i) => {
+      const path = touchArtifact(`batch-${i}.png`);
+      written.push(path);
+      return path;
+    };
+    pruneImpl = () => {
+      pruneCalls++;
+      unlinkSync(written[0]!);
+    };
+    const r = await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: `{"prompt":"x"}` },
+      { ...plan, artifactsKeepCount: 1 } as ImageBridgePlan,
+      { spent: 0 },
+    );
+    expect(pruneCalls).toBe(1);
+    expect(r.ok).toBe(true);
+    expect(r.files).toEqual([written[1]]);
+    expect(r.path).toBe(written[1]);
   });
 
   test("forwards prompt, model, and n to callXaiImages", async () => {

@@ -1,6 +1,12 @@
+import { existsSync } from "node:fs";
 import type { ImageBridgePlan, ImageCallResult } from "./types";
 import { callXaiImages } from "./xai-client";
-import { materializeInlineImage, downloadImageToArtifact, type ImageBudget } from "./artifacts";
+import {
+  materializeInlineImage,
+  downloadImageToArtifact,
+  pruneArtifacts,
+  type ImageBudget,
+} from "./artifacts";
 
 /**
  * Fulfill ONE image-generation tool call end-to-end: parse args, call xAI, materialize the returned
@@ -64,18 +70,23 @@ export async function fulfillImageCall(
     }
   }
 
-  if (files.length === 0) {
+  // Prune only after the full batch is on disk so a tight keepCount cannot delete
+  // an earlier image from this same call before we return its path.
+  pruneArtifacts(plan.artifactsKeepCount);
+  const retained = files.filter((p) => existsSync(p));
+
+  if (retained.length === 0) {
     return { ok: false, model: plan.model, prompt, files: [], count: 0, error: "image generation returned no usable images" };
   }
 
-  const primary = files[0];
+  const primary = retained[0];
   return {
     ok: true,
     model: plan.model,
     prompt,
     path: primary,
-    files,
-    count: files.length,
+    files: retained,
+    count: retained.length,
     markdown: `![image](${primary})`,
   };
 }
