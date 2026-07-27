@@ -38,7 +38,21 @@ const MEMORY_PAYLOAD = {
   rss: 1536,
   heapUsed: 2_097_152,
   heapTotal: 4_194_304,
+  external: 8_388_608,
+  arrayBuffers: 1_048_576,
+  observedBytes: 8_388_608,
+  observedMetric: "external",
   responseState: { count: 3, totalBytes: 5_242_880, largestBytes: 1_048_576, oldestAgeMs: 60_000 },
+  watchdog: {
+    warnThresholdBytes: 4 * 1024 ** 3,
+    lastWarnAt: null,
+    observedBytes: 8_388_608,
+    observedMetric: "external",
+    samples: [
+      { at: 0, rss: 1536, heapUsed: 2_097_152, heapTotal: 4_194_304, external: 4_194_304, arrayBuffers: 1_048_576, observedBytes: 4_194_304, observedMetric: "external" },
+      { at: 3_600_000, rss: 1536, heapUsed: 2_097_152, heapTotal: 4_194_304, external: 8_388_608, arrayBuffers: 1_048_576, observedBytes: 8_388_608, observedMetric: "external" },
+    ],
+  },
 };
 
 async function mountCard(respond: () => Promise<Response> | Response): Promise<{
@@ -85,6 +99,8 @@ test("a healthy payload renders the metrics with binary units", async () => {
   const text = container.textContent ?? "";
   expect(text).toContain("1.5 KiB");      // rss
   expect(text).toContain("2.0 MiB");      // heapUsed
+  expect(text).toContain("8.0 MiB (external)"); // observed memory
+  expect(text).toContain("4.0 MiB/h");    // observed drift/hour
   expect(text).toContain("5.0 MiB");      // response-store total
   expect(text).not.toContain("1.5 KB");   // the mislabelled decimal unit must be gone
 

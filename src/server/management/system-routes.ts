@@ -7,15 +7,16 @@
  * unauthenticated /healthz surface.
  *
  * The payload is scalar-only (numbers, enum strings): no paths, no tokens, no
- * account identifiers. `jscHeap` (bun:jsc heapStats) is the js-vs-native
- * discriminator: a flat JS heap under a growing RSS points at native runtime
- * memory (the #314 shape), not an app-level JS leak. `responseState` attributes
- * JS-heap growth further: it is the proxy's previous_response_id continuation
- * store, so a growing responseState.totalBytes under a growing heap points the
- * finger at conversation retention rather than the runtime allocator.
+ * account identifiers. `external` and `arrayBuffers` keep Windows diagnostics
+ * honest when RSS/working-set counters under-report committed retention.
+ * `jscHeap` (bun:jsc heapStats) is useful context, but on Bun 1.3.14 it is not a
+ * standalone leak discriminator. `responseState` attributes growth further: it
+ * is the proxy's previous_response_id continuation store, so a growing
+ * responseState.totalBytes under rising observed memory points at conversation
+ * retention rather than the runtime allocator.
  */
 import { decideEagerRelay } from "../../lib/bun-stream-caps";
-import { getActiveMemoryWatchdog } from "../memory-watchdog";
+import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
 import { responseStateMetrics } from "../../responses/state";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
@@ -38,15 +39,22 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
     } catch {
       /* non-Bun tooling or unavailable introspection — omit the discriminator */
     }
-    const watchdogInstance = getActiveMemoryWatchdog();
+	    const watchdogInstance = getActiveMemoryWatchdog();
+	    const observed = observedMemoryCounter({
+	      rss: usage.rss,
+	      external: usage.external,
+	      arrayBuffers: usage.arrayBuffers,
+	    });
     const watchdog = watchdogInstance
       ? (() => {
         const snap = watchdogInstance.snapshot();
-        return {
-          warnThresholdBytes: snap.warnThresholdBytes,
-          lastWarnAt: snap.lastWarnAt,
-          samples: snap.samples.slice(-ENDPOINT_SAMPLE_LIMIT),
-        };
+	        return {
+	          warnThresholdBytes: snap.warnThresholdBytes,
+	          lastWarnAt: snap.lastWarnAt,
+	          observedBytes: snap.observedBytes,
+	          observedMetric: snap.observedMetric,
+	          samples: snap.samples.slice(-ENDPOINT_SAMPLE_LIMIT),
+	        };
       })()
       : null;
     const streamMode = config.streamMode ?? "auto";
@@ -58,8 +66,12 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       uptimeSeconds: process.uptime(),
       rss: usage.rss,
       heapUsed: usage.heapUsed,
-      heapTotal: usage.heapTotal,
-      jscHeap,
+	      heapTotal: usage.heapTotal,
+	      external: usage.external,
+	      arrayBuffers: usage.arrayBuffers,
+	      observedBytes: observed.observedBytes,
+	      observedMetric: observed.observedMetric,
+	      jscHeap,
       responseState: responseStateMetrics(),
       streamMode,
       eagerRelay: process.platform === "win32" ? decideEagerRelay(streamMode) : null,

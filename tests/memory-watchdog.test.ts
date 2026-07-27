@@ -5,8 +5,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getActiveMemoryWatchdog,
+  observedMemoryCounter,
   startMemoryWatchdog,
-  type MemorySample,
+  type MemorySampleBase,
 } from "../src/server/memory-watchdog";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
@@ -30,8 +31,15 @@ afterEach(() => {
   getActiveMemoryWatchdog()?.stop();
 });
 
-function sampleAt(at: number, rssMb: number): MemorySample {
-  return { at, rss: rssMb * 1024 * 1024, heapUsed: 1000, heapTotal: 2000 };
+function sampleAt(at: number, rssMb: number, externalMb = 1, arrayBuffersMb = 1): MemorySampleBase {
+  return {
+    at,
+    rss: rssMb * 1024 * 1024,
+    heapUsed: 1000,
+    heapTotal: 2000,
+    external: externalMb * 1024 * 1024,
+    arrayBuffers: arrayBuffersMb * 1024 * 1024,
+  };
 }
 
 describe("startMemoryWatchdog", () => {
@@ -64,11 +72,59 @@ describe("startMemoryWatchdog", () => {
     });
     await new Promise(resolve => setTimeout(resolve, 25));
     expect(warns.length).toBe(1);
-    expect(warns[0]).toContain("600MB");
+    expect(warns[0]).toContain("observed memory 600MB (rss)");
     expect(warns[0]).toContain("500MB");
     // No paths/hostnames in the warn line.
     expect(warns[0]).not.toContain("/Users/");
     expect(warns[0]).not.toContain("C:\\");
+  });
+
+  test("threshold warn uses external and ArrayBuffers when RSS is below threshold (#509)", async () => {
+    const warns: string[] = [];
+    let t = 0;
+    startMemoryWatchdog({
+      intervalMs: 1,
+      warnThresholdBytes: 500 * 1024 * 1024,
+      now: () => t,
+      sample: () => sampleAt((t += 1), 100, 600, 300),
+      warn: msg => warns.push(msg),
+    });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(warns.length).toBe(1);
+    expect(warns[0]).toContain("observed memory 600MB (external)");
+
+    const snap = getActiveMemoryWatchdog()!.snapshot();
+    expect(snap.observedMetric).toBe("external");
+    expect(snap.observedBytes).toBe(600 * 1024 * 1024);
+
+    getActiveMemoryWatchdog()?.stop();
+    warns.length = 0;
+    t = 0;
+    startMemoryWatchdog({
+      intervalMs: 1,
+      warnThresholdBytes: 500 * 1024 * 1024,
+      now: () => t,
+      sample: () => sampleAt((t += 1), 100, 300, 700),
+      warn: msg => warns.push(msg),
+    });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(warns.length).toBe(1);
+    expect(warns[0]).toContain("observed memory 700MB (arrayBuffers)");
+  });
+
+  test("observedMemoryCounter uses max, not a sum", () => {
+    expect(observedMemoryCounter(sampleAt(1, 100, 90, 80))).toEqual({
+      observedBytes: 100 * 1024 * 1024,
+      observedMetric: "rss",
+    });
+    expect(observedMemoryCounter(sampleAt(1, 10, 100, 90))).toEqual({
+      observedBytes: 100 * 1024 * 1024,
+      observedMetric: "external",
+    });
+    expect(observedMemoryCounter(sampleAt(1, 10, 90, 100))).toEqual({
+      observedBytes: 100 * 1024 * 1024,
+      observedMetric: "arrayBuffers",
+    });
   });
 
   test("below-threshold samples never warn", async () => {
@@ -117,18 +173,23 @@ describe("GET /api/system/memory", () => {
     const res = await handleManagementAPI(req, new URL(req.url), config());
     expect(res).not.toBeNull();
     expect(res!.status).toBe(200);
-    const body = await res!.json() as {
-      pid: number; bunVersion: string; platform: string; rss: number;
-      heapUsed: number; jscHeap: { heapSize: number } | null;
-      responseState: { count: number; totalBytes: number; largestBytes: number; oldestAgeMs: number };
-      streamMode: string; eagerRelay: unknown;
-      watchdog: { samples: unknown[]; warnThresholdBytes: number } | null;
-    };
+	    const body = await res!.json() as {
+	      pid: number; bunVersion: string; platform: string; rss: number;
+	      heapUsed: number; external: number; arrayBuffers: number; observedBytes: number; observedMetric: string;
+	      jscHeap: { heapSize: number } | null;
+	      responseState: { count: number; totalBytes: number; largestBytes: number; oldestAgeMs: number };
+	      streamMode: string; eagerRelay: unknown;
+	      watchdog: { samples: unknown[]; warnThresholdBytes: number; observedBytes: number; observedMetric: string } | null;
+	    };
     expect(body.pid).toBe(process.pid);
     expect(body.bunVersion).toBe(Bun.version);
-    expect(body.rss).toBeGreaterThan(0);
-    expect(body.heapUsed).toBeGreaterThan(0);
-    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
+	    expect(body.rss).toBeGreaterThan(0);
+	    expect(body.heapUsed).toBeGreaterThan(0);
+	    expect(body.external).toBeGreaterThanOrEqual(0);
+	    expect(body.arrayBuffers).toBeGreaterThanOrEqual(0);
+	    expect(body.observedBytes).toBeGreaterThan(0);
+	    expect(["rss", "external", "arrayBuffers"]).toContain(body.observedMetric);
+	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
     expect(typeof body.responseState.count).toBe("number");
@@ -140,9 +201,11 @@ describe("GET /api/system/memory", () => {
     // Non-win32 test runners report no gate decision; win32 reports one.
     if (process.platform === "win32") expect(body.eagerRelay).not.toBeNull();
     else expect(body.eagerRelay).toBeNull();
-    expect(body.watchdog).not.toBeNull();
-    expect(body.watchdog!.samples.length).toBeLessThanOrEqual(60);
-  });
+	    expect(body.watchdog).not.toBeNull();
+	    expect(body.watchdog!.samples.length).toBeLessThanOrEqual(60);
+	    expect(typeof body.watchdog!.observedBytes).toBe("number");
+	    expect(["rss", "external", "arrayBuffers"]).toContain(body.watchdog!.observedMetric);
+	  });
 
   test("watchdog null when no instance is running", async () => {
     getActiveMemoryWatchdog()?.stop();

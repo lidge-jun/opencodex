@@ -30,24 +30,28 @@ upstream data in native memory that JavaScript cannot bound.
 Bounded mitigation and visibility — **not a fix**. On the bundled 1.3.14
 runtime the leak itself remains an upstream problem:
 
-- **RSS watchdog** — the proxy samples its own memory every minute and logs a
-  rate-limited warning when RSS crosses 4 GiB.
+- **Memory watchdog** — the proxy samples its own memory every minute and logs a
+  rate-limited warning when observed memory crosses 4 GiB. Observed memory is
+  the largest of RSS, `external`, and `arrayBuffers` (not their sum), because
+  Windows working-set/RSS counters can under-report committed external
+  retention.
 - **`ocx doctor`** — a "Memory / runtime" section shows the *service*
-  process's Bun version, RSS, JS-heap share, and stream-mode decision, and
-  tells you whether growth looks native-side (the upstream issue) or JS-side
-  (an opencodex bug you should report).
+  process's Bun version, RSS, external/ArrayBuffers counters, JS-heap context,
+  and stream-mode decision. On the bundled Bun 1.3.14 runtime, `heapUsed` /
+  `jscHeap` alone are not a leak discriminator; compare observed memory with
+  `responseState` and repeated samples before assigning an app-level leak.
 - **`GET /api/system/memory`** — the same data over the authenticated
-  management API for dashboards or scripts. Alongside the RSS/heap numbers it
-  reports a scalar `responseState` block (entry count, total/largest serialized
-  bytes, oldest-entry age) for the proxy's in-memory `previous_response_id`
-  continuation store. This further attributes *JS-heap* growth: a rising
-  `responseState.totalBytes` under a rising heap points at conversation
-  retention (long `store:false` chains re-expanding each turn), whereas a flat
-  `responseState` under a rising RSS points back at the native runtime. The
-  values are scalar-only — no request bodies, tokens, paths, or account
-  identifiers — and the read is side-effect free (it never prunes or evicts).
-  The dashboard's read-only **Memory observability** card renders the same
-  fields.
+  management API for dashboards or scripts. Alongside RSS/heap/external counters
+  it reports a scalar `responseState` block (entry count, total/largest
+  serialized bytes, oldest-entry age) for the proxy's in-memory
+  `previous_response_id` continuation store. This further attributes growth: a
+  rising `responseState.totalBytes` under rising observed memory points at
+  conversation retention (long `store:false` chains re-expanding each turn),
+  whereas a flat `responseState` under rising observed memory points away from
+  that store. The values are scalar-only — no request bodies, tokens, paths, or
+  account identifiers — and the read is side-effect free (it never prunes or
+  evicts). The dashboard's read-only **Memory observability** card renders the
+  same fields.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the unbounded buffering shape entirely. It becomes the default
   automatically once a bundled Bun release verifiably carries the #32111 fix;

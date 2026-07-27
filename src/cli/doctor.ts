@@ -480,10 +480,14 @@ export type ServiceMemoryData = {
   platform: string;
   rss: number;
   heapUsed: number;
+  external: number;
+  arrayBuffers: number;
+  observedBytes?: number;
+  observedMetric?: MemoryMetric;
   jscHeap: { heapSize: number } | null;
   streamMode: string;
   eagerRelay: { useEagerRelay: boolean; reason: string } | null;
-  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null } | null;
+  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; observedBytes?: number; observedMetric?: MemoryMetric } | null;
 };
 
 export type ServiceMemoryReport =
@@ -493,6 +497,19 @@ export type ServiceMemoryReport =
 
 const SERVICE_MEMORY_TIMEOUT_MS = 2000;
 const DEFAULT_MEMORY_THRESHOLD_BYTES = 4 * 1024 ** 3;
+type MemoryMetric = "rss" | "external" | "arrayBuffers";
+
+function observedMemory(data: { rss: number; external?: number; arrayBuffers?: number }): {
+  bytes: number;
+  metric: MemoryMetric;
+} {
+  const values: Array<{ metric: MemoryMetric; bytes: number }> = [
+    { metric: "rss", bytes: data.rss },
+    { metric: "external", bytes: data.external ?? 0 },
+    { metric: "arrayBuffers", bytes: data.arrayBuffers ?? 0 },
+  ];
+  return values.reduce((best, next) => next.bytes > best.bytes ? next : best, values[0]);
+}
 
 export async function fetchServiceMemory(
   host: string,
@@ -519,13 +536,26 @@ export async function fetchServiceMemory(
         platform: typeof body.platform === "string" ? body.platform : "unknown",
         rss: body.rss,
         heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
+        external: typeof body.external === "number" ? body.external : 0,
+        arrayBuffers: typeof body.arrayBuffers === "number" ? body.arrayBuffers : 0,
+        observedBytes: typeof body.observedBytes === "number" ? body.observedBytes : undefined,
+        observedMetric: body.observedMetric === "rss" || body.observedMetric === "external" || body.observedMetric === "arrayBuffers"
+          ? body.observedMetric
+          : undefined,
         jscHeap: body.jscHeap && typeof body.jscHeap.heapSize === "number" ? { heapSize: body.jscHeap.heapSize } : null,
         streamMode: typeof body.streamMode === "string" ? body.streamMode : "auto",
         eagerRelay: body.eagerRelay && typeof body.eagerRelay.reason === "string"
           ? { useEagerRelay: body.eagerRelay.useEagerRelay === true, reason: body.eagerRelay.reason }
           : null,
         watchdog: body.watchdog && typeof body.watchdog.warnThresholdBytes === "number"
-          ? { warnThresholdBytes: body.watchdog.warnThresholdBytes, lastWarnAt: body.watchdog.lastWarnAt ?? null }
+          ? {
+            warnThresholdBytes: body.watchdog.warnThresholdBytes,
+            lastWarnAt: body.watchdog.lastWarnAt ?? null,
+            observedBytes: typeof body.watchdog.observedBytes === "number" ? body.watchdog.observedBytes : undefined,
+            observedMetric: body.watchdog.observedMetric === "rss" || body.watchdog.observedMetric === "external" || body.watchdog.observedMetric === "arrayBuffers"
+              ? body.watchdog.observedMetric
+              : undefined,
+          }
           : null,
       },
     };
@@ -550,22 +580,29 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   }
   const d = report.data;
   lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`);
-  lines.push(`         rss=${mb(d.rss)}, heapUsed=${mb(d.heapUsed)}${d.jscHeap ? `, jscHeap=${mb(d.jscHeap.heapSize)}` : ""}`);
+  const observed = observedMemory(d);
+  const observedBytes = d.observedBytes ?? d.watchdog?.observedBytes ?? observed.bytes;
+  const observedMetric = d.observedMetric ?? d.watchdog?.observedMetric ?? observed.metric;
+  lines.push(`         rss=${mb(d.rss)}, external=${mb(d.external)}, arrayBuffers=${mb(d.arrayBuffers)}, heapUsed=${mb(d.heapUsed)}${d.jscHeap ? `, jscHeap=${mb(d.jscHeap.heapSize)}` : ""}`);
+  lines.push(`         observed=${mb(observedBytes)} (${observedMetric})`);
   lines.push(`         streamMode=${d.streamMode}${d.eagerRelay ? ` (eager relay: ${d.eagerRelay.useEagerRelay ? "on" : "off"}, ${d.eagerRelay.reason})` : ""}`);
   if (d.watchdog) {
     lines.push(`         watchdog threshold=${mb(d.watchdog.warnThresholdBytes)}${d.watchdog.lastWarnAt ? `, last warn ${new Date(d.watchdog.lastWarnAt).toISOString()}` : ", no warnings"}`);
   }
-  // Interpretation rule (devlog 040): reuse the watchdog's own threshold so
-  // doctor and watchdog never disagree about "high"; jsShare discriminates
-  // JS-heap growth from native runtime growth (the #314 shape).
+  // Interpretation rule: reuse the watchdog threshold and the same max-of
+  // observed memory counters, so doctor and watchdog never disagree about
+  // "high". RSS/working-set can under-report committed retention on Windows, and
+  // Bun 1.3.14 heap counters are not standalone leak proof.
   const threshold = d.watchdog?.warnThresholdBytes ?? DEFAULT_MEMORY_THRESHOLD_BYTES;
   const jsShare = d.rss > 0 ? Math.max(d.heapUsed, d.jscHeap?.heapSize ?? 0) / d.rss : 0;
-  if (d.rss < threshold) {
+  if (observedBytes < threshold) {
     lines.push("         memory usage looks normal");
+  } else if (observedMetric !== "rss") {
+    lines.push(`  !!     high observed memory via ${observedMetric}; Windows RSS/working-set counters may be blind. See docs: troubleshooting/windows-memory`);
   } else if (jsShare < 0.25) {
     lines.push("  !!     high RSS with a small JS heap — native-side growth (Bun runtime buffers/handles). See docs: troubleshooting/windows-memory");
   } else if (jsShare >= 0.5) {
-    lines.push("  !!     high RSS dominated by the JS heap — likely an opencodex bug; please report it");
+    lines.push("  !!     high RSS with large JS/JSC counters — possible JS-side retention; compare responseState/external samples before filing an app leak");
   } else {
     lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
   }

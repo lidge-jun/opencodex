@@ -1,9 +1,9 @@
 /**
- * RSS memory watchdog (#314 WP3) — warn-only observability for the Windows
+ * Memory watchdog (#314 WP3 / #509) — warn-only observability for the Windows
  * native-memory growth reported upstream (Bun fetch buffers / socket handles).
  *
  * Samples process.memoryUsage() on an unref'd interval into a bounded ring and
- * logs ONE rate-limited warning when RSS crosses the threshold. It never
+ * logs ONE rate-limited warning when observed memory crosses the threshold. It never
  * restarts anything (threshold auto-restart is deliberately deferred; the
  * service managers' crash-respawn already covers hard failures). The active
  * instance is a module-level singleton so the management API can expose the
@@ -13,7 +13,7 @@
  * paths, hostnames, or tokens.
  */
 
-export type MemorySample = {
+export type MemorySampleBase = {
   /** Epoch ms. */
   at: number;
   /** Resident set size in bytes. */
@@ -22,12 +22,27 @@ export type MemorySample = {
   heapUsed: number;
   /** JS heap total in bytes. */
   heapTotal: number;
+  /** External/native memory tracked by process.memoryUsage(). */
+  external: number;
+  /** ArrayBuffer memory tracked by process.memoryUsage(). */
+  arrayBuffers: number;
 };
+
+export type MemorySample = MemorySampleBase & {
+  /** Largest observed memory counter used for thresholding. */
+  observedBytes: number;
+  /** Counter that produced observedBytes. */
+  observedMetric: MemoryMetric;
+};
+
+export type MemoryMetric = "rss" | "external" | "arrayBuffers";
 
 export type MemoryWatchdogState = {
   samples: MemorySample[];
   warnThresholdBytes: number;
   lastWarnAt: number | null;
+  observedBytes: number;
+  observedMetric: MemoryMetric;
 };
 
 export type MemoryWatchdog = {
@@ -43,6 +58,19 @@ const DOCS_URL = "https://opencodex.me/troubleshooting/windows-memory/";
 
 let active: MemoryWatchdog | null = null;
 
+export function observedMemoryCounter(sample: Pick<MemorySampleBase, "rss" | "external" | "arrayBuffers">): {
+  observedBytes: number;
+  observedMetric: MemoryMetric;
+} {
+  const values: Array<{ metric: MemoryMetric; bytes: number }> = [
+    { metric: "rss", bytes: sample.rss },
+    { metric: "external", bytes: sample.external },
+    { metric: "arrayBuffers", bytes: sample.arrayBuffers },
+  ];
+  const best = values.reduce((current, next) => next.bytes > current.bytes ? next : current, values[0]);
+  return { observedBytes: best.bytes, observedMetric: best.metric };
+}
+
 /** The running watchdog, if any — read by /api/system/memory. */
 export function getActiveMemoryWatchdog(): MemoryWatchdog | null {
   return active;
@@ -50,7 +78,19 @@ export function getActiveMemoryWatchdog(): MemoryWatchdog | null {
 
 function defaultSample(now: () => number): MemorySample {
   const usage = process.memoryUsage();
-  return { at: now(), rss: usage.rss, heapUsed: usage.heapUsed, heapTotal: usage.heapTotal };
+  const base = {
+    at: now(),
+    rss: usage.rss,
+    heapUsed: usage.heapUsed,
+    heapTotal: usage.heapTotal,
+    external: usage.external,
+    arrayBuffers: usage.arrayBuffers,
+  };
+  return { ...base, ...observedMemoryCounter(base) };
+}
+
+function normalizeSample(sample: MemorySampleBase): MemorySample {
+  return { ...sample, ...observedMemoryCounter(sample) };
 }
 
 /**
@@ -64,7 +104,7 @@ export function startMemoryWatchdog(opts?: {
   warnThresholdBytes?: number;
   ringSize?: number;
   now?: () => number;
-  sample?: () => MemorySample;
+  sample?: () => MemorySampleBase;
   warn?: (msg: string) => void;
 }): MemoryWatchdog {
   active?.stop();
@@ -77,21 +117,25 @@ export function startMemoryWatchdog(opts?: {
 
   const samples: MemorySample[] = [];
   let lastWarnAt: number | null = null;
+  let observedBytes = 0;
+  let observedMetric: MemoryMetric = "rss";
 
   const tick = () => {
     let s: MemorySample;
     try {
-      s = sample();
+      s = normalizeSample(sample());
     } catch {
       return; // sampling must never break the server
     }
     samples.push(s);
     if (samples.length > ringSize) samples.splice(0, samples.length - ringSize);
-    if (s.rss >= warnThresholdBytes && (lastWarnAt === null || now() - lastWarnAt >= WARN_INTERVAL_MS)) {
+    observedBytes = s.observedBytes;
+    observedMetric = s.observedMetric;
+    if (s.observedBytes >= warnThresholdBytes && (lastWarnAt === null || now() - lastWarnAt >= WARN_INTERVAL_MS)) {
       lastWarnAt = now();
-      const rssMb = Math.round(s.rss / (1024 * 1024));
+      const observedMb = Math.round(s.observedBytes / (1024 * 1024));
       const thresholdMb = Math.round(warnThresholdBytes / (1024 * 1024));
-      warn(`⚠️  opencodex RSS ${rssMb}MB exceeds the ${thresholdMb}MB watch threshold. On Windows this is usually the upstream Bun runtime memory issue — see ${DOCS_URL}`);
+      warn(`⚠️  opencodex observed memory ${observedMb}MB (${s.observedMetric}) exceeds the ${thresholdMb}MB watch threshold. On Windows this is usually the upstream Bun runtime memory issue — see ${DOCS_URL}`);
     }
   };
 
@@ -104,7 +148,7 @@ export function startMemoryWatchdog(opts?: {
       if (active === instance) active = null;
     },
     snapshot() {
-      return { samples: [...samples], warnThresholdBytes, lastWarnAt };
+      return { samples: [...samples], warnThresholdBytes, lastWarnAt, observedBytes, observedMetric };
     },
   };
   active = instance;
