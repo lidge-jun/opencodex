@@ -71,6 +71,18 @@ afterEach(() => {
 });
 
 describe("storage trash restore job responsiveness", () => {
+  test("test-stream route is absent without OPENCODEX_CLEANUP_TEST_HOOKS", async () => {
+    delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+    setRestoreTrashJobTestHooks({ enableTestStream: true });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
+      expect(res.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("blocked worker keeps /healthz and streaming response responsive", async () => {
     const blockMs = 1200;
     setRestoreTrashJobTestHooks({ blockMs, enableTestStream: true });

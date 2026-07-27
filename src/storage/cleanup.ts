@@ -50,7 +50,6 @@ export type CleanupErrorCode =
   | "fs_failed"
   | "db_reconcile_failed"
   | "referenced_history"
-  | "restore_pending_overlap"
   | "cleanup_failed";
 
 export interface ArchivedCandidate {
@@ -333,16 +332,14 @@ export function previewArchivedCleanup(
 ): CleanupPreview {
   const all = listArchivedCandidates(codexHome);
   const selected = selectOldestPercent(all, percent);
-  const guarded = guardCleanupCandidatesForPendingRestore(codexHome, selected);
-  const safe = guarded.ok ? guarded.candidates : [];
   const pct = clampPercent(percent);
   return {
     codexHome,
     percent: pct,
-    count: safe.length,
-    bytes: safe.reduce((sum, c) => sum + c.bytes, 0),
-    digest: computePreviewDigest(safe, pct),
-    candidates: safe,
+    count: selected.length,
+    bytes: selected.reduce((sum, c) => sum + c.bytes, 0),
+    digest: computePreviewDigest(selected, pct),
+    candidates: selected,
   };
 }
 
@@ -1536,36 +1533,9 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return fail(mode, percent, "invalid_digest");
   }
 
-let unfilteredSelected: ArchivedCandidate[];
-  if (options.candidateRelPaths !== undefined) {
-    const selected = resolveExactArchivedCandidates(options.candidateRelPaths, codexHome);
-    if (selected === null) {
-      return fail(mode, percent, "stale_preview");
-    }
-    unfilteredSelected = selected;
-    preview = previewExactArchivedCleanup(selected, codexHome);
-  } else {
-    const all = listArchivedCandidates(codexHome);
-    unfilteredSelected = selectOldestPercent(all, percent);
-    preview = previewArchivedCleanup(percent, codexHome);
-  }
+  const preview = previewArchivedCleanup(percent, codexHome);
   if (preview.digest.toLowerCase() !== options.digest.toLowerCase()) {
-    const pendingDests = collectRestorePendingAcceptedDestRels(codexHome);
-    const blocked = unfilteredSelected.filter(c => candidateOverlapsPendingRestore(c, pendingDests));
-    const unfilteredDigest = options.candidateRelPaths !== undefined
-      ? computeExactPreviewDigest(unfilteredSelected)
-      : computePreviewDigest(unfilteredSelected, percent);
-    if (
-      unfilteredDigest.toLowerCase() === options.digest.toLowerCase()
-      && blocked.length > 0
-    ) {
-      return fail(mode, percent, "restore_pending_overlap");
-    }
     return fail(mode, percent, "stale_preview");
-  }
-  const pendingDests = collectRestorePendingAcceptedDestRels(codexHome);
-  if (preview.candidates.some(c => candidateOverlapsPendingRestore(c, pendingDests))) {
-    return fail(mode, percent, "restore_pending_overlap");
   }
 
   if (preview.candidates.length === 0) {
