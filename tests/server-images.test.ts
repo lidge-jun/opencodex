@@ -1723,6 +1723,32 @@ test("CCA-only request with proxy admission bearer succeeds and never sends it u
   }
 });
 
+test("CCA logged-in without projectId returns project-discovery error, not provider-missing 400", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits);
+
+  saveConfig(ccaConfig());
+  const { projectId: _omit, ...noProject } = CCA_CREDENTIAL;
+  await saveCredential("google-antigravity", { ...noProject });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/Cloud Code Assist project/i);
+    expect(json.error.message).not.toMatch(/none is configured/i);
+    expect(registryHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("CCA rejects n>1 before contacting Google", async () => {
   const registryHits: CcaFetchRequest[] = [];
   const otherHits: CcaFetchRequest[] = [];

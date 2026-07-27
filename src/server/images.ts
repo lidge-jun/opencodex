@@ -144,7 +144,11 @@ async function tryCcaImageGeneration(
   const project = getOAuthCredentialProjectId("google-antigravity");
   if (!project) {
     linkedSignal.cleanup();
-    return undefined;
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).",
+    );
   }
 
   logCtx.provider = "google-antigravity";
