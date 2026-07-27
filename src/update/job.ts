@@ -298,6 +298,8 @@ export interface RestartProxyIdentity {
   version?: string;
 }
 
+export type FailedUpdateRecovery = "not-needed" | "still-running" | "restarted" | "failed";
+
 /** Test seam: the wait/spawn pair is injectable so the restart path is verifiable. */
 export interface RestartIo {
   waitForPort?: typeof reclaimListenPort;
@@ -524,6 +526,47 @@ async function defaultProbeProxyIdentity(
   }
 }
 
+/** Keep a failed GUI install from also leaving a previously-active proxy offline. */
+async function recoverFailedGuiUpdate(
+  job: UpdateJobState,
+  captured: { port: number; hostname: string; oldPid?: number },
+  proxyWasActive: boolean,
+  io: RestartIo = {},
+): Promise<FailedUpdateRecovery> {
+  if (!proxyWasActive) return "not-needed";
+
+  const probeIdentity = io.probeProxyIdentity ?? defaultProbeProxyIdentity;
+  if (await probeIdentity(captured.port, captured.hostname)) {
+    updateJob(job, {}, `Update command failed, but the existing proxy remains healthy on ${captured.hostname}:${captured.port}.`);
+    return "still-running";
+  }
+
+  updateJob(job, {}, "Update command failed after the proxy stopped; attempting to restore the proxy...");
+  try {
+    const restartFn = io.restartAfterUpdateFn ?? restartAfterUpdate;
+    await restartFn(job, captured, io);
+    const healthy = await awaitRestartedProxyHealthy(job, captured, io);
+    if (healthy.ok) {
+      updateJob(job, {}, `Previous proxy service restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
+      return "restarted";
+    }
+  } catch (error) {
+    updateJob(job, {}, `Automatic proxy recovery threw: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  updateJob(job, {}, `Automatic proxy recovery failed. Restore the package, then run 'ocx service install' or 'ocx start --port ${captured.port}'.`);
+  return "failed";
+}
+
+export function recoverFailedGuiUpdateForTests(
+  job: UpdateJobState,
+  captured: { port: number; hostname: string; oldPid?: number },
+  proxyWasActive: boolean,
+  io: RestartIo,
+): Promise<FailedUpdateRecovery> {
+  return recoverFailedGuiUpdate(job, captured, proxyWasActive, io);
+}
+
 /**
  * Health alone is not enough to skip the GUI worker restart: a surviving pre-update
  * process is still identity-healthy. Require update-correlated evidence — a new PID
@@ -687,6 +730,7 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
   const livePid = readPid();
   const preUpdateConfig = loadConfig();
   const runtimeTrusted = !!(rt && livePid && rt.pid === livePid);
+  const proxyWasActive = isServiceInstalled() || runtimeTrusted;
   const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
     ? preUpdateConfig.port
     : 10100;
@@ -775,11 +819,13 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
           startWindowsTray();
         } catch { /* retain the primary update failure */ }
       }
+      const recovery = await recoverFailedGuiUpdate(job, captured, proxyWasActive);
       updateJob(job, {
         status: "failed",
         exitCode: result.status,
         signal: result.signal,
         error: `update command failed (${result.status ?? "?"})`,
+        ...(recovery === "restarted" ? { restarted: true } : {}),
       });
       return;
     }

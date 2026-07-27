@@ -8,6 +8,7 @@ import {
   finishGuiUpdateRestart,
   npmSelfUpdateRestartEvidence,
   readUpdateJob,
+  recoverFailedGuiUpdateForTests,
   restartCommand,
   restartAfterUpdateForTests,
   startUpdateJob,
@@ -283,6 +284,71 @@ describe("GUI update execution decisions", () => {
     });
     // The fallback must fire: direct proxy start instead of throwing.
     expect(spawned).toEqual([{ port: 19999 }]);
+  });
+
+  test("failed install leaves an already-healthy proxy untouched", async () => {
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-still-running",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => ({ pid: 111, version: "2.7.40" }),
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+    expect(recovery).toBe("still-running");
+    expect(restartCalls).toBe(0);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("existing proxy remains healthy"))).toBe(true);
+  });
+
+  test("failed install restores a proxy that the updater stopped", async () => {
+    let now = 0;
+    let restarted = false;
+    const job: UpdateJobState = {
+      id: "failed-install-recovery",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        probeProxy: async () => restarted,
+        restartAfterUpdateFn: async () => { restarted = true; },
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+    expect(recovery).toBe("restarted");
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("update itself still failed"))).toBe(true);
   });
 
   test("restart confirmation fails when the proxy never becomes healthy", async () => {

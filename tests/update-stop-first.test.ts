@@ -27,6 +27,19 @@ describe("update stops the running proxy before replacing files", () => {
     expect(abortAt).toBeLessThan(stopAt);
   });
 
+  test("npm cache ownership pre-flight runs before either updater stops the proxy", () => {
+    const cliGateAt = updateSource.indexOf("const cacheOwnership = checkNpmCacheOwnership()");
+    const cliStopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    const launcherGateAt = launcherSource.indexOf("const cacheOwnership = checkNpmCacheOwnership(");
+    const launcherStopAt = launcherSource.indexOf('[launcher, "stop"]');
+    expect(cliGateAt).toBeGreaterThan(-1);
+    expect(launcherGateAt).toBeGreaterThan(-1);
+    expect(cliGateAt).toBeLessThan(cliStopAt);
+    expect(launcherGateAt).toBeLessThan(launcherStopAt);
+    expect(updateSource).toContain("formatNpmCacheOwnershipFailure(cacheOwnership)");
+    expect(launcherSource).toContain("formatNpmCacheOwnershipFailure(cacheOwnership)");
+  });
+
   test("npm launcher update path stops via its own launcher path before npm install", () => {
     expect(launcherSource).toContain('spawnSync(process.execPath, [launcher, "stop"]');
     const stopAt = launcherSource.indexOf('[launcher, "stop"]');

@@ -499,7 +499,10 @@ Self-update opencodex from npm. Stable installs use `@latest`; preview installs 
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to
 `git pull && bun install` instead, and is a no-op if you're already on the newest version for that
 tag. A running proxy is stopped before files are replaced; an installed service is rebuilt and
-started automatically, while a foreground installation prints `ocx start` as the next step.
+started automatically, while a foreground installation prints `ocx start` as the next step. On
+Unix, the updater first checks that the configured npm cache is owned by the current user. It aborts
+before stopping the proxy when it finds a foreign-owned cache entry, so you can correct the cache
+ownership or configure a user-owned cache and retry without losing the running service.
 
 ```bash
 ocx update

@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { checkNpmCacheOwnership, formatNpmCacheOwnershipFailure } from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 
 /**
@@ -162,6 +163,14 @@ export async function runUpdate(): Promise<void> {
     console.warn(`⚠️  Integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`);
   } else {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
+  }
+
+  if (installer === "npm") {
+    const cacheOwnership = checkNpmCacheOwnership();
+    if (cacheOwnership.ok === false) {
+      console.error(`⚠️  ${formatNpmCacheOwnershipFailure(cacheOwnership)}`);
+      process.exit(1);
+    }
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`

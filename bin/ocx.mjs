@@ -14,6 +14,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkNpmCacheOwnership, formatNpmCacheOwnershipFailure } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
 const PKG = "@bitkyc08/opencodex";
@@ -131,6 +132,12 @@ function runNpmSelfUpdate() {
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
     process.exit(0);
+  }
+
+  const cacheOwnership = checkNpmCacheOwnership({ npmBin: npm, shell: winShell });
+  if (cacheOwnership.ok === false) {
+    console.error(`opencodex: ${formatNpmCacheOwnershipFailure(cacheOwnership)}`);
+    process.exit(1);
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`

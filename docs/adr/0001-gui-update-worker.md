@@ -22,6 +22,17 @@ the existing npm self-update guard is reused. For Bun global installs, it runs t
 global update command. Source checkouts remain manual-only and show `git pull && bun install &&
 bun run build:gui`.
 
+Before an npm updater stops the proxy, it resolves the configured npm cache and checks that every
+entry is owned by the current Unix user. A foreign-owned entry (commonly left by an older `sudo npm`
+invocation) aborts the update with an actionable error while the existing proxy and service remain
+running. Failure to resolve or inspect the cache also aborts before shutdown; platforms without
+Unix uid ownership skip this gate.
+
+If the installer still exits nonzero, the GUI worker first checks whether the pre-update proxy is
+still healthy. It leaves that process alone when an early gate failed; when the updater already
+stopped it, the worker makes a best-effort restart and verifies health. The update job remains
+failed either way because restoring availability is not the same as installing the new version.
+
 After an update requests a restart, the worker now waits for an identity-checked `/healthz` to
 return and remain healthy for a short stability window before marking the job successful. This
 keeps `update-job.json` honest on Windows cases where npm leaves the bundled Bun runtime in a bad
@@ -45,6 +56,8 @@ restart path because `bun add -g` does not restart the proxy.
 - The GUI request handler stays responsive and does not overwrite its own running module graph.
 - Update status survives a proxy restart because it is stored in the opencodex config directory.
 - Restart handling can branch between service-managed installs and direct detached proxy starts.
+- npm cache ownership failures are detected before service or proxy shutdown.
+- A failed install best-effort restores a previously-active proxy without claiming update success.
 - A completed install can still finish with `status: "failed"` when the replacement proxy never
   becomes healthy or flaps during the stability window; the job log then points the user at
   `ocx start` and the Bun `--allow-scripts` reinstall path.
