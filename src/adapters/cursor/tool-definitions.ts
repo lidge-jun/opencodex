@@ -304,10 +304,46 @@ export function cursorToolsForActivePrompt<T extends Pick<OcxTool, "namespace" |
 }
 
 /**
- * Extract a non-empty shell command from completed Cursor bridge args.
- * Accepts either Responses-side `command` or Cursor-advertised `cmd`.
+ * Required command payload keys for a shell bridge tool, derived from the advertised schema when present.
  */
-export function nonEmptyShellBridgeCommandFromArgs(finalArgs: string): string | undefined {
+export function shellBridgeRequiredCommandKeys(
+  toolName: string,
+  schema?: unknown,
+): readonly ("cmd" | "command")[] {
+  if (schema && typeof schema === "object") {
+    const required = (schema as Record<string, unknown>).required;
+    if (Array.isArray(required)) {
+      const keys = required.filter((key): key is "cmd" | "command" => key === "cmd" || key === "command");
+      if (keys.length > 0) return keys;
+    }
+  }
+  return toolName === CODEX_SHELL_COMMAND_TOOL ? ["command"] : ["cmd"];
+}
+
+/** Normalize-schema defaults used when validating stateless synthetic shell-bridge calls. */
+export function defaultShellBridgeArgNormalizeSchema(toolName: string): unknown {
+  return toolName === CODEX_SHELL_COMMAND_TOOL
+    ? CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA
+    : {
+      type: "object",
+      properties: CURSOR_EXEC_COMMAND_INPUT_SCHEMA.properties,
+      required: ["cmd"],
+    };
+}
+
+export function cursorShellBridgeDropError(toolName: string): string {
+  return `Cursor emitted ${toolName} without a non-empty command; the tool call was dropped.`;
+}
+
+/**
+ * Extract a non-empty shell command from completed Cursor bridge args using the schema's required
+ * command key (`cmd` for bare exec_command, `command` for shell_command).
+ */
+export function nonEmptyShellBridgeCommandFromArgs(
+  finalArgs: string,
+  toolName: string,
+  schema?: unknown,
+): string | undefined {
   let parsed: unknown;
   try {
     parsed = finalArgs.length > 0 ? JSON.parse(finalArgs) : {};
@@ -316,11 +352,20 @@ export function nonEmptyShellBridgeCommandFromArgs(finalArgs: string): string | 
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
-  for (const key of ["command", "cmd"] as const) {
+  for (const key of shellBridgeRequiredCommandKeys(toolName, schema)) {
     const value = record[key];
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
   return undefined;
+}
+
+export function cursorShellBridgeArgsValid(
+  finalArgs: string,
+  toolName: string,
+  schema?: unknown,
+): boolean {
+  return !isCodexShellBridgeToolName(toolName)
+    || nonEmptyShellBridgeCommandFromArgs(finalArgs, toolName, schema) !== undefined;
 }
 
 export function cursorToolAllowedByChoice(
