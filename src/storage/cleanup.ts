@@ -619,17 +619,21 @@ function tableColumnNames(db: Database, table: string): Set<string> {
   return new Set(rows.map(r => r.name));
 }
 
-function insertRowsConflictIgnore(db: Database, table: string, rows: SqlRow[]): void {
-  if (rows.length === 0) return;
+/** Insert rows with ON CONFLICT DO NOTHING; returns only rows that were newly inserted. */
+function insertRowsConflictIgnore(db: Database, table: string, rows: SqlRow[]): SqlRow[] {
+  const inserted: SqlRow[] = [];
+  if (rows.length === 0) return inserted;
   const allowed = tableColumnNames(db, table);
   for (const row of rows) {
     const cols = Object.keys(row).filter(c => allowed.has(c));
     if (cols.length === 0) continue;
-    db.run(
+    const result = db.run(
       `INSERT INTO ${quoteIdent(table)} (${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
       cols.map(c => row[c] as string | number | bigint | null | Uint8Array),
     );
+    if (result.changes > 0) inserted.push(row);
   }
+  return inserted;
 }
 
 /** Snapshot state-DB dependents that cleanup deletes with the thread rows. */
@@ -2004,53 +2008,156 @@ function reconstructThreadRowFromRollout(
   return row;
 }
 
-/** Re-insert threads (+ dependents) from satellite snapshot or rollout reconstruction. */
-function existingThreadIds(db: Database, ids: string[]): Set<string> {
-  const out = new Set<string>();
-  if (ids.length === 0 || !tableExists(db, "threads")) return out;
+/** Rows this restore actually inserted (conflict-ignored pre-existing rows omitted). */
+interface RestoreInsertedRows {
+  threadIds: string[];
+  dynamicTools: SqlRow[];
+  spawnEdges: SqlRow[];
+  logs: SqlRow[];
+  memoriesStage1: SqlRow[];
+  memoriesJobs: SqlRow[];
+  /** True when restoreConsolidateGlobalJob ran during this restore. */
+  memoriesConsolidateRestored: boolean;
+  goals: SqlRow[];
+  goalDeferrals: SqlRow[];
+}
+
+function emptyRestoreInsertedRows(): RestoreInsertedRows {
+  return {
+    threadIds: [],
+    dynamicTools: [],
+    spawnEdges: [],
+    logs: [],
+    memoriesStage1: [],
+    memoriesJobs: [],
+    memoriesConsolidateRestored: false,
+    goals: [],
+    goalDeferrals: [],
+  };
+}
+
+function deleteInsertedDynamicTools(db: Database, rows: SqlRow[]): void {
+  if (rows.length === 0 || !tableExists(db, "thread_dynamic_tools")) return;
+  for (const row of rows) {
+    if (typeof row.thread_id !== "string" || row.position === null || row.position === undefined) continue;
+    db.run(
+      "DELETE FROM thread_dynamic_tools WHERE thread_id = ? AND position = ?",
+      [row.thread_id, row.position as string | number],
+    );
+  }
+}
+
+function deleteInsertedSpawnEdges(db: Database, rows: SqlRow[]): void {
+  if (rows.length === 0 || !tableExists(db, "thread_spawn_edges")) return;
+  for (const row of rows) {
+    if (typeof row.child_thread_id !== "string") continue;
+    db.run("DELETE FROM thread_spawn_edges WHERE child_thread_id = ?", [row.child_thread_id]);
+  }
+}
+
+function deleteInsertedThreadsOnly(db: Database, threadIds: string[]): void {
+  if (threadIds.length === 0 || !tableExists(db, "threads")) return;
+  for (const chunk of chunkIds(threadIds, SQLITE_ID_CHUNK * 2)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    db.run(`DELETE FROM threads WHERE id IN (${placeholders})`, chunk);
+  }
+}
+
+function deleteInsertedMemoriesStage1(db: Database, rows: SqlRow[]): void {
+  if (rows.length === 0 || !tableExists(db, "stage1_outputs")) return;
+  const ids = rows.map(r => String(r.thread_id));
   for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK * 2)) {
     const placeholders = chunk.map(() => "?").join(",");
-    for (const row of selectRows(db, `SELECT id FROM threads WHERE id IN (${placeholders})`, chunk)) {
-      if (typeof row.id === "string") out.add(row.id);
+    db.run(`DELETE FROM stage1_outputs WHERE thread_id IN (${placeholders})`, chunk);
+  }
+}
+
+function deleteInsertedMemoriesJobs(db: Database, rows: SqlRow[]): void {
+  if (rows.length === 0 || !tableExists(db, "jobs")) return;
+  const keys = rows.map(r => String(r.job_key));
+  for (const chunk of chunkIds(keys, SQLITE_ID_CHUNK * 2)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    db.run(
+      `DELETE FROM jobs WHERE kind = ? AND job_key IN (${placeholders})`,
+      [JOB_KIND_MEMORY_STAGE1, ...chunk],
+    );
+  }
+}
+
+function deleteInsertedGoals(db: Database, goals: SqlRow[], deferrals: SqlRow[]): void {
+  if (deferrals.length > 0 && tableExists(db, "thread_goal_continuation_deferrals")) {
+    const ids = deferrals.map(r => String(r.thread_id));
+    for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK * 2)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      db.run(
+        `DELETE FROM thread_goal_continuation_deferrals WHERE thread_id IN (${placeholders})`,
+        chunk,
+      );
     }
   }
-  return out;
+  if (goals.length > 0 && tableExists(db, "thread_goals")) {
+    const ids = goals.map(r => String(r.thread_id));
+    for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK * 2)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      db.run(`DELETE FROM thread_goals WHERE thread_id IN (${placeholders})`, chunk);
+    }
+  }
 }
 
 /**
- * Undo state + satellite rows committed by a restore that is about to restage
- * files back into `.trash`. Only deletes IDs / satellite sections this restore
- * actually inserted (or committed), so conflict-ignored pre-existing rows stay.
+ * Undo state + satellite rows this restore inserted before restaging files.
+ * Only deletes exact inserted rows so conflict-ignored pre-existing rows stay.
+ * Returns ok only when every compensating transaction commits.
  */
 function compensateRestoreMetadata(
   stateDbPath: string | null,
-  insertedThreadIds: string[],
   backup: SatelliteBackup | null,
-  committedSatellites: { logs: boolean; memories: boolean; goals: boolean },
+  inserted: RestoreInsertedRows,
   busyTimeoutMs: number,
-): void {
-  if (backup) {
-    if (committedSatellites.logs && backup.logs) {
-      withWritableDb(backup.logs.path, busyTimeoutMs, db => {
-        deleteLogsInTx(db, backup.logs!.rows);
-      });
-    }
-    if (committedSatellites.memories && backup.memories) {
-      withWritableDb(backup.memories.path, busyTimeoutMs, db => {
-        deleteMemoriesInTx(db, backup.memories!);
-      });
-    }
-    if (committedSatellites.goals && backup.goals) {
-      withWritableDb(backup.goals.path, busyTimeoutMs, db => {
-        deleteGoalsInTx(db, backup.goals!);
-      });
-    }
-  }
-  if (stateDbPath && insertedThreadIds.length > 0 && existsSync(stateDbPath)) {
-    withWritableDb(stateDbPath, busyTimeoutMs, db => {
-      deleteThreadsAndDependents(db, insertedThreadIds);
+): { ok: true } | ReconcileErr {
+  if (backup?.logs && inserted.logs.length > 0) {
+    const result = withWritableDb(backup.logs.path, busyTimeoutMs, db => {
+      deleteLogsInTx(db, inserted.logs);
     });
+    if (!result.ok) return result;
   }
+  if (backup?.memories && (
+    inserted.memoriesStage1.length > 0
+    || inserted.memoriesJobs.length > 0
+    || inserted.memoriesConsolidateRestored
+  )) {
+    const mem = backup.memories;
+    const result = withWritableDb(mem.path, busyTimeoutMs, db => {
+      deleteInsertedMemoriesStage1(db, inserted.memoriesStage1);
+      deleteInsertedMemoriesJobs(db, inserted.memoriesJobs);
+      if (inserted.memoriesConsolidateRestored) {
+        // Invert restoreConsolidateGlobalJob: if current still matches the
+        // restored snapshot, put the post-delete image back.
+        restoreConsolidateGlobalJob(db, mem.consolidatePostImage ?? null, mem.consolidateJob);
+      }
+    });
+    if (!result.ok) return result;
+  }
+  if (backup?.goals && (inserted.goals.length > 0 || inserted.goalDeferrals.length > 0)) {
+    const result = withWritableDb(backup.goals.path, busyTimeoutMs, db => {
+      deleteInsertedGoals(db, inserted.goals, inserted.goalDeferrals);
+    });
+    if (!result.ok) return result;
+  }
+
+  const needsState =
+    inserted.threadIds.length > 0
+    || inserted.dynamicTools.length > 0
+    || inserted.spawnEdges.length > 0;
+  if (needsState && stateDbPath && existsSync(stateDbPath)) {
+    const result = withWritableDb(stateDbPath, busyTimeoutMs, db => {
+      deleteInsertedDynamicTools(db, inserted.dynamicTools);
+      deleteInsertedSpawnEdges(db, inserted.spawnEdges);
+      deleteInsertedThreadsOnly(db, inserted.threadIds);
+    });
+    if (!result.ok) return result;
+  }
+  return { ok: true };
 }
 
 function restoreThreadsFromManifest(
@@ -2059,7 +2166,7 @@ function restoreThreadsFromManifest(
   backup: SatelliteBackup | null,
   busyTimeoutMs: number,
   codexHome: string,
-): { ok: true; insertedThreadIds: string[] } | ReconcileErr {
+): { ok: true; inserted: Pick<RestoreInsertedRows, "threadIds" | "dynamicTools" | "spawnEdges"> } | ReconcileErr {
   const manifestThreadIds = entries
     .map(e => e.threadId)
     .filter((id): id is string => typeof id === "string");
@@ -2071,9 +2178,15 @@ function restoreThreadsFromManifest(
   if (needsThreads && (!stateDbPath || !existsSync(stateDbPath))) {
     return { ok: false, error: "db_reconcile_failed" };
   }
-  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true, insertedThreadIds: [] };
+  if (!stateDbPath || !existsSync(stateDbPath)) {
+    return { ok: true, inserted: { threadIds: [], dynamicTools: [], spawnEdges: [] } };
+  }
 
-  let insertedThreadIds: string[] = [];
+  let inserted: Pick<RestoreInsertedRows, "threadIds" | "dynamicTools" | "spawnEdges"> = {
+    threadIds: [],
+    dynamicTools: [],
+    spawnEdges: [],
+  };
   const result = withWritableDb(stateDbPath, busyTimeoutMs, db => {
     if (!tableExists(db, "threads")) throw new Error("missing_threads_table");
 
@@ -2119,32 +2232,35 @@ function restoreThreadsFromManifest(
       reconstructed.push(row);
     }
 
-    const candidateIds = [
-      ...coveredIds,
-      ...reconstructed
-        .map(r => r.id)
-        .filter((id): id is string => typeof id === "string"),
-    ];
-    const preexisting = existingThreadIds(db, candidateIds);
-
+    const insertedThreads: SqlRow[] = [];
     if (completeSnapshots.length > 0) {
-      insertRowsConflictIgnore(db, "threads", completeSnapshots);
+      insertedThreads.push(...insertRowsConflictIgnore(db, "threads", completeSnapshots));
     }
     if (reconstructed.length > 0) {
-      insertRowsConflictIgnore(db, "threads", reconstructed);
+      insertedThreads.push(...insertRowsConflictIgnore(db, "threads", reconstructed));
     }
 
+    let dynamicTools: SqlRow[] = [];
     if (backup?.dynamicTools && isSqlRowArray(backup.dynamicTools) && tableExists(db, "thread_dynamic_tools")) {
-      insertRowsConflictIgnore(db, "thread_dynamic_tools", backup.dynamicTools);
+      dynamicTools = insertRowsConflictIgnore(db, "thread_dynamic_tools", backup.dynamicTools);
     }
+    let spawnEdges: SqlRow[] = [];
     if (backup?.spawnEdges && isSqlRowArray(backup.spawnEdges) && tableExists(db, "thread_spawn_edges")) {
-      insertRowsConflictIgnore(db, "thread_spawn_edges", backup.spawnEdges);
+      spawnEdges = insertRowsConflictIgnore(db, "thread_spawn_edges", backup.spawnEdges);
     }
 
-    insertedThreadIds = [...new Set(candidateIds.filter(id => !preexisting.has(id)))];
+    inserted = {
+      threadIds: [...new Set(
+        insertedThreads
+          .map(r => r.id)
+          .filter((id): id is string => typeof id === "string"),
+      )],
+      dynamicTools,
+      spawnEdges,
+    };
   });
   if (!result.ok) return result;
-  return { ok: true, insertedThreadIds };
+  return { ok: true, inserted };
 }
 
 function isSafeArchivedPhysicalRel(rel: string): boolean {
@@ -2164,15 +2280,18 @@ export interface RestoreTestHooks {
   failAfterFirstSatelliteCommit?: boolean;
   /** When the leftover staged-rollout completeness gate runs. */
   failAtLeftoverStageGate?: boolean;
+  /** Runs immediately before compensating metadata on late failure. */
+  beforeCompensate?: () => void;
 }
 
 /**
  * Restore one quarantine entry: move JSONL back, re-insert threads (+ satellites
  * when satellite-backup.json is present), then remove the trash directory.
  *
- * Late failures restage files first, then compensate any rows this restore
- * committed, so the trash entry stays retryable without `dest_exists` or
- * orphan metadata.
+ * Late failures compensate metadata this restore inserted first (enforcing success),
+ * then restage files. If compensation is busy/fails, leave the consistent
+ * partial-restored files+metadata state with accurate counts instead of
+ * restaging and reporting a zero restore.
  */
 export function restoreTrashEntry(
   trashId: string,
@@ -2332,31 +2451,44 @@ export function restoreTrashEntry(
   const bytes = entries.reduce((sum, e) => sum + (e.bytes || 0), 0);
   const partialCounts = { count: restoredPaths.length, bytes, restoredPaths };
 
-  let insertedThreadIds: string[] = [];
+  const inserted = emptyRestoreInsertedRows();
+  /** Which satellite DBs reached COMMIT (independent of conflict-ignored inserts). */
   const committedSatellites = { logs: false, memories: false, goals: false };
 
   /**
-   * Restage files first (retryable if we crash mid-compensate), then delete any
-   * rows this restore committed. When restage is incomplete, keep metadata so
-   * unrestored files are not left without DB rows.
+   * Compensate inserted metadata first. Only restage files after compensation
+   * succeeds so a busy/failed compensate leaves a consistent partial restore
+   * (files + rows, accurate counts) instead of a zeroed restage with orphans.
    */
   const abortAfterMoves = (error: RestoreErrorCode): RestoreResult => {
     if (satelliteLocks) {
       rollbackAllSatelliteLocks(satelliteLocks);
       satelliteLocks = undefined;
     }
+    try {
+      hooks?.beforeCompensate?.();
+    } catch {
+      /* test hooks must not break compensation */
+    }
+    const compensated = compensateRestoreMetadata(
+      paths.state,
+      satelliteBackup,
+      inserted,
+      busyTimeoutMs,
+    );
+    if (!compensated.ok) {
+      return {
+        ok: false,
+        trashDir: id,
+        ...partialCounts,
+        error: compensated.error === "codex_busy" ? "codex_busy" : error,
+      };
+    }
     rollbackMoves(moved);
     const unrestored = moved.filter(m => existsSync(m.to) && !existsSync(m.from));
     if (unrestored.length > 0) {
-      return { ok: false, trashDir: id, ...partialCounts, error };
+      return { ok: false, trashDir: id, ...partialCounts, error: "fs_failed" };
     }
-    compensateRestoreMetadata(
-      paths.state,
-      insertedThreadIds,
-      satelliteBackup,
-      committedSatellites,
-      busyTimeoutMs,
-    );
     return {
       ok: false,
       trashDir: id,
@@ -2379,7 +2511,9 @@ export function restoreTrashEntry(
       threadsRestored.error === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
     );
   }
-  insertedThreadIds = threadsRestored.insertedThreadIds;
+  inserted.threadIds = threadsRestored.inserted.threadIds;
+  inserted.dynamicTools = threadsRestored.inserted.dynamicTools;
+  inserted.spawnEdges = threadsRestored.inserted.spawnEdges;
 
   if (hooks?.failAfterStateCommit) {
     return abortAfterMoves("db_reconcile_failed");
@@ -2393,7 +2527,11 @@ export function restoreTrashEntry(
       if (satelliteBackup.logs) {
         if (!locks.logs) throw new Error("missing_logs_lock");
         if (!tableExists(locks.logs.db, "logs")) throw new Error("missing_logs_table");
-        insertRowsConflictIgnore(locks.logs.db, "logs", satelliteBackup.logs.rows);
+        inserted.logs = insertRowsConflictIgnore(
+          locks.logs.db,
+          "logs",
+          satelliteBackup.logs.rows,
+        );
         commitSatelliteLock(locks.logs);
         locks.logs = undefined;
         committedSatellites.logs = true;
@@ -2407,15 +2545,24 @@ export function restoreTrashEntry(
         if (!tableExists(locks.memories.db, "stage1_outputs")) {
           throw new Error("missing_stage1_outputs_table");
         }
-        insertRowsConflictIgnore(locks.memories.db, "stage1_outputs", mem.stage1);
+        inserted.memoriesStage1 = insertRowsConflictIgnore(
+          locks.memories.db,
+          "stage1_outputs",
+          mem.stage1,
+        );
         if (tableExists(locks.memories.db, "jobs")) {
-          insertRowsConflictIgnore(locks.memories.db, "jobs", mem.stage1Jobs);
+          inserted.memoriesJobs = insertRowsConflictIgnore(
+            locks.memories.db,
+            "jobs",
+            mem.stage1Jobs,
+          );
           if (mem.consolidateTouched) {
             restoreConsolidateGlobalJob(
               locks.memories.db,
               mem.consolidateJob,
               mem.consolidatePostImage,
             );
+            inserted.memoriesConsolidateRestored = true;
           }
         }
         commitSatelliteLock(locks.memories);
@@ -2431,9 +2578,9 @@ export function restoreTrashEntry(
         if (!tableExists(locks.goals.db, "thread_goals")) {
           throw new Error("missing_thread_goals_table");
         }
-        insertRowsConflictIgnore(locks.goals.db, "thread_goals", g.goals);
+        inserted.goals = insertRowsConflictIgnore(locks.goals.db, "thread_goals", g.goals);
         if (tableExists(locks.goals.db, "thread_goal_continuation_deferrals")) {
-          insertRowsConflictIgnore(
+          inserted.goalDeferrals = insertRowsConflictIgnore(
             locks.goals.db,
             "thread_goal_continuation_deferrals",
             g.deferrals,

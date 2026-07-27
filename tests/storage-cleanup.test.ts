@@ -1283,4 +1283,204 @@ describe("listTrashEntries + restoreTrashEntry", () => {
       logsAfter.close();
     },
   );
+
+  test("compensation busy on state leaves partial restore with accurate counts and keeps pre-existing rows", () => {
+    home = buildHome({
+      withSatelliteStores: true,
+      withDynamicTools: true,
+      withSpawnEdges: true,
+    });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_100 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    // Conflict-ignored pre-existing thread + satellite rows (same keys as backup).
+    const stateSeed = new Database(join(home, "state_5.sqlite"));
+    stateSeed.exec(`INSERT INTO threads VALUES (
+      'told','archived_sessions/rollout-old.jsonl',1,1,'legacy'
+    )`);
+    stateSeed.exec(`INSERT INTO thread_dynamic_tools VALUES ('told',0,'pre','d','{}')`);
+    stateSeed.close();
+    const logsSeed = new Database(join(home, "logs_2.sqlite"));
+    logsSeed.exec(
+      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,1,'INFO','t','told',10)`,
+    );
+    logsSeed.close();
+    const memSeed = new Database(join(home, "memories_1.sqlite"));
+    memSeed.exec(`INSERT INTO stage1_outputs VALUES ('told',1,'pre-m','pre-s',1,0)`);
+    memSeed.close();
+    const goalsSeed = new Database(join(home, "goals_1.sqlite"));
+    goalsSeed.exec(`INSERT INTO thread_goals VALUES ('told','g1','pre','complete',0,0,1,1)`);
+    goalsSeed.close();
+
+    let locker: Database | undefined;
+    let failed: ReturnType<typeof restoreTrashEntry>;
+    try {
+      failed = restoreTrashEntry(trashId, {
+        codexHome: home,
+        busyTimeoutMs: 1,
+        _test: {
+          failAfterStateCommit: true,
+          beforeCompensate: () => {
+            locker = new Database(join(home, "state_5.sqlite"));
+            locker.exec("BEGIN EXCLUSIVE");
+          },
+        },
+      });
+    } finally {
+      try { locker?.exec("ROLLBACK"); } catch { /* */ }
+      try { locker?.close(); } catch { /* */ }
+    }
+
+    expect(failed!.ok).toBe(false);
+    expect(failed!.error).toBe("codex_busy");
+    // Do NOT restage + report zero — keep accurate partial counts.
+    expect(failed!.count).toBe(3);
+    expect(failed!.restoredPaths).toEqual([
+      "archived_sessions/rollout-old.jsonl",
+      "archived_sessions/rollout-mid.jsonl",
+      "archived_sessions/rollout-new.jsonl",
+    ]);
+
+    // Files stay restored (no restage when compensation is busy).
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-mid.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+
+    // Metadata remains consistent with restored files (including newly inserted mid/new).
+    const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(state.query("SELECT id FROM threads WHERE id='told'").get()).toEqual({ id: "told" });
+    expect(state.query("SELECT id FROM threads WHERE id='tmid'").get()).toEqual({ id: "tmid" });
+    expect(state.query("SELECT id FROM threads WHERE id='tnew'").get()).toEqual({ id: "tnew" });
+    expect(
+      state.query("SELECT name FROM thread_dynamic_tools WHERE thread_id='told' AND position=0").get(),
+    ).toEqual({ name: "pre" });
+    state.close();
+  });
+
+  test("compensation busy on satellite leaves partial restore and does not delete pre-existing satellite rows", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_200 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    // Pre-seed the log PK that the backup will conflict-ignore on restore.
+    const logsSeed = new Database(join(home, "logs_2.sqlite"));
+    logsSeed.exec(
+      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,42,'INFO','pre','told',99)`,
+    );
+    logsSeed.close();
+
+    let locker: Database | undefined;
+    let failed: ReturnType<typeof restoreTrashEntry>;
+    try {
+      failed = restoreTrashEntry(trashId, {
+        codexHome: home,
+        busyTimeoutMs: 1,
+        _test: {
+          failAfterFirstSatelliteCommit: true,
+          beforeCompensate: () => {
+            locker = new Database(join(home, "logs_2.sqlite"));
+            locker.exec("BEGIN EXCLUSIVE");
+          },
+        },
+      });
+    } finally {
+      try { locker?.exec("ROLLBACK"); } catch { /* */ }
+      try { locker?.close(); } catch { /* */ }
+    }
+
+    expect(failed!.ok).toBe(false);
+    expect(failed!.error).toBe("codex_busy");
+    expect(failed!.count).toBe(3);
+    expect(failed!.restoredPaths.length).toBe(3);
+
+    // No missing files — stay partially restored.
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(false);
+
+    // Pre-existing log row (id=1) must not be deleted; newly inserted mid/new may remain.
+    const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    expect(
+      logs.query("SELECT ts, target, estimated_bytes FROM logs WHERE id=1").get(),
+    ).toEqual({ ts: 42, target: "pre", estimated_bytes: 99 });
+    logs.close();
+
+    // Thread rows stay (consistent with restored files).
+    const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('told','tmid','tnew')").get())
+      .toEqual({ n: 3 });
+    state.close();
+  });
+
+  test("successful compensation deletes only inserted rows and preserves conflict-ignored pre-existing rows", () => {
+    home = buildHome({
+      withSatelliteStores: true,
+      withDynamicTools: true,
+    });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_300 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const stateSeed = new Database(join(home, "state_5.sqlite"));
+    stateSeed.exec(`INSERT INTO threads VALUES (
+      'told','archived_sessions/rollout-old.jsonl',1,1,'legacy'
+    )`);
+    stateSeed.exec(`INSERT INTO thread_dynamic_tools VALUES ('told',0,'keep-me','d','{}')`);
+    stateSeed.close();
+    const logsSeed = new Database(join(home, "logs_2.sqlite"));
+    logsSeed.exec(
+      `INSERT INTO logs (id, ts, level, target, thread_id, estimated_bytes) VALUES (1,77,'WARN','keep','told',5)`,
+    );
+    logsSeed.close();
+    const memSeed = new Database(join(home, "memories_1.sqlite"));
+    memSeed.exec(`INSERT INTO stage1_outputs VALUES ('told',9,'keep-m','keep-s',9,0)`);
+    memSeed.close();
+    const goalsSeed = new Database(join(home, "goals_1.sqlite"));
+    goalsSeed.exec(`INSERT INTO thread_goals VALUES ('told','g-keep','keep','complete',0,0,9,9)`);
+    goalsSeed.close();
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterFirstSatelliteCommit: true },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("db_reconcile_failed");
+    expect(failed.count).toBe(0);
+    expect(failed.restoredPaths).toEqual([]);
+
+    // Fully restaged — retryable trash shape, no orphan inserted rows.
+    expect(existsSync(join(stage, "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+
+    const state = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(state.query("SELECT id FROM threads WHERE id='told'").get()).toEqual({ id: "told" });
+    expect(state.query("SELECT COUNT(*) AS n FROM threads WHERE id IN ('tmid','tnew')").get())
+      .toEqual({ n: 0 });
+    expect(
+      state.query("SELECT name FROM thread_dynamic_tools WHERE thread_id='told' AND position=0").get(),
+    ).toEqual({ name: "keep-me" });
+    state.close();
+
+    const logs = new Database(join(home, "logs_2.sqlite"), { readonly: true });
+    expect(logs.query("SELECT ts, target FROM logs WHERE id=1").get()).toEqual({ ts: 77, target: "keep" });
+    expect(logs.query("SELECT COUNT(*) AS n FROM logs WHERE thread_id IN ('tmid','tnew')").get())
+      .toEqual({ n: 0 });
+    logs.close();
+
+    const mem = new Database(join(home, "memories_1.sqlite"), { readonly: true });
+    expect(mem.query("SELECT raw_memory FROM stage1_outputs WHERE thread_id='told'").get())
+      .toEqual({ raw_memory: "keep-m" });
+    mem.close();
+
+    const goals = new Database(join(home, "goals_1.sqlite"), { readonly: true });
+    expect(goals.query("SELECT objective FROM thread_goals WHERE thread_id='told'").get())
+      .toEqual({ objective: "keep" });
+    expect(goals.query("SELECT COUNT(*) AS n FROM thread_goals WHERE thread_id='tmid'").get())
+      .toEqual({ n: 0 });
+    goals.close();
+  });
 });
