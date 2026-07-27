@@ -107,11 +107,3 @@ export async function withStorageMutationSlot<T>(
     endStorageMutation(codexHome);
   }
 }
-
-/** Policy worker helper — same pending-restore overlap guard as manual cleanup. */
-export function guardPolicyCleanupCandidates(
-  codexHome: string,
-  candidates: ArchivedCandidate[],
-): ReturnType<typeof guardCleanupCandidatesForPendingRestore> {
-  return guardCleanupCandidatesForPendingRestore(codexHome, candidates);
-}
