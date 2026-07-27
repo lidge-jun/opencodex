@@ -78,6 +78,8 @@ describe("storage trash restore job responsiveness", () => {
     try {
       const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
       expect(res.status).toBe(404);
+      expect(res.headers.get("content-type") ?? "").toContain("application/json");
+      expect(await res.json()).toEqual({ error: "not_available" });
     } finally {
       await server.stop(true);
     }

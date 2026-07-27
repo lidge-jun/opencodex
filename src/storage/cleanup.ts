@@ -34,6 +34,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Database } from "bun:sqlite";
 import { resolveCodexHomeDir } from "../codex/home";
 import { readThreadFieldsFromRollout } from "../codex/history-provider";
+import { renameAtomicFile } from "../config";
 
 export const ARCHIVED_SESSIONS_DIR = "archived_sessions";
 export const TRASH_DIR = ".trash";
@@ -997,9 +998,10 @@ function fsyncDirectoryBestEffort(dirPath: string): void {
 }
 
 /**
- * Atomically replace satellite-backup.json: private temp in the stage, fsync, rename,
- * then best-effort directory fsync. An interrupted update never truncates the last
- * valid backup that was written before a satellite DB commit.
+ * Atomically replace satellite-backup.json: private temp in the stage, full write + fsync,
+ * rename (with Windows sharing-violation retries), then best-effort directory fsync.
+ * An interrupted update never truncates the last valid backup that was written before a
+ * satellite DB commit.
  */
 function writeSatelliteBackup(
   stageDir: string,
@@ -1010,10 +1012,13 @@ function writeSatelliteBackup(
   const dest = join(stageDir, SATELLITE_BACKUP_FILE);
   const replacing = existsSync(dest);
   const tmp = join(stageDir, `${SATELLITE_BACKUP_FILE}.${process.pid}.${++_satelliteBackupSeq}.tmp`);
-  const payload = JSON.stringify(backup);
+  const payload = Buffer.from(JSON.stringify(backup), "utf8");
   const fd = openSync(tmp, "w", 0o600);
   try {
-    writeSync(fd, payload, null, "utf8");
+    let offset = 0;
+    while (offset < payload.length) {
+      offset += writeSync(fd, payload, offset, payload.length - offset, null);
+    }
     fsyncSync(fd);
   } catch (error) {
     try { closeSync(fd); } catch { /* */ }
@@ -1027,7 +1032,7 @@ function writeSatelliteBackup(
     throw new Error("test_fail_satellite_backup_replace");
   }
   try {
-    renameSync(tmp, dest);
+    renameAtomicFile(tmp, dest);
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* */ }
     throw error;
