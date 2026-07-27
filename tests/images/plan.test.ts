@@ -18,7 +18,7 @@ const { planImageBridge } = await import("../../src/images/plan");
 
 function makeConfig(
   providers: Record<string, Partial<OcxProviderConfig>>,
-  images?: { bridgeEnabled?: boolean; bridgeModel?: string },
+  images?: { bridgeEnabled?: boolean; bridgeModel?: string; timeoutMs?: number },
 ): OcxConfig {
   return {
     port: 0,
@@ -104,6 +104,15 @@ describe("planImageBridge", () => {
       { bridgeEnabled: true, bridgeModel: "custom-img-model" },
     );
     expect((await planImageBridge(cfg, makeParsed(true), routed))!.model).toBe("custom-img-model");
+  });
+
+  test("images.timeoutMs is forwarded onto the plan", async () => {
+    const cfg = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } },
+      { bridgeEnabled: true, timeoutMs: 120_000 },
+    );
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan!.timeoutMs).toBe(120_000);
   });
 
   test("toolNames includes IMAGE_GEN_TOOL_NAME so the loop can intercept synthetic calls", async () => {

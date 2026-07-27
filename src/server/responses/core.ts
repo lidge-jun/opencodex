@@ -39,7 +39,7 @@ import {
   UnsupportedOAuthProviderError,
 } from "../../oauth";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
-import { buildImageTool, planImageBridge, runWithImageBridge } from "../../images";
+import { buildImageTool, planImageBridge, runWithImageBridge, clampImageMaxRounds } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -1550,7 +1550,28 @@ export async function handleResponses(
         forwardHeaders: selectedForwardHeaders,
         onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
         abortSignal: options.abortSignal,
-        ...(config.images?.maxRounds != null ? { maxRounds: config.images.maxRounds } : {}),
+        maxRounds: clampImageMaxRounds(config.images?.maxRounds),
+        onUsage: usage => {
+          logCtx.usageFromBridge = true;
+          if (usage) {
+            logCtx.usage = usage;
+            if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+          }
+        },
+        on429: retryAfter => {
+          const rotated = rotateProviderTransportOn429(config, route.providerName, {
+            retryAfter,
+            now: Date.now(),
+            attemptedKey: route.provider.apiKey,
+            promptCacheKey: parsed.options.promptCacheKey,
+          });
+          if (!rotated) return null;
+          route.provider = rotated;
+          return resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+            config.cacheRetention,
+          );
+        },
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       });
       if (imgResponse.body) {

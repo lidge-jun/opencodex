@@ -76,6 +76,14 @@ describe("callXaiImages", () => {
     expect(passed.aborted).toBe(true);
   });
 
+  test("custom timeoutMs is composed into the abort signal", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x" }, AUTH, undefined, 5_000);
+    const passed = calls[0]!.init?.signal as AbortSignal;
+    expect(passed).toBeDefined();
+    expect(passed.aborted).toBe(false);
+  });
+
   test("size/quality mapped to aspect_ratio/resolution, no passthrough", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
     await callXaiImages({ prompt: "x", size: "1024x1792", quality: "hd" }, AUTH);

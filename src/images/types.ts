@@ -5,6 +5,8 @@ export interface ImageBridgePlan {
   auth: { baseUrl: string; token: string };
   model: string;
   toolNames: Set<string>;
+  /** Per-call xAI deadline (ms). Defaults inside callXaiImages when omitted. */
+  timeoutMs?: number;
 }
 
 export interface ImageCallResult {

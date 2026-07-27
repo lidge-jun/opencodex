@@ -74,6 +74,12 @@ mock.module("../../src/images/loop", () => ({
       status: 200, headers: { "content-type": "text/event-stream" },
     });
   },
+  clampImageMaxRounds: (value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return 3;
+    return Math.max(0, Math.min(10, Math.floor(value)));
+  },
+  DEFAULT_MAX_ROUNDS: 3,
+  MAX_ROUNDS_HARD_LIMIT: 10,
 }));
 
 // --- Stub the web-search planner + runner: control eligibility and detect activation ---

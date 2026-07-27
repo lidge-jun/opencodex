@@ -38,7 +38,12 @@ export async function fulfillImageCall(
 
   let result;
   try {
-    result = await callXaiImages({ prompt, model: plan.model, n, imageUrl, size, quality }, plan.auth, signal);
+    result = await callXaiImages(
+      { prompt, model: plan.model, n, imageUrl, size, quality },
+      plan.auth,
+      signal,
+      plan.timeoutMs,
+    );
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     return { ok: false, model: plan.model, prompt, files: [], count: 0, error };

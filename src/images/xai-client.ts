@@ -65,6 +65,7 @@ export async function callXaiImages(
   req: XaiImageRequest,
   auth: { baseUrl: string; token: string },
   signal?: AbortSignal,
+  timeoutMs: number = XAI_IMAGES_TIMEOUT_MS,
 ): Promise<XaiImageResult> {
   const isEdit = typeof req.imageUrl === "string" && req.imageUrl.length > 0;
   const endpoint = isEdit ? "/images/edits" : "/images/generations";
@@ -82,7 +83,10 @@ export async function callXaiImages(
     body.image = { url: req.imageUrl as string, type: "image_url" };
   }
 
-  const timeout = AbortSignal.timeout(XAI_IMAGES_TIMEOUT_MS);
+  const deadlineMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : XAI_IMAGES_TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(deadlineMs);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
   const resp = await fetch(`${auth.baseUrl}${endpoint}`, {
