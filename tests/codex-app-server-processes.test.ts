@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   afterCatalogWriteHandleAppServers,
+  attachStaleAppServerHint,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
   isWindowsCodexCandidateCommandLine,
@@ -230,16 +231,51 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
-  test("POST /api/sync always returns shared staleAppServerHint without enumerating processes", () => {
+  test("POST /api/sync attaches staleAppServerHint only after a write and never enumerates processes", () => {
     const syncHandler = configRoutesSource.slice(
       configRoutesSource.indexOf('url.pathname === "/api/sync"'),
       configRoutesSource.indexOf('url.pathname === "/api/update/check"'),
     );
-    expect(syncHandler).toContain("staleAppServerHint: STALE_CODEX_APP_SERVER_HINT");
-    expect(syncHandler).toContain("STALE_CODEX_APP_SERVER_HINT");
+    expect(syncHandler).toContain("attachStaleAppServerHint(result)");
     expect(syncHandler).not.toContain("listCodexAppServerProcesses");
     expect(syncHandler).not.toContain("afterCatalogWriteHandleAppServers");
     expect(STALE_CODEX_APP_SERVER_HINT).toContain("ocx sync --restart-codex");
+  });
+
+  test("no-write sync responses omit staleAppServerHint", () => {
+    const omitted = attachStaleAppServerHint({
+      ok: true,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: "noop",
+    });
+    expect(omitted).toEqual({
+      ok: true,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: "noop",
+    });
+    expect("staleAppServerHint" in omitted).toBe(false);
+  });
+
+  test("successful catalog or cache writes include the shared staleAppServerHint", () => {
+    expect(attachStaleAppServerHint({
+      ok: true,
+      catalogWritten: true,
+      cacheSynced: false,
+    }).staleAppServerHint).toBe(STALE_CODEX_APP_SERVER_HINT);
+
+    expect(attachStaleAppServerHint({
+      ok: true,
+      catalogWritten: false,
+      cacheSynced: true,
+    }).staleAppServerHint).toBe(STALE_CODEX_APP_SERVER_HINT);
+
+    expect(attachStaleAppServerHint({
+      ok: true,
+      catalogWritten: true,
+      cacheSynced: true,
+    }).staleAppServerHint).toBe(STALE_CODEX_APP_SERVER_HINT);
   });
 });
 

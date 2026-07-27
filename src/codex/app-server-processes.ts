@@ -14,6 +14,16 @@ import { isProcessAlive, waitForExit } from "../lib/process-control";
 export const STALE_CODEX_APP_SERVER_HINT =
   "If Codex still shows an older model list, restart its long-lived app-server process after sync (ocx sync --restart-codex).";
 
+/** Attach the shared dashboard hint only after a catalog or models_cache write. */
+export function attachStaleAppServerHint<T extends {
+  catalogWritten: boolean;
+  cacheSynced: boolean;
+}>(result: T): T & { staleAppServerHint?: string } {
+  if (result.catalogWritten || result.cacheSynced) {
+    return { ...result, staleAppServerHint: STALE_CODEX_APP_SERVER_HINT };
+  }
+  return { ...result };
+}
 /**
  * Narrow Win32_Process CommandLine pre-filter (JS + .NET compatible).
  * Allows an optional closing quote after the executable basename so paths like
