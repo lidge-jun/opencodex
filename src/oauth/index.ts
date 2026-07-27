@@ -611,9 +611,9 @@ function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["a
  *
  * After preservation, `apiKey` always has exactly one matching pool entry (inserting via the
  * same content-derived id as the API-key manager when the active key was missing from the
- * pool). Key mode is restored only when the previous mode was `"key"` or omitted *and*
- * `resolveEnvValue(apiKey)` yields a non-empty secret — unresolved env references stay
- * preserved as literals but do not flip billing away from the OAuth preset.
+ * pool). Key mode reflects stored user intent (explicit `"key"` or omitted mode with safe
+ * key material) — never whether the login CLI process can resolve an env reference. Env-backed
+ * availability is decided at proxy routing time in `router.ts`.
  */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
@@ -639,10 +639,8 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
       }
       next.apiKey = storedApiKey;
       next.apiKeyPool = pool;
-      const resolved = resolveEnvValue(storedApiKey);
-      const usable = typeof resolved === "string" && resolved.trim().length > 0;
       const previousModeAllowsKey = existing.authMode === "key" || existing.authMode === undefined;
-      if (usable && previousModeAllowsKey) next.authMode = "key";
+      if (previousModeAllowsKey) next.authMode = "key";
     }
   }
   config.providers[provider] = next;
