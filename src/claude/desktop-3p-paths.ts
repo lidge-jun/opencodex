@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 
 /**
  * Claude Desktop's own configLibrary location, ported from the shipped app bundle.
@@ -27,6 +27,10 @@ import { join } from "node:path";
 const SUFFIX = "-3p";
 const APP_DIR = `Claude${SUFFIX}`;
 
+function joinForPlatform(platform: NodeJS.Platform, ...parts: string[]): string {
+  return platform === "win32" ? win32.join(...parts) : posix.join(...parts);
+}
+
 export interface DesktopPathInputs {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
@@ -38,11 +42,11 @@ export function resolveElectronUserData(inputs: DesktopPathInputs): string {
   const { env, platform, home } = inputs;
   if (platform === "win32") {
     const appData = env.APPDATA?.trim();
-    return appData ? join(appData, "Claude") : join(home, "AppData", "Roaming", "Claude");
+    return appData ? win32.join(appData, "Claude") : win32.join(home, "AppData", "Roaming", "Claude");
   }
-  if (platform === "darwin") return join(home, "Library", "Application Support", "Claude");
+  if (platform === "darwin") return posix.join(home, "Library", "Application Support", "Claude");
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  return xdg ? join(xdg, "Claude") : join(home, ".config", "Claude");
+  return xdg ? posix.join(xdg, "Claude") : posix.join(home, ".config", "Claude");
 }
 
 /** Desktop's userData root, mirroring `GE()` branch for branch. */
@@ -54,7 +58,7 @@ export function resolveUserDataDir(inputs: DesktopPathInputs): string {
 
   if (inputs.platform === "win32") {
     const localAppData = inputs.env.LOCALAPPDATA?.trim();
-    if (localAppData) return join(localAppData, APP_DIR);
+    if (localAppData) return win32.join(localAppData, APP_DIR);
   }
 
   const root = resolveElectronUserData(inputs);
@@ -71,7 +75,7 @@ export function resolveUserDataDir(inputs: DesktopPathInputs): string {
 export function resolveConfigLibraryDir(inputs: DesktopPathInputs): string {
   const override = inputs.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim();
   if (override) return override;
-  return join(resolveUserDataDir(inputs), "configLibrary");
+  return joinForPlatform(inputs.platform, resolveUserDataDir(inputs), "configLibrary");
 }
 
 /** Runtime wrapper. Keep it thin: all branching lives in the pure functions above. */

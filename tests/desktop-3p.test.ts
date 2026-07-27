@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import {
   atomicReplaceDesktopConfig,
   buildDesktop3pRegistry,
@@ -32,19 +32,19 @@ describe("Claude Desktop 3P models", () => {
       env: { CLAUDE_USER_DATA_DIR: "/profiles/claude" },
       platform: "darwin",
       homeDir: "/Users/test",
-    })).toBe("/profiles/claude/configLibrary");
+    })).toBe(posix.join("/profiles/claude", "configLibrary"));
     expect(resolveDesktop3pConfigLibraryPath({
       env: {},
       platform: "darwin",
       homeDir: "/Users/test",
     })).toBe("/Users/test/Library/Application Support/Claude-3p/configLibrary");
     // Windows reads LOCALAPPDATA first; APPDATA is only the Electron userData fallback.
-    // Asserted with `join` because the separator follows the HOST, not the target platform.
+    // Asserted with `win32.join` because the separator follows the target platform, not the host.
     expect(resolveDesktop3pConfigLibraryPath({
       env: { LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" },
       platform: "win32",
       homeDir: "C:\\Users\\test",
-    })).toBe(join("C:\\Users\\test\\AppData\\Local", "Claude-3p", "configLibrary"));
+    })).toBe(win32.join("C:\\Users\\test\\AppData\\Local", "Claude-3p", "configLibrary"));
     expect(resolveDesktop3pConfigLibraryPath({
       env: { XDG_CONFIG_HOME: "/xdg/config" },
       platform: "linux",

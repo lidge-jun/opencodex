@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { startServer } from "../src/server";
 import {
   claudeDesktopConfigLibraryDir,
@@ -30,13 +30,13 @@ describe("Claude Desktop configLibrary resolution", () => {
       platform: "darwin",
       home: HOME,
     });
-    expect(dir).toBe(join("/custom/user-data", "configLibrary"));
+    expect(dir).toBe(posix.join("/custom/user-data", "configLibrary"));
     expect(dir).not.toContain("-3p");
   });
 
   test("the macOS default stays Claude-3p (regression guard for existing users)", () => {
     const dir = resolveConfigLibraryDir({ env: {}, platform: "darwin", home: HOME });
-    expect(dir).toBe(join(HOME, "Library", "Application Support", "Claude-3p", "configLibrary"));
+    expect(dir).toBe(posix.join(HOME, "Library", "Application Support", "Claude-3p", "configLibrary"));
   });
 
   test("win32 with LOCALAPPDATA resolves under LOCALAPPDATA, not the macOS tree", () => {
@@ -44,7 +44,7 @@ describe("Claude Desktop configLibrary resolution", () => {
     const win = resolveConfigLibraryDir({ env, platform: "win32", home: HOME });
     const mac = resolveConfigLibraryDir({ env, platform: "darwin", home: HOME });
 
-    expect(win).toBe(join("C:\\Users\\tester\\AppData\\Local", "Claude-3p", "configLibrary"));
+    expect(win).toBe(win32.join("C:\\Users\\tester\\AppData\\Local", "Claude-3p", "configLibrary"));
     // The defect was returning the macOS path on Windows: prove the branch diverges.
     expect(win).not.toBe(mac);
     expect(win).not.toContain("Application Support");
@@ -56,14 +56,14 @@ describe("Claude Desktop configLibrary resolution", () => {
       platform: "win32",
       home: HOME,
     });
-    expect(dir).toBe(`${join("C:\\Users\\tester\\AppData\\Roaming", "Claude")}-3p`);
+    expect(dir).toBe(`${win32.join("C:\\Users\\tester\\AppData\\Roaming", "Claude")}-3p`);
   });
 
   test("linux uses XDG_CONFIG_HOME when set, otherwise ~/.config", () => {
     expect(resolveElectronUserData({ env: { XDG_CONFIG_HOME: "/xdg" }, platform: "linux", home: HOME }))
-      .toBe(join("/xdg", "Claude"));
+      .toBe(posix.join("/xdg", "Claude"));
     expect(resolveConfigLibraryDir({ env: {}, platform: "linux", home: HOME }))
-      .toBe(join(HOME, ".config", "Claude-3p", "configLibrary"));
+      .toBe(posix.join(HOME, ".config", "Claude-3p", "configLibrary"));
   });
 
   test("a userData root already ending in -3p is not double-suffixed", () => {
