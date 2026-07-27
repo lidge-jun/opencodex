@@ -238,6 +238,21 @@ describe("responseModalities gating", () => {
     const body = JSON.parse(req.body);
     expect(body.generationConfig).toBeUndefined();
   });
+
+  test("Imagen models do NOT get responseModalities (different API schema)", async () => {
+    // imagen-* uses the prediction/image-generation endpoint, not
+    // responseModalities — listing it here would send a Gemini image-capable
+    // request to a model that cannot handle it.
+    const adapter = createGoogleAdapter(aiStudioProvider);
+    const req = await adapter.buildRequest({
+      context: { messages: [], tools: [] },
+      options: {},
+      modelId: "imagen-4.0-generate-001",
+      stream: false,
+    } as never);
+    const body = JSON.parse(req.body);
+    expect(body.generationConfig?.responseModalities).toBeUndefined();
+  });
 });
 
 describe("markdown path escaping with special characters", () => {
@@ -256,7 +271,7 @@ describe("markdown path escaping with special characters", () => {
     rmSync(specialHome, { recursive: true, force: true });
   });
 
-  test("streaming: escapes spaces and parentheses in emitted markdown path", async () => {
+  test("streaming: file: URI percent-encodes spaces and escapes parens", async () => {
     const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
@@ -267,13 +282,19 @@ describe("markdown path escaping with special characters", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    expect(mdPath).toContain("ocx\\ test\\ \\(dir\\)\\ ");
-    expect(mdPath).not.toMatch(/(?<!\\)[ ()]/);
-    const unescaped = mdPath.replace(/\\([() ])/g, "$1");
-    expect(existsSync(unescaped)).toBe(true);
+    // file: prefix so clients can resolve the link
+    expect(mdPath.startsWith("file:")).toBe(true);
+    // Spaces are percent-encoded by encodeURI, never literal
+    expect(mdPath).toContain("%20");
+    expect(mdPath).not.toMatch(/(?<!\\) /);
+    // Parens are backslash-escaped (encodeURI does not encode them)
+    expect(mdPath).toContain("\\(dir\\)");
+    // Decoded + unescaped path resolves to a real file on disk
+    const decoded = decodeURI(mdPath.replace(/^file:/, "")).replace(/\\([()])/g, "$1");
+    expect(existsSync(decoded)).toBe(true);
   });
 
-  test("non-streaming: escapes spaces and parentheses in emitted markdown path", async () => {
+  test("non-streaming: file: URI percent-encodes spaces and escapes parens", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
     const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/webp", data: TINY_PNG } }] }, finishReason: "STOP" }],
@@ -285,19 +306,22 @@ describe("markdown path escaping with special characters", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    expect(mdPath).toContain("ocx\\ test\\ \\(dir\\)\\ ");
-    const unescaped = mdPath.replace(/\\([() ])/g, "$1");
-    expect(existsSync(unescaped)).toBe(true);
+    expect(mdPath.startsWith("file:")).toBe(true);
+    expect(mdPath).toContain("%20");
+    expect(mdPath).not.toMatch(/(?<!\\) /);
+    expect(mdPath).toContain("\\(dir\\)");
+    const decoded = decodeURI(mdPath.replace(/^file:/, "")).replace(/\\([()])/g, "$1");
+    expect(existsSync(decoded)).toBe(true);
   });
 });
 
-describe("artifact path sanitization (no home-directory leak)", () => {
+describe("artifact path is a resolvable file: URI", () => {
   let underHome: string;
   let savedHome: string | undefined;
 
   beforeAll(() => {
     savedHome = process.env.OPENCODEX_HOME;
-    // Place OPENCODEX_HOME *under* the real home so sanitizeArtifactPath kicks in.
+    // Place OPENCODEX_HOME *under* the real home so the path includes the username segment.
     underHome = mkdtempSync(join(homedir(), ".ocx-test-leak-"));
     process.env.OPENCODEX_HOME = underHome;
   });
@@ -308,7 +332,7 @@ describe("artifact path sanitization (no home-directory leak)", () => {
     rmSync(underHome, { recursive: true, force: true });
   });
 
-  test("streaming: emitted path does not contain the raw home directory", async () => {
+  test("streaming: emitted path is a resolvable file: URI", async () => {
     const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
@@ -316,14 +340,14 @@ describe("artifact path sanitization (no home-directory leak)", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    // The username segment (e.g. /Users/tizerluo) must NOT appear in model-visible text.
-    expect(md).not.toContain(homedir());
-    expect(md).not.toMatch(/\/Users\/|\/home\//);
-    // Path is abbreviated to ~/...
-    expect(md).toContain("~/");
+    // Output must be a resolvable file: URI (fixes the ~/ regression where clients
+    // could not open the link). A file: URI is inherently an absolute path.
+    expect(md).toContain("file:");
+    // The old ~/ abbreviation must NOT be used (it broke resolution).
+    expect(md).not.toContain("~/");
   });
 
-  test("non-streaming: emitted path does not contain the raw home directory", async () => {
+  test("non-streaming: emitted path is a resolvable file: URI", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
     const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] }, finishReason: "STOP" }],
@@ -332,9 +356,8 @@ describe("artifact path sanitization (no home-directory leak)", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    expect(md).not.toContain(homedir());
-    expect(md).not.toMatch(/\/Users\/|\/home\//);
-    expect(md).toContain("~/");
+    expect(md).toContain("file:");
+    expect(md).not.toContain("~/");
   });
 });
 

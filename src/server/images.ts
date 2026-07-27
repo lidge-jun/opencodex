@@ -33,6 +33,7 @@ import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
+import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -68,10 +69,9 @@ async function tryCcaImageGeneration(
   try {
     token = await getValidAccessToken("google-antigravity");
   } catch {
-    // Refresh failures (revoked grant, network error, …) silently fall back to
-    // the OpenAI image path. The OAuth refresh error message is NOT surfaced
-    // here — it would leak refresh-state internals to the client.
-    return undefined;
+    // A transient OAuth/network refresh failure is not a permanent config issue.
+    // Surface a 502 so the caller does not misdiagnose it as "no provider configured".
+    return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
   }
   const project = getOAuthCredentialProjectId("google-antigravity");
   if (!project) return undefined;
@@ -99,102 +99,115 @@ async function tryCcaImageGeneration(
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
   let upstream: Response;
   try {
-    upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`,
-        "User-Agent": "opencodex-images/1.0",
-      },
-      body: JSON.stringify(envelope),
-      signal: linkedSignal.signal,
-    });
-  } catch (err) {
-    if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
-    if (err instanceof Error && err.name === "TimeoutError") {
-      return formatErrorResponse(504, "upstream_error", "CCA image generation timed out");
-    }
-    // Network/DNS/runtime errors may embed the request URL or headers verbatim
-    // (e.g. "fetch failed: https://…/v1internal:generateContent"). The token
-    // lives in an Authorization header, not in the URL, but sanitize defensively
-    // so no upstream-rejected credential or query param can reach the client,
-    // and strip the internal base URL host from the surfaced message.
-    const rawMsg = err instanceof Error ? err.message : String(err);
-    const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(
-      /https?:\/\/[^\s"'<>]+/gi,
-      "[upstream-url]",
-    );
-    return formatErrorResponse(502, "upstream_error", `CCA image generation failed: ${safeMsg}`);
-  }
-
-  // Stream the upstream body with a bounded reader so an oversized or malicious
-  // response is rejected mid-stream rather than after a full arrayBuffer() allocation.
-  let payload: Uint8Array;
-  try {
-    const reader = upstream.body?.getReader();
-    if (!reader) {
-      linkedSignal.cleanup();
-      return formatErrorResponse(502, "upstream_error", "CCA image response had no body");
-    }
-    const chunks: Uint8Array[] = [];
-    let total = 0;
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > IMAGES_RESPONSE_MAX_BYTES) {
-          await reader.cancel().catch(() => {});
-          linkedSignal.cleanup();
-          return formatErrorResponse(502, "upstream_error", `CCA image response too large (exceeded ${IMAGES_RESPONSE_MAX_BYTES} bytes)`);
-        }
-        chunks.push(value);
+      upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+          "User-Agent": ANTIGRAVITY_REQUEST_UA,
+        },
+        body: JSON.stringify(envelope),
+        signal: linkedSignal.signal,
+      });
+    } catch (err) {
+      if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
+      if (err instanceof Error && err.name === "TimeoutError") {
+        return formatErrorResponse(504, "upstream_error", "CCA image generation timed out");
       }
-    } finally {
-      try { await reader.cancel(); } catch { /* ignore */ }
-      reader.releaseLock();
+      // Network/DNS/runtime errors may embed the request URL or headers verbatim
+      // (e.g. "fetch failed: https://…/v1internal:generateContent"). The token
+      // lives in an Authorization header, not in the URL, but sanitize defensively
+      // so no upstream-rejected credential or query param can reach the client,
+      // and strip the internal base URL host from the surfaced message.
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(
+        /https?:\/\/[^\s"'<>]+/gi,
+        "[upstream-url]",
+      );
+      return formatErrorResponse(502, "upstream_error", `CCA image generation failed: ${safeMsg}`);
     }
-    payload = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      payload.set(chunk, offset);
-      offset += chunk.byteLength;
+
+    // Stream the upstream body with a bounded reader so an oversized or malicious
+    // response is rejected mid-stream rather than after a full arrayBuffer() allocation.
+    let payload: Uint8Array;
+    try {
+      const reader = upstream.body?.getReader();
+      if (!reader) {
+        return formatErrorResponse(502, "upstream_error", "CCA image response had no body");
+      }
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > IMAGES_RESPONSE_MAX_BYTES) {
+            await reader.cancel().catch(() => {});
+            return formatErrorResponse(502, "upstream_error", `CCA image response too large (exceeded ${IMAGES_RESPONSE_MAX_BYTES} bytes)`);
+          }
+          chunks.push(value);
+        }
+      } finally {
+        try { await reader.cancel(); } catch { /* ignore */ }
+        reader.releaseLock();
+      }
+      payload = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        payload.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    } catch (err) {
+      // Body-read timeout/abort: when CCA returns headers then stalls, the linked
+      // signal's timeout aborts reader.read(), which rejects here. Map it the same
+      // way as the fetch catch above so the rejection never escapes this function.
+      if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
+      if (err instanceof Error && err.name === "TimeoutError") {
+        return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
+      }
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");
+      return formatErrorResponse(502, "upstream_error", `CCA image body read failed: ${safeMsg}`);
     }
+
+    if (!upstream.ok) {
+      // Preserve auth/rate-limit and other permanent 4xx signals so callers can
+      // distinguish retryable from permanent failures. Remaining 5xx collapse to 502.
+      const text = new TextDecoder().decode(payload);
+      const safeMsg = safeAntigravityHttpErrorMessage(upstream.status, text);
+      if (upstream.status >= 400 && upstream.status < 500) {
+        return formatErrorResponse(upstream.status, "upstream_error", safeMsg);
+      }
+      return formatErrorResponse(502, "upstream_error", safeMsg);
+    }
+
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
+    } catch {
+      return formatErrorResponse(502, "upstream_error", "CCA image response was not valid JSON");
+    }
+    const resp = (json.response ?? json) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[] } }[] };
+    const parts = resp.candidates?.[0]?.content?.parts ?? [];
+    const images: { b64_json: string }[] = [];
+    for (const part of parts) {
+      if (part.inlineData?.data) images.push({ b64_json: part.inlineData.data });
+    }
+    if (images.length === 0) {
+      return formatErrorResponse(502, "upstream_error", "CCA image model returned no image data");
+    }
+    // Only `{created, data:[{b64_json}]}` is returned — no token, projectId, or
+    // upstream metadata leak through. The Authorization header is consumed by the
+    // fetch above and never copied onto this Response.
+    return new Response(JSON.stringify({ created: Math.floor(Date.now() / 1000), data: images }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   } finally {
     linkedSignal.cleanup();
   }
-
-  if (!upstream.ok) {
-    // Preserve auth/rate-limit signals so callers can distinguish retryable from permanent failures.
-    const text = new TextDecoder().decode(payload);
-    const status = upstream.status === 401 || upstream.status === 403 || upstream.status === 429
-      ? upstream.status
-      : 502;
-    return formatErrorResponse(status, "upstream_error", safeAntigravityHttpErrorMessage(upstream.status, text));
-  }
-
-  let json: Record<string, unknown>;
-  try {
-    json = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
-  } catch {
-    return formatErrorResponse(502, "upstream_error", "CCA image response was not valid JSON");
-  }
-  const resp = (json.response ?? json) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[] } }[] };
-  const parts = resp.candidates?.[0]?.content?.parts ?? [];
-  const images: { b64_json: string }[] = [];
-  for (const part of parts) {
-    if (part.inlineData?.data) images.push({ b64_json: part.inlineData.data });
-  }
-  if (images.length === 0) {
-    return formatErrorResponse(502, "upstream_error", "CCA image model returned no image data");
-  }
-  // Only `{created, data:[{b64_json}]}` is returned — no token, projectId, or
-  // upstream metadata leak through. The Authorization header is consumed by the
-  // fetch above and never copied onto this Response.
-  return new Response(JSON.stringify({ created: Math.floor(Date.now() / 1000), data: images }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 export async function handleImages(
@@ -273,8 +286,12 @@ export async function handleImages(
     // The ChatGPT codex backend takes bare paths (matches the adapter's `${baseUrl}/responses`).
     url = `${provider.baseUrl}/images/${endpoint}`;
   } else if (forwardAuthError) {
-    // A configured OpenAI pool mode owns its authentication failure. Do not hide a
-    // broken/expired pool behind separately billed API-key image generation.
+    // Before surfacing the OpenAI auth failure, try CCA — the user may have a
+    // valid Google Antigravity login even though their OpenAI pool is broken.
+    const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint);
+    if (ccaResponse) return ccaResponse;
+    // No CCA either: a configured OpenAI pool mode owns its authentication failure.
+    // Do not hide a broken/expired pool behind separately billed API-key image generation.
     return forwardAuthError;
   } else if (candidates.keyed) {
     const { provider, apiKey, providerName } = candidates.keyed;
@@ -284,6 +301,9 @@ export async function handleImages(
     // Keyed providers tolerate baseUrl with or without /v1 (mirrors openai-responses.ts).
     url = `${provider.baseUrl.replace(/\/v1\/?$/, "")}/v1/images/${endpoint}`;
   } else {
+    // No usable OpenAI credential — try CCA before giving up.
+    const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint);
+    if (ccaResponse) return ccaResponse;
     return formatErrorResponse(
       401,
       "authentication_error",

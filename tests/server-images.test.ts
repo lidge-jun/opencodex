@@ -14,6 +14,7 @@ import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
+import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -940,6 +941,10 @@ test("CCA image fallback generates images via Google Antigravity when no OpenAI 
     expect(body.model).toBe("gemini-3.1-flash-image");
     expect(body.request?.generationConfig?.responseModalities).toEqual(["TEXT", "IMAGE"]);
     expect(registryHits[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+    // The CCA image request must use the shared Antigravity User-Agent (not a
+    // bespoke "opencodex-images/1.0"), so the request fingerprint matches the
+    // OAuth credential.
+    expect(registryHits[0].headers.get("user-agent")).toBe(ANTIGRAVITY_REQUEST_UA);
 
     // The attacker host (config baseUrl) must NOT receive any request.
     expect(otherHits).toHaveLength(0);
@@ -1060,6 +1065,183 @@ test("CCA image fallback rejects a whitespace-only prompt with 400", async () =>
     expect(response.status).toBe(400);
     const json = await response.json() as { error: { message: string } };
     expect(json.error.message).toContain("prompt is required");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA fallback serves images when OpenAI forward auth fails but Google Antigravity is logged in", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits);
+
+  // OpenAI forward provider in pool mode, but pool-a has NO stored credential →
+  // forward auth resolution throws CodexAuthContextError. Without the CCA
+  // fallback the user gets a 401 even though they have a valid Google login.
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://attacker.example.com",
+        googleMode: "cloud-code-assist",
+      } as OcxConfig["providers"][string],
+    },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer caller-token" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    // OpenAI forward auth failed, but CCA picked up the slack.
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data: { b64_json: string }[] };
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+
+    // CCA was called on the registry host, not the attacker host.
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA OAuth refresh failure returns 502, not a misleading 400 'none configured'", async () => {
+  saveConfig(ccaConfig());
+  // Deliberately do NOT save a google-antigravity credential. The provider IS
+  // configured, but getValidAccessToken will throw OAuthLoginRequiredError.
+  // This must surface as a 502 upstream error, NOT the permanent 400
+  // "none configured" message that implies the user forgot to add a provider.
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("OAuth token refresh failed");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA fetch network failure returns 502 without leaking the timeout timer", async () => {
+  // Mock: CCA fetch always fails with a network error. The bug was that the
+  // fetch catch returned 502 without calling linkedSignal.cleanup(), leaving
+  // the timeout timer alive. With a short timeout this would keep the process
+  // alive. The fix wraps everything in try/finally so cleanup always runs.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      throw new TypeError("fetch failed: connection refused");
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  saveConfig({ ...ccaConfig(), images: { timeoutMs: 10_000 } } as OcxConfig);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("CCA image generation failed");
+  } finally {
+    await server.stop(true);
+  }
+}, 5_000);
+
+test("CCA body-read timeout returns 504 when upstream stalls after sending headers", async () => {
+  // Mock: CCA returns 200 OK headers immediately but the body stream never
+  // produces data. The linked signal's timeout aborts reader.read(), which
+  // must be caught and mapped to 504 — previously the rejection escaped
+  // tryCcaImageGeneration entirely.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      const fetchSignal = init?.signal;
+      const stalledBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Never produce data — stall until the fetch signal aborts, then
+          // error the stream so reader.read() rejects with the abort reason.
+          if (fetchSignal) {
+            if (fetchSignal.aborted) {
+              controller.error(fetchSignal.reason);
+            } else {
+              fetchSignal.addEventListener("abort", () => controller.error(fetchSignal.reason), { once: true });
+            }
+          }
+        },
+      });
+      return new Response(stalledBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  saveConfig({ ...ccaConfig(), images: { timeoutMs: 100 } } as OcxConfig);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(504);
+    const json = await response.json() as { error: { message: string } };
+    // Either the body-read timeout message or the general timeout message.
+    expect(json.error.message).toMatch(/body read|timed out/i);
+  } finally {
+    await server.stop(true);
+  }
+}, 5_000);
+
+test("CCA image fallback preserves upstream 400 (not collapsed to 502)", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, { status: 400, payload: { error: { message: "Invalid prompt content" } } });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    // 400 must be forwarded, not collapsed to 502.
+    expect(response.status).toBe(400);
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
   } finally {
     await server.stop(true);
   }

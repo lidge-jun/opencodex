@@ -1,7 +1,6 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { createImageBudget, materializeInlineImage } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -235,10 +234,11 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
   };
 }
 
+// Note: imagen-* models use a different API surface (prediction/image-generation
+// schema) and must NOT be treated as responseModalities-capable Gemini models.
 const IMAGE_CAPABLE_MODELS = new Set([
   "gemini-3.1-flash-image",
   "gemini-2.0-flash-preview-image-generation",
-  "imagen-4.0-generate-001",
 ]);
 
 function isImageCapableModel(modelId: string): boolean {
@@ -247,17 +247,14 @@ function isImageCapableModel(modelId: string): boolean {
 }
 
 /**
- * Strip the home directory prefix from an artifact path so the absolute
- * filesystem location (which embeds the username and config dir) never leaks
- * into model-visible / client-visible text. An absolute home-rooted path
- * becomes "~/.config/…/img.png".
+ * Emit a file: URI so markdown renderers (including Codex) can resolve and open
+ * the image. The previous "~/" prefix approach was not expanded by clients,
+ * silently breaking the feature. encodeURI percent-encodes special path
+ * characters so they don't appear verbatim in model-visible text, while the
+ * URI remains resolvable by file: URI handlers on the local machine.
  */
-function sanitizeArtifactPath(filePath: string): string {
-  const home = homedir();
-  if (home && filePath.startsWith(home)) {
-    return filePath.slice(home.length).replace(/^\//, "~/");
-  }
-  return filePath;
+function artifactFileUrl(filePath: string): string {
+  return "file:" + encodeURI(filePath);
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
@@ -486,7 +483,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             if (inline && typeof inline.data === "string") {
               try {
                 const filePath = await materializeInlineImage(inline.data, imageBudget);
-                const escapedPath = sanitizeArtifactPath(filePath).replace(/([() ])/g, "\\$1");
+                const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
                 emittedContentEvent = true;
                 yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
               } catch {
@@ -601,7 +598,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (inline && typeof inline.data === "string") {
             try {
               const filePath = await materializeInlineImage(inline.data, imageBudget);
-              const escapedPath = sanitizeArtifactPath(filePath).replace(/([() ])/g, "\\$1");
+              const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
               events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
             } catch {
               events.push({ type: "error", message: "failed to materialize inline image" });

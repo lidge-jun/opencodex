@@ -38,6 +38,31 @@ function timestampPrefix(): string {
   ].join("");
 }
 
+/**
+ * Write a buffer to a unique artifact file using `flag: "wx"` (exclusive create).
+ * Collisions on the random UUID suffix are astronomically unlikely, but `wx`
+ * would surface them as EEXIST; retry a few times with a fresh UUID before
+ * giving up so a fluke name clash can never fail an image write.
+ */
+async function writeArtifactUnique(
+  dir: string,
+  prefix: string,
+  buf: Uint8Array,
+  ext: string,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const suffix = attempt === 0 ? crypto.randomUUID() : `${crypto.randomUUID()}-${attempt}`;
+    const filePath = join(dir, `${prefix}${timestampPrefix()}-${suffix}.${ext}`);
+    try {
+      await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
+      return filePath;
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "EEXIST" && attempt < 3) continue;
+      throw e;
+    }
+  }
+}
+
 export function guessExtFromMagic(bytes: Uint8Array): string {
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
   if (sig.startsWith("\x89PNG")) return "png";
@@ -73,9 +98,7 @@ export async function materializeInlineImage(
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = guessExtFromMagic(buf);
-  const filePath = join(dir, `img-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
-  return filePath;
+  return writeArtifactUnique(dir, "img-", buf, ext);
 }
 
 export async function downloadImageToArtifact(
@@ -140,7 +163,5 @@ export async function downloadImageToArtifact(
   await mkdir(dir, { recursive: true, mode: 0o700 });
   if (budget) budget.spent += bytes.length;
 
-  const filePath = join(dir, `dl-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, bytes, { mode: 0o600, flag: "wx" });
-  return filePath;
+  return writeArtifactUnique(dir, "dl-", bytes, ext);
 }
