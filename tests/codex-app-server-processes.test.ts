@@ -35,6 +35,10 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("codex -c model=gpt-5.4 app-server")).toBe(true);
     expect(isCodexAppServerCommandLine("codex --profile production app-server")).toBe(true);
     expect(isCodexAppServerCommandLine("codex -p production app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex -a never app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --ask-for-approval on-request app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --oss --local-provider ollama app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --add-dir /tmp app-server")).toBe(true);
     expect(isCodexAppServerCommandLine(
       "codex --enable js_repl --profile prod -c model=gpt-5.4 app-server --listen stdio://",
     )).toBe(true);
