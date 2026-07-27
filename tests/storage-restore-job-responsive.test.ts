@@ -71,49 +71,72 @@ afterEach(() => {
 });
 
 describe("storage trash restore job responsiveness", () => {
-  test("test-stream route is absent without OPENCODEX_CLEANUP_TEST_HOOKS", async () => {
-    delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
-    setRestoreTrashJobTestHooks({ enableTestStream: true });
+  async function withTestStreamRoute(
+    setup: () => void,
+    assert: (serverUrl: string) => Promise<void>,
+  ): Promise<void> {
+    const previousHooksEnv = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+    setup();
     const server = startServer(0);
     try {
-      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
-      expect(res.status).toBe(404);
-      expect(res.headers.get("content-type") ?? "").toContain("application/json");
-      expect(await res.json()).toEqual({ error: "not_available" });
+      await assert(server.url.toString());
     } finally {
-      await server.stop(true);
+      try {
+        await server.stop(true);
+      } finally {
+        setRestoreTrashJobTestHooks(null);
+        if (previousHooksEnv === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+        else process.env.OPENCODEX_CLEANUP_TEST_HOOKS = previousHooksEnv;
+      }
     }
+  }
+
+  test("test-stream route is absent without OPENCODEX_CLEANUP_TEST_HOOKS", async () => {
+    await withTestStreamRoute(
+      () => {
+        delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+        setRestoreTrashJobTestHooks({ enableTestStream: true });
+      },
+      async (serverUrl) => {
+        const res = await fetch(new URL("/api/storage/trash/restore/test-stream", serverUrl));
+        expect(res.status).toBe(404);
+        expect(res.headers.get("content-type") ?? "").toContain("application/json");
+        expect(await res.json()).toEqual({ error: "not_available" });
+      },
+    );
   });
 
   test("test-stream route returns JSON 404 when hooks are enabled but stream is null", async () => {
-    process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
-    // enableTestStream omitted → getRestoreTrashTestStreamResponse() returns null
-    setRestoreTrashJobTestHooks({ blockMs: 0 });
-    const server = startServer(0);
-    try {
-      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
-      expect(res.status).toBe(404);
-      expect(res.headers.get("content-type") ?? "").toContain("application/json");
-      expect(await res.json()).toEqual({ error: "not_available" });
-    } finally {
-      await server.stop(true);
-    }
+    await withTestStreamRoute(
+      () => {
+        process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+        // enableTestStream omitted → getRestoreTrashTestStreamResponse() returns null
+        setRestoreTrashJobTestHooks({ blockMs: 0 });
+      },
+      async (serverUrl) => {
+        const res = await fetch(new URL("/api/storage/trash/restore/test-stream", serverUrl));
+        expect(res.status).toBe(404);
+        expect(res.headers.get("content-type") ?? "").toContain("application/json");
+        expect(await res.json()).toEqual({ error: "not_available" });
+      },
+    );
   });
 
   test("test-stream route serves the enabled hook stream", async () => {
-    process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
-    setRestoreTrashJobTestHooks({ enableTestStream: true });
-    const server = startServer(0);
-    try {
-      const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type") ?? "").toContain("text/plain");
-      const body = await res.text();
-      expect(body).toContain("chunk-0");
-      expect(body).toContain("chunk-7");
-    } finally {
-      await server.stop(true);
-    }
+    await withTestStreamRoute(
+      () => {
+        process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+        setRestoreTrashJobTestHooks({ enableTestStream: true });
+      },
+      async (serverUrl) => {
+        const res = await fetch(new URL("/api/storage/trash/restore/test-stream", serverUrl));
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type") ?? "").toContain("text/plain");
+        const body = await res.text();
+        expect(body).toContain("chunk-0");
+        expect(body).toContain("chunk-7");
+      },
+    );
   }, { timeout: 10_000 });
 
   test("blocked worker keeps /healthz and streaming response responsive", async () => {
