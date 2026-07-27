@@ -1006,6 +1006,10 @@ switch (command) {
     }
     process.exit(await cmdClaude(args.slice(1)));
   }
+  case "opencode": {
+    const { cmdOpencode } = await import("./opencode");
+    process.exit(await cmdOpencode(args.slice(1)));
+  }
     case "help":
   case "--help":
   case "-h":
