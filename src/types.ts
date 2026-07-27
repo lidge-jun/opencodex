@@ -726,6 +726,8 @@ export interface OcxImagesConfig {
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3 (see DEFAULT_MAX_ROUNDS in images/loop.ts). */
   maxRounds?: number;
+  /** Max files retained under artifacts/. Oldest deleted when exceeded. Default 200. */
+  artifactsKeepCount?: number;
 }
 
 export interface OcxSearchConfig {

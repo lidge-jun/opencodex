@@ -5,6 +5,8 @@ export interface ImageBridgePlan {
   auth: { baseUrl: string; token: string };
   model: string;
   toolNames: Set<string>;
+  /** Max artifact files to retain (from config.images.artifactsKeepCount). Default 200. */
+  artifactsKeepCount?: number;
 }
 
 export interface ImageCallResult {

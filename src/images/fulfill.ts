@@ -48,9 +48,9 @@ export async function fulfillImageCall(
   for (const img of result.images ?? []) {
     try {
       if (img.b64_json) {
-        files.push(await materializeInlineImage(img.b64_json, budget));
+        files.push(await materializeInlineImage(img.b64_json, budget, plan.artifactsKeepCount));
       } else if (img.url) {
-        files.push(await downloadImageToArtifact(img.url, budget, signal));
+        files.push(await downloadImageToArtifact(img.url, budget, signal, plan.artifactsKeepCount));
       }
     } catch {
       // Keep warnings URL-free — error messages may embed provider CDN URLs.

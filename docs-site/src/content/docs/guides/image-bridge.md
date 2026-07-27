@@ -41,6 +41,14 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 | `bridgeEnabled` | `false` | Master switch. Set `true` to enable bridging. Off by default to avoid unexpected xAI charges. |
 | `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
 | `maxRounds` | `3` | Maximum number of image-generation loop iterations per turn. |
+| `artifactsKeepCount` | `200` | Maximum number of files retained under `artifacts/`. When exceeded, the oldest files are deleted automatically. |
+
+## Artifact Retention
+
+Generated images are written to `~/.opencodex/artifacts/`. To prevent unbounded disk
+growth in long-running sessions, the directory is pruned automatically after each image
+write — the oldest files (by modification time) are deleted when the count exceeds the
+configured maximum (default 200, configurable via `images.artifactsKeepCount`).
 
 ## How It Works
 

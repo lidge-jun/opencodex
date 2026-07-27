@@ -60,5 +60,6 @@ export async function planImageBridge(
     auth: { baseUrl: pinnedBaseUrl, token },
     model: config.images?.bridgeModel ?? DEFAULT_MODEL,
     toolNames,
+    artifactsKeepCount: config.images?.artifactsKeepCount,
   };
 }
