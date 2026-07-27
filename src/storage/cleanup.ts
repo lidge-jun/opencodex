@@ -29,6 +29,7 @@ import {
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Database } from "bun:sqlite";
 import { resolveCodexHomeDir } from "../codex/home";
+import { readThreadFieldsFromRollout } from "../codex/history-provider";
 
 export const ARCHIVED_SESSIONS_DIR = "archived_sessions";
 export const TRASH_DIR = ".trash";
@@ -1759,40 +1760,61 @@ interface TrashManifest {
 /** Epoch dir names: digits, optionally `-N` from createExclusiveStageDir collision. */
 const TRASH_EPOCH_DIR = /^(\d+)(-\d+)?$/;
 
+/**
+ * Parse a trash `manifest.json` atomically.
+ *
+ * Any missing `entries` array, or any malformed entry / `physicalRelPaths` value /
+ * required field, rejects the **entire** manifest (returns null). Individual bad
+ * entries are never filtered out so a partial parse cannot silently drop evidence.
+ */
 function parseTrashManifest(raw: string): TrashManifest | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     const o = parsed as Record<string, unknown>;
-    const out: TrashManifest = {};
+    if (!Array.isArray(o.entries)) return null;
+
+    const entries: CleanupManifestEntry[] = [];
+    for (const e of o.entries) {
+      if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+      const entry = e as Record<string, unknown>;
+      if (typeof entry.relPath !== "string" || entry.relPath.length === 0) return null;
+      if (typeof entry.bytes !== "number" || !Number.isFinite(entry.bytes)) return null;
+      if (typeof entry.mtimeMs !== "number" || !Number.isFinite(entry.mtimeMs)) return null;
+      if (!Array.isArray(entry.physicalRelPaths) || entry.physicalRelPaths.length === 0) return null;
+      const physical: string[] = [];
+      for (const p of entry.physicalRelPaths) {
+        // Do not strip bad elements — one malformed path invalidates the whole manifest.
+        if (typeof p !== "string" || p.length === 0) return null;
+        physical.push(p);
+      }
+      if ("threadId" in entry && typeof entry.threadId !== "string") return null;
+      if ("rolloutPath" in entry && typeof entry.rolloutPath !== "string") return null;
+      if (
+        "archived" in entry
+        && entry.archived !== null
+        && typeof entry.archived !== "number"
+      ) {
+        return null;
+      }
+      entries.push({
+        relPath: entry.relPath,
+        bytes: entry.bytes,
+        mtimeMs: entry.mtimeMs,
+        physicalRelPaths: physical,
+        ...(typeof entry.threadId === "string" ? { threadId: entry.threadId } : {}),
+        ...(typeof entry.rolloutPath === "string" ? { rolloutPath: entry.rolloutPath } : {}),
+        ...(entry.archived === null || typeof entry.archived === "number"
+          ? { archived: entry.archived as number | null }
+          : {}),
+      });
+    }
+
+    const out: TrashManifest = { entries };
     if (typeof o.quarantinedAt === "number" && Number.isFinite(o.quarantinedAt)) {
       out.quarantinedAt = o.quarantinedAt;
     }
     if (o.mode === "quarantine" || o.mode === "permanent") out.mode = o.mode;
-    if (Array.isArray(o.entries)) {
-      out.entries = o.entries.filter((e): e is CleanupManifestEntry => {
-        if (!e || typeof e !== "object") return false;
-        const entry = e as Record<string, unknown>;
-        if (typeof entry.relPath !== "string" || !Array.isArray(entry.physicalRelPaths)) return false;
-        const physical = (entry.physicalRelPaths as unknown[])
-          .filter((p): p is string => typeof p === "string" && p.length > 0);
-        return physical.length > 0;
-      }).map(e => {
-        const entry = e as CleanupManifestEntry & Record<string, unknown>;
-        return {
-          relPath: String(entry.relPath),
-          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
-          mtimeMs: typeof entry.mtimeMs === "number" ? entry.mtimeMs : 0,
-          physicalRelPaths: (entry.physicalRelPaths as unknown[])
-            .filter((p): p is string => typeof p === "string" && p.length > 0),
-          ...(typeof entry.threadId === "string" ? { threadId: entry.threadId } : {}),
-          ...(typeof entry.rolloutPath === "string" ? { rolloutPath: entry.rolloutPath } : {}),
-          ...(entry.archived === null || typeof entry.archived === "number"
-            ? { archived: entry.archived as number | null }
-            : {}),
-        };
-      });
-    }
     return out;
   } catch {
     return null;
@@ -1930,12 +1952,92 @@ function isSqlRowArray(value: unknown): value is SqlRow[] {
   return Array.isArray(value) && value.every(row => row && typeof row === "object" && !Array.isArray(row));
 }
 
-/** Re-insert threads (+ dependents) from satellite snapshot or manifest fallback fields. */
+/** True when a snapshotted thread row covers every NOT NULL column on the live schema. */
+function threadSnapshotCoversRequiredColumns(row: SqlRow, requiredCols: string[]): boolean {
+  for (const col of requiredCols) {
+    if (!(col in row) || row[col] === undefined) return false;
+  }
+  return true;
+}
+
+function requiredThreadColumnNames(db: Database): string[] {
+  if (!tableExists(db, "threads")) return [];
+  const rows = db.query<{ name: string; notnull: number }, []>(
+    `PRAGMA table_info("threads")`,
+  ).all();
+  return rows.filter(r => r.notnull === 1).map(r => r.name);
+}
+
+/**
+ * Build a production-shaped thread row for schemas that predate full satellite snapshots.
+ * Prefer `readThreadFieldsFromRollout` (canonical history/session_meta path); fall back to
+ * the sparse manifest fields only when the live schema does not require model/source/message.
+ */
+function reconstructThreadRowFromRollout(
+  entry: CleanupManifestEntry,
+  rolloutAbsPath: string,
+  allowedCols: Set<string>,
+  requiredCols: string[],
+): SqlRow | null {
+  if (typeof entry.threadId !== "string" || typeof entry.rolloutPath !== "string") return null;
+
+  const fields = readThreadFieldsFromRollout(rolloutAbsPath);
+  const row: SqlRow = {
+    id: entry.threadId,
+    rollout_path: entry.rolloutPath,
+  };
+
+  if (fields) {
+    // Prefer manifest thread id (binding) but keep rollout-derived listing fields.
+    if (allowedCols.has("model_provider")) row.model_provider = fields.modelProvider;
+    if (allowedCols.has("source")) row.source = fields.source;
+    if (allowedCols.has("first_user_message")) row.first_user_message = fields.firstUserMessage;
+    if (allowedCols.has("has_user_event")) row.has_user_event = fields.hasUserEvent;
+    if (allowedCols.has("cwd") && fields.cwd !== undefined) row.cwd = fields.cwd;
+    if (allowedCols.has("history_mode") && fields.historyMode !== undefined) {
+      row.history_mode = fields.historyMode;
+    }
+    if (allowedCols.has("cli_version") && fields.cliVersion !== undefined) {
+      row.cli_version = fields.cliVersion;
+    }
+  }
+
+  if (allowedCols.has("archived")) {
+    row.archived = entry.archived ?? 1;
+  }
+  if (allowedCols.has("archived_at")) {
+    row.archived_at = null;
+  }
+
+  // Fill remaining NOT NULL columns with safe empties when the rollout lacked them
+  // (e.g. fixture rollouts without a user turn still need first_user_message = '').
+  for (const col of requiredCols) {
+    if (row[col] !== undefined) continue;
+    if (col === "id" || col === "rollout_path") continue;
+    if (col === "model_provider") row[col] = "openai";
+    else if (col === "source") row[col] = "cli";
+    else if (col === "first_user_message") row[col] = "";
+    else if (col === "has_user_event") row[col] = 0;
+    else if (col === "archived") row[col] = entry.archived ?? 1;
+    else return null; // unknown required column we cannot invent
+  }
+
+  // If the schema requires listing fields, refuse when the rollout was unreadable.
+  const needsSessionMeta = requiredCols.some(
+    c => c === "model_provider" || c === "source" || c === "first_user_message",
+  );
+  if (needsSessionMeta && !fields) return null;
+
+  return row;
+}
+
+/** Re-insert threads (+ dependents) from satellite snapshot or rollout reconstruction. */
 function restoreThreadsFromManifest(
   stateDbPath: string | null,
   entries: CleanupManifestEntry[],
   backup: SatelliteBackup | null,
   busyTimeoutMs: number,
+  codexHome: string,
 ): { ok: true } | ReconcileErr {
   const manifestThreadIds = entries
     .map(e => e.threadId)
@@ -1953,36 +2055,53 @@ function restoreThreadsFromManifest(
   return withWritableDb(stateDbPath, busyTimeoutMs, db => {
     if (!tableExists(db, "threads")) throw new Error("missing_threads_table");
 
-    if (backup?.threads && isSqlRowArray(backup.threads) && backup.threads.length > 0) {
-      insertRowsConflictIgnore(db, "threads", backup.threads);
-    } else {
-      const toRestore = entries.filter(
-        e => typeof e.threadId === "string" && typeof e.rolloutPath === "string",
-      );
-      const hasArchived = columnExists(db, "threads", "archived");
-      const hasArchivedAt = columnExists(db, "threads", "archived_at");
-      for (const entry of toRestore) {
-        const archived = entry.archived ?? 1;
-        if (hasArchived && hasArchivedAt) {
-          db.run(
-            `INSERT INTO threads (id, rollout_path, archived, archived_at) VALUES (?, ?, ?, ?)
-             ON CONFLICT(id) DO NOTHING`,
-            [entry.threadId!, entry.rolloutPath!, archived, null],
-          );
-        } else if (hasArchived) {
-          db.run(
-            `INSERT INTO threads (id, rollout_path, archived) VALUES (?, ?, ?)
-             ON CONFLICT(id) DO NOTHING`,
-            [entry.threadId!, entry.rolloutPath!, archived],
-          );
-        } else {
-          db.run(
-            `INSERT INTO threads (id, rollout_path) VALUES (?, ?)
-             ON CONFLICT(id) DO NOTHING`,
-            [entry.threadId!, entry.rolloutPath!],
-          );
+    const requiredCols = requiredThreadColumnNames(db);
+    const allowedCols = tableColumnNames(db, "threads");
+    const snapshotThreads = backup?.threads && isSqlRowArray(backup.threads)
+      ? backup.threads
+      : [];
+    const completeSnapshots = snapshotThreads.filter(row =>
+      threadSnapshotCoversRequiredColumns(row, requiredCols),
+    );
+    const coveredIds = new Set(
+      completeSnapshots
+        .map(r => r.id)
+        .filter((id): id is string => typeof id === "string"),
+    );
+
+    if (completeSnapshots.length > 0) {
+      insertRowsConflictIgnore(db, "threads", completeSnapshots);
+    }
+
+    // Legacy Phase-2 quarantine (no / incomplete satellite thread snapshots): reconstruct
+    // every required column from the restored rollout via the history-provider session path.
+    const toReconstruct = entries.filter(
+      e => typeof e.threadId === "string"
+        && typeof e.rolloutPath === "string"
+        && !coveredIds.has(e.threadId!),
+    );
+    if (toReconstruct.length > 0) {
+      const reconstructed: SqlRow[] = [];
+      for (const entry of toReconstruct) {
+        let abs: string;
+        try {
+          abs = absFromRel(codexHome, entry.rolloutPath!);
+        } catch {
+          // Prefer the first restored physical path under archived_sessions.
+          const rel = entry.physicalRelPaths[0];
+          if (!rel) throw new Error("missing_rollout_for_thread");
+          abs = absFromRel(codexHome, rel);
         }
+        // .jsonl.zst cannot be parsed here — require a plain .jsonl sibling or path.
+        if (abs.endsWith(ZST_SUFFIX)) {
+          const plain = abs.slice(0, -".zst".length);
+          if (existsSync(plain)) abs = plain;
+        }
+        const row = reconstructThreadRowFromRollout(entry, abs, allowedCols, requiredCols);
+        if (!row) throw new Error("thread_reconstruct_failed");
+        reconstructed.push(row);
       }
+      insertRowsConflictIgnore(db, "threads", reconstructed);
     }
 
     if (backup?.dynamicTools && isSqlRowArray(backup.dynamicTools) && tableExists(db, "thread_dynamic_tools")) {
@@ -2168,6 +2287,7 @@ export function restoreTrashEntry(
     entries,
     satelliteBackup,
     busyTimeoutMs,
+    codexHome,
   );
   if (!threadsRestored.ok) {
     rollbackMoves(moved);
@@ -2213,6 +2333,47 @@ export function restoreTrashEntry(
         error: mapDbError(error) === "codex_busy" ? "codex_busy" : "db_reconcile_failed",
       };
     }
+  }
+
+  // Completeness gate: every planned file must sit at its restored path, and the stage
+  // must hold no leftover rollout files, before we destroy the quarantine evidence.
+  for (const item of moved) {
+    if (!existsSync(item.to) || existsSync(item.from)) {
+      rollbackMoves(moved);
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: "fs_failed",
+      };
+    }
+  }
+  try {
+    for (const name of readdirSync(stageDir)) {
+      if (name === "manifest.json" || name === SATELLITE_BACKUP_FILE) continue;
+      if (!isRolloutFileName(name)) continue;
+      rollbackMoves(moved);
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: "fs_failed",
+      };
+    }
+  } catch {
+    rollbackMoves(moved);
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: "fs_failed",
+    };
   }
 
   try {
