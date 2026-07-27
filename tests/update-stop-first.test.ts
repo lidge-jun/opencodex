@@ -103,7 +103,10 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain("io.recoveryLauncherFn ?? findNpmRecoveryLauncher");
     expect(updateJobSource).toContain("recoveryCaptured = { ...captured, recoveryLauncher }");
     expect(updateJobSource).toContain("captured?.recoveryLauncher ?? packageLauncherPath()");
-    expect(updateJobSource).toContain("if (refuseForReplacementPid()) return");
+    expect(updateJobSource).toContain("const readPidForRestart = (context: string)");
+    expect(updateJobSource).toContain('if (readPidForRestart("after service port reclaim").refused) return');
+    expect(updateJobSource).toContain('const directPid = readPidForRestart("before direct restart")');
+    expect(updateJobSource).toContain('if (readPidForRestart("after direct port reclaim").refused) return');
   });
 
   test("GUI recovery waits beyond the nested npm install deadline", () => {

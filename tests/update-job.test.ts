@@ -239,6 +239,7 @@ describe("GUI update execution decisions", () => {
       installer: "npm",
       restart: true,
       command: "",
+      releaseNotesUrl: "",
       log: [],
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
@@ -273,6 +274,7 @@ describe("GUI update execution decisions", () => {
       installer: "npm",
       restart: true,
       command: "",
+      releaseNotesUrl: "",
       log: [],
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));

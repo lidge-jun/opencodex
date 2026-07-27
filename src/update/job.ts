@@ -429,13 +429,13 @@ async function restartAfterUpdate(
     ? captured.oldPid
     : undefined;
   const readCurrentPid = io.readPidFn ?? readPid;
-  const refuseForReplacementPid = (): boolean => {
+  const readPidForRestart = (context: string): { pid: number | null; refused: boolean } => {
     const currentPid = readCurrentPid();
-    if (currentPid === null || currentPid === oldPid) return false;
-    updateJob(job, {}, "A different identity-checked proxy PID appeared during restart handoff; leaving it untouched.");
-    return true;
+    if (currentPid === null || currentPid === oldPid) return { pid: currentPid, refused: false };
+    updateJob(job, {}, `A different identity-checked proxy PID appeared ${context}; leaving it untouched.`);
+    return { pid: null, refused: true };
   };
-  if (refuseForReplacementPid()) return;
+  if (readPidForRestart("during restart handoff").refused) return;
   let svcArgs: string[] | undefined;
   if (serviceInstalled) {
     try {
@@ -461,7 +461,7 @@ async function restartAfterUpdate(
     if (!freed) {
       updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`);
     }
-    if (refuseForReplacementPid()) return;
+    if (readPidForRestart("after service port reclaim").refused) return;
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(Math.trunc(port));
     let serviceOk = false;
@@ -487,12 +487,10 @@ async function restartAfterUpdate(
     // proxy stopped when the service reinstall could not run.
   }
 
-  const pid = readCurrentPid();
-  if (pid) {
-    if (pid !== oldPid) {
-      updateJob(job, {}, "A different identity-checked proxy PID appeared before direct restart; leaving it untouched.");
-      return;
-    }
+  const directPid = readPidForRestart("before direct restart");
+  if (directPid.refused) return;
+  const pid = directPid.pid;
+  if (pid !== null) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
     killProxy(pid);
   }
@@ -504,7 +502,7 @@ async function restartAfterUpdate(
     updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s (reclaim could not free the socket); not starting on another port. Retry 'ocx start --port ${port}'.`);
     return;
   }
-  if (refuseForReplacementPid()) return;
+  if (readPidForRestart("after direct port reclaim").refused) return;
   (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port, launcher);
 }
 
