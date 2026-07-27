@@ -32,6 +32,14 @@ describe("SSRF: assessUrlDestination", () => {
   test("localhost → localhost", () => {
     expect(assessUrlDestination("http://localhost/test")?.kind).toBe("localhost");
   });
+  test("shorthand / decimal IPv4 literals normalize via URL and stay non-public", () => {
+    // WHATWG URL expands these before our classifier runs (e.g. 127.1 → 127.0.0.1).
+    expect(assessUrlDestination("https://127.1/image.png")?.kind).toBe("loopback");
+    expect(assessUrlDestination("https://127.0.1/image.png")?.kind).toBe("loopback");
+    expect(assessUrlDestination("https://0x7f.0.0.1/image.png")?.kind).toBe("loopback");
+    expect(assessUrlDestination("https://2130706433/image.png")?.kind).toBe("loopback");
+    expect(assessUrlDestination("https://10.1/image.png")?.kind).toBe("private");
+  });
   test("IPv6 site-local [fec0::1] → private", () => {
     expect(assessUrlDestination("https://[fec0::1]/image.png")?.kind).toBe("private");
     expect(assessUrlDestination("https://[fec0::1]/image.png")?.detail).toContain("site-local");
@@ -141,6 +149,11 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
 
   test("private 10.x via download helper → rejects", async () => {
     await expect(downloadImageToArtifact("https://10.0.0.1/img.png")).rejects.toThrow();
+  });
+
+  test("shorthand IPv4 (127.1 / decimal) via download helper → rejects", async () => {
+    await expect(downloadImageToArtifact("https://127.1/img.png")).rejects.toThrow(/loopback/);
+    await expect(downloadImageToArtifact("https://2130706433/img.png")).rejects.toThrow(/loopback/);
   });
 
   test("IPv4-mapped IPv6 [::ffff:127.0.0.1] via download helper → rejects", async () => {
