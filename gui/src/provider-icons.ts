@@ -68,6 +68,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   github: "GitHub",
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",
+  modelsell: "Modelsell",
   openrouter: "OpenRouter",
   "opencode-go": "OpenCode Go",
   "opencode-free": "OpenCode Free",

@@ -648,6 +648,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
   {
+    // Modelsell exposes an OpenAI-compatible multi-model API. Keep the catalog live instead of
+    // freezing an aggregator-wide model list: /v1/models is scoped by the authenticated API key.
+    // Evidence: https://modelsell.com/docs/api-reference and issue #561.
+    id: "modelsell",
+    label: "Modelsell",
+    adapter: "openai-chat",
+    baseUrl: "https://modelsell.com/v1",
+    authKind: "key",
+    dashboardUrl: "https://modelsell.com/console/token",
+    liveModels: true,
+    note: "OpenAI-compatible multi-model gateway with live model discovery.",
+  },
+  {
     // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
     // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
     // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
