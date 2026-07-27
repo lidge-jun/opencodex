@@ -35,6 +35,7 @@ import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
 import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
+import { runArchivedCleanupJob } from "../../storage/cleanup-job";
 import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
 import {
   currentUsageLogRevision,
@@ -279,7 +280,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         ? pickWireCleanupTestHooks(body._test)
         : undefined;
     try {
-      const result = executeArchivedCleanup({
+      const result = await runArchivedCleanupJob({
         percent,
         mode: mode as CleanupMode,
         digest,
@@ -287,13 +288,17 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       });
       if (!result.ok) {
         const status =
-          result.error === "codex_busy" || result.error === "stale_preview" || result.error === "referenced_history"
+          result.error === "codex_busy"
+            || result.error === "stale_preview"
+            || result.error === "referenced_history"
+            || result.error === "storage_mutation_busy"
             ? 409
             : result.error === "invalid_mode" || result.error === "invalid_digest"
               ? 400
               : 500;
         const messages: Record<string, string> = {
           codex_busy: "Codex is using state.sqlite — try again after quitting Codex.",
+          storage_mutation_busy: "Another storage cleanup or restore is in progress — try again shortly.",
           stale_preview: "Archived files changed since preview — run Preview again.",
           referenced_history: "Selected archives are still referenced by forked or paginated history.",
           invalid_digest: "Preview digest is missing or invalid.",
@@ -362,7 +367,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const result = await runRestoreTrashEntryJob(id);
       if (!result.ok) {
         const status =
-          result.error === "codex_busy" || result.error === "dest_exists"
+          result.error === "codex_busy"
+            || result.error === "dest_exists"
+            || result.error === "storage_mutation_busy"
             ? 409
             : result.error === "missing_trash"
               ? 404
@@ -373,6 +380,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           invalid_trash: "Trash entry id is missing or invalid.",
           missing_trash: "Trash entry was not found.",
           codex_busy: "Codex is using state.sqlite — try again after quitting Codex.",
+          storage_mutation_busy: "Another storage cleanup or restore is in progress — try again shortly.",
           dest_exists: "Restore destination already exists — remove or rename the archived file and retry.",
           fs_failed: "Filesystem restore failed. Some files may already be restored — check archived_sessions and .trash.",
           db_reconcile_failed: "Could not restore Codex state database rows.",

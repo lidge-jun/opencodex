@@ -3,12 +3,21 @@
  *
  * Heavy work (file moves, SQLite reconcile) runs in a Bun Worker so the proxy
  * event loop stays responsive while the management API awaits the outcome.
+ *
+ * Restore shares the CODEX_HOME storage-mutation coordinator with manual cleanup
+ * and (Phase 3) policy-driven cleanup. Concurrent callers receive
+ * `storage_mutation_busy` (409) instead of queueing.
  */
+import { resolveCodexHomeDir } from "../codex/home";
 import { restoreTrashEntry, type RestoreResult, type RestoreTestHooks } from "./cleanup";
+import {
+  resetStorageMutationCoordinatorForTests,
+  setStorageMutationCoordinatorTestHooks,
+  withStorageMutationSlot,
+  type StorageMutationCoordinatorTestHooks,
+} from "./storage-mutation-coordinator";
 
-export interface RestoreJobTestHooks {
-  /** Block the worker this many ms before restoreTrashEntry (responsiveness tests). */
-  blockMs?: number;
+export interface RestoreJobTestHooks extends StorageMutationCoordinatorTestHooks {
   /**
    * When true, run on the main thread via dynamic import + optional sleep.
    * Responsiveness tests must leave this unset so work stays in a Worker.
@@ -22,13 +31,13 @@ export interface RestoreJobTestHooks {
 
 const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
 
-let chain: Promise<unknown> = Promise.resolve();
 let activeWorker: Worker | null = null;
 let testHooks: RestoreJobTestHooks | null = null;
 let cancelActiveRun: (() => void) | null = null;
 
 export function setRestoreTrashJobTestHooks(hooks: RestoreJobTestHooks | null): void {
   testHooks = hooks;
+  setStorageMutationCoordinatorTestHooks(hooks);
 }
 
 export function resetRestoreTrashJobForTests(): void {
@@ -39,7 +48,7 @@ export function resetRestoreTrashJobForTests(): void {
   cancelActiveRun?.();
   cancelActiveRun = null;
   testHooks = null;
-  chain = Promise.resolve();
+  resetStorageMutationCoordinatorForTests();
 }
 
 /** Terminate an in-flight worker during process shutdown. */
@@ -178,11 +187,21 @@ async function executeRestore(opts: {
   }
 }
 
+function busyRestoreResult(): RestoreResult {
+  return {
+    ok: false,
+    count: 0,
+    bytes: 0,
+    restoredPaths: [],
+    error: "storage_mutation_busy",
+  };
+}
+
 /**
- * Run trash restore off the event loop. Restores are serialized — concurrent
- * callers wait for the in-flight job to finish.
+ * Run trash restore off the event loop under the shared storage-mutation gate.
+ * Returns `storage_mutation_busy` when cleanup or another restore is in flight.
  */
-export function runRestoreTrashEntryJob(
+export async function runRestoreTrashEntryJob(
   trashId: string,
   options?: {
     codexHome?: string;
@@ -190,7 +209,13 @@ export function runRestoreTrashEntryJob(
     _test?: RestoreTestHooks;
   },
 ): Promise<RestoreResult> {
-  const next = chain.then(() => executeRestore({ trashId, ...options }));
-  chain = next.catch(() => {});
-  return next;
+  const codexHome = options?.codexHome ?? resolveCodexHomeDir();
+  const result = await withStorageMutationSlot("restore", codexHome, () =>
+    executeRestore({ trashId, ...options }),
+  );
+  if (result && typeof result === "object" && "ok" in result && result.ok === false
+    && "error" in result && result.error === "storage_mutation_busy") {
+    return busyRestoreResult();
+  }
+  return result as RestoreResult;
 }

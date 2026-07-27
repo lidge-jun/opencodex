@@ -46,6 +46,7 @@ export type CleanupErrorCode =
   | "invalid_digest"
   | "stale_preview"
   | "codex_busy"
+  | "storage_mutation_busy"
   | "fs_failed"
   | "db_reconcile_failed"
   | "referenced_history"
@@ -1722,6 +1723,7 @@ export type RestoreErrorCode =
   | "invalid_trash"
   | "missing_trash"
   | "codex_busy"
+  | "storage_mutation_busy"
   | "fs_failed"
   | "db_reconcile_failed"
   | "dest_exists"
@@ -2240,6 +2242,11 @@ export interface RestoreTestHooks {
   failStageTombstoneRename?: boolean;
   /** After tombstone rename, skip best-effort tombstone delete (orphan is OK). */
   failTombstoneDelete?: boolean;
+  /**
+   * Test-only: spin-wait this many ms after rollout file moves, before DB
+   * reconcile, so cleanup can race an in-flight restore.
+   */
+  holdAfterFileMovesMs?: number;
 }
 
 /**
@@ -2578,6 +2585,14 @@ export function restoreTrashEntry(
     }
     return { ok: false, trashDir: id, ...partialCounts, error };
   };
+
+  if (hooks?.holdAfterFileMovesMs !== undefined) {
+    const holdMs = Math.max(0, Math.floor(hooks.holdAfterFileMovesMs));
+    if (holdMs > 0) {
+      const deadline = Date.now() + holdMs;
+      while (Date.now() < deadline) { /* test-only spin wait */ }
+    }
+  }
 
   if (hooks?.failAfterFileMoves) {
     return abortAfterMoves("fs_failed");
