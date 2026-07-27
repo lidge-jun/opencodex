@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -2668,6 +2668,33 @@ describe("media-generation model filtering", () => {
     ]) {
       expect(isMediaGenerationModelId(id)).toBe(false);
     }
+  });
+});
+
+describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
+  test("exposes gemini-3.1-flash-image (image-capable chat model, not media-gen)", () => {
+    expect(shouldExposeRoutedModel({ provider: "google-antigravity", id: "gemini-3.1-flash-image" })).toBe(true);
+  });
+
+  test("exposes cursor gemini-3-pro-image-preview", () => {
+    expect(shouldExposeRoutedModel({ provider: "cursor", id: "gemini-3-pro-image-preview" })).toBe(true);
+  });
+
+  test("does not resurrect standalone media-gen gemini image ids", () => {
+    expect(shouldExposeRoutedModel({ provider: "google-antigravity", id: "gemini-3-pro-image" })).toBe(false);
+    expect(shouldExposeRoutedModel({ provider: "openrouter", id: "gemini-3-pro-image" })).toBe(false);
+  });
+
+  test("still filters true media-generation models", () => {
+    for (const id of [
+      "grok-2-image", "gpt-image-1", "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux",
+    ]) {
+      expect(shouldExposeRoutedModel({ provider: "openrouter", id })).toBe(false);
+    }
+  });
+
+  test("still filters compatibility-excluded slugs", () => {
+    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "hy3-preview" })).toBe(false);
   });
 });
 

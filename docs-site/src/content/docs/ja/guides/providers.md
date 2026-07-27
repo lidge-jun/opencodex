@@ -80,7 +80,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | インストール済み `kiro-cli` ログインを優先取得。Kiro CLI のインストール(`curl -fsSL https://cli.kiro.dev/install | bash`)と `kiro-cli login` が必要。 |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは Kiro CLI をインストール（`curl -fsSL https://cli.kiro.dev/install | bash`）し、`kiro-cli login` でサインインした既存セッションを取り込みます。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 
@@ -90,9 +90,22 @@ ocx logout <provider>
 
 認証情報に固定アカウント ID やメールがある OAuth プロバイダーはログインを複数保持できます。
 Providers ページでアカウントを追加し、別アカウントをログアウトせずにアクティブアカウントだけを切り替えられます。
-アカウント識別情報がない Kimi と Kiro はアクティブスロットを差し替え、`chatgpt` は Codex アカウントプールに別の保存場所が
-あり常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
+アカウント識別情報がない Kimi 認証情報だけがアクティブスロットを差し替え、Kiro アカウントはプロファイル ARN をキーに保存されます。
+`chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
+
+### Kiro 認証情報の取り込み
+
+Kiro のログインには Kiro CLI が必要です。`curl -fsSL https://cli.kiro.dev/install | bash` でインストールし、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
+
+通常の `ocx login kiro` 取り込みは CLI の SQLite データベースを読み取り専用で開き、データベース、WAL、SHM を変更しません。
+
+- `KIROCLI_DB_PATH` は標準外の Kiro CLI SQLite データベースを選択します。指定するデータベースは既に存在している必要があります。
+- `KIROCLI_TOKEN_KEY` は複数の曖昧なトークン行がある場合に、取り込む正確な `auth_kv` 行のキーを指定します。選択がない場合、推測せずログインに失敗します。
+
+取り込んだ認証情報は `~/.opencodex/auth.json` に保存されます。**アカウントを追加**のロールバックは別処理で、以前のスナップショットを復元する際にデータベースを置き換え、現在の WAL、SHM、journal サイドカーを削除します。
+
+ロールバックはスナップショットがある場合にのみ可能なため、セッションストアが存在するのに取得できない場合（ファイルが読めない、スキーマの不一致、トークン選択があいまい）、`KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` が実際の CLI ストアと異なるインポート先を指す場合、またはプライマリ CLI データベースに認識できるトークン行がない場合、**アカウントを追加**は `kiro-cli` のログアウトを拒否します。通常の `kiro-cli` データパス上の壊れたデータベースを修復または削除し、インポート専用セレクタが設定されていれば解除してから再試行してください。既存の `kiro-cli` セッションがまったくない環境には影響しません。
 
 ## 3. API キーカタログ
 

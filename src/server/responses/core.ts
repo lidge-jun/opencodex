@@ -1029,6 +1029,11 @@ export async function handleResponses(
       const resolved = await getValidAccessTokenSnapshot(route.providerName);
       if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
       route.provider = { ...route.provider, apiKey: resolved.accessToken };
+      if (route.providerName === "kiro") {
+        // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
+        // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
+        parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
+      }
       // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
       // CCA envelope; the server injects only the bare token, so pull project from the credential.
       if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
@@ -1911,6 +1916,9 @@ export async function handleResponses(
           return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
         }
         sentOAuthSnapshot = refreshed;
+        if (route.providerName === "kiro") {
+          parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
+        }
         const refreshedProvider = resolveProviderTransport(
           route.providerName,
           { ...route.provider, apiKey: refreshed.accessToken },

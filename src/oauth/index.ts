@@ -1,13 +1,13 @@
-import type { OAuthController, OAuthCredentials } from "./types";
+import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
-import { getAccountCredential, getAccountSet, saveAccountCredential, saveCredential, markAccountNeedsReauth, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, clearOAuthRefreshIntent } from "./store";
+import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, clearOAuthRefreshIntent } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
-import { loginKiro, readKiroCliSqlite, refreshKiroToken } from "./kiro";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
@@ -45,6 +45,8 @@ export interface OAuthAccessSnapshot {
   accountId: string;
   generation: string;
   accessToken: string;
+  /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
+  kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
 
 const tokenRefreshes = new Map<string, Promise<OAuthAccessSnapshot>>();
@@ -60,7 +62,11 @@ export interface LoginOpts { forceLogin?: boolean; /** When set, persist into th
 
 interface OAuthProviderDef {
   login(ctrl: OAuthController, opts?: LoginOpts): Promise<OAuthCredentials>;
-  refresh(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials>;
+  refresh(
+    refreshToken: string,
+    signal?: AbortSignal,
+    credential?: OAuthCredentials,
+  ): Promise<OAuthCredentials>;
   /** provider entry written into config.json on first login. */
   providerConfig: OcxProviderConfig;
   defaultModel: string;
@@ -108,8 +114,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("kimi"),
   },
   kiro: {
-    login: (ctrl) => loginKiro(ctrl),
-    refresh: (rt, signal) => refreshKiroToken(rt, signal),
+    login: (ctrl, opts) => loginKiro(ctrl, { forceLogin: opts?.forceLogin }),
+    refresh: (rt, signal, credential) => refreshKiroToken(rt, signal, credential),
     providerConfig: oauthConfig("kiro"),
     defaultModel: oauthDefaultModel("kiro"),
   },
@@ -195,11 +201,25 @@ export class OAuthLoginRequiredError extends Error {
 }
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
+  const storedKiroRouting = {
+    ...(cred.kiro?.profileArn ? { profileArn: cred.kiro.profileArn } : {}),
+    ...(cred.kiro?.apiRegion ? { apiRegion: cred.kiro.apiRegion } : {}),
+    ...(cred.kiro?.ssoRegion ? { ssoRegion: cred.kiro.ssoRegion } : {}),
+  };
   return {
     provider,
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
+    // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
+    ...(provider === "kiro"
+      ? {
+          kiro: Object.keys(storedKiroRouting).length > 0
+            ? storedKiroRouting
+            : environmentKiroRoutingMetadata() ?? {},
+        }
+      : {}),
   };
 }
 
@@ -268,12 +288,6 @@ export async function getValidAccessTokenForAccount(provider: string, accountId:
   return (await resolveAccessSnapshotForAccount(provider, accountId)).accessToken;
 }
 
-function readFreshKiroCliCredential(): OAuthCredentials | undefined {
-  const imported = readKiroCliSqlite();
-  if (!imported || imported.expires <= Date.now() + REFRESH_SKEW_MS) return undefined;
-  return { access: imported.access, refresh: imported.refresh, expires: imported.expires, source: "local-cli" };
-}
-
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */
 function isTerminalRefreshError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
@@ -287,6 +301,7 @@ function isTerminalRefreshError(err: unknown): boolean {
 function terminal(error:unknown):boolean{
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
+  if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
   return isTerminalRefreshError(error);
 }
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
@@ -298,6 +313,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.apiBaseUrl === undefined && previous.apiBaseUrl ? { apiBaseUrl: previous.apiBaseUrl } : {}),
     ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
     ...(fresh.accountId === undefined && previous.accountId ? { accountId: previous.accountId } : {}),
+    ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
   };
 }
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(!terminal(error))throw error;permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),now()+XAI_PERMANENT_FAILURE_TTL_MS);await markAccountNeedsReauthIfGeneration(provider,accountId,generation);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
@@ -396,7 +412,7 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
-      const fresh = merged(await def.refresh(stored.refresh), stored);
+      const fresh = merged(await def.refresh(stored.refresh, undefined, stored), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
@@ -408,7 +424,7 @@ export async function refreshGenericAccountWithLock(
       logOAuthEvent("OAuth credentials rotated and persisted", { provider, accountId });
       return fresh.access;
     } catch (error) {
-      if (!isTerminalRefreshError(error)) throw error;
+      if (!terminal(error)) throw error;
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
       throw new OAuthLoginRequiredError(provider);
     }
@@ -423,30 +439,9 @@ async function refreshAndPersistAccessToken(
   def: OAuthProviderDef,
   cred: OAuthCredentials,
 ): Promise<string> {
-  // Local-CLI import fallback only for the ACTIVE account: importing another identity's
-  // token under a background account id would silently contaminate that account.
-  const isActive = getAccountSet(provider)?.activeAccountId === accountId;
-  if (provider === "kiro" && isActive) {
-    const imported = readFreshKiroCliCredential();
-    if (imported) {
-      await saveCredential(provider, imported);
-      return imported.access;
-    }
-  }
   if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred);
   if (provider === "anthropic") return refreshAnthropicAccountWithLock(provider, accountId, def, cred);
-  try {
-    return await refreshGenericAccountWithLock(provider, accountId, def, cred);
-  } catch (err) {
-    if (provider === "kiro" && isActive) {
-      const imported = readFreshKiroCliCredential();
-      if (imported) {
-        await saveCredential(provider, imported);
-        return imported.access;
-      }
-    }
-    throw err;
-  }
+  return refreshGenericAccountWithLock(provider, accountId, def, cred);
 }
 
 /**
@@ -646,27 +641,101 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   config.providers[provider] = next;
 }
 
+interface RunLoginDeps {
+  saveCredential?: typeof saveCredential;
+  saveAccountCredential?: typeof saveAccountCredential;
+  loadConfig?: typeof loadConfig;
+  saveConfig?: typeof saveConfig;
+  settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
+  removeAccount?: typeof removeAccount;
+  setActiveAccount?: typeof setActiveAccount;
+}
+
+/** Roll back only accounts created by this forced login, preserving concurrent refreshes of others. */
+async function rollbackForcedKiroAccountWrite(
+  provider: string,
+  previousActiveId: string | undefined,
+  previousAccountIds: ReadonlySet<string>,
+  deps: Pick<RunLoginDeps, "removeAccount" | "setActiveAccount">,
+): Promise<void> {
+  const set = getAccountSet(provider);
+  if (!set) return;
+  for (const account of [...set.accounts]) {
+    if (previousAccountIds.has(account.id)) continue;
+    await (deps.removeAccount ?? removeAccount)(provider, account.id);
+  }
+  if (previousActiveId && getAccountCredential(provider, previousActiveId)) {
+    await (deps.setActiveAccount ?? setActiveAccount)(provider, previousActiveId);
+  }
+}
+
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */
-export async function runLogin(provider: string, ctrl: OAuthController, opts?: LoginOpts): Promise<OAuthCredentials> {
+export async function runLogin(
+  provider: string,
+  ctrl: OAuthController,
+  opts?: LoginOpts,
+  deps: RunLoginDeps = {},
+): Promise<OAuthCredentials> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
+  // loginKiro keys its pending CLI-session transaction by object identity. Keep this exact object
+  // for settlement even when source normalization below creates a derived credential object.
+  const shouldRollbackKiroAccounts = provider === "kiro" && opts?.forceLogin === true;
+  const previousKiroAccounts = shouldRollbackKiroAccounts ? getAccountSet(provider) : undefined;
+  const previousKiroActiveId = previousKiroAccounts?.activeAccountId;
+  const previousKiroAccountIds = new Set(previousKiroAccounts?.accounts.map(account => account.id) ?? []);
   const rawCred = await def.login(ctrl, opts);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
-  if (opts?.reauthAccountId) {
-    const existing = getAccountCredential(provider, opts.reauthAccountId);
-    if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
-    const expected = existing.accountId ?? existing.email;
-    const got = cred.accountId ?? cred.email;
-    if (!expected) {
-      throw new Error("Could not verify signed-in account identity for reauth.");
+  const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
+  try {
+    if (opts?.reauthAccountId) {
+      const existing = getAccountCredential(provider, opts.reauthAccountId);
+      if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
+      if (!existing.accountId && !existing.email) {
+        throw new Error("Could not verify signed-in account identity for reauth.");
+      }
+      const identityMatches = existing.accountId && cred.accountId
+        ? existing.accountId === cred.accountId
+        : existing.email && cred.email
+          ? existing.email.toLowerCase() === cred.email.toLowerCase()
+          : false;
+      if (!identityMatches) {
+        throw new Error("Signed-in account does not match the selected account. Sign in with the same account.");
+      }
+      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred);
+    } else {
+      await (deps.saveCredential ?? saveCredential)(provider, cred, {
+        preserveIdentityless: provider === "kiro" && opts?.forceLogin === true,
+      });
     }
-    if (!got || expected !== got) {
-      throw new Error("Signed-in account does not match the selected account. Sign in with the same account.");
+    if (provider !== "chatgpt") {
+      const config = (deps.loadConfig ?? loadConfig)();
+      upsertOAuthProvider(config, provider);
+      (deps.saveConfig ?? saveConfig)(config);
     }
-    await saveAccountCredential(provider, opts.reauthAccountId, cred);
-  } else {
-    await saveCredential(provider, cred);
+  } catch (error) {
+    const errors: unknown[] = [error];
+    if (shouldRollbackKiroAccounts) {
+      try {
+        await rollbackForcedKiroAccountWrite(provider, previousKiroActiveId, previousKiroAccountIds, deps);
+      } catch (rollbackError) {
+        errors.push(rollbackError);
+      }
+    }
+    try {
+      settleKiroTransaction(rawCred, false);
+    } catch (restoreError) {
+      errors.push(restoreError);
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(
+        errors,
+        "Kiro login persistence failed and the previous Kiro CLI session could not be restored.",
+      );
+    }
+    throw error;
   }
+  settleKiroTransaction(rawCred, true);
   if (provider !== "chatgpt") {
     try {
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
@@ -676,10 +745,6 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
       // Quota module may be unavailable in tightly scoped unit tests.
     }
   }
-  if (provider === "chatgpt") return cred;
-  const config = loadConfig();
-  upsertOAuthProvider(config, provider);
-  saveConfig(config);
   return cred;
 }
 

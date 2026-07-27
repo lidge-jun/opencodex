@@ -50,9 +50,17 @@ Standalone `/images/generations` calls never enter that bridge.
   `openai-responses` provider whose endpoint implements the OpenAI Images API. Explicit selection
   fails closed and never falls back to a different paid upstream. Registry-managed provider ids
   are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
+- **Google Antigravity (CCA) fallback:** when neither an OpenAI forward candidate nor a keyed
+  provider is configured, `/v1/images/generations` (not `/images/edits`) falls back to the
+  Antigravity **Cloud Code Assist** endpoint using the `gemini-3.1-flash-image` model. The fallback
+  also fires after OpenAI auth resolution fails (e.g. an expired or missing ChatGPT credential),
+  not only when no OpenAI candidate is configured. This
+  requires `ocx login google-antigravity`; the OAuth token is sent only to the pinned CCA registry
+  host, never to a config-level `baseUrl` override. The response is returned in the same
+  `{created, data:[{b64_json}]}` shape Codex expects.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
-  (Cursor, Gemini, Kiro, …) cannot serve image generation; if you don't want the tool offered at
-  all, disable it in Codex with `codex features disable image_generation`
+  (Cursor, Gemini, Kiro, …) cannot serve the `image_generation` tool relay; if you don't want the
+  tool offered at all, disable it in Codex with `codex features disable image_generation`
   (`[features] image_generation = false` in `config.toml`).
 
 For an OpenAI-compatible custom gateway, configure a dedicated provider and select it only for
@@ -78,6 +86,11 @@ standalone Images requests:
 The custom endpoint must accept `POST /v1/images/generations` and `/v1/images/edits` and return the
 OpenAI Images response shape expected by Codex. The provider's configured key replaces any caller
 bearer before the upstream request.
+
+> **Note:** This refers only to the Codex `image_generation` tool (`/images/generations` relay).
+> Gemini models that are image-capable produce inline images natively through the `google` adapter
+> (via `responseModalities: ["TEXT", "IMAGE"]`), independent of this relay — see
+> [Adapters](/reference/adapters/#google).
 
 For a non-loopback `hostname`, Codex must send the generated API auth header. The injector therefore
 uses a dedicated provider instead:

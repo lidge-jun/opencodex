@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, runLogin } from "../src/oauth";
 import { getAccountCredential, getAccountSet, saveCredential } from "../src/oauth/store";
-import type { OAuthController } from "../src/oauth/types";
+import type { OAuthController, OAuthCredentials } from "../src/oauth/types";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
@@ -107,6 +107,91 @@ describe("OAuth account-scoped reauth", () => {
     }
     expect(getAccountCredential("xai", slotId)?.access).toBe("a2");
     expect(getAccountSet("xai")?.accounts).toHaveLength(1);
+  });
+
+  test("forced Kiro add-account preserves a legacy identity-less account", async () => {
+    await saveCredential("kiro", {
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: Date.now() + 60_000,
+      source: "local-cli",
+    });
+    const original = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => ({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/new",
+      source: "local-cli",
+    });
+    try {
+      await runLogin("kiro", {} as OAuthController, { forceLogin: true });
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = original;
+    }
+
+    const set = getAccountSet("kiro")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(set.accounts.some(account => account.credential.access === "legacy-access")).toBe(true);
+    expect(getAccountCredential("kiro", set.activeAccountId)?.access).toBe("identified-access");
+  });
+
+  test("non-force Kiro login upgrades a legacy identity-less slot in place", async () => {
+    await saveCredential("kiro", {
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: Date.now() + 60_000,
+      source: "local-cli",
+    });
+    const legacySlotId = getAccountSet("kiro")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => ({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/existing",
+      source: "local-cli",
+    });
+    try {
+      await runLogin("kiro", {} as OAuthController);
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = original;
+    }
+
+    const set = getAccountSet("kiro")!;
+    expect(set.accounts).toHaveLength(1);
+    expect(set.activeAccountId).toBe(legacySlotId);
+    expect(getAccountCredential("kiro", legacySlotId)?.access).toBe("identified-access");
+  });
+
+  test("runLogin settles a source-less Kiro credential with its exact raw object identity", async () => {
+    const rawCredential: OAuthCredentials = {
+      access: "source-less-access",
+      refresh: "source-less-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source-less",
+    };
+    let savedCredential: OAuthCredentials | undefined;
+    let settledCredential: OAuthCredentials | undefined;
+    let settledPersisted: boolean | undefined;
+    const original = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => rawCredential;
+    try {
+      await runLogin("kiro", {} as OAuthController, undefined, {
+        saveCredential: async (_provider, credential) => { savedCredential = credential; },
+        settleKiroLoginTransaction: (credential, persisted) => {
+          settledCredential = credential;
+          settledPersisted = persisted;
+        },
+      });
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = original;
+    }
+
+    expect(savedCredential).not.toBe(rawCredential);
+    expect(savedCredential?.source).toBe("oauth");
+    expect(settledCredential).toBe(rawCredential);
+    expect(settledPersisted).toBe(true);
   });
 
   test("management login passes reauthAccountId into startLoginFlow", async () => {

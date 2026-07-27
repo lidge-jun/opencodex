@@ -1,6 +1,15 @@
 /** Minimal OAuth types, ported from jawcode packages/ai/src/utils/oauth/types.ts. */
 export type OAuthCredentialSource = "oauth" | "local-cli" | "credential-file" | "environment" | "manual";
 
+/** Account-scoped Kiro data required for refresh and request routing. */
+export interface KiroOAuthMetadata {
+  profileArn?: string;
+  ssoRegion?: string;
+  apiRegion?: string;
+  clientId?: string;
+  clientSecret?: string;
+}
+
 export type OAuthCredentials = {
   refresh: string;
   access: string;
@@ -15,6 +24,8 @@ export type OAuthCredentials = {
    * Never reuse for Antigravity projectId; validated on write and again at request time.
    */
   apiBaseUrl?: string;
+  /** Never returned by management APIs; persisted only inside the protected auth-store boundary. */
+  kiro?: KiroOAuthMetadata;
 };
 
 /** One logged-in account inside a provider's account set (multiauth). */

@@ -141,6 +141,47 @@ function installFetch(chatStatuses: number[]): { chatAuth: string[]; refreshCall
 }
 
 describe("Kiro OAuth upstream 401 replay", () => {
+  test("selected OAuth account supplies its own Kiro runtime region and profile", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-b";
+    await saveCredential("kiro", {
+      access: "account-b-access",
+      refresh: "account-b-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: profileArn,
+      source: "local-cli",
+      kiro: { profileArn, apiRegion: "eu-west-1", ssoRegion: "us-east-1" },
+    });
+    saveConfig(config());
+    let observed: { url: string; profileHeader: string | null; profileBody?: string } | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://runtime.eu-west-1.kiro.dev/") {
+        const body = JSON.parse(String(init?.body)) as { profileArn?: string };
+        observed = {
+          url,
+          profileHeader: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+          profileBody: body.profileArn,
+        };
+        return new Response(eventStream("account b"), {
+          headers: { "content-type": "application/vnd.amazon.eventstream" },
+        });
+      }
+      if (/^https:\/\/runtime\.[a-z0-9-]+\.kiro\.dev\//.test(url)) {
+        throw new Error(`unexpected Kiro runtime host: ${url}`);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      expect(observed).toEqual({ url: "https://runtime.eu-west-1.kiro.dev/", profileHeader: profileArn, profileBody: profileArn });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("401 then 200 performs one refresh and one replay", async () => {
     await seedOAuth();
     saveConfig(config());
@@ -153,6 +194,66 @@ describe("Kiro OAuth upstream 401 replay", () => {
       expect(json.output?.find(item => item.type === "message")?.content?.[0]?.text).toBe("ok after refresh");
       expect(observed.refreshCalls()).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("401 replay uses metadata from a concurrently updated account generation", async () => {
+    const oldProfile = "arn:aws:codewhisperer:us-east-1:123456789012:profile/concurrent";
+    const newProfile = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/concurrent";
+    await saveCredential("kiro", {
+      access: "rejected-access",
+      refresh: "initial-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kiro-concurrent-account",
+      source: "oauth",
+      kiro: { profileArn: oldProfile, apiRegion: "us-east-1", ssoRegion: "us-east-1" },
+    });
+    saveConfig(config());
+    const observed: Array<{ url: string; auth: string; profile: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === CHAT_ENDPOINT) {
+        observed.push({
+          url,
+          auth: new Headers(init?.headers).get("authorization") ?? "",
+          profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+        });
+        await saveCredential("kiro", {
+          access: "concurrent-access",
+          refresh: "concurrent-refresh",
+          expires: Date.now() + 3_600_000,
+          accountId: "kiro-concurrent-account",
+          source: "oauth",
+          kiro: { profileArn: newProfile, apiRegion: "eu-west-1", ssoRegion: "eu-west-1" },
+        });
+        return new Response("rejected", { status: 401 });
+      }
+      if (url === "https://runtime.eu-west-1.kiro.dev/") {
+        observed.push({
+          url,
+          auth: new Headers(init?.headers).get("authorization") ?? "",
+          profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn"),
+        });
+        return new Response(eventStream("updated account"), {
+          headers: { "content-type": "application/vnd.amazon.eventstream" },
+        });
+      }
+      if (/^https:\/\/runtime\.[a-z0-9-]+\.kiro\.dev\//.test(url)) {
+        throw new Error(`unexpected Kiro runtime host: ${url}`);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      expect(observed).toEqual([
+        { url: CHAT_ENDPOINT, auth: "Bearer rejected-access", profile: oldProfile },
+        { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer concurrent-access", profile: newProfile },
+      ]);
     } finally {
       server.stop(true);
     }

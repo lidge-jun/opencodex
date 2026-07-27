@@ -1,9 +1,9 @@
-import { mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, unlinkSync, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import type { RequestOptions } from "node:https";
-import { join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
 
@@ -14,8 +14,22 @@ export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 /** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
+/**
+ * Upper bound on the raw base64 string length before it is decoded. Base64
+ * encoding expands 3 decoded bytes to 4 encoded chars, so this corresponds to
+ * MAX_DECODED_BYTES_PER_IMAGE. Checking this in the adapter (before calling
+ * materializeInlineImage) rejects oversized payloads before normalization
+ * copies them — see Wibias R4 finding 5.
+ */
+export const MAX_ENCODED_BYTES_PER_IMAGE = Math.ceil(MAX_DECODED_BYTES_PER_IMAGE * 4 / 3);
+
 /** Default cap on files retained under artifacts/. Oldest files are pruned when exceeded. */
 export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
+
+/** Opaque artifact HTTP path prefix (data-plane, API-auth gated). */
+export const ARTIFACT_HTTP_PREFIX = "/v1/opencodex/artifacts";
+
+const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif)$/i;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -47,8 +61,75 @@ export function chargeImageBudget(budget: ImageBudget | undefined, bytes: number
   budget.spent += bytes;
 }
 
-function getArtifactsDir(): string {
+export function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
+}
+
+/**
+ * Markdown-safe relative URL for a materialized artifact. Opaque filename only —
+ * never expose host filesystem paths to model-visible content.
+ */
+export function artifactHttpUrl(filePath: string): string {
+  const name = basename(filePath);
+  if (!ARTIFACT_ID_RE.test(name)) {
+    throw new Error("artifact filename is not a valid opaque id");
+  }
+  return `${ARTIFACT_HTTP_PREFIX}/${name}`;
+}
+
+/**
+ * Resolve an opaque artifact id to an absolute path under the artifacts dir.
+ * Rejects traversal (`..`, absolute paths, separators).
+ */
+export function resolveArtifactPath(id: string): string | null {
+  if (!ARTIFACT_ID_RE.test(id)) return null;
+  const dir = resolve(getArtifactsDir());
+  const candidate = resolve(dir, id);
+  if (candidate !== dir && !candidate.startsWith(dir + sep)) return null;
+  if (!existsSync(candidate)) return null;
+  try {
+    if (!statSync(candidate).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+export function readArtifactBytes(id: string): { bytes: Buffer; contentType: string } | null {
+  const path = resolveArtifactPath(id);
+  if (!path) return null;
+  const bytes = readFileSync(path);
+  const ext = path.split(".").pop()?.toLowerCase();
+  const contentType =
+    ext === "png" ? "image/png"
+      : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+          : ext === "gif" ? "image/gif"
+            : "application/octet-stream";
+  return { bytes, contentType };
+}
+
+/**
+ * Decode + validate base64 image bytes (alphabet, size, magic). Used by CCA
+ * Images fallback before returning b64_json and by materializeInlineImage.
+ */
+export function decodeValidatedImageBase64(base64Data: string): Buffer {
+  const normalized = base64Data.replace(/\s+/g, "");
+  if (!BASE64_RE.test(normalized) || normalized.length % 4 !== 0) {
+    throw new Error("inline image data is not valid base64");
+  }
+  if (normalized.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+    throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
+  }
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const decodedBytes = (normalized.length / 4) * 3 - padding;
+  if (decodedBytes === 0) throw new Error("inline image data is empty after base64 decode");
+  if (decodedBytes > MAX_DECODED_BYTES_PER_IMAGE) {
+    throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
+  }
+  const buf = Buffer.from(normalized, "base64");
+  guessExtFromMagic(buf);
+  return buf;
 }
 
 /**
@@ -107,6 +188,31 @@ function timestampPrefix(): string {
   ].join("");
 }
 
+/**
+ * Write a buffer to a unique artifact file using `flag: "wx"` (exclusive create).
+ * Collisions on the random UUID suffix are astronomically unlikely, but `wx`
+ * would surface them as EEXIST; retry a few times with a fresh UUID before
+ * giving up so a fluke name clash can never fail an image write.
+ */
+async function writeArtifactUnique(
+  dir: string,
+  prefix: string,
+  buf: Uint8Array,
+  ext: string,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const suffix = attempt === 0 ? crypto.randomUUID() : `${crypto.randomUUID()}-${attempt}`;
+    const filePath = join(dir, `${prefix}${timestampPrefix()}-${suffix}.${ext}`);
+    try {
+      await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
+      return filePath;
+    } catch (e) {
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "EEXIST" && attempt < 3) continue;
+      throw e;
+    }
+  }
+}
+
 /** Sniff a recognized image extension, or null when the payload is empty/non-image. */
 export function sniffImageExtension(bytes: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
   if (bytes.byteLength === 0) return null;
@@ -120,7 +226,11 @@ export function sniffImageExtension(bytes: Uint8Array): "png" | "jpg" | "webp" |
 }
 
 export function guessExtFromMagic(bytes: Uint8Array): string {
-  return sniffImageExtension(bytes) ?? "png";
+  const ext = sniffImageExtension(bytes);
+  if (!ext) {
+    throw new Error("unrecognized image format — magic bytes do not match PNG, JPEG, WebP, or GIF");
+  }
+  return ext;
 }
 
 /** Prune `OPENCODEX_HOME/artifacts` after a full image batch has been written. */
@@ -135,26 +245,15 @@ export async function materializeInlineImage(
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
-  const normalized = base64Data.replace(/\s+/g, "");
-  if (!BASE64_RE.test(normalized) || normalized.length % 4 !== 0) {
-    throw new Error("inline image data is not valid base64");
-  }
-  // Validate decoded size from the base64 length *before* allocating a Buffer, so a
-  // malicious or broken upstream cannot force a large allocation / OOM.
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  const decodedBytes = (normalized.length / 4) * 3 - padding;
-  if (decodedBytes === 0) throw new Error("inline image data is empty after base64 decode");
-  if (decodedBytes > MAX_DECODED_BYTES_PER_IMAGE) throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
-  chargeImageBudget(budget, decodedBytes);
-
-  const buf = Buffer.from(normalized, "base64");
+  const buf = decodeValidatedImageBase64(base64Data);
+  chargeImageBudget(budget, buf.length);
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = sniffImageExtension(buf);
   if (!ext) throw new Error("inline image data is not a recognized image");
-  const filePath = join(dir, `img-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, buf, { mode: 0o600 });
-  return filePath;
+  // Retention is post-batch via pruneArtifacts (see fulfill.ts) so a tight keepCount
+  // cannot delete earlier images from the same call before their paths are returned.
+  return writeArtifactUnique(dir, "img-", buf, ext);
 }
 
 /**
@@ -373,7 +472,6 @@ export async function downloadImageToArtifact(
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
-  const filePath = join(dir, `dl-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, bytes, { mode: 0o600 });
-  return filePath;
+  // Retention is post-batch via pruneArtifacts (see fulfill.ts).
+  return writeArtifactUnique(dir, "dl-", bytes, ext);
 }

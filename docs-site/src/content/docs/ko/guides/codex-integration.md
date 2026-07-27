@@ -44,8 +44,15 @@ ChatGPT bearer 인증으로 직접 POST합니다. 주입된 `base_url`이 openco
 - **명시적 커스텀 프로바이더:** `images.provider`에 OpenAI Images API를 구현한 커스텀 API-key
   `openai-responses` 프로바이더를 지정할 수 있습니다. 명시적 선택이 실패해도 다른 유료 업스트림으로
   fallback하지 않습니다. 내장 프로바이더 id에는 사용하지 말고, 기본 OpenAI 경로를 쓰려면 생략하세요.
-- **둘 다 없음:** 모호한 404 대신 명확한 오류를 반환합니다. 라우팅되는 다른 프로바이더(Cursor,
-  Gemini, Kiro 등)는 기본적으로 이미지 생성을 제공할 수 없습니다. 도구 자체를 끄고 싶다면 Codex에서
+- **Google Antigravity (CCA) 폴백:** OpenAI forward 후보와 API key 프로바이더 모두 없을 때,
+  `/v1/images/generations`(`/images/edits` 제외)가 Antigravity **Cloud Code Assist** 엔드포인트로
+  폴백되며 `gemini-3.1-flash-image` 모델을 사용합니다. OpenAI 인증 해석이 실패할 때(예: ChatGPT 자격
+  증명이 만료되거나 누락된 경우)에도 동일하게 폴백이 트리거되며, OpenAI 후보가 아예 없을 때만
+  발생하는 것은 아닙니다. `ocx login google-antigravity`가 필요합니다.
+  OAuth 토큰은 CCA 레지스트리 호스트로만 전송되며 설정의 `baseUrl` 재정의로는 가지 않습니다.
+  응답은 Codex가 기대하는 `{created, data:[{b64_json}]}` 형식으로 반환됩니다.
+- **모두 없음:** 모호한 404 대신 명확한 오류를 반환합니다. 라우팅되는 다른 프로바이더(Cursor,
+  Gemini, Kiro 등)는 이미지 생성을 제공할 수 없습니다. 도구 자체를 끄고 싶다면 Codex에서
   `codex features disable image_generation`(`config.toml`의 `[features] image_generation = false`)을
   사용하세요.
 
