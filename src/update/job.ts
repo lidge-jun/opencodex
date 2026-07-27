@@ -2,10 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWriteFile, getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { atomicWriteFile, getConfigDir, loadConfig, readPid } from "../config";
 import { killProxy } from "../lib/process-control";
 import { reclaimListenPort } from "../server/port-reclaim";
-import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
+import { findLiveProxy, isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
 import { isServiceInstalled } from "../service";
 import {
   type Channel,
@@ -28,6 +28,8 @@ const UPDATE_TIMEOUT_MS = 180_000;
 const RESTART_TIMEOUT_MS = 60_000;
 const RESTART_HEALTH_TIMEOUT_MS = 15_000;
 const RESTART_STABILITY_WINDOW_MS = 15_000;
+const FAILED_UPDATE_PROBE_ATTEMPTS = 3;
+const FAILED_UPDATE_PROBE_DELAY_MS = 250;
 /** How long update restart waits for the captured port to become bindable after stop. */
 export const RESTART_PORT_RECLAIM_MS = 30_000;
 
@@ -308,6 +310,7 @@ export interface RestartIo {
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
+  isProcessAlive?: (pid: number) => boolean;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
@@ -526,6 +529,35 @@ async function defaultProbeProxyIdentity(
   }
 }
 
+/** Check whether a captured PID still exists without signaling or replacing it. */
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !!(error && typeof error === "object" && "code" in error && error.code === "EPERM");
+  }
+}
+
+/** Retry identity-aware health checks before considering a recovery restart. */
+async function probeFailedUpdateProxy(
+  captured: { port: number; hostname: string },
+  io: RestartIo,
+): Promise<RestartProxyIdentity | null> {
+  const probeIdentity = io.probeProxyIdentity ?? defaultProbeProxyIdentity;
+  const sleep = io.sleepMs ?? (async (ms: number) => {
+    await new Promise(resolve => setTimeout(resolve, ms));
+  });
+  for (let attempt = 0; attempt < FAILED_UPDATE_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      const identity = await probeIdentity(captured.port, captured.hostname);
+      if (identity) return identity;
+    } catch { /* a custom probe failure is equivalent to no health response */ }
+    if (attempt + 1 < FAILED_UPDATE_PROBE_ATTEMPTS) await sleep(FAILED_UPDATE_PROBE_DELAY_MS);
+  }
+  return null;
+}
+
 /** Keep a failed GUI install from also leaving a previously-active proxy offline. */
 async function recoverFailedGuiUpdate(
   job: UpdateJobState,
@@ -535,9 +567,15 @@ async function recoverFailedGuiUpdate(
 ): Promise<FailedUpdateRecovery> {
   if (!proxyWasActive) return "not-needed";
 
-  const probeIdentity = io.probeProxyIdentity ?? defaultProbeProxyIdentity;
-  if (await probeIdentity(captured.port, captured.hostname)) {
+  if (await probeFailedUpdateProxy(captured, io)) {
     updateJob(job, {}, `Update command failed, but the existing proxy remains healthy on ${captured.hostname}:${captured.port}.`);
+    return "still-running";
+  }
+
+  const oldPidStillAlive = captured.oldPid != null
+    && (io.isProcessAlive ?? defaultIsProcessAlive)(captured.oldPid);
+  if (oldPidStillAlive) {
+    updateJob(job, {}, `Update command failed and health probes timed out, but pre-update PID ${captured.oldPid} is still alive; refusing an automatic restart.`);
     return "still-running";
   }
 
@@ -547,7 +585,7 @@ async function recoverFailedGuiUpdate(
     await restartFn(job, captured, io);
     const healthy = await awaitRestartedProxyHealthy(job, captured, io);
     if (healthy.ok) {
-      updateJob(job, {}, `Previous proxy service restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
+      updateJob(job, {}, `Previous proxy availability restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
       return "restarted";
     }
   } catch (error) {
@@ -723,21 +761,18 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
   let job = readUpdateJob(jobId);
   const check = checkForUpdate(channel);
   const now = new Date().toISOString();
-  // Capture the live listen target BEFORE the update command runs: the stop-first update
-  // flow clears pid/runtime state, so this is the last moment the real port is knowable.
-  // Only trust runtime-port.json when its pid matches the live pidfile process.
-  const rt = readRuntimePort();
-  const livePid = readPid();
+  // Capture identity-checked liveness BEFORE the update command runs. Installation or
+  // runtime metadata alone must not turn an intentionally stopped service back on.
   const preUpdateConfig = loadConfig();
-  const runtimeTrusted = !!(rt && livePid && rt.pid === livePid);
-  const proxyWasActive = isServiceInstalled() || runtimeTrusted;
+  const liveBeforeUpdate = await findLiveProxy();
+  const proxyWasActive = liveBeforeUpdate !== null;
   const configPort = typeof preUpdateConfig.port === "number" && preUpdateConfig.port > 0
     ? preUpdateConfig.port
     : 10100;
   const captured = {
-    port: runtimeTrusted ? rt.port : configPort,
-    hostname: (runtimeTrusted ? rt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
-    ...(runtimeTrusted && livePid ? { oldPid: livePid } : {}),
+    port: liveBeforeUpdate?.port ?? configPort,
+    hostname: liveBeforeUpdate?.hostname ?? preUpdateConfig.hostname ?? "127.0.0.1",
+    ...(liveBeforeUpdate?.pid ? { oldPid: liveBeforeUpdate.pid } : {}),
   };
   let trayWasInstalled = false;
   let trayWasRunning = false;

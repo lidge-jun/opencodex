@@ -317,6 +317,102 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("existing proxy remains healthy"))).toBe(true);
   });
 
+  test("failed install does not start a proxy that was inactive before the update", async () => {
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-inactive",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1" },
+      false,
+      {
+        probeProxyIdentity: async () => { throw new Error("must not probe an inactive proxy"); },
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+    expect(recovery).toBe("not-needed");
+    expect(restartCalls).toBe(0);
+  });
+
+  test("failed install retries a transient health miss before considering restart", async () => {
+    let probes = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-transient-probe",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => (++probes === 1 ? null : { pid: 111, version: "2.7.40" }),
+        sleepMs: async () => {},
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+    expect(recovery).toBe("still-running");
+    expect(probes).toBe(2);
+    expect(restartCalls).toBe(0);
+  });
+
+  test("failed install preserves a captured PID that remains alive after health timeouts", async () => {
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-live-pid",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        isProcessAlive: () => true,
+        sleepMs: async () => {},
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+    expect(recovery).toBe("still-running");
+    expect(restartCalls).toBe(0);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("refusing an automatic restart"))).toBe(true);
+  });
+
   test("failed install restores a proxy that the updater stopped", async () => {
     let now = 0;
     let restarted = false;
@@ -341,6 +437,7 @@ describe("GUI update execution decisions", () => {
       true,
       {
         probeProxyIdentity: async () => null,
+        isProcessAlive: () => false,
         probeProxy: async () => restarted,
         restartAfterUpdateFn: async () => { restarted = true; },
         now: () => now,

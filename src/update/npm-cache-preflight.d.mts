@@ -11,6 +11,7 @@ export interface NpmCachePreflightOptions {
   spawn?: typeof import("node:child_process").spawnSync;
   lstat?: (path: string) => NpmCacheEntryStat;
   readdir?: (path: string) => string[];
+  realpath?: (path: string) => string;
 }
 
 export type NpmCacheOwnershipIssue =
@@ -32,7 +33,7 @@ export type NpmCacheOwnershipResult =
 export declare function findForeignOwnedNpmCacheEntry(
   cachePath: string,
   expectedUid: number,
-  io?: Pick<NpmCachePreflightOptions, "lstat" | "readdir">,
+  io?: Pick<NpmCachePreflightOptions, "lstat" | "readdir" | "realpath">,
 ): NpmCacheOwnershipIssue | null;
 
 export declare function checkNpmCacheOwnership(

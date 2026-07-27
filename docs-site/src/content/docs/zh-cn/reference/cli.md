@@ -424,6 +424,8 @@ provider debug 默认读取 `OCX_DEBUG=1`（旧的 `OCX_DEBUG_FRAMES=1` 仍可�
 `--tag latest|preview`。在源码 checkout 中，它会改为提示 `git pull && bun install`；如果已经是
 相应 tag 的最新版，则不执行任何操作。替换文件前会停止正在运行的代理；已安装的服务会自动重建
 并启动，而前台安装会把 `ocx start` 显示为下一步。
+在 Unix 上，更新器会先检查配置的 npm 缓存是否全部归当前用户所有。如果发现其他用户拥有的条目，
+或无法检查缓存，更新会在停止代理前中止。
 
 ```bash
 ocx update

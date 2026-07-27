@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   checkNpmCacheOwnership,
@@ -9,15 +9,18 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 
 let dir: string;
+let extraPaths: string[];
 
 beforeEach(() => {
   dir = join(tmpdir(), `ocx-npm-cache-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(join(dir, "_cacache", "index-v5"), { recursive: true });
   writeFileSync(join(dir, "_cacache", "index-v5", "entry"), "cache");
+  extraPaths = [];
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+  for (const path of extraPaths) rmSync(path, { recursive: true, force: true });
 });
 
 function cacheLookup(path: string): typeof import("node:child_process").spawnSync {
@@ -44,7 +47,7 @@ describe("npm cache ownership pre-flight", () => {
   test("finds a foreign-owned nested entry before package replacement", () => {
     const uid = process.getuid?.();
     if (uid === undefined) return;
-    const foreign = join(dir, "_cacache", "index-v5", "entry");
+    const foreign = join(realpathSync(dir), "_cacache", "index-v5", "entry");
     const issue = findForeignOwnedNpmCacheEntry(dir, uid, {
       lstat: (path) => {
         const stat = lstatSync(path);
@@ -58,6 +61,34 @@ describe("npm cache ownership pre-flight", () => {
     expect(issue).toEqual({ kind: "foreign-owner", path: foreign, actualUid: uid + 1 });
   });
 
+  test("follows a configured cache-root symlink but not nested symlinks", () => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    const cacheLink = `${dir}-link`;
+    const outside = `${dir}-outside`;
+    extraPaths.push(cacheLink, outside);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "foreign"), "outside");
+    symlinkSync(dir, cacheLink, "dir");
+    symlinkSync(outside, join(dir, "nested-link"), "dir");
+    const foreign = join(realpathSync(dir), "_cacache", "index-v5", "entry");
+    const outsideRoot = realpathSync(outside);
+    let inspectedOutside = false;
+    const issue = findForeignOwnedNpmCacheEntry(cacheLink, uid, {
+      lstat: (path) => {
+        if (path.startsWith(outsideRoot)) inspectedOutside = true;
+        const stat = lstatSync(path);
+        return {
+          uid: path === foreign ? uid + 1 : stat.uid,
+          isDirectory: () => stat.isDirectory(),
+        };
+      },
+      readdir: path => readdirSync(path, { encoding: "utf8" }),
+    });
+    expect(issue).toEqual({ kind: "foreign-owner", path: foreign, actualUid: uid + 1 });
+    expect(inspectedOutside).toBe(false);
+  });
+
   test("returns an actionable failure without changing the cache", () => {
     const uid = process.getuid?.();
     if (uid === undefined) return;
@@ -68,13 +99,27 @@ describe("npm cache ownership pre-flight", () => {
     expect(result).toMatchObject({
       ok: false,
       cachePath: dir,
-      entryPath: dir,
+      entryPath: realpathSync(dir),
       expectedUid: uid + 1,
       actualUid: uid,
     });
     if (result.ok !== false) throw new Error("expected ownership failure");
     expect(formatNpmCacheOwnershipFailure(result)).toContain("before stopping the proxy");
     expect(formatNpmCacheOwnershipFailure(result)).toContain("configure a user-owned npm cache");
+  });
+
+  test("formats cache failures without persisting the OS account name", () => {
+    const cachePath = join(homedir(), ".npm");
+    const output = formatNpmCacheOwnershipFailure({
+      ok: false,
+      cachePath,
+      entryPath: join(cachePath, "_cacache", "foreign"),
+      expectedUid: 502,
+      actualUid: 0,
+      reason: "foreign owner",
+    });
+    expect(output).toContain("~/.npm/_cacache/foreign");
+    expect(output).not.toContain(homedir());
   });
 
   test("fails closed before shutdown when npm cannot resolve its cache", () => {

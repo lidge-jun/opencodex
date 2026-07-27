@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
+const updateJobSource = readFileSync(join(import.meta.dir, "..", "src", "update", "job.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
 const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
@@ -63,7 +64,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("OCX_BAKE_PORT");
     // Live runtime port 10100 must not be discarded as a missing-port sentinel.
     expect(launcherSource).toContain("sawRuntimePort");
-    expect(updateSource).toContain("runtimeTrusted");
+    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxy()");
   });
 
   test("both update paths surface a skipped history restore after the stop", () => {
@@ -86,6 +87,12 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
     expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
     expect(launcherSource).toContain("stopRes.status !== 0 || stillHasRuntimeState");
+  });
+
+  test("GUI failure recovery is gated by identity-checked pre-update liveness", () => {
+    expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxy()");
+    expect(updateJobSource).toContain("const proxyWasActive = liveBeforeUpdate !== null");
+    expect(updateJobSource).not.toContain("const proxyWasActive = isServiceInstalled() || runtimeTrusted");
   });
 
   test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {

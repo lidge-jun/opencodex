@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { lstatSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
+/** Extract a stable filesystem error code without serializing the full error. */
 function errorCode(error) {
   return error && typeof error === "object" && "code" in error
     ? String(error.code)
@@ -12,7 +14,21 @@ function errorCode(error) {
 export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
   const lstat = io.lstat ?? lstatSync;
   const readdir = io.readdir ?? (path => readdirSync(path, { encoding: "utf8" }));
-  const stack = [resolve(cachePath)];
+  const realpath = io.realpath ?? realpathSync;
+  let cacheRoot;
+  try {
+    // npm follows a configured cache-root symlink. Resolve only that root; nested
+    // symlinks remain lstat-only and are never traversed.
+    cacheRoot = realpath(resolve(cachePath));
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    return {
+      kind: "error",
+      path: resolve(cachePath),
+      reason: `could not resolve npm cache root (${errorCode(error)})`,
+    };
+  }
+  const stack = [cacheRoot];
 
   while (stack.length > 0) {
     const path = stack.pop();
@@ -31,6 +47,9 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
     if (Number.isInteger(stat.uid) && stat.uid !== expectedUid) {
       return { kind: "foreign-owner", path, actualUid: stat.uid };
     }
+    if (path === cacheRoot && !stat.isDirectory()) {
+      return { kind: "error", path, reason: "npm cache root is not a directory" };
+    }
     if (!stat.isDirectory()) continue;
 
     let entries;
@@ -47,6 +66,38 @@ export function findForeignOwnedNpmCacheEntry(cachePath, expectedUid, io = {}) {
   }
 
   return null;
+}
+
+/** Redact path segments that commonly carry secrets before they reach update logs. */
+function sanitizePathSegments(path) {
+  return path
+    .split(/[\\/]/)
+    .map(segment => /(?:secret|password|passwd|token|api[-_]?key|apikey|credential|email)/i.test(segment)
+      ? "[REDACTED]"
+      : segment)
+    .join("/");
+}
+
+/** Render paths home-relative, or hide absolute paths outside the current home. */
+function displayUserPath(path) {
+  const absolute = resolve(path);
+  const home = resolve(homedir());
+  const fromHome = relative(home, absolute);
+  if (fromHome === "") return "~";
+  if (fromHome !== ".." && !fromHome.startsWith(`..${sep}`) && !isAbsolute(fromHome)) {
+    return `~/${sanitizePathSegments(fromHome)}`;
+  }
+  return "[configured npm cache]";
+}
+
+/** Prefer a cache-relative entry while preserving the same account-name redaction. */
+function displayCacheEntry(cachePath, entryPath) {
+  const fromCache = relative(resolve(cachePath), resolve(entryPath));
+  if (fromCache === "") return displayUserPath(cachePath);
+  if (fromCache !== ".." && !fromCache.startsWith(`..${sep}`) && !isAbsolute(fromCache)) {
+    return `${displayUserPath(cachePath)}/${sanitizePathSegments(fromCache)}`;
+  }
+  return displayUserPath(entryPath);
 }
 
 /**
@@ -114,11 +165,15 @@ export function checkNpmCacheOwnership(options = {}) {
   };
 }
 
+/** Format an actionable update error without persisting an OS account name. */
 export function formatNpmCacheOwnershipFailure(result) {
+  const entry = result.entryPath
+    ? displayCacheEntry(result.cachePath ?? result.entryPath, result.entryPath)
+    : null;
   return [
     "npm cache ownership pre-flight failed before stopping the proxy.",
-    result.entryPath ? `${result.reason}: ${result.entryPath}` : result.reason,
-    ...(result.cachePath ? [`Cache: ${result.cachePath}`] : []),
+    entry ? `${result.reason}: ${entry}` : result.reason,
+    ...(result.cachePath ? [`Cache: ${displayUserPath(result.cachePath)}`] : []),
     "Correct the cache ownership or configure a user-owned npm cache, then retry.",
   ].join("\n");
 }

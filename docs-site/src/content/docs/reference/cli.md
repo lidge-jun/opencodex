@@ -501,8 +501,9 @@ unless you pass `--tag latest|preview`. It detects a source checkout and tells y
 tag. A running proxy is stopped before files are replaced; an installed service is rebuilt and
 started automatically, while a foreground installation prints `ocx start` as the next step. On
 Unix, the updater first checks that the configured npm cache is owned by the current user. It aborts
-before stopping the proxy when it finds a foreign-owned cache entry, so you can correct the cache
-ownership or configure a user-owned cache and retry without losing the running service.
+before stopping the proxy when it finds a foreign-owned cache entry or cannot inspect the cache, so
+you can correct the cache ownership or configure a user-owned cache and retry without losing the
+running service.
 
 ```bash
 ocx update
