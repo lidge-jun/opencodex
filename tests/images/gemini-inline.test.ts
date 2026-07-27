@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { createGoogleAdapter } from "../../src/adapters/google";
@@ -268,23 +267,8 @@ describe("responseModalities gating", () => {
   });
 });
 
-describe("markdown path escaping with special characters", () => {
-  let specialHome: string;
-  let savedHome: string | undefined;
-
-  beforeAll(() => {
-    savedHome = process.env.OPENCODEX_HOME;
-    specialHome = mkdtempSync(join(tmpdir(), "ocx test (dir) "));
-    process.env.OPENCODEX_HOME = specialHome;
-  });
-
-  afterAll(() => {
-    if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
-    else delete process.env.OPENCODEX_HOME;
-    rmSync(specialHome, { recursive: true, force: true });
-  });
-
-  test("streaming: file: URI percent-encodes spaces and escapes parens", async () => {
+describe("markdown emits authenticated opaque artifact URLs", () => {
+  test("streaming: markdown uses /v1/opencodex/artifacts/<id>, not file: or host paths", async () => {
     const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
@@ -295,20 +279,16 @@ describe("markdown path escaping with special characters", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    // Standard file: URI prefix so clients can resolve the link
-    expect(mdPath.startsWith("file:")).toBe(true);
-    // Spaces are percent-encoded by pathToFileURL, never literal
-    expect(mdPath).toContain("%20");
-    expect(mdPath).not.toMatch(/(?<!\\) /);
-    // Parens are backslash-escaped (pathToFileURL leaves them unencoded)
-    expect(mdPath).toContain("\\(dir\\)");
-    // Round-trip: unescape markdown parens, then fileURLToPath must resolve
-    // to the original file path on disk (validates a standard file: URI).
-    const unescaped = mdPath.replace(/\\([()])/g, "$1");
-    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
+    expect(mdPath.startsWith("/v1/opencodex/artifacts/")).toBe(true);
+    expect(mdPath).not.toContain("file:");
+    expect(mdPath).not.toContain("~/");
+    expect(mdPath).not.toMatch(/[A-Za-z]:\\/);
+    expect(mdPath).not.toContain(tempHome);
+    const id = mdPath.slice("/v1/opencodex/artifacts/".length);
+    expect(existsSync(join(artifactsDir, id))).toBe(true);
   });
 
-  test("non-streaming: file: URI percent-encodes spaces and escapes parens", async () => {
+  test("non-streaming: markdown uses /v1/opencodex/artifacts/<id>, not file: or host paths", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
     const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/webp", data: TINY_PNG } }] }, finishReason: "STOP" }],
@@ -320,26 +300,20 @@ describe("markdown path escaping with special characters", () => {
     const match = textEvents[0].text.match(/^\n!\[image\]\((.+)\)\n$/);
     expect(match).not.toBeNull();
     const mdPath = match![1];
-    expect(mdPath.startsWith("file:")).toBe(true);
-    // Spaces are percent-encoded by pathToFileURL, never literal
-    expect(mdPath).toContain("%20");
-    expect(mdPath).not.toMatch(/(?<!\\) /);
-    // Parens are backslash-escaped (pathToFileURL leaves them unencoded)
-    expect(mdPath).toContain("\\(dir\\)");
-    // Round-trip: unescape markdown parens, then fileURLToPath must resolve
-    // to the original file path on disk (validates a standard file: URI).
-    const unescaped = mdPath.replace(/\\([()])/g, "$1");
-    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
+    expect(mdPath.startsWith("/v1/opencodex/artifacts/")).toBe(true);
+    expect(mdPath).not.toContain("file:");
+    expect(mdPath).not.toContain(tempHome);
+    const id = mdPath.slice("/v1/opencodex/artifacts/".length);
+    expect(existsSync(join(artifactsDir, id))).toBe(true);
   });
 });
 
-describe("artifact path is a resolvable file: URI", () => {
+describe("artifact markdown never leaks OPENCODEX_HOME paths", () => {
   let underHome: string;
   let savedHome: string | undefined;
 
   beforeAll(() => {
     savedHome = process.env.OPENCODEX_HOME;
-    // Place OPENCODEX_HOME *under* the real home so the path includes the username segment.
     underHome = mkdtempSync(join(homedir(), ".ocx-test-leak-"));
     process.env.OPENCODEX_HOME = underHome;
   });
@@ -350,7 +324,7 @@ describe("artifact path is a resolvable file: URI", () => {
     rmSync(underHome, { recursive: true, force: true });
   });
 
-  test("streaming: emitted path is a resolvable file: URI", async () => {
+  test("streaming: no home/username path segments in markdown", async () => {
     const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
@@ -358,19 +332,14 @@ describe("artifact path is a resolvable file: URI", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    // Output must be a resolvable file: URI (fixes the ~/ regression where clients
-    // could not open the link). A file: URI is inherently an absolute path.
-    expect(md).toContain("file:");
-    // The old ~/ abbreviation must NOT be used (it broke resolution).
+    expect(md).toContain("/v1/opencodex/artifacts/");
+    expect(md).not.toContain("file:");
     expect(md).not.toContain("~/");
-    // Round-trip with fileURLToPath to prove it's a standard file: URI.
-    const match = md.match(/^\n!\[image\]\((.+)\)\n$/);
-    expect(match).not.toBeNull();
-    const unescaped = match![1].replace(/\\([()])/g, "$1");
-    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
+    expect(md).not.toContain(underHome);
+    expect(md).not.toContain(homedir());
   });
 
-  test("non-streaming: emitted path is a resolvable file: URI", async () => {
+  test("non-streaming: no home/username path segments in markdown", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
     const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] }, finishReason: "STOP" }],
@@ -379,13 +348,9 @@ describe("artifact path is a resolvable file: URI", () => {
     const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
     expect(textEvents.length).toBe(1);
     const md = textEvents[0].text;
-    expect(md).toContain("file:");
-    expect(md).not.toContain("~/");
-    // Round-trip with fileURLToPath to prove it's a standard file: URI.
-    const match = md.match(/^\n!\[image\]\((.+)\)\n$/);
-    expect(match).not.toBeNull();
-    const unescaped = match![1].replace(/\\([()])/g, "$1");
-    expect(existsSync(fileURLToPath(unescaped))).toBe(true);
+    expect(md).toContain("/v1/opencodex/artifacts/");
+    expect(md).not.toContain("file:");
+    expect(md).not.toContain(underHome);
   });
 });
 

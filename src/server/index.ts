@@ -498,6 +498,28 @@ export function startServer(port?: number) {
         return withCors(response, req, config);
       }
 
+      if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
+        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        }
+        const id = decodeURIComponent(url.pathname.slice("/v1/opencodex/artifacts/".length));
+        const { readArtifactBytes } = await import("../images/artifacts");
+        const artifact = readArtifactBytes(id);
+        if (!artifact) {
+          return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
+        }
+        return withCors(new Response(new Uint8Array(artifact.bytes), {
+          status: 200,
+          headers: {
+            "content-type": artifact.contentType,
+            "cache-control": "private, max-age=3600",
+            "x-content-type-options": "nosniff",
+          },
+        }), req, config);
+      }
+
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {

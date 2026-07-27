@@ -2680,6 +2680,11 @@ describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
     expect(shouldExposeRoutedModel({ provider: "cursor", id: "gemini-3-pro-image-preview" })).toBe(true);
   });
 
+  test("does not resurrect standalone media-gen gemini image ids", () => {
+    expect(shouldExposeRoutedModel({ provider: "google-antigravity", id: "gemini-3-pro-image" })).toBe(false);
+    expect(shouldExposeRoutedModel({ provider: "openrouter", id: "gemini-3-pro-image" })).toBe(false);
+  });
+
   test("still filters true media-generation models", () => {
     for (const id of [
       "grok-2-image", "gpt-image-1", "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux",

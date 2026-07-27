@@ -1,6 +1,6 @@
-import { mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { getConfigDir } from "../config";
 import { assessUrlDestination, assertUrlResolvesPublic } from "../lib/destination-policy";
 
@@ -20,6 +20,11 @@ export const MAX_ENCODED_BYTES_PER_IMAGE = Math.ceil(MAX_DECODED_BYTES_PER_IMAGE
 /** Default cap on files retained under artifacts/. Oldest files are pruned when exceeded. */
 export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 
+/** Opaque artifact HTTP path prefix (data-plane, API-auth gated). */
+export const ARTIFACT_HTTP_PREFIX = "/v1/opencodex/artifacts";
+
+const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif)$/i;
+
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -32,8 +37,75 @@ export function createImageBudget(): ImageBudget {
   return { spent: 0 };
 }
 
-function getArtifactsDir(): string {
+export function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
+}
+
+/**
+ * Markdown-safe relative URL for a materialized artifact. Opaque filename only —
+ * never expose host filesystem paths to model-visible content.
+ */
+export function artifactHttpUrl(filePath: string): string {
+  const name = basename(filePath);
+  if (!ARTIFACT_ID_RE.test(name)) {
+    throw new Error("artifact filename is not a valid opaque id");
+  }
+  return `${ARTIFACT_HTTP_PREFIX}/${name}`;
+}
+
+/**
+ * Resolve an opaque artifact id to an absolute path under the artifacts dir.
+ * Rejects traversal (`..`, absolute paths, separators).
+ */
+export function resolveArtifactPath(id: string): string | null {
+  if (!ARTIFACT_ID_RE.test(id)) return null;
+  const dir = resolve(getArtifactsDir());
+  const candidate = resolve(dir, id);
+  if (candidate !== dir && !candidate.startsWith(dir + sep)) return null;
+  if (!existsSync(candidate)) return null;
+  try {
+    if (!statSync(candidate).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+export function readArtifactBytes(id: string): { bytes: Buffer; contentType: string } | null {
+  const path = resolveArtifactPath(id);
+  if (!path) return null;
+  const bytes = readFileSync(path);
+  const ext = path.split(".").pop()?.toLowerCase();
+  const contentType =
+    ext === "png" ? "image/png"
+      : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+          : ext === "gif" ? "image/gif"
+            : "application/octet-stream";
+  return { bytes, contentType };
+}
+
+/**
+ * Decode + validate base64 image bytes (alphabet, size, magic). Used by CCA
+ * Images fallback before returning b64_json and by materializeInlineImage.
+ */
+export function decodeValidatedImageBase64(base64Data: string): Buffer {
+  const normalized = base64Data.replace(/\s+/g, "");
+  if (!BASE64_RE.test(normalized) || normalized.length % 4 !== 0) {
+    throw new Error("inline image data is not valid base64");
+  }
+  if (normalized.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+    throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
+  }
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const decodedBytes = (normalized.length / 4) * 3 - padding;
+  if (decodedBytes === 0) throw new Error("inline image data is empty after base64 decode");
+  if (decodedBytes > MAX_DECODED_BYTES_PER_IMAGE) {
+    throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
+  }
+  const buf = Buffer.from(normalized, "base64");
+  guessExtFromMagic(buf);
+  return buf;
 }
 
 /**
@@ -132,21 +204,10 @@ export async function materializeInlineImage(
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
-  const normalized = base64Data.replace(/\s+/g, "");
-  if (!BASE64_RE.test(normalized) || normalized.length % 4 !== 0) {
-    throw new Error("inline image data is not valid base64");
-  }
-  // Validate decoded size from the base64 length *before* allocating a Buffer, so a
-  // malicious or broken upstream cannot force a large allocation / OOM.
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  const decodedBytes = (normalized.length / 4) * 3 - padding;
-  if (decodedBytes === 0) throw new Error("inline image data is empty after base64 decode");
-  if (decodedBytes > MAX_DECODED_BYTES_PER_IMAGE) throw new Error(`inline image exceeds ${MAX_DECODED_BYTES_PER_IMAGE} byte per-image cap`);
-  if (budget && budget.spent + decodedBytes > MAX_DECODED_BYTES_PER_RESPONSE) {
+  const buf = decodeValidatedImageBase64(base64Data);
+  if (budget && budget.spent + buf.length > MAX_DECODED_BYTES_PER_RESPONSE) {
     throw new Error(`inline image response exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response cap`);
   }
-
-  const buf = Buffer.from(normalized, "base64");
   if (budget) budget.spent += buf.length;
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.

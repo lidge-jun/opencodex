@@ -823,14 +823,17 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
   const server = startServer(0);
   try {
     // Authorization carries the proxy's OWN admission token — it authenticates the caller to the
-    // proxy, but must be stripped before upstream selection (else it would leak to chatgpt.com).
+    // proxy, but must never be forwarded as ChatGPT credentials. OpenAI forward is skipped; a
+    // configured keyed provider may still serve the request with its own apiKey.
     const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer local-secret" },
       body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
     });
-    expect(response.status).toBe(401);
-    expect(captured).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-platform-key");
+    expect([...captured[0].headers.values()].some(v => v.includes("local-secret"))).toBe(false);
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -867,6 +870,8 @@ interface CcaFetchRequest {
   body: unknown;
 }
 
+const CCA_TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+
 /**
  * Stub globalThis.fetch for CCA image tests: requests to the registry host
  * (daily-cloudcode-pa.googleapis.com) get a canned response and are recorded in
@@ -883,7 +888,7 @@ function ccaFetchMock(
   const payload = response?.payload ?? {
     response: {
       candidates: [{
-        content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+        content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] },
       }],
     },
   };
@@ -931,7 +936,7 @@ test("CCA image fallback generates images via Google Antigravity when no OpenAI 
     expect(response.status).toBe(200);
     const json = await response.json() as { data: { b64_json: string }[] };
     expect(json.data).toHaveLength(1);
-    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+    expect(json.data[0].b64_json).toBe(CCA_TINY_PNG);
 
     // The CCA call MUST hit the registry host, not the config-level baseUrl.
     expect(registryHits).toHaveLength(1);
@@ -1109,7 +1114,7 @@ test("CCA fallback serves images when OpenAI forward auth fails but Google Antig
     expect(response.status).toBe(200);
     const json = await response.json() as { data: { b64_json: string }[] };
     expect(json.data).toHaveLength(1);
-    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+    expect(json.data[0].b64_json).toBe(CCA_TINY_PNG);
 
     // CCA was called on the registry host, not the attacker host.
     expect(registryHits).toHaveLength(1);
@@ -1358,7 +1363,7 @@ test("CCA image response skips malformed inlineData.data but keeps valid string 
         candidates: [{
           content: { parts: [
             { inlineData: { mimeType: "image/png", data: 42 } },
-            { inlineData: { mimeType: "image/png", data: "aGVsbG8=" } },
+            { inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } },
             { inlineData: { mimeType: "image/png", data: "" } },
           ] },
         }],
@@ -1379,7 +1384,7 @@ test("CCA image response skips malformed inlineData.data but keeps valid string 
     expect(response.status).toBe(200);
     const json = await response.json() as { data: { b64_json: string }[] };
     expect(json.data).toHaveLength(1);
-    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+    expect(json.data[0].b64_json).toBe(CCA_TINY_PNG);
     expect(registryHits).toHaveLength(1);
     expect(otherHits).toHaveLength(0);
   } finally {
@@ -1661,7 +1666,7 @@ test("CCA finishReason STOP with valid image is not affected by safety block log
     payload: {
       response: {
         candidates: [{
-          content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+          content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] },
           finishReason: "STOP",
         }],
       },
@@ -1681,10 +1686,160 @@ test("CCA finishReason STOP with valid image is not affected by safety block log
     expect(response.status).toBe(200);
     const json = await response.json() as { data: { b64_json: string }[] };
     expect(json.data).toHaveLength(1);
-    expect(json.data[0].b64_json).toBe("aGVsbG8=");
+    expect(json.data[0].b64_json).toBe(CCA_TINY_PNG);
     expect(registryHits).toHaveLength(1);
     expect(otherHits).toHaveLength(0);
   } finally {
     await server.stop(true);
+  }
+});
+
+test("CCA-only request with proxy admission bearer succeeds and never sends it upstream", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-admission-secret";
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits);
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-admission-secret",
+      },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(200);
+    expect(registryHits).toHaveLength(1);
+    expect([...registryHits[0].headers.values()].some(v => v.includes("proxy-admission-secret"))).toBe(false);
+    expect(registryHits[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+  } finally {
+    await server.stop(true);
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  }
+});
+
+test("CCA rejects n>1 before contacting Google", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits);
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat", n: 2 }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/n=1/i);
+    expect(registryHits).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA RECITATION finishReason returns non-retryable 400", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{ content: { parts: [] }, finishReason: "RECITATION" }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "copyrighted stuff" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/RECITATION|safety/i);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA rejects invalid base64 and non-image bytes instead of returning b64_json", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, {
+    payload: {
+      response: {
+        candidates: [{
+          content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+        }],
+      },
+    },
+  });
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/base64|magic|validation/i);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("GET /v1/opencodex/artifacts/:id serves opaque artifacts with API auth", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-admission-secret";
+  const { materializeInlineImage, createImageBudget, artifactHttpUrl } = await import("../src/images/artifacts");
+  const filePath = await materializeInlineImage(CCA_TINY_PNG, createImageBudget());
+  const urlPath = artifactHttpUrl(filePath);
+
+  // Non-loopback bind makes data-plane auth mandatory (same as production remote binds).
+  saveConfig({ ...ccaConfig(), hostname: "0.0.0.0" });
+  const server = startServer(0);
+  try {
+    const denied = await fetch(`http://127.0.0.1:${server.port}${urlPath}`);
+    expect(denied.status).toBe(401);
+
+    const wrong = await fetch(`http://127.0.0.1:${server.port}${urlPath}`, {
+      headers: { authorization: "Bearer wrong-secret" },
+    });
+    expect(wrong.status).toBe(401);
+
+    const ok = await fetch(`http://127.0.0.1:${server.port}${urlPath}`, {
+      headers: { authorization: "Bearer proxy-admission-secret" },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("image/png");
+    const bytes = new Uint8Array(await ok.arrayBuffer());
+    expect(bytes[0]).toBe(0x89);
+    expect(bytes[1]).toBe(0x50);
+
+    const traversal = await fetch(`http://127.0.0.1:${server.port}/v1/opencodex/artifacts/../package.json`, {
+      headers: { authorization: "Bearer proxy-admission-secret" },
+    });
+    expect(traversal.status).toBe(404);
+  } finally {
+    await server.stop(true);
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
   }
 });

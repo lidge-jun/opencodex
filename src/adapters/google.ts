@@ -1,8 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
-import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -237,36 +236,34 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
 
 /**
  * Cap on the buffered non-streaming response body (100 MiB), matching
- * IMAGES_RESPONSE_MAX_BYTES in src/server/images.ts. Checked via the
- * Content-Length header before response.json() so an oversized or malicious
- * body is rejected without ever being fully buffered into memory. Streaming
- * responses need no such guard — SSE chunks are processed incrementally and
- * each inline image is capped by MAX_ENCODED_BYTES_PER_IMAGE before decode.
+ * IMAGES_RESPONSE_MAX_BYTES in src/server/images.ts. Enforced by streaming the
+ * body with a hard byte cap before JSON.parse — Content-Length alone is not
+ * trusted (missing/lying headers must still reject oversized payloads).
+ * Streaming SSE responses also cap each data frame before JSON.parse.
  */
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
+const MAX_SSE_FRAME_BYTES = MAX_RESPONSE_BYTES;
 
 // Note: imagen-* models use a different API surface (prediction/image-generation
 // schema) and must NOT be treated as responseModalities-capable Gemini models.
+// Explicit allowlist only — never `/gemini/ && /image/` (resurrects media-gen IDs).
 const IMAGE_CAPABLE_MODELS = new Set([
   "gemini-3.1-flash-image",
   "gemini-2.0-flash-preview-image-generation",
+  "gemini-3-pro-image-preview",
 ]);
 
 function isImageCapableModel(modelId: string): boolean {
-  if (IMAGE_CAPABLE_MODELS.has(modelId)) return true;
-  return /image/.test(modelId) && /gemini/.test(modelId);
+  return IMAGE_CAPABLE_MODELS.has(modelId);
 }
 
 /**
- * Emit a standard file: URI (via node:url pathToFileURL) so markdown renderers
- * (including Codex) can resolve and open the image. The previous "~/" prefix
- * approach was not expanded by clients, and a hand-rolled `"file:" + encodeURI`
- * produced non-standard URIs that break on Windows (file:C:%5C… should be
- * file:///C:/…) and mishandle '#'/':' in paths. pathToFileURL follows the
- * WHATWG URL spec for correct, cross-platform file: URIs.
+ * Model-visible markdown link for a materialized artifact. Uses the authenticated
+ * opaque HTTP route so remote/container clients can fetch the image without host
+ * filesystem paths leaking into the transcript.
  */
-function artifactFileUrl(filePath: string): string {
-  return pathToFileURL(filePath).href;
+function artifactMarkdownUrl(filePath: string): string {
+  return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
@@ -433,6 +430,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
         if (!payload) return "continue";
+        if (payload.length > MAX_SSE_FRAME_BYTES) {
+          yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
+          return "terminate";
+        }
         let emittedContentEvent = false;
 
         let chunk: Record<string, unknown>;
@@ -502,7 +503,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               } else {
                 try {
                   const filePath = await materializeInlineImage(inline.data, imageBudget);
-                  const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
+                  const escapedPath = artifactMarkdownUrl(filePath);
                   emittedContentEvent = true;
                   yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
                 } catch {
@@ -585,13 +586,50 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     },
 
     async parseResponse(response: Response): Promise<AdapterEvent[]> {
-      // Reject oversized responses before buffering: check Content-Length so an
-      // oversized or malicious body is never fully read into memory.
+      // Reject oversized responses before JSON parse. Prefer Content-Length when
+      // present and truthful; always stream-read with a hard byte cap so a missing
+      // or lying Content-Length cannot force a full in-memory buffer + parse.
       const contentLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
         return [{ type: "error", message: `google response too large (content-length ${contentLength} exceeds ${MAX_RESPONSE_BYTES} bytes)` }];
       }
-      const raw = await response.json() as Record<string, unknown>;
+      let rawText: string;
+      try {
+        const reader = response.body?.getReader();
+        if (!reader) return [{ type: "error", message: "google response had no body" }];
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > MAX_RESPONSE_BYTES) {
+              await reader.cancel().catch(() => {});
+              return [{ type: "error", message: `google response too large (exceeded ${MAX_RESPONSE_BYTES} bytes)` }];
+            }
+            chunks.push(value);
+          }
+        } finally {
+          try { await reader.cancel(); } catch { /* ignore */ }
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        rawText = new TextDecoder().decode(bytes);
+      } catch (err) {
+        return [{ type: "error", message: err instanceof Error ? err.message : "failed to read google response body" }];
+      }
+      let raw: Record<string, unknown>;
+      try {
+        raw = JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        return [{ type: "error", message: "google response was not valid JSON" }];
+      }
       if (raw.error) {
         const err = raw.error as { message?: string };
         return [{ type: "error", message: err.message ?? "upstream error" }];
@@ -627,7 +665,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             } else {
               try {
                 const filePath = await materializeInlineImage(inline.data, imageBudget);
-                const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
+                const escapedPath = artifactMarkdownUrl(filePath);
                 events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
               } catch {
                 events.push({ type: "error", message: "failed to materialize inline image" });

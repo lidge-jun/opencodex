@@ -34,6 +34,7 @@ import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -60,6 +61,7 @@ const CCA_BLOCKING_FINISH_REASONS: ReadonlySet<string> = new Set([
   "BLOCKLIST",
   "PROHIBITED_CONTENT",
   "SPII",
+  "RECITATION",
 ]);
 
 /**
@@ -96,6 +98,14 @@ async function tryCcaImageGeneration(
   const prompt = (body as { prompt?: unknown })?.prompt;
   if (typeof prompt !== "string" || !prompt.trim()) {
     return formatErrorResponse(400, "invalid_request_error", "prompt is required and must not be empty");
+  }
+
+  const nRaw = (body as { n?: unknown })?.n;
+  if (nRaw !== undefined && nRaw !== null) {
+    const n = typeof nRaw === "number" ? nRaw : Number(nRaw);
+    if (!Number.isInteger(n) || n !== 1) {
+      return formatErrorResponse(400, "invalid_request_error", "CCA image generation supports n=1 only");
+    }
   }
 
   // Create the deadline before credential resolution so the timeout covers
@@ -277,7 +287,17 @@ async function tryCcaImageGeneration(
     const images: { b64_json: string }[] = [];
     for (const part of parts) {
       if (!part || typeof part !== "object") continue;
-      if (typeof part.inlineData?.data === "string" && part.inlineData.data.length > 0) images.push({ b64_json: part.inlineData.data });
+      const data = part.inlineData?.data;
+      if (typeof data !== "string" || data.length === 0) continue;
+      if (data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+        return formatErrorResponse(502, "upstream_error", "CCA image payload exceeds per-image size cap");
+      }
+      try {
+        decodeValidatedImageBase64(data);
+      } catch {
+        return formatErrorResponse(502, "upstream_error", "CCA image payload failed base64/magic validation");
+      }
+      images.push({ b64_json: data });
     }
     if (images.length === 0) {
       return formatErrorResponse(502, "upstream_error", "CCA image model returned no image data");
@@ -305,11 +325,18 @@ export async function handleImages(
     return formatErrorResponse(400, "invalid_request_error", candidates.error);
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
+  // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
+  // forwarded as OpenAI ChatGPT credentials. When the caller sent it, skip OpenAI forward
+  // and allow CCA / keyed paths instead of rejecting the whole request.
+  let skipOpenAiForwardForAdmissionBearer = false;
   if (!explicitKeyedProvider) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
-      if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
-      throw err;
+      if (err instanceof ForwardAdmissionCredentialError) {
+        skipOpenAiForwardForAdmissionBearer = true;
+      } else {
+        throw err;
+      }
     }
   }
   let body: unknown;
@@ -321,7 +348,9 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  if (candidates.forwardCandidates.length === 0 && !candidates.keyed) {
+  const canUseOpenAiForward = !skipOpenAiForwardForAdmissionBearer && candidates.forwardCandidates.length > 0;
+
+  if (!canUseOpenAiForward && !candidates.keyed) {
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint);
     if (ccaResponse) return ccaResponse;
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
@@ -340,7 +369,7 @@ export async function handleImages(
   // 429 image_gen while api.openai.com sits idle).
   let forward: Awaited<ReturnType<typeof resolveFirstUsableOpenAiSidecar>>;
   let forwardAuthError: Response | undefined;
-  if (candidates.forwardCandidates.length > 0) {
+  if (canUseOpenAiForward) {
     try {
       forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config);
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
