@@ -12,7 +12,7 @@
  * satellite rows before staged files. Success never carries soft `dbWarning` /
  * `failedPaths`.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -2236,6 +2236,53 @@ export interface RestoreTestHooks {
    * Exercises mid-loop failure with some dests placed and others still staged.
    */
   failAfterMoveCount?: number;
+  /** Fail renaming the completed stage to a non-listable tombstone dir. */
+  failStageTombstoneRename?: boolean;
+  /** After tombstone rename, skip best-effort tombstone delete (orphan is OK). */
+  failTombstoneDelete?: boolean;
+}
+
+/**
+ * Resume must not clear owed satellite work when the matching backup section is
+ * absent — fail closed per section instead.
+ */
+function failClosedSatelliteResume(
+  priorPending: RestorePendingState,
+  satelliteBackup: SatelliteBackup | null,
+): RestoreErrorCode | null {
+  const owed = priorPending.pending;
+  if (!owed.logs && !owed.memories && !owed.goals) return null;
+  if (!satelliteBackup) return "db_reconcile_failed";
+  if (owed.logs && !satelliteBackup.logs) return "db_reconcile_failed";
+  if (owed.memories && !satelliteBackup.memories) return "db_reconcile_failed";
+  if (owed.goals && !satelliteBackup.goals) return "db_reconcile_failed";
+  return null;
+}
+
+/**
+ * Successful restore finalization: rename the stage to a tombstone name that
+ * `listTrashEntries` ignores, then delete the tombstone best-effort. A failed
+ * rename leaves the original stage (and all evidence) intact for retry.
+ */
+function finalizeRestoredStage(
+  stageDir: string,
+  codexHome: string,
+  hooks?: Pick<RestoreTestHooks, "failStageTombstoneRename" | "failTombstoneDelete">,
+): boolean {
+  const trashRoot = join(codexHome, TRASH_DIR);
+  const epoch = basename(stageDir);
+  const tombstoneName = `.tombstone-${epoch}-${randomUUID()}`;
+  const tombstonePath = join(trashRoot, tombstoneName);
+  try {
+    if (hooks?.failStageTombstoneRename) throw new Error("test_fail_stage_tombstone_rename");
+    renameSync(stageDir, tombstonePath);
+  } catch {
+    return false;
+  }
+  if (!hooks?.failTombstoneDelete) {
+    try { rmSync(tombstonePath, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+  return true;
 }
 
 /**
@@ -2338,28 +2385,25 @@ export function restoreTrashEntry(
     satelliteBackup = remapped.backup;
   }
 
-  // A resume that still owes satellite work but has no backup to replay must not
-  // be reported as success — that would delete the stage with the work undone.
-  if (
-    priorPending
-    && !satelliteBackup
-    && (priorPending.pending.logs || priorPending.pending.memories || priorPending.pending.goals)
-  ) {
-    return {
-      ok: false,
-      trashDir: id,
-      count: 0,
-      bytes: 0,
-      restoredPaths: [],
-      error: "db_reconcile_failed",
-    };
+  if (priorPending) {
+    const resumeErr = failClosedSatelliteResume(priorPending, satelliteBackup);
+    if (resumeErr) {
+      return {
+        ok: false,
+        trashDir: id,
+        count: 0,
+        bytes: 0,
+        restoredPaths: [],
+        error: resumeErr,
+      };
+    }
   }
 
   const pendingSections: RestorePendingSections = {
     state: priorPending ? priorPending.pending.state : true,
-    logs: Boolean(satelliteBackup?.logs) && (priorPending ? priorPending.pending.logs : true),
-    memories: Boolean(satelliteBackup?.memories) && (priorPending ? priorPending.pending.memories : true),
-    goals: Boolean(satelliteBackup?.goals) && (priorPending ? priorPending.pending.goals : true),
+    logs: priorPending ? priorPending.pending.logs : Boolean(satelliteBackup?.logs),
+    memories: priorPending ? priorPending.pending.memories : Boolean(satelliteBackup?.memories),
+    goals: priorPending ? priorPending.pending.goals : Boolean(satelliteBackup?.goals),
   };
 
   const needAnySatellite = pendingSections.logs || pendingSections.memories || pendingSections.goals;
@@ -2668,17 +2712,7 @@ export function restoreTrashEntry(
     return abortAfterMoves("fs_failed");
   }
 
-  try {
-    rmSync(stageDir, { recursive: true, force: true });
-  } catch {
-    return {
-      ok: false,
-      trashDir: id,
-      ...partialCounts,
-      error: "fs_failed",
-    };
-  }
-  if (existsSync(stageDir)) {
+  if (!finalizeRestoredStage(stageDir, codexHome, hooks)) {
     return {
       ok: false,
       trashDir: id,

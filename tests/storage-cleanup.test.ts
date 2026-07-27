@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -1614,5 +1615,80 @@ describe("listTrashEntries + restoreTrashEntry", () => {
     expect(failed.error).toBe("db_reconcile_failed");
     expect(existsSync(stage)).toBe(true);
     expect(existsSync(join(stage, "manifest.json"))).toBe(true);
+  }, { timeout: 20_000 });
+
+  test("resume with owed logs section but missing logs in backup fails closed", () => {
+    home = buildHome({ withSatelliteStores: true });
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_800 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const partial = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failAfterStateCommit: true },
+    });
+    expect(partial.ok).toBe(false);
+
+    const backupPath = join(stage, "satellite-backup.json");
+    const backup = JSON.parse(readFileSync(backupPath, "utf8")) as Record<string, unknown>;
+    delete backup.logs;
+    writeFileSync(backupPath, JSON.stringify(backup));
+
+    const pending = JSON.parse(readFileSync(join(stage, "restore-pending.json"), "utf8")) as {
+      pending: { logs: boolean; memories: boolean; goals: boolean };
+    };
+    expect(pending.pending.logs).toBe(true);
+
+    const failed = restoreTrashEntry(trashId, { codexHome: home });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("db_reconcile_failed");
+    expect(existsSync(stage)).toBe(true);
+    expect(existsSync(join(stage, "manifest.json"))).toBe(true);
+    expect(existsSync(join(stage, "restore-pending.json"))).toBe(true);
+  }, { timeout: 20_000 });
+
+  test("failed tombstone rename keeps stage recoverable and listed", () => {
+    home = buildHome();
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_001_900 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const failed = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failStageTombstoneRename: true },
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBe("fs_failed");
+    expect(failed.count).toBe(3);
+    expect(existsSync(stage)).toBe(true);
+    expect(existsSync(join(stage, "manifest.json"))).toBe(true);
+    expect(listTrashEntries(home).some(e => e.id === trashId)).toBe(true);
+
+    const retried = restoreTrashEntry(trashId, { codexHome: home });
+    expect(retried.ok).toBe(true);
+    expect(existsSync(stage)).toBe(false);
+    expect(listTrashEntries(home)).toEqual([]);
+  }, { timeout: 20_000 });
+
+  test("tombstone delete failure reports success without phantom trash entry", () => {
+    home = buildHome();
+    const quarantined = runWithDigest(100, "quarantine", home, { now: 1_700_000_002_000 });
+    expect(quarantined.ok).toBe(true);
+    const trashId = quarantined.trashDir!;
+    const stage = join(home, ...trashId.split("/"));
+
+    const restored = restoreTrashEntry(trashId, {
+      codexHome: home,
+      _test: { failTombstoneDelete: true },
+    });
+    expect(restored.ok).toBe(true);
+    expect(existsSync(stage)).toBe(false);
+    expect(listTrashEntries(home)).toEqual([]);
+
+    const trashRoot = join(home, ".trash");
+    const tombstones = readdirSync(trashRoot).filter(n => n.startsWith(".tombstone-"));
+    expect(tombstones.length).toBe(1);
   }, { timeout: 20_000 });
 });

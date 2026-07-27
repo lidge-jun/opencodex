@@ -34,7 +34,8 @@ import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { scanStorage } from "../../storage/scanner";
-import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, restoreTrashEntry, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
+import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
+import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
 import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
@@ -344,6 +345,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     }
   }
 
+  if (url.pathname === "/api/storage/trash/restore/test-stream" && req.method === "GET") {
+    const stream = getRestoreTrashTestStreamResponse();
+    if (stream) return stream;
+    return jsonResponse({ error: "not_available" }, 404);
+  }
+
   if (url.pathname === "/api/storage/trash/restore" && req.method === "POST") {
     let body: { id?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid_json" }, 400); }
@@ -352,7 +359,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       return jsonResponse({ error: "invalid_trash", message: "Trash entry id is required." }, 400);
     }
     try {
-      const result = restoreTrashEntry(id);
+      const result = await runRestoreTrashEntryJob(id);
       if (!result.ok) {
         const status =
           result.error === "codex_busy" || result.error === "dest_exists"
@@ -375,6 +382,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           ok: false,
           error: result.error ?? "restore_failed",
           message: messages[result.error ?? "restore_failed"] ?? messages.restore_failed,
+          count: result.count,
+          bytes: result.bytes,
+          restoredPaths: result.restoredPaths,
           ...(result.trashDir ? { trashDir: result.trashDir } : {}),
         }, status);
       }

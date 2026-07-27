@@ -1,0 +1,132 @@
+/**
+ * Regression: a blocked restore Worker must not stall /healthz or an active
+ * streaming response on the proxy event loop.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../src/config";
+import { startServer } from "../src/server";
+import type { OcxConfig } from "../src/types";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import {
+  resetRestoreTrashJobForTests,
+  setRestoreTrashJobTestHooks,
+} from "../src/storage/restore-job";
+
+let testDir = "";
+let previousHome: string | undefined;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+function baseConfig(): OcxConfig {
+  return {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "forward",
+      },
+    },
+  } as OcxConfig;
+}
+
+function seedArchived(codexHome: string): void {
+  mkdirSync(join(codexHome, "archived_sessions"));
+  writeFileSync(join(codexHome, "archived_sessions", "rollout-old.jsonl"), "o".repeat(100));
+  utimesSync(join(codexHome, "archived_sessions", "rollout-old.jsonl"), new Date("2026-01-01"), new Date("2026-01-01"));
+  const db = new Database(join(codexHome, "state_5.sqlite"));
+  db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, archived INTEGER)`);
+  db.exec(`INSERT INTO threads VALUES ('told','archived_sessions/rollout-old.jsonl',1)`);
+  db.close();
+}
+
+beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ocx-restore-job-responsive-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ocx-restore-job-responsive-"));
+  process.env.OPENCODEX_HOME = testDir;
+  saveConfig(baseConfig());
+  resetRestoreTrashJobForTests();
+});
+
+afterEach(() => {
+  resetRestoreTrashJobForTests();
+  setRestoreTrashJobTestHooks(null);
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
+  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  testDir = "";
+});
+
+describe("storage trash restore job responsiveness", () => {
+  test("blocked worker keeps /healthz and streaming response responsive", async () => {
+    const blockMs = 1200;
+    setRestoreTrashJobTestHooks({ blockMs, enableTestStream: true });
+    seedArchived(isolatedCodexHome!.path);
+
+    const server = startServer(0);
+    try {
+      const previewRes = await fetch(new URL("/api/storage/cleanup/preview", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 100 }),
+      });
+      const preview = await previewRes.json();
+      const cleanupRes = await fetch(new URL("/api/storage/cleanup", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ percent: 100, mode: "quarantine", digest: preview.digest }),
+      });
+      expect(cleanupRes.status).toBe(200);
+      const cleanup = await cleanupRes.json();
+      expect(cleanup.trashDir).toMatch(/^\.trash\//);
+
+      const restoreStarted = Date.now();
+      const restorePromise = fetch(new URL("/api/storage/trash/restore", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: cleanup.trashDir }),
+      });
+
+      const streamPromise = (async () => {
+        const res = await fetch(new URL("/api/storage/trash/restore/test-stream", server.url));
+        expect(res.ok).toBe(true);
+        return await res.text();
+      })();
+
+      const healthSamples: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const t0 = Date.now();
+        const health = await fetch(new URL("/healthz", server.url));
+        expect(health.status).toBe(200);
+        healthSamples.push(Date.now() - t0);
+        await Bun.sleep(40);
+      }
+
+      const streamText = await streamPromise;
+      expect(streamText.split("\n").filter(Boolean).length).toBe(8);
+
+      const maxHealthMs = Math.floor(blockMs / 3);
+      for (const sample of healthSamples) {
+        expect(sample).toBeLessThan(maxHealthMs);
+      }
+
+      const restoreRes = await restorePromise;
+      expect(restoreRes.status).toBe(200);
+      const restored = await restoreRes.json();
+      expect(restored.ok).toBe(true);
+      expect(Date.now() - restoreStarted).toBeGreaterThanOrEqual(blockMs - 100);
+      expect(existsSync(join(isolatedCodexHome!.path, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    } finally {
+      await server.stop(true);
+      resetRestoreTrashJobForTests();
+    }
+  }, { timeout: 30_000 });
+});
