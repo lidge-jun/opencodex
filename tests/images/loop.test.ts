@@ -419,6 +419,32 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(sse).toContain("runTurn inactivity timeout");
   });
 
+  test("runTurn adapter → idle timeout completes when runTurn ignores abort and never settles", async () => {
+    // Regression: aborting internalAbort alone is not enough — if runTurn never observes
+    // cancellation and never closes the queue, queue.stream() would hang forever. The idle
+    // handler must close the queue to unblock the consumer independently.
+    const neverSettlingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async () => {
+        await new Promise(() => { /* never settles; ignores abort entirely */ });
+      },
+    };
+    const started = Date.now();
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: neverSettlingAdapter,
+      plan,
+      stallTimeoutSec: 0.05,
+    });
+    const sse = await response.text();
+    const elapsedMs = Date.now() - started;
+    const timeoutFrames = sse.split("\n\n").filter(frame => frame.includes("runTurn inactivity timeout"));
+    expect(timeoutFrames).toHaveLength(1);
+    expect(timeoutFrames[0]).toContain("response.failed");
+    // Must finish near the idle deadline, not hang on the never-settling runTurn.
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
   test("runTurn adapter → continuous progress resets the idle stall deadline", async () => {
     // Wall-clock for the whole turn exceeds stallTimeoutSec, but each idle gap is shorter.
     const progressingAdapter: ProviderAdapter = {

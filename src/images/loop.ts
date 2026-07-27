@@ -295,12 +295,16 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // producing tokens. Do NOT manufacture adapter heartbeats here — bridgeToResponsesSSE
       // treats those as upstream activity and would defeat the stall guard. SSE keepalives
       // come from the bridge heartbeat interval instead.
+      //
+      // On idle expiry: abort the runTurn signal AND close the queue so the consumer
+      // unblocks even when adapter.runTurn ignores cancellation and never settles.
       let timedOut = false;
       const idle = idleDeadline(stallTimeoutMs, () => {
         timedOut = true;
-        // Cancel the fire-and-forget runTurn so a stalled Cursor session does not keep
-        // running after the bridge has already failed the iteration with 504.
+        // Cancel the fire-and-forget runTurn so a well-behaved adapter can stop.
         internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
+        // Independently unblock queue.stream() — do not wait for runTurn to observe abort.
+        queue.close();
       });
       const events: AdapterEvent[] = [];
       try {
