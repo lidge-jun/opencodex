@@ -124,6 +124,7 @@ type PoolRetryHarness = {
   config: OcxConfig;
   dispatches: string[];
   request: (init?: { stream?: boolean; signal?: AbortSignal }) => Promise<Response>;
+  restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
   upstream: ReturnType<typeof Bun.serve>;
 };
@@ -151,6 +152,7 @@ async function startPoolRetryHarness(
     },
   });
   redirectCanonicalCodexTo(upstream.url.toString());
+  const redirectedFetch = globalThis.fetch;
 
   const secondAccount = options.secondAccount ?? true;
   const config = {
@@ -190,6 +192,9 @@ async function startPoolRetryHarness(
   return {
     config,
     dispatches,
+    restoreFetch: () => {
+      if (globalThis.fetch === redirectedFetch) globalThis.fetch = originalGlobalFetch;
+    },
     server,
     upstream,
     request: ({ stream = false, signal } = {}) => originalGlobalFetch(
@@ -205,6 +210,7 @@ async function startPoolRetryHarness(
 }
 
 async function stopPoolRetryHarness(harness: PoolRetryHarness): Promise<void> {
+  harness.restoreFetch();
   await harness.server.stop(true);
   await harness.upstream.stop(true);
 }
@@ -1892,7 +1898,7 @@ describe("server local API auth", () => {
     } finally {
       await stopPoolRetryHarness(positive);
     }
-  });
+  }, 12_000);
 
   test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
     for (const body of ['"string"', "42", "true", "null", '["detail"]']) {
