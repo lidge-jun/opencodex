@@ -52,9 +52,10 @@ export async function fulfillImageCall(
       } else if (img.url) {
         files.push(await downloadImageToArtifact(img.url, budget, signal));
       }
-    } catch (e) {
+    } catch {
+      // Keep warnings URL-free — error messages may embed provider CDN URLs.
       // Partial success is OK — silently skip this image and continue.
-      console.warn(`[images] failed to materialize image: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn("[images] failed to materialize image");
     }
   }
 
