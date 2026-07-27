@@ -32,6 +32,21 @@ describe("SSRF: assessUrlDestination", () => {
   test("localhost → localhost", () => {
     expect(assessUrlDestination("http://localhost/test")?.kind).toBe("localhost");
   });
+  test("IPv6 site-local [fec0::1] → private", () => {
+    expect(assessUrlDestination("https://[fec0::1]/image.png")?.kind).toBe("private");
+    expect(assessUrlDestination("https://[fec0::1]/image.png")?.detail).toContain("site-local");
+  });
+  test("IPv6 multicast [ff02::1] → private", () => {
+    expect(assessUrlDestination("https://[ff02::1]/image.png")?.kind).toBe("private");
+    expect(assessUrlDestination("https://[ff02::1]/image.png")?.detail).toContain("multicast");
+  });
+  test("IPv6 documentation [2001:db8::1] → private", () => {
+    expect(assessUrlDestination("https://[2001:db8::1]/image.png")?.kind).toBe("private");
+    expect(assessUrlDestination("https://[2001:db8::1]/image.png")?.detail).toContain("documentation");
+  });
+  test("IPv6 global unicast [2001:4860:4860::8888] → public", () => {
+    expect(assessUrlDestination("https://[2001:4860:4860::8888]/image.png")?.kind).toBe("public");
+  });
   test("public HTTPS → hostname or public", () => {
     const kind = assessUrlDestination("https://example.com/image.png")?.kind;
     expect(kind === "hostname" || kind === "public").toBe(true);
@@ -87,6 +102,24 @@ describe("SSRF: resolvePublicAddresses", () => {
     ]);
     try {
       await expect(resolvePublicAddresses("https://mixed-host/img.png")).rejects.toThrow(/loopback|127\.0\.0\.1/);
+    } finally {
+      lookupMock.mockClear();
+    }
+  });
+
+  test("hostname resolving to IPv6 site-local → throws", async () => {
+    lookupMock.mockResolvedValue([{ address: "fec0::1", family: 6 }]);
+    try {
+      await expect(resolvePublicAddresses("https://v6-site.example/img.png")).rejects.toThrow(/site-local|fec0/);
+    } finally {
+      lookupMock.mockClear();
+    }
+  });
+
+  test("hostname resolving to IPv6 multicast → throws", async () => {
+    lookupMock.mockResolvedValue([{ address: "ff02::1", family: 6 }]);
+    try {
+      await expect(resolvePublicAddresses("https://v6-mcast.example/img.png")).rejects.toThrow(/multicast|ff02/);
     } finally {
       lookupMock.mockClear();
     }
@@ -148,6 +181,28 @@ describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
     } finally {
       lookupMock.mockClear();
       if (downloadedPath) await rm(downloadedPath).catch(() => {});
+    }
+  });
+
+  test("empty 200 body → rejects", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    try {
+      await expect(downloadImageToArtifact("https://public-host/empty", undefined, undefined, {
+        pinnedDownload: async () => new Response(new Uint8Array(0), { status: 200 }),
+      })).rejects.toThrow(/empty/);
+    } finally {
+      lookupMock.mockClear();
+    }
+  });
+
+  test("non-image 200 body (HTML/JSON) → rejects", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    try {
+      await expect(downloadImageToArtifact("https://public-host/not-image", undefined, undefined, {
+        pinnedDownload: async () => new Response("<html>error</html>", { status: 200 }),
+      })).rejects.toThrow(/recognized image/);
+    } finally {
+      lookupMock.mockClear();
     }
   });
 

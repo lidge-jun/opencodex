@@ -53,13 +53,19 @@ function timestampPrefix(): string {
   ].join("");
 }
 
-export function guessExtFromMagic(bytes: Uint8Array): string {
+/** Sniff a recognized image extension, or null when the payload is empty/non-image. */
+export function sniffImageExtension(bytes: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
+  if (bytes.byteLength === 0) return null;
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
   if (sig.startsWith("\x89PNG")) return "png";
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";
-  return "png";
+  return null;
+}
+
+export function guessExtFromMagic(bytes: Uint8Array): string {
+  return sniffImageExtension(bytes) ?? "png";
 }
 
 export async function materializeInlineImage(
@@ -87,7 +93,8 @@ export async function materializeInlineImage(
   if (budget) budget.spent += buf.length;
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
-  const ext = guessExtFromMagic(buf);
+  const ext = sniffImageExtension(buf);
+  if (!ext) throw new Error("inline image data is not a recognized image");
   const filePath = join(dir, `img-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
   await writeFile(filePath, buf, { mode: 0o600 });
   return filePath;
@@ -300,11 +307,14 @@ export async function downloadImageToArtifact(
   let offset = 0;
   for (const c of chunks) { bytes.set(c, offset); offset += c.byteLength; }
 
+  if (bytes.byteLength === 0) throw new Error("image download returned empty body");
+  const ext = sniffImageExtension(bytes);
+  if (!ext) throw new Error("image download did not contain a recognized image");
+
   if (budget && budget.spent + bytes.length > MAX_DECODED_BYTES_PER_RESPONSE) {
     throw new Error(`image download exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response budget`);
   }
 
-  const ext = guessExtFromMagic(bytes);
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
   if (budget) budget.spent += bytes.length;

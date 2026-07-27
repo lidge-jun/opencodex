@@ -254,6 +254,29 @@ describe("runWithImageBridge", () => {
     expect(seen).toEqual({ inputTokens: 1, outputTokens: 2 });
   });
 
+  test("onUsage does not double-count hiddenUsage across image iterations", async () => {
+    let seen: unknown = "unset";
+    streamQueue = [
+      [
+        { type: "tool_call_start", id: "call_1", name: "image_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+        { type: "tool_call_end" },
+        { type: "done", usage: { inputTokens: 10, outputTokens: 4 } },
+      ],
+      [{ type: "text_delta", text: "ready" }, { type: "done", usage: { inputTokens: 3, outputTokens: 2 } }],
+    ];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      plan,
+      maxRounds: 1,
+      onUsage: usage => { seen = usage; },
+    });
+    await response.text();
+    // Hidden iter (10/4) + final (3/2) once — not 2*hidden + final.
+    expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
+  });
+
   test("429 key rotation rebuilds the adapter and retries the iteration", async () => {
     let fetchCalls = 0;
     let rotations = 0;
@@ -394,6 +417,30 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(seenSignal).toBeDefined();
     expect(aborted).toBe(true);
     expect(sse).toContain("runTurn inactivity timeout");
+  });
+
+  test("runTurn adapter → continuous progress resets the idle stall deadline", async () => {
+    // Wall-clock for the whole turn exceeds stallTimeoutSec, but each idle gap is shorter.
+    const progressingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed, incoming, emit) => {
+        for (let i = 0; i < 6; i++) {
+          if (incoming.abortSignal?.aborted) return;
+          emit({ type: "text_delta", text: `chunk${i}` });
+          await new Promise(r => setTimeout(r, 40));
+        }
+        if (!incoming.abortSignal?.aborted) emit({ type: "done" });
+      },
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: progressingAdapter,
+      plan,
+      stallTimeoutSec: 0.1, // 100ms idle; total emit span ~240ms
+    });
+    const sse = await response.text();
+    expect(sse).toContain("chunk5");
+    expect(sse).not.toContain("inactivity timeout");
   });
 
   test("runTurn adapter → preserves _cursorConversationId across iterations", async () => {
