@@ -251,6 +251,7 @@ describe("GUI update execution decisions", () => {
     }, {
       serviceInstalledFn: () => true,
       readPidFn: () => (++pidReads === 1 ? 111 : 222),
+      verifyPidIdentityFn: pid => pid,
       waitForPort: async () => true,
       runService: () => { throw new Error("must not reinstall over a replacement PID"); },
       spawnStart: () => { throw new Error("must not start over a replacement PID"); },
@@ -286,6 +287,7 @@ describe("GUI update execution decisions", () => {
     }, {
       serviceInstalledFn: () => false,
       readPidFn: () => (++pidReads < 3 ? null : 222),
+      verifyPidIdentityFn: pid => pid,
       waitForPort: async () => true,
       spawnStart: () => { throw new Error("must not start over a replacement PID"); },
     });
@@ -293,6 +295,46 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line =>
       line.includes("different identity-checked proxy PID") && line.includes("leaving it untouched"),
     )).toBe(true);
+  });
+
+  test("direct restart treats an unverified pidfile PID as absent", async () => {
+    const verified: number[] = [];
+    let spawned = 0;
+    const job: UpdateJobState = {
+      id: "restart-unverified-pid",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, {
+      port: 10100,
+      hostname: "127.0.0.1",
+      oldPid: 111,
+      recoveryLauncher: "/retired/bin/ocx.mjs",
+    }, {
+      serviceInstalledFn: () => false,
+      readPidFn: () => 222,
+      verifyPidIdentityFn: pid => {
+        verified.push(pid);
+        return null;
+      },
+      waitForPort: async () => true,
+      spawnStart: () => { spawned += 1; },
+    });
+    expect(verified).toEqual([222, 222, 222]);
+    expect(spawned).toBe(1);
+    const log = readUpdateJob(job.id)?.log ?? [];
+    expect(log.some(line => line.includes("Stopping current proxy PID"))).toBe(false);
+    expect(log.some(line => line.includes("different identity-checked proxy PID"))).toBe(false);
   });
 
   test("restart refuses to spawn when the captured port never becomes free", async () => {

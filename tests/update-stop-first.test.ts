@@ -104,6 +104,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain("recoveryCaptured = { ...captured, recoveryLauncher }");
     expect(updateJobSource).toContain("captured?.recoveryLauncher ?? packageLauncherPath()");
     expect(updateJobSource).toContain("const readPidForRestart = (context: string)");
+    expect(updateJobSource).toContain("const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentity");
+    expect(updateJobSource).toContain("verifyCurrentPid(rawPid) === rawPid");
     expect(updateJobSource).toContain('if (readPidForRestart("after service port reclaim").refused) return');
     expect(updateJobSource).toContain('const directPid = readPidForRestart("before direct restart")');
     expect(updateJobSource).toContain('if (readPidForRestart("after direct port reclaim").refused) return');

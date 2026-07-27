@@ -429,8 +429,12 @@ async function restartAfterUpdate(
     ? captured.oldPid
     : undefined;
   const readCurrentPid = io.readPidFn ?? readPid;
+  const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentity;
   const readPidForRestart = (context: string): { pid: number | null; refused: boolean } => {
-    const currentPid = readCurrentPid();
+    const rawPid = readCurrentPid();
+    const currentPid = rawPid !== null && verifyCurrentPid(rawPid) === rawPid
+      ? rawPid
+      : null;
     if (currentPid === null || currentPid === oldPid) return { pid: currentPid, refused: false };
     updateJob(job, {}, `A different identity-checked proxy PID appeared ${context}; leaving it untouched.`);
     return { pid: null, refused: true };
