@@ -44,7 +44,7 @@ export function guessExtFromMagic(bytes: Uint8Array): string {
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";
-  return "png";
+  throw new Error("unrecognized image format — magic bytes do not match PNG, JPEG, WebP, or GIF");
 }
 
 export async function materializeInlineImage(
@@ -74,7 +74,7 @@ export async function materializeInlineImage(
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = guessExtFromMagic(buf);
   const filePath = join(dir, `img-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, buf, { mode: 0o600 });
+  await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
   return filePath;
 }
 
@@ -141,6 +141,6 @@ export async function downloadImageToArtifact(
   if (budget) budget.spent += bytes.length;
 
   const filePath = join(dir, `dl-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
-  await writeFile(filePath, bytes, { mode: 0o600 });
+  await writeFile(filePath, bytes, { mode: 0o600, flag: "wx" });
   return filePath;
 }

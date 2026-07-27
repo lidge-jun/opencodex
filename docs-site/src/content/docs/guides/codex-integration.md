@@ -46,6 +46,12 @@ points at opencodex, the proxy relays those calls to the OpenAI upstream:
   `openai-responses` provider whose endpoint implements the OpenAI Images API. Explicit selection
   fails closed and never falls back to a different paid upstream. Registry-managed provider ids
   are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
+- **Google Antigravity (CCA) fallback:** when neither an OpenAI forward candidate nor a keyed
+  provider is configured, `/v1/images/generations` (not `/images/edits`) falls back to the
+  Antigravity **Cloud Code Assist** endpoint using the `gemini-3.1-flash-image` model. This
+  requires `ocx login google-antigravity`; the OAuth token is sent only to the pinned CCA registry
+  host, never to a config-level `baseUrl` override. The response is returned in the same
+  `{created, data:[{b64_json}]}` shape Codex expects.
 - **Neither:** the proxy returns a clear error instead of a generic 404. Routed providers
   (Cursor, Gemini, Kiro, …) cannot serve the `image_generation` tool relay; if you don't want the
   tool offered at all, disable it in Codex with `codex features disable image_generation`

@@ -60,7 +60,9 @@ async function tryCcaImageGeneration(
   if (!provider || provider.disabled) return undefined;
 
   const prompt = (body as { prompt?: unknown })?.prompt;
-  if (typeof prompt !== "string" || !prompt) return undefined;
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return formatErrorResponse(400, "invalid_request_error", "prompt is required and must not be empty");
+  }
 
   let token: string;
   try {

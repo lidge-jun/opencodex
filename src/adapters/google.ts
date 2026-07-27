@@ -1,6 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { createImageBudget, materializeInlineImage } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -245,6 +246,20 @@ function isImageCapableModel(modelId: string): boolean {
   return /image/.test(modelId) && /gemini/.test(modelId);
 }
 
+/**
+ * Strip the home directory prefix from an artifact path so the absolute
+ * filesystem location (which embeds the username and config dir) never leaks
+ * into model-visible / client-visible text. An absolute home-rooted path
+ * becomes "~/.config/…/img.png".
+ */
+function sanitizeArtifactPath(filePath: string): string {
+  const home = homedir();
+  if (home && filePath.startsWith(home)) {
+    return filePath.slice(home.length).replace(/^\//, "~/");
+  }
+  return filePath;
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -469,10 +484,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
-              const filePath = await materializeInlineImage(inline.data, imageBudget);
-              const escapedPath = filePath.replace(/([() ])/g, "\\$1");
-              emittedContentEvent = true;
-              yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
+              try {
+                const filePath = await materializeInlineImage(inline.data, imageBudget);
+                const escapedPath = sanitizeArtifactPath(filePath).replace(/([() ])/g, "\\$1");
+                emittedContentEvent = true;
+                yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
+              } catch {
+                yield { type: "error", message: "failed to materialize inline image" };
+              }
             }
             if (part.functionCall) {
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
@@ -580,9 +599,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.text) events.push({ type: "text_delta", text: part.text });
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
-            const filePath = await materializeInlineImage(inline.data, imageBudget);
-            const escapedPath = filePath.replace(/([() ])/g, "\\$1");
-            events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
+            try {
+              const filePath = await materializeInlineImage(inline.data, imageBudget);
+              const escapedPath = sanitizeArtifactPath(filePath).replace(/([() ])/g, "\\$1");
+              events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
+            } catch {
+              events.push({ type: "error", message: "failed to materialize inline image" });
+            }
           }
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;

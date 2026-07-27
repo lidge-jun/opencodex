@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
@@ -179,11 +179,14 @@ describe("google adapter — inline image streaming", () => {
     expect(done.usage?.outputTokens).toBe(2);
   });
 
-  test("empty inlineData.data is rejected in streaming mode", async () => {
-    await expect(collectStream(aiStudioProvider, [
+  test("empty inlineData.data yields an error event but does not abort the stream", async () => {
+    const events = await collectStream(aiStudioProvider, [
       { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "" } }] } }] },
       { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
-    ])).rejects.toThrow("empty");
+    ]);
+    expect(events.some(e => e.type === "error" && /materialize/.test(e.message))).toBe(true);
+    // Stream still reaches a terminal done event.
+    expect(events.some(e => e.type === "done")).toBe(true);
   });
 });
 
@@ -201,13 +204,13 @@ describe("google adapter — inline image non-streaming", () => {
     expect(textEvents[1].text).toMatch(/^\n!\[image\]\(.+\.jpg\)\n$/);
   });
 
-  test("empty inlineData.data is rejected, not silently skipped", async () => {
+  test("empty inlineData.data yields an error event, not a rejection", async () => {
     const adapter = createGoogleAdapter(aiStudioProvider);
-    // In the non-streaming path, materializeInlineImage throws and propagates out of parseResponse.
-    await expect(adapter.parseResponse(jsonResponse({
+    const events = await adapter.parseResponse(jsonResponse({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "" } }] }, finishReason: "STOP" }],
       usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
-    }))).rejects.toThrow("empty");
+    }));
+    expect(events.some(e => e.type === "error" && /materialize/.test(e.message))).toBe(true);
   });
 });
 
@@ -285,5 +288,85 @@ describe("markdown path escaping with special characters", () => {
     expect(mdPath).toContain("ocx\\ test\\ \\(dir\\)\\ ");
     const unescaped = mdPath.replace(/\\([() ])/g, "$1");
     expect(existsSync(unescaped)).toBe(true);
+  });
+});
+
+describe("artifact path sanitization (no home-directory leak)", () => {
+  let underHome: string;
+  let savedHome: string | undefined;
+
+  beforeAll(() => {
+    savedHome = process.env.OPENCODEX_HOME;
+    // Place OPENCODEX_HOME *under* the real home so sanitizeArtifactPath kicks in.
+    underHome = mkdtempSync(join(homedir(), ".ocx-test-leak-"));
+    process.env.OPENCODEX_HOME = underHome;
+  });
+
+  afterAll(() => {
+    if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
+    else delete process.env.OPENCODEX_HOME;
+    rmSync(underHome, { recursive: true, force: true });
+  });
+
+  test("streaming: emitted path does not contain the raw home directory", async () => {
+    const events = await collectStream(aiStudioProvider, [
+      { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] } }] },
+      { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
+    ]);
+    const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
+    expect(textEvents.length).toBe(1);
+    const md = textEvents[0].text;
+    // The username segment (e.g. /Users/tizerluo) must NOT appear in model-visible text.
+    expect(md).not.toContain(homedir());
+    expect(md).not.toMatch(/\/Users\/|\/home\//);
+    // Path is abbreviated to ~/...
+    expect(md).toContain("~/");
+  });
+
+  test("non-streaming: emitted path does not contain the raw home directory", async () => {
+    const adapter = createGoogleAdapter(aiStudioProvider);
+    const events = await adapter.parseResponse(jsonResponse({
+      candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG } }] }, finishReason: "STOP" }],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+    }));
+    const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
+    expect(textEvents.length).toBe(1);
+    const md = textEvents[0].text;
+    expect(md).not.toContain(homedir());
+    expect(md).not.toMatch(/\/Users\/|\/home\//);
+    expect(md).toContain("~/");
+  });
+});
+
+describe("malformed inlineData does not abort the stream", () => {
+  test("streaming: sibling text + bad inline yields text_delta AND error event", async () => {
+    const events = await collectStream(aiStudioProvider, [
+      { candidates: [{ content: { parts: [
+        { text: "before image" },
+        { inlineData: { mimeType: "image/png", data: "!!!not-base64!!!" } },
+      ] } }] },
+      { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
+    ]);
+    // The text part before the bad image is still emitted.
+    const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
+    expect(textEvents.some(e => e.text === "before image")).toBe(true);
+    // An error event is emitted for the bad image.
+    expect(events.some(e => e.type === "error" && /materialize/.test(e.message))).toBe(true);
+    // The stream terminates normally.
+    expect(events.some(e => e.type === "done")).toBe(true);
+  });
+
+  test("non-streaming: sibling text + bad inline yields text_delta AND error event", async () => {
+    const adapter = createGoogleAdapter(aiStudioProvider);
+    const events = await adapter.parseResponse(jsonResponse({
+      candidates: [{ content: { parts: [
+        { text: "hello" },
+        { inlineData: { mimeType: "image/png", data: "!!!not-base64!!!" } },
+      ] }, finishReason: "STOP" }],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+    }));
+    const textEvents = events.filter(e => e.type === "text_delta") as Extract<AdapterEvent, { type: "text_delta" }>[];
+    expect(textEvents.some(e => e.text === "hello")).toBe(true);
+    expect(events.some(e => e.type === "error" && /materialize/.test(e.message))).toBe(true);
   });
 });

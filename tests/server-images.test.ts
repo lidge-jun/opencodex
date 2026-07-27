@@ -838,54 +838,87 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
 
 // ── Google Antigravity (CCA) image generation fallback ──
 
-function ccaConfig(ccaBaseUrl?: string): OcxConfig {
+/**
+ * CCA config for image tests. The config-level baseUrl is deliberately set to an
+ * attacker host to prove the CCA path pins to the registry entry
+ * (daily-cloudcode-pa.googleapis.com) and ignores this override. The OAuth token
+ * comes from the credential store via getValidAccessToken, not from config apiKey.
+ */
+function ccaConfig(): OcxConfig {
   return {
     port: 0,
     defaultProvider: "google-antigravity",
     openaiProviderTierVersion: 2,
     providers: {
       openai: disabledOpenAiProvider,
-      ...(ccaBaseUrl ? {
-        "google-antigravity": {
-          adapter: "google",
-          baseUrl: ccaBaseUrl,
-          googleMode: "cloud-code-assist",
-          apiKey: "cca-access-token",
-          project: "cca-project-123",
-          allowPrivateNetwork: ccaBaseUrl.includes("localhost") || ccaBaseUrl.includes("127.0.0.1"),
-        } as OcxConfig["providers"][string],
-      } : {}),
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://attacker.example.com",
+        googleMode: "cloud-code-assist",
+      } as OcxConfig["providers"][string],
     },
   } as OcxConfig;
 }
 
-test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
-  const captured: CapturedRequest[] = [];
-  const upstream = Bun.serve({
-    port: 0,
-    async fetch(req) {
-      captured.push({
-        path: new URL(req.url).pathname,
-        headers: req.headers,
-        body: await req.json(),
-      });
-      return Response.json({
-        response: {
-          candidates: [{
-            content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
-          }],
-        },
-      });
-    },
-  });
+interface CcaFetchRequest {
+  url: string;
+  headers: Headers;
+  body: unknown;
+}
 
-  saveConfig(ccaConfig(upstream.url.toString().replace(/\/$/, "")));
-  await saveCredential("google-antigravity", {
-    access: "cca-access-token",
-    refresh: "cca-refresh-token",
-    expires: Date.now() + 3_600_000,
-    projectId: "cca-project-123",
-  });
+/**
+ * Stub globalThis.fetch for CCA image tests: requests to the registry host
+ * (daily-cloudcode-pa.googleapis.com) get a canned response and are recorded in
+ * `registryHits`; requests to any other non-localhost host are recorded in
+ * `otherHits` (to prove the attacker host is never contacted); localhost requests
+ * pass through to the real network stack (the test proxy server).
+ */
+function ccaFetchMock(
+  registryHits: CcaFetchRequest[],
+  otherHits: CcaFetchRequest[],
+  response?: { status?: number; payload?: unknown },
+) {
+  const status = response?.status ?? 200;
+  const payload = response?.payload ?? {
+    response: {
+      candidates: [{
+        content: { parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }] },
+      }],
+    },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const headers = new Headers(init?.headers);
+    let parsedBody: unknown;
+    if (init?.body && typeof init.body === "string") {
+      try { parsedBody = JSON.parse(init.body); } catch { /* non-JSON body */ }
+    }
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      registryHits.push({ url: requestUrl, headers, body: parsedBody });
+      return Response.json(payload, { status });
+    }
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      otherHits.push({ url: requestUrl, headers, body: parsedBody });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+}
+
+const CCA_CREDENTIAL = {
+  access: "cca-access-token",
+  refresh: "cca-refresh-token",
+  expires: Date.now() + 3_600_000,
+  projectId: "cca-project-123",
+} as const;
+
+test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits);
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
 
   const server = startServer(0);
   try {
@@ -899,33 +932,29 @@ test("CCA image fallback generates images via Google Antigravity when no OpenAI 
     expect(json.data).toHaveLength(1);
     expect(json.data[0].b64_json).toBe("aGVsbG8=");
 
-    expect(captured).toHaveLength(1);
-    expect(captured[0].path).toContain("generateContent");
-    const body = captured[0].body as { model?: string; request?: { generationConfig?: { responseModalities?: string[] } } };
+    // The CCA call MUST hit the registry host, not the config-level baseUrl.
+    expect(registryHits).toHaveLength(1);
+    expect(registryHits[0].url).toContain("daily-cloudcode-pa.googleapis.com");
+    expect(registryHits[0].url).toContain("generateContent");
+    const body = registryHits[0].body as { model?: string; request?: { generationConfig?: { responseModalities?: string[] } } };
     expect(body.model).toBe("gemini-3.1-flash-image");
     expect(body.request?.generationConfig?.responseModalities).toEqual(["TEXT", "IMAGE"]);
-    expect(captured[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+    expect(registryHits[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+
+    // The attacker host (config baseUrl) must NOT receive any request.
+    expect(otherHits).toHaveLength(0);
   } finally {
     await server.stop(true);
-    await upstream.stop(true);
   }
 });
 
 test("CCA image fallback preserves upstream 429 status", async () => {
-  const upstream = Bun.serve({
-    port: 0,
-    fetch() {
-      return Response.json({ error: { message: "Rate limited" } }, { status: 429 });
-    },
-  });
+  const registryHits: CcaFetchRequest[] = [];
+  const otherHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, otherHits, { status: 429, payload: { error: { message: "Rate limited" } } });
 
-  saveConfig(ccaConfig(upstream.url.toString().replace(/\/$/, "")));
-  await saveCredential("google-antigravity", {
-    access: "cca-access-token",
-    refresh: "cca-refresh-token",
-    expires: Date.now() + 3_600_000,
-    projectId: "cca-project-123",
-  });
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
 
   const server = startServer(0);
   try {
@@ -935,20 +964,17 @@ test("CCA image fallback preserves upstream 429 status", async () => {
       body: JSON.stringify({ prompt: "a cat" }),
     });
     expect(response.status).toBe(429);
+    // The registry host was hit, not the attacker host.
+    expect(registryHits).toHaveLength(1);
+    expect(otherHits).toHaveLength(0);
   } finally {
     await server.stop(true);
-    await upstream.stop(true);
   }
 });
 
 test("CCA fallback does not serve image edits", async () => {
-  saveConfig(ccaConfig("https://daily-cloudcode-pa.googleapis.com"));
-  await saveCredential("google-antigravity", {
-    access: "cca-access-token",
-    refresh: "cca-refresh-token",
-    expires: Date.now() + 3_600_000,
-    projectId: "cca-project-123",
-  });
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
 
   const server = startServer(0);
   try {
@@ -961,6 +987,79 @@ test("CCA fallback does not serve image edits", async () => {
     expect(response.status).toBe(400);
     const json = await response.json() as { error: { message: string } };
     expect(json.error.message).toContain("image generation");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA image fallback never sends Authorization to a tampered config baseUrl (sink-host regression)", async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const attackerHits: CcaFetchRequest[] = [];
+  ccaFetchMock(registryHits, attackerHits);
+
+  // ccaConfig already sets baseUrl to https://attacker.example.com — if the pin
+  // were ever removed, this host would receive the OAuth bearer token.
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(200);
+
+    // The registry host received the request with the OAuth bearer token.
+    expect(registryHits).toHaveLength(1);
+    expect(registryHits[0].url).toContain("daily-cloudcode-pa.googleapis.com");
+    expect(registryHits[0].headers.get("authorization")).toBe("Bearer cca-access-token");
+
+    // The attacker host received ZERO requests — no Authorization header leak.
+    const authLeak = attackerHits.filter(r => r.headers.get("authorization"));
+    expect(attackerHits).toHaveLength(0);
+    expect(authLeak).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA image fallback rejects an empty prompt with 400 before any OAuth work", async () => {
+  saveConfig(ccaConfig());
+  // Deliberately do NOT save a google-antigravity credential: if the prompt
+  // check did not fire first, getValidAccessToken would throw, and the request
+  // would fall through to the misleading "no provider configured" 400 — not the
+  // "prompt is required" message asserted below.
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("prompt is required");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("CCA image fallback rejects a whitespace-only prompt with 400", async () => {
+  saveConfig(ccaConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "   ", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toContain("prompt is required");
   } finally {
     await server.stop(true);
   }
