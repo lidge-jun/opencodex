@@ -189,6 +189,12 @@ describe("fetchProviderAccountQuotas", () => {
     expect(byId[background!.id]?.unavailable).toBe(true);
     // Only the active credential was probed; background expired slot failed closed.
     expect(calls).toBe(1);
+    // Credential integrity: the expired local-cli background slot must not have
+    // been overwritten with the active (or any other) disk/CLI identity.
+    const after = getAccountSet("anthropic")?.accounts.find(a => a.id === background!.id);
+    expect(after?.credential.access).toBe("token-bg");
+    expect(after?.credential.email).toBe("bg@example.com");
+    expect(after?.credential.source).toBe("local-cli");
   });
 
   test("providers without a per-account usage API are skipped", async () => {

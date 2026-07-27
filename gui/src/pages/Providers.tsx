@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
@@ -73,6 +73,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     switchAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
+  const quotaRefreshKey = useMemo(
+    () => Object.entries(accountSets)
+      .map(([provider, set]) => `${provider}:${set.activeAccountId ?? ""}`)
+      .sort()
+      .join("|"),
+    [accountSets],
+  );
   const jsonEditor = useJsonConfigEditor({
     apiBase, config,
     notify,
@@ -203,6 +210,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         jsonSaving={jsonSaving}
         modelsRefreshToken={modelsRefreshToken}
         activeAccountNeedsReauth={activeAccountNeedsReauth}
+        quotaRefreshKey={quotaRefreshKey}
         detail={(item, data) => {
           const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
           return (

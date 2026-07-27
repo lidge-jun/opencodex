@@ -298,11 +298,16 @@ function accountCacheKey(provider: string, accountId: string): string {
 export function clearAccountQuotaCache(provider?: string): void {
   if (!provider) {
     accountQuotaCache.clear();
+    accountQuotaInflight.clear();
     return;
   }
   const prefix = `${provider}\u0000`;
   for (const key of [...accountQuotaCache.keys()]) {
     if (key.startsWith(prefix)) accountQuotaCache.delete(key);
+  }
+  // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.
+  for (const key of [...accountQuotaInflight.keys()]) {
+    if (key.startsWith(prefix)) accountQuotaInflight.delete(key);
   }
 }
 
