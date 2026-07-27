@@ -2,8 +2,8 @@
   "objective": "OpenCodex live unfinished issues and PRs triage against current GitHub state. Scope: repository lidge-jun/opencodex, dev target only, worktree /Users/jun/.codex/worktrees/260727-live-triage/opencodex. First work-phase is docs-only manifest/devlog: fetch live open PRs and open issues via gh, record current number/title/state/base/head/mergeable/checks/reviews/labels, classify every item into merge now, takeover-fix, comment/request-changes, needs-author-rebase, needs-human/security, later/enhancement, upstream-tracking, or close, and produce a priority table. Later work-phases process exactly one PR or one issue per full PABCD cycle. Allowed: directly fix bugfix/simple safe items on dev, create PRs, wait for CI, squash merge, and close linked issues when live evidence proves safety. Out of scope: main/preview/release branches, automatic merge of security/auth/permission/data-migration/privilege-boundary work, and unapproved GUI/UX decisions except the approved OpenRouter Free separate-provider direction. Terminal outcomes: DONE when all safe live items are processed and manifest evidence is current; NOOP when an item needs no action after live check; NEEDS_HUMAN or UNSAFE for risk-bound/security/UX-decision items; BLOCKED for external author/rebase/CI or upstream dependency; BUDGET_EXHAUSTED only if explicit runtime bounds are hit. Verification: gh live snapshots, code/diff review for candidate PRs, CI/check URLs where actions occur, comments/merge/close URLs for external state changes, and devlog evidence committed locally before completion.",
   "slug": "opencodex-live-unfinished-issues-and-prs-triage",
   "createdAt": "2026-07-27T10:35:02.724Z",
-  "updatedAt": "2026-07-27T11:01:22.413Z",
-  "activeWorkPhaseId": "WP9",
+  "updatedAt": "2026-07-27T11:46:27.213Z",
+  "activeWorkPhaseId": "WP11",
   "workPhases": [
     {
       "id": "WP0",
@@ -58,26 +58,51 @@
     {
       "id": "WP9",
       "title": "Dev baseline checkout blocker from devlog gitlinks",
-      "status": "in_progress",
+      "status": "done",
       "tasks": [
         {
           "id": "WP9-T1",
           "title": "Confirm current dev gitlink/.gitmodules mismatch and whether devlog chase checkouts are required tracked inputs",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "WP9-T2",
           "title": "Remove or repair only the accidental devlog gitlinks on a dev-target branch",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "WP9-T3",
           "title": "Verify checkout/submodule commands and open/merge the dev baseline CI fix before rerunning PR #526",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "criteriaIds": [
         "C-WP9-DEVLOG-GITLINK"
+      ]
+    },
+    {
+      "id": "WP10",
+      "title": "Dev baseline Desktop 3P target-platform path fix",
+      "status": "done",
+      "tasks": [
+        {
+          "id": "WP10-T1",
+          "title": "Confirm hosted Windows failure and local Desktop 3P path resolver cause",
+          "status": "done"
+        },
+        {
+          "id": "WP10-T2",
+          "title": "Patch target-platform-specific path joining and regression tests on a dev-target branch",
+          "status": "done"
+        },
+        {
+          "id": "WP10-T3",
+          "title": "Verify locally, push PR, wait for hosted checks, and squash merge if green",
+          "status": "done"
+        }
+      ],
+      "criteriaIds": [
+        "C-WP10-DESKTOP3P-PATH"
       ]
     },
     {
@@ -98,6 +123,31 @@
       ],
       "criteriaIds": [
         "C-WP2-PR528"
+      ]
+    },
+    {
+      "id": "WP11",
+      "title": "PR #526 final rerun and merge after dev baseline fixes",
+      "status": "in_progress",
+      "tasks": [
+        {
+          "id": "WP11-T1",
+          "title": "Rebase PR #526 branch onto current origin/dev after WP9/WP10",
+          "status": "pending"
+        },
+        {
+          "id": "WP11-T2",
+          "title": "Run local targeted verification and push the rebased PR head",
+          "status": "pending"
+        },
+        {
+          "id": "WP11-T3",
+          "title": "Wait for hosted checks and squash merge PR #526 if the latest head is clean",
+          "status": "pending"
+        }
+      ],
+      "criteriaIds": [
+        "C-WP11-PR526-FINAL"
       ]
     },
     {
@@ -240,13 +290,27 @@
       "id": "C-WP9-DEVLOG-GITLINK",
       "scenario": "The dev baseline checkout blocker caused by tracked devlog gitlinks without .gitmodules mappings is fixed or proven to require human direction.",
       "expectedEvidence": "git tree/submodule evidence, commit/PR URL, local checkout/submodule verification, and hosted CI rerun evidence if pushed.",
-      "capturedEvidence": "",
-      "status": "open"
+      "capturedEvidence": "WP9 closed by cxc D at 2026-07-27T11:11:58Z. Branch codex/devlog-gitlink-ci-fix removed exactly three accidental 160000 gitlinks without .gitmodules mappings: devlog/_chase/_cca, devlog/_chase/_litellm, and devlog/_fin/opencode-cursor. Local verification: git ls-files -s found no 160000 entries; git submodule status --recursive exit 0; git diff --check origin/dev exit 0. PR #550 https://github.com/lidge-jun/opencodex/pull/550 passed hosted checks and was squash-merged into origin/dev at ff831858388179d3f76f4dd7c119d84470214fa6.",
+      "status": "met"
+    },
+    {
+      "id": "C-WP10-DESKTOP3P-PATH",
+      "scenario": "The dev baseline Desktop 3P path resolver returns target-platform separators across hosted OSes and unblocks PR #526 CI.",
+      "expectedEvidence": "code pointers, targeted Bun test output, TypeScript output, diff-check output, PR URL, hosted check evidence, and merge SHA if green.",
+      "capturedEvidence": "WP10 branch codex/desktop3p-path-windows-ci commit f6d2881dd422830eece502e0ba8de493205fe9d1 patched src/claude/desktop-3p-paths.ts to use target-platform posix/win32 joins and updated tests/desktop-3p.test.ts plus tests/claude-desktop-config-path.test.ts. Local verification: bun test tests/desktop-3p.test.ts tests/claude-desktop-config-path.test.ts = 30 pass/0 fail; bun x tsc --noEmit exit 0; git diff --check origin/dev exit 0. Prepush full gate: 5047 pass/0 fail, privacy scan passed, GUI doctor skipped. Independent C review Aquinas PASS. PR #552 https://github.com/lidge-jun/opencodex/pull/552 passed hosted CodeRabbit, enforce-target, label, react-doctor, ubuntu-latest, macos-latest, windows-latest, and all npm-global matrix jobs; squash-merged at 2026-07-27T11:43:58Z as origin/dev 7c74e0a22ec96dd5849d3d7253758f0ab15d9737. Remote topic branch deleted.",
+      "status": "met"
     },
     {
       "id": "C-WP2-PR528",
       "scenario": "PR #528 receives a request-changes comment for credential-origin binding and stale checks.",
       "expectedEvidence": "live PR head/checks, independent review verdict, and comment/review URL.",
+      "capturedEvidence": "",
+      "status": "open"
+    },
+    {
+      "id": "C-WP11-PR526-FINAL",
+      "scenario": "PR #526 is rebased after dev baseline blockers, verified on the latest head, and merged if clean.",
+      "expectedEvidence": "rebase head SHA, local test/typecheck/diff-check output, pushed head SHA, hosted check list, merge commit URL/SHA or blocker evidence.",
       "capturedEvidence": "",
       "status": "open"
     },
