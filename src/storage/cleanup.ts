@@ -1076,11 +1076,17 @@ function deleteAndCommitSatellites(
     if (locks.memories && backup.memories) {
       deleteMemoriesInTx(locks.memories.db, backup.memories);
       if (backup.memories.consolidateTouched) {
+        // Capture under the write lock, but persist only after COMMIT+close.
+        // Holding BEGIN IMMEDIATE across writeFileSync lets Windows CI disk/AV
+        // latency stall the lock long enough for concurrent reopen hooks (and
+        // bun's default 5s test timeout) to hang — see PR #558 windows-latest.
         backup.memories.consolidatePostImage = readConsolidateGlobalJob(locks.memories.db);
-        writeSatelliteBackup(stageDir, backup);
       }
       commitSatelliteLock(locks.memories);
       locks.memories = undefined;
+      if (backup.memories.consolidateTouched) {
+        writeSatelliteBackup(stageDir, backup);
+      }
       if (hooks?.failAfterMemoriesMutation) throw new Error("test_fail_after_memories");
     }
     if (locks.goals && backup.goals) {

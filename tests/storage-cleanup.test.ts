@@ -826,6 +826,7 @@ describe("executeArchivedCleanup", () => {
     expect(existsSync(join(home, "memories_1.sqlite"))).toBe(false);
   });
 
+  // Windows CI: multi-satellite restore + concurrent reopen can exceed the default 5s.
   test("concurrent satellite writes after mutation are preserved on restore", () => {
     home = buildHome({ withSatelliteStores: true });
     const result = runWithDigest(100, "permanent", home, {
@@ -873,8 +874,9 @@ describe("executeArchivedCleanup", () => {
       "active", "tmid", "tnew", "told",
     ]);
     state.close();
-  });
+  }, { timeout: 20_000 });
 
+  // Windows CI: same multi-satellite restore profile as above (timed out at 5s on PR #558).
   test("concurrent consolidate enqueue watermark change is preserved on restore", () => {
     home = buildHome({ withSatelliteStores: true });
     const result = runWithDigest(100, "permanent", home, {
@@ -910,7 +912,7 @@ describe("executeArchivedCleanup", () => {
       "active", "tmid", "tnew", "told",
     ]);
     state.close();
-  });
+  }, { timeout: 20_000 });
 });
 
 describe("listTrashEntries + restoreTrashEntry", () => {
