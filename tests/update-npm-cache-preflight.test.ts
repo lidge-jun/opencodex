@@ -109,18 +109,22 @@ describe("npm cache ownership pre-flight", () => {
     expect(formatNpmCacheOwnershipFailure(result)).toContain("configure a user-owned npm cache");
   });
 
-  test("formats cache failures without persisting the OS account name", () => {
-    const cachePath = join(homedir(), ".npm");
+  test("formats cache failures without persisting arbitrary path segments or account ids", () => {
+    const cachePath = join(homedir(), "customer-alice-cache");
+    const entryPath = join(cachePath, "_npx", "node_modules", "@alice");
     const output = formatNpmCacheOwnershipFailure({
       ok: false,
       cachePath,
-      entryPath: join(cachePath, "_cacache", "foreign"),
+      entryPath,
       expectedUid: 502,
       actualUid: 0,
       reason: "npm cache entry ownership does not match the current user",
     });
-    expect(output).toContain("~/.npm/_cacache/foreign");
+    expect(output).toContain("npm config get cache");
     expect(output).not.toContain(homedir());
+    expect(output).not.toContain("customer-alice-cache");
+    expect(output).not.toContain("@alice");
+    expect(output).not.toContain("_npx");
     expect(output).not.toContain("502");
     expect(output).not.toMatch(/\buid\b/i);
   });
@@ -163,6 +167,28 @@ describe("npm cache ownership pre-flight", () => {
     expect(issue).toMatchObject({
       kind: "error",
       reason: "npm cache inspection exceeded its 10ms time budget",
+    });
+  });
+
+  test("terminates a scan process that ignores SIGTERM at the wall-clock deadline", () => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    const blockingScan = join(dir, "blocking-scan.mjs");
+    writeFileSync(
+      blockingScan,
+      "process.on('SIGTERM', () => {});\nsetInterval(() => {}, 60_000);\n",
+    );
+    const startedAt = Date.now();
+    const result = checkNpmCacheOwnership({
+      getuid: () => uid,
+      spawn: cacheLookup(dir),
+      scanScript: blockingScan,
+      maxDurationMs: 250,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "npm cache inspection exceeded its 250ms time budget",
     });
   });
 

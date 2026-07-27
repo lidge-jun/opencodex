@@ -226,6 +226,73 @@ describe("GUI update execution decisions", () => {
     expect(optsSeen).toEqual([{ killOcxHolders: true, onlyKillPids: [4242] }]);
   });
 
+  test("service restart leaves a replacement PID untouched when it appears during port reclaim", async () => {
+    let pidReads = 0;
+    const job: UpdateJobState = {
+      id: "restart-replacement-pid",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, {
+      port: 10100,
+      hostname: "127.0.0.1",
+      oldPid: 111,
+      recoveryLauncher: "/retired/bin/ocx.mjs",
+    }, {
+      serviceInstalledFn: () => true,
+      readPidFn: () => (++pidReads === 1 ? 111 : 222),
+      waitForPort: async () => true,
+      runService: () => { throw new Error("must not reinstall over a replacement PID"); },
+      spawnStart: () => { throw new Error("must not start over a replacement PID"); },
+    });
+    expect(pidReads).toBe(2);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("different identity-checked proxy PID") && line.includes("leaving it untouched"),
+    )).toBe(true);
+  });
+
+  test("direct restart leaves a replacement PID untouched when it appears during port reclaim", async () => {
+    let pidReads = 0;
+    const job: UpdateJobState = {
+      id: "restart-direct-replacement-pid",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, {
+      port: 10100,
+      hostname: "127.0.0.1",
+      oldPid: 111,
+      recoveryLauncher: "/retired/bin/ocx.mjs",
+    }, {
+      serviceInstalledFn: () => false,
+      readPidFn: () => (++pidReads < 3 ? null : 222),
+      waitForPort: async () => true,
+      spawnStart: () => { throw new Error("must not start over a replacement PID"); },
+    });
+    expect(pidReads).toBe(3);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("different identity-checked proxy PID") && line.includes("leaving it untouched"),
+    )).toBe(true);
+  });
+
   test("restart refuses to spawn when the captured port never becomes free", async () => {
     const spawned: Array<{ port?: number }> = [];
     const job: UpdateJobState = {
@@ -333,13 +400,33 @@ describe("GUI update execution decisions", () => {
   test("pre-update liveness retries a transient miss before classifying the proxy inactive", async () => {
     let probes = 0;
     const delays: number[] = [];
-    const live = await findLiveProxyForUpdate(
-      async () => (++probes === 1 ? null : { pid: 111, port: 15432, hostname: "127.0.0.1" }),
-      async ms => { delays.push(ms); },
-    );
+    const live = await findLiveProxyForUpdate({
+      findLiveProxyFn: async () => (
+        ++probes === 1 ? null : { pid: 111, port: 15432, hostname: "127.0.0.1" }
+      ),
+      sleepMs: async ms => { delays.push(ms); },
+    });
     expect(live).toEqual({ pid: 111, port: 15432, hostname: "127.0.0.1" });
     expect(probes).toBe(2);
     expect(delays).toEqual([250]);
+  });
+
+  test("pre-update liveness retains a PID-verified runtime target after health misses", async () => {
+    let probes = 0;
+    const live = await findLiveProxyForUpdate({
+      findLiveProxyFn: async () => {
+        probes += 1;
+        return null;
+      },
+      sleepMs: async () => {},
+      readAlivePidFn: () => 111,
+      verifyPidIdentityFn: pid => pid,
+      readRuntimePortFn: expectedPid => (
+        expectedPid === 111 ? { pid: 111, port: 16543, hostname: "127.0.0.1" } : null
+      ),
+    });
+    expect(probes).toBe(3);
+    expect(live).toEqual({ pid: 111, port: 16543, hostname: "127.0.0.1" });
   });
 
   test("failed install leaves an already-healthy proxy untouched", async () => {
@@ -467,6 +554,44 @@ describe("GUI update execution decisions", () => {
     expect(recovery).toBe("still-running");
     expect(restartCalls).toBe(0);
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("refusing an automatic restart"))).toBe(true);
+  });
+
+  test("failed install leaves a concurrently restored replacement proxy untouched", async () => {
+    let probes = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "failed-install-concurrent-replacement",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => (
+          ++probes <= 3 ? null : { pid: 222, version: "2.7.40" }
+        ),
+        verifyPidIdentityFn: () => null,
+        sleepMs: async () => {},
+        recoveryLauncherFn: () => { throw new Error("must not resolve a launcher"); },
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+    expect(recovery).toBe("still-running");
+    expect(probes).toBe(4);
+    expect(restartCalls).toBe(0);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("replacement proxy became healthy"))).toBe(true);
   });
 
   test("failed install restores through the retired launcher after the old PID loses identity", async () => {

@@ -92,6 +92,9 @@ describe("update stops the running proxy before replacing files", () => {
   test("GUI failure recovery is gated by identity-checked pre-update liveness", () => {
     expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxyForUpdate()");
     expect(updateJobSource).toContain("const proxyWasActive = liveBeforeUpdate !== null");
+    expect(updateJobSource).toContain("(io.readAlivePidFn ?? readAlivePid)()");
+    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentity)(candidatePid)");
+    expect(updateJobSource).toContain("(io.readRuntimePortFn ?? readRuntimePort)(candidatePid)");
     expect(updateJobSource).not.toContain("const proxyWasActive = isServiceInstalled() || runtimeTrusted");
   });
 
@@ -100,6 +103,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain("io.recoveryLauncherFn ?? findNpmRecoveryLauncher");
     expect(updateJobSource).toContain("recoveryCaptured = { ...captured, recoveryLauncher }");
     expect(updateJobSource).toContain("captured?.recoveryLauncher ?? packageLauncherPath()");
+    expect(updateJobSource).toContain("if (refuseForReplacementPid()) return");
   });
 
   test("GUI recovery waits beyond the nested npm install deadline", () => {

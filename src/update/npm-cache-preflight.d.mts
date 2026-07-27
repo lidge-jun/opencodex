@@ -9,6 +9,9 @@ export interface NpmCachePreflightOptions {
   npmBin?: string;
   shell?: boolean;
   spawn?: typeof import("node:child_process").spawnSync;
+  scanSpawn?: typeof import("node:child_process").spawnSync;
+  scanBin?: string;
+  scanScript?: string;
   lstat?: (path: string) => NpmCacheEntryStat;
   readdir?: (path: string) => string[];
   realpath?: (path: string) => string;

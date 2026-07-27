@@ -2,7 +2,15 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWriteFile, getConfigDir, loadConfig, readPid, verifyPidIdentity } from "../config";
+import {
+  atomicWriteFile,
+  getConfigDir,
+  loadConfig,
+  readAlivePid,
+  readPid,
+  readRuntimePort,
+  verifyPidIdentity,
+} from "../config";
 import { killProxy } from "../lib/process-control";
 import { reclaimListenPort } from "../server/port-reclaim";
 import {
@@ -383,6 +391,7 @@ export interface RestartIo {
   waitForPort?: typeof reclaimListenPort;
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number, launcher?: string) => void;
   serviceInstalledFn?: () => boolean;
+  readPidFn?: () => number | null;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -419,6 +428,14 @@ async function restartAfterUpdate(
   const oldPid = typeof captured?.oldPid === "number" && captured.oldPid > 0
     ? captured.oldPid
     : undefined;
+  const readCurrentPid = io.readPidFn ?? readPid;
+  const refuseForReplacementPid = (): boolean => {
+    const currentPid = readCurrentPid();
+    if (currentPid === null || currentPid === oldPid) return false;
+    updateJob(job, {}, "A different identity-checked proxy PID appeared during restart handoff; leaving it untouched.");
+    return true;
+  };
+  if (refuseForReplacementPid()) return;
   let svcArgs: string[] | undefined;
   if (serviceInstalled) {
     try {
@@ -444,6 +461,7 @@ async function restartAfterUpdate(
     if (!freed) {
       updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`);
     }
+    if (refuseForReplacementPid()) return;
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(Math.trunc(port));
     let serviceOk = false;
@@ -469,8 +487,12 @@ async function restartAfterUpdate(
     // proxy stopped when the service reinstall could not run.
   }
 
-  const pid = readPid();
+  const pid = readCurrentPid();
   if (pid) {
+    if (pid !== oldPid) {
+      updateJob(job, {}, "A different identity-checked proxy PID appeared before direct restart; leaving it untouched.");
+      return;
+    }
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
     killProxy(pid);
   }
@@ -482,6 +504,7 @@ async function restartAfterUpdate(
     updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s (reclaim could not free the socket); not starting on another port. Retry 'ocx start --port ${port}'.`);
     return;
   }
+  if (refuseForReplacementPid()) return;
   (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port, launcher);
 }
 
@@ -626,13 +649,20 @@ async function probeFailedUpdateProxy(
   return null;
 }
 
-/** Retry the pre-update identity lookup before declaring an active proxy absent. */
-export async function findLiveProxyForUpdate(
-  probe: () => Promise<LiveProxy | null> = findLiveProxy,
-  sleep: (ms: number) => Promise<void> = async (ms: number) => {
+export interface UpdateLivenessIo {
+  findLiveProxyFn?: () => Promise<LiveProxy | null>;
+  sleepMs?: (ms: number) => Promise<void>;
+  readAlivePidFn?: () => number | null;
+  verifyPidIdentityFn?: (pid: number) => number | null;
+  readRuntimePortFn?: (expectedPid?: number) => { pid?: number; port: number; hostname?: string } | null;
+}
+
+/** Retry health first, then retain a PID-verified runtime target as active evidence. */
+export async function findLiveProxyForUpdate(io: UpdateLivenessIo = {}): Promise<LiveProxy | null> {
+  const probe = io.findLiveProxyFn ?? findLiveProxy;
+  const sleep = io.sleepMs ?? (async (ms: number) => {
     await new Promise(resolve => setTimeout(resolve, ms));
-  },
-): Promise<LiveProxy | null> {
+  });
   for (let attempt = 0; attempt < UPDATE_LIVENESS_PROBE_ATTEMPTS; attempt += 1) {
     try {
       const live = await probe();
@@ -640,7 +670,14 @@ export async function findLiveProxyForUpdate(
     } catch { /* retry a transient liveness lookup failure */ }
     if (attempt + 1 < UPDATE_LIVENESS_PROBE_ATTEMPTS) await sleep(UPDATE_LIVENESS_PROBE_DELAY_MS);
   }
-  return null;
+
+  const candidatePid = (io.readAlivePidFn ?? readAlivePid)();
+  if (candidatePid === null) return null;
+  const verifiedPid = (io.verifyPidIdentityFn ?? verifyPidIdentity)(candidatePid);
+  if (verifiedPid !== candidatePid) return null;
+  const runtime = (io.readRuntimePortFn ?? readRuntimePort)(candidatePid);
+  if (!runtime) return null;
+  return { pid: candidatePid, port: runtime.port, hostname: runtime.hostname };
 }
 
 /** Keep a failed GUI install from also leaving a previously-active proxy offline. */
@@ -661,6 +698,11 @@ async function recoverFailedGuiUpdate(
     && (io.verifyPidIdentityFn ?? verifyPidIdentity)(captured.oldPid) === captured.oldPid;
   if (oldPidIdentityMatches) {
     updateJob(job, {}, `Update command failed and health probes timed out, but pre-update PID ${captured.oldPid} still identifies as OpenCodex; refusing an automatic restart.`);
+    return "still-running";
+  }
+
+  if (await probeFailedUpdateProxy(captured, io)) {
+    updateJob(job, {}, `A replacement proxy became healthy on ${captured.hostname}:${captured.port} before recovery; leaving it untouched.`);
     return "still-running";
   }
 
