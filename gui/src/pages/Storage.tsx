@@ -489,6 +489,10 @@ function QuarantineTrashPanel({
       case "fs_failed": return t("storage.trash.err.fs_failed");
       case "db_reconcile_failed": return t("storage.trash.err.db_reconcile_failed");
       case "restore_failed": return t("storage.trash.err.restore_failed");
+      case "restore_worker_timeout": return t("storage.trash.err.restore_worker_timeout");
+      case "restore_worker_aborted": return t("storage.trash.err.restore_worker_aborted");
+      case "restore_worker_failed":
+        return fallback ?? t("storage.trash.err.restore_worker_failed");
       default: return fallback ?? t("storage.trash.restoreFailed");
     }
   };

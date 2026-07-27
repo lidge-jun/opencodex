@@ -696,6 +696,9 @@ export const ru: Record<TKey, string> = {
   "storage.trash.err.fs_failed": "Ошибка восстановления файлов. Часть файлов могла уже восстановиться — проверьте archived_sessions и .trash.",
   "storage.trash.err.db_reconcile_failed": "Не удалось восстановить строки базы состояния Codex.",
   "storage.trash.err.restore_failed": "Не удалось восстановить.",
+  "storage.trash.err.restore_worker_timeout": "Восстановление заняло слишком много времени (более 10 минут) и было остановлено.",
+  "storage.trash.err.restore_worker_aborted": "Восстановление отменено при завершении работы.",
+  "storage.trash.err.restore_worker_failed": "Worker восстановления завершился с ошибкой или аварийно.",
 
   // add-provider modal
   "modal.addNamed": "Добавить: {label}",

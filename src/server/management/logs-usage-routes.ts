@@ -350,7 +350,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     }
   }
 
-  if (url.pathname === "/api/storage/trash/restore/test-stream" && req.method === "GET") {
+  if (
+    process.env.OPENCODEX_CLEANUP_TEST_HOOKS === "1" &&
+    url.pathname === "/api/storage/trash/restore/test-stream" &&
+    req.method === "GET"
+  ) {
     const stream = getRestoreTrashTestStreamResponse();
     if (stream) return stream;
     return jsonResponse({ error: "not_available" }, 404);
@@ -385,11 +389,20 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           fs_failed: "Filesystem restore failed. Some files may already be restored — check archived_sessions and .trash.",
           db_reconcile_failed: "Could not restore Codex state database rows.",
           restore_failed: "Restore failed.",
+          restore_worker_timeout: "Restore took too long (over 10 minutes) and was stopped.",
+          restore_worker_aborted: "Restore was cancelled during shutdown.",
+          restore_worker_failed: "Restore worker crashed or failed unexpectedly.",
         };
+        const errorCode = result.error ?? "restore_failed";
+        const baseMessage = messages[errorCode] ?? messages.restore_failed;
+        const message =
+          result.message && errorCode === "restore_worker_failed"
+            ? `${baseMessage} (${result.message})`
+            : baseMessage;
         return jsonResponse({
           ok: false,
-          error: result.error ?? "restore_failed",
-          message: messages[result.error ?? "restore_failed"] ?? messages.restore_failed,
+          error: errorCode,
+          message,
           count: result.count,
           bytes: result.bytes,
           restoredPaths: result.restoredPaths,

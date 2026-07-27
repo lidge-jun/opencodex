@@ -697,6 +697,9 @@ export const en = {
   "storage.trash.err.fs_failed": "Filesystem restore failed. Some files may already be restored — check archived_sessions and .trash.",
   "storage.trash.err.db_reconcile_failed": "Could not restore Codex state database rows.",
   "storage.trash.err.restore_failed": "Restore failed.",
+  "storage.trash.err.restore_worker_timeout": "Restore took too long (over 10 minutes) and was stopped.",
+  "storage.trash.err.restore_worker_aborted": "Restore was cancelled during shutdown.",
+  "storage.trash.err.restore_worker_failed": "Restore worker crashed or failed unexpectedly.",
 
   // add-provider modal
   "modal.addNamed": "Add: {label}",

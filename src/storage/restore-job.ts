@@ -31,6 +31,33 @@ export interface RestoreJobTestHooks extends StorageMutationCoordinatorTestHooks
 
 const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
 
+const WORKER_REJECTION_CODES: Record<string, RestoreResult["error"]> = {
+  restore_worker_timeout: "restore_worker_timeout",
+  aborted: "restore_worker_aborted",
+  worker_failed: "restore_worker_failed",
+};
+
+/** Map a rejected worker promise to a precise restore outcome (exported for tests). */
+export function restoreResultFromWorkerRejection(err: unknown, trashId: string): RestoreResult {
+  const raw = err instanceof Error ? err.message : String(err);
+  const error = WORKER_REJECTION_CODES[raw] ?? "restore_worker_failed";
+  const detail =
+    error === "restore_worker_failed" && raw !== "worker_failed" && raw.trim().length > 0
+      ? raw
+      : undefined;
+  console.error(
+    `[storage] trash restore worker failed (${error}) trashId=${trashId}${detail ? `: ${detail}` : ""}`,
+  );
+  return {
+    ok: false,
+    count: 0,
+    bytes: 0,
+    restoredPaths: [],
+    error,
+    ...(detail ? { message: detail } : {}),
+  };
+}
+
 let activeWorker: Worker | null = null;
 let testHooks: RestoreJobTestHooks | null = null;
 let cancelActiveRun: (() => void) | null = null;
@@ -176,14 +203,8 @@ async function executeRestore(opts: {
       ...(typeof blockMs === "number" && blockMs > 0 ? { blockMs } : {}),
       ...(restoreTest ? { restoreTest } : {}),
     });
-  } catch {
-    return {
-      ok: false,
-      count: 0,
-      bytes: 0,
-      restoredPaths: [],
-      error: "restore_failed",
-    };
+  } catch (err) {
+    return restoreResultFromWorkerRejection(err, opts.trashId);
   }
 }
 

@@ -664,6 +664,9 @@ export const ja: Record<TKey, string> = {
   "storage.trash.err.fs_failed": "ファイルシステムの復元に失敗しました。一部は既に復元されている可能性があります — archived_sessions と .trash を確認してください。",
   "storage.trash.err.db_reconcile_failed": "Codex の状態データベース行を復元できませんでした。",
   "storage.trash.err.restore_failed": "復元に失敗しました。",
+  "storage.trash.err.restore_worker_timeout": "復元が長時間（10 分超）かかったため停止しました。",
+  "storage.trash.err.restore_worker_aborted": "シャットダウン中に復元がキャンセルされました。",
+  "storage.trash.err.restore_worker_failed": "復元ワーカーがクラッシュまたは予期しないエラーで失敗しました。",
 
   // add-provider modal
   "modal.addNamed": "追加: {label}",

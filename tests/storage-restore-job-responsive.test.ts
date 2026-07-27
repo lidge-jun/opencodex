@@ -18,6 +18,7 @@ import {
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousCleanupTestHooks: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function baseConfig(): OcxConfig {
@@ -47,6 +48,8 @@ function seedArchived(codexHome: string): void {
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousCleanupTestHooks = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+  process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
   isolatedCodexHome = installIsolatedCodexHome("ocx-restore-job-responsive-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-restore-job-responsive-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -59,6 +62,8 @@ afterEach(() => {
   setRestoreTrashJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousCleanupTestHooks === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
+  else process.env.OPENCODEX_CLEANUP_TEST_HOOKS = previousCleanupTestHooks;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
