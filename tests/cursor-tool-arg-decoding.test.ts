@@ -241,6 +241,76 @@ describe("Cursor Responses tool argument decoding", () => {
     ]);
   });
 
+  describe("shell bridge rejects empty or malformed command args", () => {
+    const dropped = (tool: string) =>
+      `Cursor emitted ${tool} without a non-empty command; the tool call was dropped.`;
+
+    function shellBridgeArgs(
+      toolName: "exec_command" | "shell_command",
+      args: Record<string, Uint8Array>,
+      callId: string,
+    ) {
+      return create(McpArgsSchema, {
+        name: toolName,
+        toolName: toolName,
+        toolCallId: callId,
+        providerIdentifier: "opencodex-responses",
+        args,
+      });
+    }
+
+    test.each([
+      ["exec_command", "cmd", "echo hi"] as const,
+      ["shell_command", "command", "echo hi"] as const,
+    ])("%s accepts a valid %s payload", (toolName, field, command) => {
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes(command) }, `toolu_valid_${toolName}`);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "tool_call_start", id: `toolu_valid_${toolName}`, name: toolName },
+        { type: "tool_call_delta", arguments: expect.stringContaining(command) },
+        { type: "tool_call_end", id: `toolu_valid_${toolName}` },
+      ]);
+    });
+
+    test.each([
+      ["exec_command", "cmd"] as const,
+      ["shell_command", "command"] as const,
+    ])("%s rejects missing args", (toolName, field) => {
+      void field;
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, {}, `toolu_empty_${toolName}`);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+    });
+
+    test.each([
+      ["exec_command", "cmd"] as const,
+      ["shell_command", "command"] as const,
+    ])("%s rejects whitespace-only %s", (toolName, field) => {
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes("   ") }, `toolu_blank_${toolName}`);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+    });
+
+    test.each([
+      ["exec_command", "cmd", 42] as const,
+      ["exec_command", "cmd", {}] as const,
+      ["exec_command", "cmd", ""] as const,
+      ["shell_command", "command", 42] as const,
+      ["shell_command", "command", {}] as const,
+      ["shell_command", "command", ""] as const,
+    ])("%s rejects invalid %s=%s", (toolName, field, value) => {
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes(value) }, `toolu_bad_${toolName}_${field}`);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+    });
+  });
+
   test("synthetic native mcp exec emits a self-contained atomic tool call", () => {
     // Native-exec delivers the whole call at once. With deferred-start emission the synthetic mapper
     // always emits its own start -> delta -> end unit (the old suppressStart option is gone).

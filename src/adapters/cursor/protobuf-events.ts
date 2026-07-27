@@ -3,6 +3,8 @@ import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
 import {
+  isCodexShellBridgeToolName,
+  nonEmptyShellBridgeCommandFromArgs,
   normalizeCursorWireName,
   OCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
@@ -364,6 +366,14 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
 function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
+  if (isCodexShellBridgeToolName(open.name) && nonEmptyShellBridgeCommandFromArgs(finalArgs) === undefined) {
+    state.openToolCalls.delete(callId);
+    state.completedToolCalls.add(callId);
+    return [{
+      type: "error",
+      message: `Cursor emitted ${open.name} without a non-empty command; the tool call was dropped.`,
+    }];
+  }
   const out: CursorServerMessage[] = [{ type: "tool_call_start", id: callId, name: open.name }];
   if (finalArgs.length > 0) out.push({ type: "tool_call_delta", arguments: finalArgs });
   out.push(...endToolCall(state, callId));
