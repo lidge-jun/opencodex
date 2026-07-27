@@ -1,9 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { assessUrlDestination, assertUrlResolvesPublic } from "../lib/destination-policy";
 
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -17,24 +19,39 @@ export function createImageBudget(): ImageBudget {
   return { spent: 0 };
 }
 
-/**
- * Sniff the real image format from leading magic bytes rather than trusting an
- * upstream-declared MIME type, which may be missing or spoofed.
- */
+function getArtifactsDir(): string {
+  return join(getConfigDir(), "artifacts");
+}
+
+function timestampPrefix(): string {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+    "-",
+    String(now.getMilliseconds()).padStart(3, "0"),
+  ].join("");
+}
+
 export function guessExtFromMagic(bytes: Uint8Array): string {
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
   if (sig.startsWith("\x89PNG")) return "png";
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";
-  throw new Error("unrecognized image format — magic bytes do not match PNG, JPEG, WebP, or GIF");
+  return "png";
 }
 
 export async function materializeInlineImage(
   base64Data: string,
   budget?: ImageBudget,
 ): Promise<string> {
-  const dir = join(getConfigDir(), "artifacts");
+  const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
   const normalized = base64Data.replace(/\s+/g, "");
@@ -54,25 +71,76 @@ export async function materializeInlineImage(
   const buf = Buffer.from(normalized, "base64");
   if (budget) budget.spent += buf.length;
 
-  // Determine the extension from the actual decoded bytes, not an upstream MIME
-  // label, so a spoofed or missing type cannot misname the file.
+  // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = guessExtFromMagic(buf);
-
-  const now = new Date();
-  const ts = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-    "-",
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-    String(now.getSeconds()).padStart(2, "0"),
-    "-",
-    String(now.getMilliseconds()).padStart(3, "0"),
-  ].join("");
-  const suffix = crypto.randomUUID();
-  const filePath = join(dir, `img-${ts}-${suffix}.${ext}`);
-
+  const filePath = join(dir, `img-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
   await writeFile(filePath, buf, { mode: 0o600 });
+  return filePath;
+}
+
+export async function downloadImageToArtifact(
+  url: string,
+  budget?: ImageBudget,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (url.startsWith("data:")) {
+    const m = /^data:([^;]+);base64,(.+)$/.exec(url);
+    if (!m) throw new Error("data URL is not a valid base64 image");
+    return materializeInlineImage(m[2], budget);
+  }
+
+  // SSRF protection: validate the provider-returned URL before fetching.
+  // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  // Reject literal private/loopback/link-local/metadata addresses.
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`image URL targets ${assessment.detail}`);
+  }
+  // DNS check: resolve hostname and reject if it points at private/internal space.
+  await assertUrlResolvesPublic(url);
+  const resp = await fetch(url, { signal, redirect: "error" });
+  if (!resp.ok) throw new Error("image download failed: " + resp.status);
+
+  // Stream the body with a hard byte cap so a missing/lying Content-Length or a
+  // compromised CDN URL cannot exhaust memory before the size check runs.
+  if (!resp.body) throw new Error("image download returned no body");
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_DOWNLOAD_BYTES) {
+        throw new Error(`image download exceeds ${MAX_DOWNLOAD_BYTES} byte cap`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* ignore cancel errors */ }
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { bytes.set(c, offset); offset += c.byteLength; }
+
+  if (budget && budget.spent + bytes.length > MAX_DECODED_BYTES_PER_RESPONSE) {
+    throw new Error(`image download exceeds ${MAX_DECODED_BYTES_PER_RESPONSE} byte per-response budget`);
+  }
+
+  const ext = guessExtFromMagic(bytes);
+  const dir = getArtifactsDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (budget) budget.spent += bytes.length;
+
+  const filePath = join(dir, `dl-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`);
+  await writeFile(filePath, bytes, { mode: 0o600 });
   return filePath;
 }
