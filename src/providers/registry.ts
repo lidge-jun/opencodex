@@ -785,6 +785,29 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
     preserveReasoningContentModels: ZAI_GLM_52_MODELS,
   },
+  // Zhipu AI (BigModel) — the domestic Chinese OpenAI-compatible endpoint. Same GLM family
+  // as `zai`, but the public pay-as-you-go host at open.bigmodel.cn instead of the z.ai
+  // coding-plan subscription. Live model discovery is enabled so newly published GLM ids
+  // surface automatically without a registry edit. Evidence: docs.bigmodel.cn/api-reference.
+  {
+    id: "glm",
+    label: "Zhipu AI — GLM",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
+    defaultModel: "glm-4.6",
+    models: ["glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-air", "glm-4-airx", "glm-4-flash", "glm-4-flashx", "glm-4-long", "glm-4v"],
+    liveModels: true,
+    // GLM-4.6 exposes a binary thinking toggle: `thinking: {type: "enabled" | "disabled"}`.
+    // Evidence: docs.bigmodel.cn/cn/guide/models/text/glm-4.6, docs.z.ai/guides/capabilities/thinking-mode.
+    // Reuses the shared THINKING_TOGGLE_EFFORTS / THINKING_TOGGLE_MAP constants.
+    thinkingToggleModels: ["glm-4.6"],
+    modelReasoningEfforts: { "glm-4.6": THINKING_TOGGLE_EFFORTS },
+    modelReasoningEffortMap: { "glm-4.6": THINKING_TOGGLE_MAP },
+    preserveReasoningContentModels: ["glm-4.6"],
+    note: "Zhipu AI / ChatGLM OpenAI-compatible endpoint (open.bigmodel.cn)",
+  },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
   // SiliconFlow publishes an OpenAI-compatible chat endpoint and a dynamic model catalog. Do not
