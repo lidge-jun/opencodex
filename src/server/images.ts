@@ -48,10 +48,14 @@ export async function handleImages(
   endpoint: ImagesEndpoint,
   logCtx: RequestLogContext,
 ): Promise<Response> {
-  try { validateForwardAdmissionCredential(req.headers, config); }
-  catch (err) {
-    if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
-    throw err;
+  const candidates = selectImagesProvider(config);
+  const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
+  if (!explicitKeyedProvider) {
+    try { validateForwardAdmissionCredential(req.headers, config); }
+    catch (err) {
+      if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
+      throw err;
+    }
   }
   let body: unknown;
   try {
@@ -62,7 +66,6 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  const candidates = selectImagesProvider(config);
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);
   }

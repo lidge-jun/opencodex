@@ -340,6 +340,57 @@ test("an explicit custom Images provider uses its configured endpoint, key, and 
   }
 });
 
+test("an explicit Images provider accepts bearer admission without leaking the proxy secret", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-admission-secret";
+  const captured: CapturedRequest[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({
+        path: new URL(req.url).pathname,
+        headers: req.headers,
+        body: await req.json(),
+      });
+      return Response.json({ created: 1_767_000_000, data: [{ b64_json: "aGVsbG8=" }] });
+    },
+  });
+  saveConfig({
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "custom-images",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "custom-images": {
+        adapter: "openai-responses",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        allowPrivateNetwork: true,
+        authMode: "key",
+        apiKey: "${OPENCODEX_TEST_IMAGES_API_KEY}",
+      },
+    },
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-admission-secret",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer custom-images-key");
+    expect([...captured[0].headers.values()].some(value => value.includes("proxy-admission-secret"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("an invalid explicit Images provider fails closed instead of using another upstream", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);

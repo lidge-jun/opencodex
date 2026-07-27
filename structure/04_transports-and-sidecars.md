@@ -50,13 +50,15 @@ These are standalone Images API routes, not the hosted Responses `image_generati
 `src/server/images.ts` uses the existing ChatGPT/OpenAI fallback unless `images.provider` explicitly
 selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
 provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
-falls through to another paid upstream. The relay passes the bounded opaque body without rewriting
-Codex's JSON edit schema or a compatible multipart body. Each paid Images POST receives one upstream
-attempt; client cancellation aborts the upstream and pool-only failures update the existing
-account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+falls through to another paid upstream. The relay accepts bounded JSON generation and edit requests,
+then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST receives
+one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
+existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
-On non-loopback binds, data-plane authentication and origin policy cover both Images routes just as
-they cover `/v1/responses`; clients must send the configured `x-opencodex-api-key`.
+On non-loopback binds, data-plane authentication and origin policy cover both Images routes. An
+explicit keyed Images provider accepts the proxy admission secret as either an OpenAI-style bearer
+or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
+ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
 
 The API-key `openai-responses` path also prevents the standalone client tool from colliding with the
 hosted Responses tool. When a request declares `image_gen.imagegen` (as a flat function or an
