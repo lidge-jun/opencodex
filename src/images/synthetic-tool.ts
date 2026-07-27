@@ -55,8 +55,8 @@ export function buildImageTool(): OcxTool {
   return {
     name: IMAGE_GEN_TOOL_NAME,
     description:
-      "Generate or edit an image. Returns absolute local filesystem path(s). " +
-      "Use when the user asks to create, draw, or edit an image.",
+      "Generate an image from a text prompt. Returns absolute local filesystem path(s). " +
+      "Use when the user asks to create or draw an image.",
     parameters: {
       type: "object",
       properties: {
