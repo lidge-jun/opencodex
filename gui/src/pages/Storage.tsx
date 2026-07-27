@@ -68,6 +68,34 @@ interface RestoreResult {
   message?: string;
 }
 
+const GB = 1024 ** 3;
+
+interface CleanupPolicy {
+  enabled: boolean;
+  trigger: { archivedBytesOver: number };
+  target: { reduceToBytes?: number; removeOldestPercent?: number };
+  schedule: "startup" | "daily" | "weekly" | "manual";
+  mode: "quarantine" | "permanent";
+  lastRun?: { at: number; freedBytes: number; removed: number };
+  nextRun?: number;
+  job?: {
+    status: "idle" | "running";
+    reason?: string;
+    startedAt?: number;
+    finishedAt?: number;
+    lastError?: string;
+    lastOutcome?: {
+      ok: boolean;
+      skipped?: string;
+      deferred?: string;
+      error?: string;
+      mode?: string;
+      freedBytes?: number;
+      removed?: number;
+    };
+  };
+}
+
 const BUCKET_TKEYS: Record<string, TKey> = {
   sessions: "storage.bucket.sessions",
   archived_sessions: "storage.bucket.archived_sessions",
@@ -635,6 +663,443 @@ function QuarantineTrashPanel({
   );
 }
 
+function policyFieldsFromResponse(json: CleanupPolicy): CleanupPolicy {
+  const { job, ...policy } = json;
+  void job;
+  return policy;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+function AutoCleanupPolicyPanel({
+  apiBase,
+  locale,
+  t,
+  onDone,
+}: {
+  apiBase: string;
+  locale: Locale;
+  t: TFn;
+  onDone: () => void;
+}) {
+  const [policy, setPolicy] = useState<CleanupPolicy | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [targetMode, setTargetMode] = useState<"percent" | "reduce">("percent");
+  const [percent, setPercent] = useState(25);
+  /** Draft string so blank/invalid reduce targets are rejected instead of coerced to 0. */
+  const [reduceGb, setReduceGb] = useState("4");
+  /** Draft string so a cleared threshold is rejected instead of coerced to 0. */
+  const [thresholdGb, setThresholdGb] = useState("5");
+  /** Cancels in-flight Run-now polling when the panel unmounts. */
+  const runAbortRef = useRef<AbortController | null>(null);
+
+  const loadPolicy = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/storage/cleanup-policy`, { signal });
+      if (!res.ok) throw new Error("load_failed");
+      const json = await res.json() as CleanupPolicy;
+      if (signal?.aborted) return;
+      setPolicy(policyFieldsFromResponse(json));
+      setThresholdGb(String(Math.max(0, Math.round((json.trigger.archivedBytesOver / GB) * 100) / 100)));
+      if (json.target.reduceToBytes !== undefined) {
+        setTargetMode("reduce");
+        setReduceGb(String(Math.max(0, Math.round((json.target.reduceToBytes / GB) * 100) / 100)));
+      } else {
+        setTargetMode("percent");
+        setPercent(Math.min(100, Math.max(1, Math.floor(json.target.removeOldestPercent ?? 25))));
+      }
+    } catch {
+      if (signal?.aborted) return;
+      setPolicy(null);
+      setError(t("storage.policy.loadFailed"));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [apiBase, t]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void loadPolicy(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [loadPolicy]);
+
+  useEffect(() => {
+    return () => {
+      runAbortRef.current?.abort();
+      runAbortRef.current = null;
+    };
+  }, []);
+
+  const buildBody = (): CleanupPolicy | null => {
+    if (!policy) return null;
+    const thresholdRaw = thresholdGb.trim();
+    if (thresholdRaw === "") return null;
+    const threshold = Number(thresholdRaw);
+    if (!Number.isFinite(threshold) || threshold < 0) return null;
+
+    let target: CleanupPolicy["target"];
+    if (targetMode === "reduce") {
+      const raw = reduceGb.trim();
+      if (raw === "") return null;
+      const reduce = Number(raw);
+      if (!Number.isFinite(reduce) || reduce < 0) return null;
+      target = { reduceToBytes: Math.floor(reduce * GB) };
+    } else {
+      const pct = Number(percent);
+      if (!Number.isFinite(pct) || pct < 1 || pct > 100) return null;
+      target = { removeOldestPercent: Math.min(100, Math.max(1, Math.floor(pct))) };
+    }
+
+    return {
+      enabled: policy.enabled,
+      trigger: { archivedBytesOver: Math.floor(threshold * GB) },
+      target,
+      schedule: policy.schedule,
+      mode: policy.mode,
+    };
+  };
+
+  const savePolicy = async (patch?: Partial<CleanupPolicy>) => {
+    const base = buildBody();
+    if (!base) {
+      setError(t("storage.policy.invalid"));
+      return;
+    }
+    const body = { ...base, ...patch };
+    setSaving(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const res = await fetch(`${apiBase}/api/storage/cleanup-policy`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json() as { ok?: boolean; policy?: CleanupPolicy; error?: string };
+      if (!res.ok || !json.policy) {
+        setError(t("storage.policy.saveFailed"));
+        return;
+      }
+      setPolicy(policyFieldsFromResponse(json.policy));
+      setStatus(t("storage.policy.saved"));
+    } catch {
+      setError(t("storage.policy.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runNow = async () => {
+    runAbortRef.current?.abort();
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    const { signal } = controller;
+
+    setRunning(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const base = buildBody();
+      if (!base) {
+        setError(t("storage.policy.invalid"));
+        return;
+      }
+      const saveRes = await fetch(`${apiBase}/api/storage/cleanup-policy`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(base),
+        signal,
+      });
+      const saved = await saveRes.json() as { policy?: CleanupPolicy; error?: string };
+      if (signal.aborted) return;
+      if (!saveRes.ok || !saved.policy) {
+        setError(t("storage.policy.saveFailed"));
+        return;
+      }
+      setPolicy(policyFieldsFromResponse(saved.policy));
+
+      const res = await fetch(`${apiBase}/api/storage/cleanup-policy/run`, {
+        method: "POST",
+        signal,
+      });
+      const startJson = await res.json() as {
+        ok?: boolean;
+        started?: boolean;
+        error?: string;
+        job?: CleanupPolicy["job"];
+        policy?: CleanupPolicy;
+      };
+      if (signal.aborted) return;
+      if (startJson.policy) setPolicy(policyFieldsFromResponse(startJson.policy));
+      if (startJson.error === "already_running" || res.status === 409) {
+        setError(t("storage.policy.alreadyRunning"));
+        return;
+      }
+      if (!res.ok) {
+        setError(t("storage.policy.runFailed"));
+        return;
+      }
+      if (!startJson.started || !startJson.job?.startedAt) {
+        setError(t("storage.policy.runFailed"));
+        return;
+      }
+
+      const startedAt = startJson.job.startedAt;
+      const deadline = Date.now() + 120_000;
+      let outcome: NonNullable<CleanupPolicy["job"]>["lastOutcome"] | undefined;
+      let finalPolicy: CleanupPolicy | undefined;
+
+      while (Date.now() < deadline) {
+        if (signal.aborted) return;
+        await sleep(250);
+        if (signal.aborted) return;
+        const pollRes = await fetch(`${apiBase}/api/storage/cleanup-policy`, { signal });
+        if (signal.aborted) return;
+        if (!pollRes.ok) continue;
+        const body = await pollRes.json() as CleanupPolicy;
+        if (signal.aborted) return;
+        finalPolicy = policyFieldsFromResponse(body);
+        setPolicy(finalPolicy);
+        const job = body.job;
+        if (!job) continue;
+        if (job.status === "running") continue;
+        if (job.startedAt === startedAt && job.lastOutcome) {
+          outcome = job.lastOutcome;
+          break;
+        }
+        if (job.finishedAt && job.finishedAt >= startedAt && job.lastOutcome) {
+          outcome = job.lastOutcome;
+          break;
+        }
+      }
+
+      if (signal.aborted) return;
+      if (finalPolicy) setPolicy(finalPolicy);
+      if (!outcome) {
+        setError(t("storage.policy.runFailed"));
+        return;
+      }
+
+      if (outcome.skipped === "disabled") {
+        setStatus(t("storage.policy.skippedDisabled"));
+      } else if (outcome.skipped === "under_threshold") {
+        setStatus(t("storage.policy.skippedUnder"));
+      } else if (outcome.skipped === "nothing_selected") {
+        setStatus(t("storage.policy.skippedEmpty"));
+      } else if (outcome.deferred === "codex_busy" || outcome.error === "codex_busy") {
+        setError(t("storage.cleanup.err.codex_busy"));
+      } else if (!outcome.ok) {
+        setError(t("storage.policy.runFailed"));
+      } else {
+        setStatus(
+          outcome.mode === "permanent"
+            ? t("storage.policy.donePermanent", {
+              count: String(outcome.removed ?? 0),
+              size: formatBytes(outcome.freedBytes ?? 0, locale),
+            })
+            : t("storage.policy.doneQuarantine", {
+              count: String(outcome.removed ?? 0),
+              size: formatBytes(outcome.freedBytes ?? 0, locale),
+            }),
+        );
+        onDone();
+      }
+    } catch (err) {
+      if (signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+      setError(t("storage.policy.runFailed"));
+    } finally {
+      if (runAbortRef.current === controller) runAbortRef.current = null;
+      if (!signal.aborted) setRunning(false);
+    }
+  };
+
+  const formatWhen = (ms: number | undefined) =>
+    ms === undefined ? t("storage.policy.never") : new Date(ms).toLocaleString(locale);
+
+  if (loading && !policy) {
+    return (
+      <section className="panel" style={{ marginTop: 16 }} aria-labelledby="storage-policy-title">
+        <h3 id="storage-policy-title" className="panel-title">{t("storage.policy.title")}</h3>
+        <p className="muted">{t("storage.policy.loading")}</p>
+      </section>
+    );
+  }
+
+  if (!policy) {
+    return (
+      <section className="panel" style={{ marginTop: 16 }} aria-labelledby="storage-policy-title">
+        <h3 id="storage-policy-title" className="panel-title">{t("storage.policy.title")}</h3>
+        {error && <p className="err" role="alert">{error}</p>}
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="storage-policy-title">
+      <h3 id="storage-policy-title" className="panel-title">{t("storage.policy.title")}</h3>
+      <p className="muted" style={{ marginTop: 4 }}>{t("storage.policy.help")}</p>
+
+      <label className="row" style={{ marginTop: 12, gap: 8, alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={policy.enabled}
+          disabled={saving || running}
+          onChange={e => {
+            const enabled = e.target.checked;
+            void savePolicy({ enabled });
+          }}
+        />
+        <span>{t("storage.policy.enabled")}</span>
+      </label>
+      <p className="muted" style={{ marginTop: 4, fontSize: "var(--text-sm)" }}>{t("storage.policy.enabledHint")}</p>
+
+      <div style={{ display: "grid", gap: 12, marginTop: 16, maxWidth: 420 }}>
+        <label>
+          <span className="muted">{t("storage.policy.threshold")}</span>
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            value={thresholdGb}
+            disabled={saving || running}
+            onChange={e => setThresholdGb(e.target.value)}
+            onBlur={() => void savePolicy()}
+            style={{ display: "block", marginTop: 4, width: "100%" }}
+          />
+        </label>
+
+        <fieldset style={{ border: "none", padding: 0, margin: 0 }}>
+          <legend className="muted">{t("storage.policy.target")}</legend>
+          <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 4 }}>
+            <input
+              type="radio"
+              name="storage-policy-target"
+              checked={targetMode === "percent"}
+              disabled={saving || running}
+              onChange={() => setTargetMode("percent")}
+            />
+            <span>{t("storage.policy.targetPercent")}</span>
+          </label>
+          {targetMode === "percent" && (
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={percent}
+              disabled={saving || running}
+              onChange={e => setPercent(Number(e.target.value))}
+              onBlur={() => void savePolicy()}
+              style={{ display: "block", marginTop: 4, width: "100%" }}
+            />
+          )}
+          <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
+            <input
+              type="radio"
+              name="storage-policy-target"
+              checked={targetMode === "reduce"}
+              disabled={saving || running}
+              onChange={() => setTargetMode("reduce")}
+            />
+            <span>{t("storage.policy.targetReduce")}</span>
+          </label>
+          {targetMode === "reduce" && (
+            <input
+              type="number"
+              min={0}
+              step={0.1}
+              value={reduceGb}
+              disabled={saving || running}
+              onChange={e => setReduceGb(e.target.value)}
+              onBlur={() => void savePolicy()}
+              style={{ display: "block", marginTop: 4, width: "100%" }}
+            />
+          )}
+        </fieldset>
+
+        <label>
+          <span className="muted">{t("storage.policy.schedule")}</span>
+          <select
+            value={policy.schedule}
+            disabled={saving || running}
+            onChange={e => {
+              const schedule = e.target.value as CleanupPolicy["schedule"];
+              void savePolicy({ schedule });
+            }}
+            style={{ display: "block", marginTop: 4, width: "100%" }}
+          >
+            <option value="manual">{t("storage.policy.schedule.manual")}</option>
+            <option value="startup">{t("storage.policy.schedule.startup")}</option>
+            <option value="daily">{t("storage.policy.schedule.daily")}</option>
+            <option value="weekly">{t("storage.policy.schedule.weekly")}</option>
+          </select>
+        </label>
+
+        <label>
+          <span className="muted">{t("storage.policy.mode")}</span>
+          <select
+            value={policy.mode}
+            disabled={saving || running}
+            onChange={e => {
+              const mode = e.target.value as CleanupPolicy["mode"];
+              void savePolicy({ mode });
+            }}
+            style={{ display: "block", marginTop: 4, width: "100%" }}
+          >
+            <option value="quarantine">{t("storage.policy.mode.quarantine")}</option>
+            <option value="permanent">{t("storage.policy.mode.permanent")}</option>
+          </select>
+        </label>
+        {policy.mode === "permanent" && (
+          <p className="err" role="status">{t("storage.policy.permanentWarn")}</p>
+        )}
+      </div>
+
+      <div className="usage-cards" style={{ marginTop: 16 }}>
+        <div className="stat">
+          <div className="muted">{t("storage.policy.lastRun")}</div>
+          <div className="stat-value" style={{ fontSize: "var(--text-body)" }}>{formatWhen(policy.lastRun?.at)}</div>
+          {policy.lastRun && (
+            <div className="muted" style={{ marginTop: 4 }}>
+              {t("storage.policy.lastRunDetail", {
+                count: String(policy.lastRun.removed),
+                size: formatBytes(policy.lastRun.freedBytes, locale),
+              })}
+            </div>
+          )}
+        </div>
+        <div className="stat">
+          <div className="muted">{t("storage.policy.nextRun")}</div>
+          <div className="stat-value" style={{ fontSize: "var(--text-body)" }}>{formatWhen(policy.nextRun)}</div>
+        </div>
+      </div>
+
+      <div className="row" style={{ marginTop: 16, gap: 8, flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={saving || running} onClick={() => void savePolicy()}>
+          {t("storage.policy.save")}
+        </button>
+        <button type="button" className="btn btn-sm" disabled={saving || running || !policy.enabled} onClick={() => void runNow()}>
+          {running ? t("storage.policy.running") : t("storage.policy.runNow")}
+        </button>
+      </div>
+      {status && <p className="muted" style={{ marginTop: 8 }} role="status">{status}</p>}
+      {error && <p className="err" style={{ marginTop: 8 }} role="alert">{error}</p>}
+    </section>
+  );
+}
+
 export default function Storage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [data, setData] = useState<StorageReport | null>(null);
@@ -707,7 +1172,15 @@ export default function Storage({ apiBase }: { apiBase: string }) {
       ) : failed ? (
         <EmptyState title={t("storage.error")} />
       ) : empty ? (
-        <EmptyState title={t("storage.empty")} />
+        <>
+          <EmptyState title={t("storage.empty")} />
+          <AutoCleanupPolicyPanel
+            apiBase={apiBase}
+            locale={locale}
+            t={t}
+            onDone={() => refreshAll()}
+          />
+        </>
       ) : (
         <>
           {data && data.total.fileCount > 0 && (
@@ -721,6 +1194,12 @@ export default function Storage({ apiBase }: { apiBase: string }) {
               <LargestFilesPanel buckets={data.buckets} locale={locale} t={t} />
             </>
           )}
+          <AutoCleanupPolicyPanel
+            apiBase={apiBase}
+            locale={locale}
+            t={t}
+            onDone={() => refreshAll()}
+          />
           {archivedCount > 0 && (
             <ArchivedCleanupPanel
               apiBase={apiBase}

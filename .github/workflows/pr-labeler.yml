@@ -17,8 +17,14 @@ concurrency:
 
 permissions:
   contents: read
-  # pulls.get only needs read; label mutations use the issues API.
-  pull-requests: read
+  # pulls.get only needs read, but the issues label endpoints are shared with
+  # pull requests: adding or removing a label on a PR number is rejected with
+  # "Resource not accessible by integration" unless the token also carries
+  # pull_requests=write (the API reports `issues=write; pull_requests=write`
+  # in x-accepted-github-permissions). Read-only here silently worked while
+  # every run happened to be a no-op sync, and failed on the first PR that
+  # actually needed a label written.
+  pull-requests: write
   issues: write
 
 jobs:

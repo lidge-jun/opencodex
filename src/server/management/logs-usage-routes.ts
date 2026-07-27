@@ -38,6 +38,16 @@ import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, pre
 import { runArchivedCleanupJob } from "../../storage/cleanup-job";
 import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
 import {
+  normalizeStorageCleanupPolicy,
+  parseStorageCleanupPolicyInput,
+  writeStorageCleanupPolicyToConfig,
+} from "../../storage/policy";
+import {
+  getStorageCleanupPolicyJobState,
+  getStorageCleanupPolicyTestStreamResponse,
+  requestStorageCleanupPolicyRun,
+} from "../../storage/policy-job";
+import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
   usageLogRevisionKey,
@@ -424,6 +434,60 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         error: "restore_failed",
         message: "Restore failed.",
       }, 500);
+    }
+  }
+
+  if (url.pathname === "/api/storage/cleanup-policy/test-stream" && req.method === "GET") {
+    const stream = getStorageCleanupPolicyTestStreamResponse();
+    if (stream) return stream;
+    // Production: hook is off. Return an explicit JSON 404 — do not fall through to the GUI.
+    return jsonResponse({ error: "not_found" }, 404);
+  }
+
+  if (url.pathname === "/api/storage/cleanup-policy" && req.method === "GET") {
+    const policy = normalizeStorageCleanupPolicy(config.storageCleanupPolicy);
+    return jsonResponse({
+      ...policy,
+      job: getStorageCleanupPolicyJobState(),
+    });
+  }
+
+  if (url.pathname === "/api/storage/cleanup-policy" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid_json" }, 400); }
+    const previous = normalizeStorageCleanupPolicy(config.storageCleanupPolicy);
+    const parsed = parseStorageCleanupPolicyInput(raw, previous);
+    if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400);
+    // Never enable implicitly: if client omitted enabled, keep previous (default false).
+    const body = raw as Record<string, unknown>;
+    if (body.enabled === undefined) parsed.policy.enabled = previous.enabled;
+    const saved = writeStorageCleanupPolicyToConfig(parsed.policy);
+    config.storageCleanupPolicy = saved;
+    return jsonResponse({ ok: true, policy: saved, job: getStorageCleanupPolicyJobState() });
+  }
+
+  if (url.pathname === "/api/storage/cleanup-policy/run" && req.method === "POST") {
+    try {
+      const accepted = requestStorageCleanupPolicyRun({ reason: "manual", force: true });
+      if (!accepted.accepted) {
+        return jsonResponse({
+          ok: false,
+          started: false,
+          error: "already_running",
+          message: "A cleanup policy run is already in progress.",
+          job: accepted.state,
+          policy: normalizeStorageCleanupPolicy(config.storageCleanupPolicy),
+        }, 409);
+      }
+      // Return promptly — clients poll GET for skip/defer/success/error outcomes.
+      return jsonResponse({
+        ok: true,
+        started: true,
+        job: accepted.state,
+        policy: normalizeStorageCleanupPolicy(config.storageCleanupPolicy),
+      });
+    } catch {
+      return jsonResponse({ ok: false, error: "cleanup_failed" }, 500);
     }
   }
 

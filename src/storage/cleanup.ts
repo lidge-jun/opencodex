@@ -242,9 +242,8 @@ export function normalizeArchivedRolloutPath(rolloutPath: string, codexHome: str
   return logical;
 }
 
-/** Content digest of the exact previewed candidate set (paths + size + mtime). */
-export function computePreviewDigest(candidates: ArchivedCandidate[], percent: number): string {
-  const lines = candidates
+function candidateDigestLines(candidates: ArchivedCandidate[]): string[] {
+  return candidates
     .map(c => {
       const physical = [...c.physicalFiles]
         .sort((a, b) => a.relPath.localeCompare(b.relPath))
@@ -253,8 +252,22 @@ export function computePreviewDigest(candidates: ArchivedCandidate[], percent: n
       return `${c.relPath}|${c.bytes}|${Math.trunc(c.mtimeMs)}|${physical}`;
     })
     .sort();
+}
+
+/** Content digest of the exact previewed candidate set (paths + size + mtime). */
+export function computePreviewDigest(candidates: ArchivedCandidate[], percent: number): string {
   return createHash("sha256")
-    .update(`${clampPercent(percent)}\n${lines.join("\n")}`)
+    .update(`${clampPercent(percent)}\n${candidateDigestLines(candidates).join("\n")}`)
+    .digest("hex");
+}
+
+/**
+ * Digest bound to an explicit candidate list (not a percent selection).
+ * Used when reduceToBytes needs an exact count that percent rounding cannot represent.
+ */
+export function computeExactPreviewDigest(candidates: ArchivedCandidate[]): string {
+  return createHash("sha256")
+    .update(`exact\n${candidateDigestLines(candidates).join("\n")}`)
     .digest("hex");
 }
 
@@ -338,6 +351,16 @@ function candidateOverlapsPendingRestore(
   return pendingDestRels.has(candidate.relPath);
 }
 
+/** Drop cleanup candidates whose physical paths overlap an in-progress restore. */
+export function filterCandidatesExcludingPendingRestore(
+  candidates: ArchivedCandidate[],
+  codexHome: string = resolveCodexHomeDir(),
+): ArchivedCandidate[] {
+  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
+  if (pendingDestRels.size === 0) return candidates;
+  return candidates.filter(c => !candidateOverlapsPendingRestore(c, pendingDestRels));
+}
+
 /** Accepted destination paths from every valid in-progress restore marker under `.trash`. */
 export function collectRestorePendingAcceptedDestRels(codexHome: string): Set<string> {
   const out = new Set<string>();
@@ -358,8 +381,7 @@ export function previewArchivedCleanup(
 ): CleanupPreview {
   const all = listArchivedCandidates(codexHome);
   const selected = selectOldestPercent(all, percent);
-  const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
-  const safe = selected.filter(c => !candidateOverlapsPendingRestore(c, pendingDestRels));
+  const safe = filterCandidatesExcludingPendingRestore(selected, codexHome);
   const pct = clampPercent(percent);
   return {
     codexHome,
@@ -369,6 +391,42 @@ export function previewArchivedCleanup(
     digest: computePreviewDigest(safe, pct),
     candidates: safe,
   };
+}
+
+/** Preview bound to an explicit candidate set (exact digest, percent left at 0). */
+export function previewExactArchivedCleanup(
+  candidates: ArchivedCandidate[],
+  codexHome: string = resolveCodexHomeDir(),
+): CleanupPreview {
+  const safe = filterCandidatesExcludingPendingRestore(candidates, codexHome);
+  return {
+    codexHome,
+    percent: 0,
+    count: safe.length,
+    bytes: safe.reduce((sum, c) => sum + c.bytes, 0),
+    digest: computeExactPreviewDigest(safe),
+    candidates: safe,
+  };
+}
+
+/**
+ * Resolve an exact candidate list from current archive state.
+ * Returns null when any requested path is missing or drifted (caller maps to stale_preview).
+ */
+export function resolveExactArchivedCandidates(
+  candidateRelPaths: string[],
+  codexHome: string = resolveCodexHomeDir(),
+): ArchivedCandidate[] | null {
+  if (!Array.isArray(candidateRelPaths) || candidateRelPaths.length === 0) return [];
+  const all = listArchivedCandidates(codexHome);
+  const byRel = new Map(all.map(c => [c.relPath, c]));
+  const selected: ArchivedCandidate[] = [];
+  for (const rel of candidateRelPaths) {
+    const hit = byRel.get(rel);
+    if (!hit) return null;
+    selected.push(hit);
+  }
+  return selected;
 }
 
 function openDbWritable(dbPath: string, busyTimeoutMs = 100): Database {
@@ -1474,6 +1532,11 @@ export interface ExecuteCleanupOptions {
   mode: CleanupMode;
   /** Required digest from preview; rejects when the candidate set drifted. */
   digest: string;
+  /**
+   * Optional exact candidate set (logical relPaths). When set, selection bypasses
+   * percent rounding and the digest must match `computeExactPreviewDigest`.
+   */
+  candidateRelPaths?: string[];
   codexHome?: string;
   /** Test-only: shrink busy_timeout so lock tests fail fast. */
   busyTimeoutMs?: number;
@@ -1561,13 +1624,26 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return fail(mode, percent, "invalid_digest");
   }
 
-  const all = listArchivedCandidates(codexHome);
-  const unfilteredSelected = selectOldestPercent(all, percent);
-  const preview = previewArchivedCleanup(percent, codexHome);
+  let preview: CleanupPreview;
+  let unfilteredSelected: ArchivedCandidate[];
+  if (options.candidateRelPaths !== undefined) {
+    const selected = resolveExactArchivedCandidates(options.candidateRelPaths, codexHome);
+    if (selected === null) {
+      return fail(mode, percent, "stale_preview");
+    }
+    unfilteredSelected = selected;
+    preview = previewExactArchivedCleanup(selected, codexHome);
+  } else {
+    const all = listArchivedCandidates(codexHome);
+    unfilteredSelected = selectOldestPercent(all, percent);
+    preview = previewArchivedCleanup(percent, codexHome);
+  }
   if (preview.digest.toLowerCase() !== options.digest.toLowerCase()) {
     const pendingDestRels = collectRestorePendingAcceptedDestRels(codexHome);
     const blocked = unfilteredSelected.filter(c => candidateOverlapsPendingRestore(c, pendingDestRels));
-    const unfilteredDigest = computePreviewDigest(unfilteredSelected, percent);
+    const unfilteredDigest = options.candidateRelPaths !== undefined
+      ? computeExactPreviewDigest(unfilteredSelected)
+      : computePreviewDigest(unfilteredSelected, percent);
     if (
       unfilteredDigest.toLowerCase() === options.digest.toLowerCase()
       && blocked.length > 0

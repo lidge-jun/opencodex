@@ -13,7 +13,8 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
-import { effectiveGoogleMode } from "../providers/registry";
+import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
+import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -566,12 +567,83 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
   return changed;
 }
 
-/** Add/refresh an OAuth provider's config entry on a config object (does not persist). */
+/** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
+function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
+  const ids = new Set<string>();
+  const keys = new Set<string>();
+  for (const entry of value as unknown[]) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = entry as Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const key = sanitizeApiKeyValue(candidate.key);
+    if (!id || !key || ids.has(id) || keys.has(key)) continue;
+    const label = typeof candidate.label === "string" ? candidate.label : undefined;
+    const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
+      ? candidate.addedAt
+      : undefined;
+    ids.add(id);
+    keys.add(key);
+    pool.push({
+      id,
+      key,
+      ...(label !== undefined ? { label } : {}),
+      ...(addedAt !== undefined ? { addedAt } : {}),
+    });
+  }
+  // `apiKey` remains the routing source of truth. Keep valid alternate slots even when a
+  // hand-edited config left the pool out of sync, rather than deleting usable credentials.
+  return pool.length > 0 ? pool : undefined;
+}
+
+/**
+ * Add/refresh an OAuth provider's config entry on a config object (does not persist).
+ *
+ * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
+ * billed through a stored API key instead of the OAuth login (router.ts honors
+ * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
+ * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
+ * flips billing back to the subscription without the user asking. Carry the key fields over
+ * and keep key billing while usable key material remains and the user was not explicitly on
+ * oauth. If the final key was removed and only the old key mode remains, let the OAuth
+ * preset restore `authMode: "oauth"` so the newly saved OAuth credential can be used.
+ *
+ * After preservation, `apiKey` always has exactly one matching pool entry (inserting via the
+ * same content-derived id as the API-key manager when the active key was missing from the
+ * pool). Key mode reflects stored user intent (explicit `"key"` or omitted mode with safe
+ * key material) — never whether the login CLI process can resolve an env reference. Env-backed
+ * availability is decided at proxy routing time in `router.ts`.
+ */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
-  config.providers[provider] = { ...def.providerConfig };
+  const existing = config.providers[provider];
+  const next: OcxProviderConfig = { ...def.providerConfig };
+  if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
+    // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
+    let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
+    const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
+    // Unsafe/blank active key with a usable pool: promote the first safe pool entry so
+    // key billing keeps working instead of falling back to oauth while pool keys remain.
+    if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
+      storedApiKey = storedApiKeyPool[0]!.key;
+    }
+    if (storedApiKey !== undefined) {
+      const pool = storedApiKeyPool ? [...storedApiKeyPool] : [];
+      // Keep routing and listProviderApiKeys in sync: never leave a hidden active key that
+      // is absent from the pool (listing would fall back to pool[0] as "active").
+      if (!pool.some(entry => entry.key === storedApiKey)) {
+        pool.push({ id: apiKeyPoolEntryId(storedApiKey), key: storedApiKey });
+      }
+      next.apiKey = storedApiKey;
+      next.apiKeyPool = pool;
+      const previousModeAllowsKey = existing.authMode === "key" || existing.authMode === undefined;
+      if (previousModeAllowsKey) next.authMode = "key";
+    }
+  }
+  config.providers[provider] = next;
 }
 
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */

@@ -288,7 +288,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Auto-install .zshrc hook (idempotent — skips if already present).
   installShellHook();
 
-  await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
+  await maybeShowStarPrompt(); // once-only [y/N] GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();

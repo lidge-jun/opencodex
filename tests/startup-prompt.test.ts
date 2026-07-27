@@ -28,6 +28,14 @@ describe("startup star prompt", () => {
     expect(promptIndex).toBeLessThan(syncIndex);
   });
 
+  test("GitHub star prompt defaults to no", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    expect(prompt).toContain("[y/N]");
+    expect(prompt).toContain('yes = ans === "y" || ans === "yes"');
+    expect(prompt).not.toContain('ans === "" || ans === "y"');
+  });
+
   test("ocx init offers the Codex autostart shim by default", async () => {
     const init = await readText("src/cli/init.ts");
 

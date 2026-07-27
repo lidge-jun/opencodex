@@ -1,4 +1,10 @@
 import { flushResponseState } from "../responses/state";
+import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
+import {
+  abortStorageCleanupPolicyJob,
+  setStorageCleanupPolicyJobLiveApply,
+} from "../storage/policy-job";
+import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -68,6 +74,11 @@ export async function drainAndShutdown(
   // Debounced replay-state snapshot may still be pending; flush so the last completed turn's
   // previous_response_id chain survives the restart this shutdown is usually part of.
   flushResponseState();
+  // Tear down opt-in storage policy timers / worker / live-config sink so they cannot fire after stop.
+  stopStorageCleanupScheduler();
+  abortStorageCleanupPolicyJob();
+  setStorageCleanupPolicyLiveSink(null);
+  setStorageCleanupPolicyJobLiveApply(null);
   s?.stop(true);
   draining = false;
 }

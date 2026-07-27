@@ -150,10 +150,11 @@ function resolveSection(body, headings) {
 }
 
 /**
- * True when the body has at least one non-empty h2–h4 section with enough
- * detail. Used for soft-pass only — unstructured length alone is not enough.
+ * True when the body has multiple non-empty h2–h4 sections with enough detail.
+ * Soft-pass only — unstructured length alone is not enough, and a single
+ * arbitrary heading must not bypass the quality gate (Codex on #564).
  */
-function hasSubstantialStructuredContent(body, minSectionLen = 40) {
+function hasSubstantialStructuredContent(body, minSectionLen = 40, minRichSections = 2) {
   if (typeof body !== "string") return false;
   const lines = body.split("\n");
   let capturing = false;
@@ -173,7 +174,7 @@ function hasSubstantialStructuredContent(body, minSectionLen = 40) {
     if (capturing) bucket.push(line);
   }
   if (capturing) flush();
-  return richSections >= 1;
+  return richSections >= minRichSections;
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +542,6 @@ function validateIssue(issue) {
   const reasons = [];
   const guidance = [];
   let softPass = false;
-  const titleLower = title.toLowerCase();
 
   if (!kind) {
     const failure = untemplatedIssueFailure(issue);
@@ -578,9 +578,11 @@ function validateIssue(issue) {
       goal !== null || blocker !== null || behaviour !== null || example !== null;
 
     if (emptyCore.length > 0) {
+      // Soft-pass rich non-template bodies once kind is already feature (title
+      // prefix, enhancement label, or stored kind). Do not require the title to
+      // keep a `[Feature]:` prefix — maintainer retitles must not re-arm closure.
       const canSoftPass =
         !mappedHeadingPresent &&
-        titleLower.startsWith("[feature]:") &&
         hasSubstantialStructuredContent(body);
       if (canSoftPass) {
         softPass = true;
@@ -625,10 +627,14 @@ function validateIssue(issue) {
     const os = extractSection(body, "Operating system") ?? extractSection(body, "OS");
 
     if (isEmpty(summary) && isEmpty(repro)) {
+      // Soft-pass substantial non-English / freeform structured reports once
+      // kind is already bug (label, stored kind, or prior `[Bug]:` detection).
+      // Requiring the title to keep a `[Bug]:` prefix caused #545: a maintainer
+      // retitle of an already detailed report was treated as empty Summary/
+      // Reproduction and auto-closed.
       const canSoftPass =
         summary === null &&
         repro === null &&
-        titleLower.startsWith("[bug]:") &&
         hasSubstantialStructuredContent(body);
       if (canSoftPass) {
         softPass = true;
@@ -687,27 +693,39 @@ function validateIssue(issue) {
     if (version !== null && isRawPlaceholder(version) === false && isEmpty(version)) emptyCore.push("OpenCodex version");
     if (endpoint !== null && isEmpty(endpoint)) emptyCore.push("endpoint or capability");
     if (emptyCore.length > 0) {
-      reasons.push(`Required sections are missing or empty: ${emptyCore.join(", ")}.`);
-      guidance.push("Describe both the current and expected behaviour.");
+      // Same soft-pass as bug/feature: label- or maintainer-scoped provider
+      // reports often use non-English structured headings after a retitle.
+      const mappedHeadingPresent =
+        current !== null || expected !== null || repro !== null || response !== null || docs !== null ||
+        provider !== null || version !== null || endpoint !== null;
+      const canSoftPass =
+        !mappedHeadingPresent &&
+        hasSubstantialStructuredContent(body);
+      if (canSoftPass) {
+        softPass = true;
+      } else {
+        reasons.push(`Required sections are missing or empty: ${emptyCore.join(", ")}.`);
+        guidance.push("Describe both the current and expected behaviour.");
+      }
     }
 
-    if (!isEmpty(current) && !isEmpty(expected) && canonicalise(current) === canonicalise(expected)) {
+    if (!softPass && !isEmpty(current) && !isEmpty(expected) && canonicalise(current) === canonicalise(expected)) {
       reasons.push("Current and expected behaviour are effectively identical.");
       guidance.push("Explain the difference between what happens now and what should happen.");
     }
 
     const allSections = [current, expected, repro, response].filter((s) => !isEmpty(s));
-    if (allSections.length >= 2 && allRepeatTitle(allSections, title)) {
+    if (!softPass && allSections.length >= 2 && allRepeatTitle(allSections, title)) {
       reasons.push("All sections merely repeat the issue title.");
       guidance.push("Add specific detail in each section.");
     }
 
-    if (isEmpty(repro) && isEmpty(response)) {
+    if (!softPass && isEmpty(repro) && isEmpty(response)) {
       reasons.push("Both the request/reproduction and the actual response/error are absent.");
       guidance.push("Include at least a minimal redacted request or the actual error output.");
     }
 
-    if (isEmpty(docs)) {
+    if (!softPass && isEmpty(docs)) {
       reasons.push("Upstream documentation is empty without stating that no public specification exists.");
       guidance.push("Add a URL to the provider specification, or state that no public spec exists.");
     }
