@@ -36,18 +36,23 @@ was inactive. If health remains unavailable, a matching runtime-port record plus
 live PID still preserves the pre-update activity evidence. If the installer exits nonzero, the worker
 probes again immediately before recovery and leaves any old or concurrently replaced process alone
 when health or PID identity proves it is OpenCodex. When npm already stopped the proxy and retired
-the old package, the worker validates each candidate's name, version, path containment, and complete
-launcher runtime with a side-effect-free `--version` probe. It tries runnable candidates in order
-until one restores health. Service and direct restart paths also stop when the pidfile has changed
-to a different identity-checked proxy, and every such identity decision re-reads the process command
-line instead of trusting a PID-only cache across the update boundary. The update job remains failed
-either way because restoring availability is not the same as installing the new version.
+the old package, the worker validates each candidate's trusted ownership, name, version, path
+containment, and complete launcher runtime with a side-effect-free `--version` probe. Candidate
+inspection and restart are bounded to at most two candidates, preferring the current package and then
+the newest retired copies, and it tries those runnable candidates in order until one restores health.
+Service and direct restart paths also stop when the pidfile has changed to a different identity-checked
+proxy, and every such identity decision re-reads the process command line instead of trusting a
+PID-only cache across the update boundary. The update job remains failed either way because restoring
+availability is not the same as installing the new version.
 
 The npm installer runs in an isolated process tree. On timeout, the launcher terminates and awaits
-the whole POSIX process group or Windows `taskkill /T /F` tree before returning failure. The outer
-worker timeout remains longer than the nested deadline, and automatic recovery is skipped if either
-layer cannot prove installer-tree shutdown, so recovery never races a lifecycle or replacement child
-that may still be writing package files.
+the whole POSIX process group or a Windows `taskkill /T /F` tree before returning failure. POSIX
+cleanup treats zombie-only groups as stopped and refuses to signal a process-group ID that has been
+reused by a new leader. Windows has no retained job-object handle after a normally failed installer
+root exits, so that case remains explicitly unconfirmed and automatic recovery (including tray
+restoration) stays disabled. The outer worker timeout remains longer than the nested deadline, and
+recovery is skipped whenever either layer cannot prove installer-tree shutdown, so recovery never
+races a lifecycle or replacement child that may still be writing package files.
 
 After an update requests a restart, the worker now waits for an identity-checked `/healthz` to
 return and remain healthy for a short stability window before marking the job successful. This

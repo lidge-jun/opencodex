@@ -132,6 +132,7 @@ describe("npm cache ownership pre-flight", () => {
   test("fails closed when the configured cache root does not exist", () => {
     const missing = `${dir}-missing`;
     const result = checkNpmCacheOwnership({
+      platform: "linux",
       getuid: () => 501,
       spawn: cacheLookup(missing),
     });
@@ -195,6 +196,7 @@ describe("npm cache ownership pre-flight", () => {
   test("fails closed before shutdown when npm cannot resolve its cache", () => {
     let inspected = false;
     const result = checkNpmCacheOwnership({
+      platform: "linux",
       getuid: () => 501,
       spawn: (() => ({
         status: null,

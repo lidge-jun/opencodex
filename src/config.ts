@@ -1283,9 +1283,16 @@ export function verifyPidIdentityFresh(candidatePid: number): number | null {
   try {
     process.kill(candidatePid, 0);
   } catch (e: unknown) {
-    if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
+    if ((e as NodeJS.ErrnoException).code !== "EPERM") {
+      ocxStartProcessCache.delete(candidatePid);
+      return null;
+    }
   }
-  return isLikelyOcxStartProcessUncached(candidatePid) ? candidatePid : null;
+  const isOcx = isLikelyOcxStartProcessUncached(candidatePid);
+  // This read is authoritative across a PID-reuse boundary. Reconcile the
+  // polling memo so later short-lived checks cannot serve the old identity.
+  ocxStartProcessCache.set(candidatePid, isOcx);
+  return isOcx ? candidatePid : null;
 }
 
 function readProcessCommandLine(pid: number): string | undefined {

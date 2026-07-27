@@ -109,6 +109,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain('if (readPidForRestart("after service port reclaim").refused) return');
     expect(updateJobSource).toContain('const directPid = readPidForRestart("before direct restart")');
     expect(updateJobSource).toContain('if (readPidForRestart("after direct port reclaim").refused) return');
+    expect(updateJobSource).toContain("hasTrustedRecoveryOwner(rootStat.uid)");
+    expect(updateJobSource).toContain("uid === currentUid || uid === 0");
   });
 
   test("GUI recovery waits beyond the nested npm install deadline", () => {
@@ -122,6 +124,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("timeoutMs: NPM_INSTALL_TIMEOUT_MS");
     expect(launcherSource).toContain("await runProcessTreeCommand(npm");
     expect(updateJobSource).toContain("installerFailureAllowsRecovery(result)");
+    expect(updateJobSource).toContain("if (trayWasRunning && mayRecover)");
+    expect(updateJobSource).toContain("candidates.slice(0, MAX_NPM_RECOVERY_CANDIDATES)");
   });
 
   test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {

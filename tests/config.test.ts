@@ -890,6 +890,8 @@ describe("opencodex config defaults", () => {
     const freshCheck = /export function verifyPidIdentityFresh[\s\S]*?\n}/.exec(source)?.[0] ?? "";
     expect(freshCheck).toContain("isLikelyOcxStartProcessUncached(candidatePid)");
     expect(freshCheck).not.toContain("isLikelyOcxStartProcess(candidatePid)");
+    expect(freshCheck).toContain("ocxStartProcessCache.set(candidatePid, isOcx)");
+    expect(freshCheck).toContain("ocxStartProcessCache.delete(candidatePid)");
   });
 
   test("writes pid file as a numeric pid", () => {

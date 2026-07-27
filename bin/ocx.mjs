@@ -241,16 +241,23 @@ async function runNpmSelfUpdate() {
     shell: winShell,
   });
   if (!res.treeExited) {
-    if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
     console.error("\nopencodex: installer process-tree cleanup could not be confirmed; automatic recovery is unsafe until those processes exit.");
     process.exit(INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE);
   }
   if (res.interruptedSignal) {
+    if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+    console.error(`\nopencodex: update interrupted (${res.interruptedSignal}); the proxy is still stopped. Run 'ocx start' or re-run 'ocx update'.`);
+    const exitCode = res.interruptedSignal === "SIGINT"
+      ? 130
+      : res.interruptedSignal === "SIGHUP"
+        ? 129
+        : 143;
     if (process.platform === "win32") {
-      process.exit(res.interruptedSignal === "SIGINT" ? 130 : 143);
+      process.exit(exitCode);
     }
     process.kill(process.pid, res.interruptedSignal);
-    return;
+    // Do not return to the update call site while fatal signal delivery is pending.
+    process.exit(exitCode);
   }
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
@@ -302,7 +309,11 @@ async function runNpmSelfUpdate() {
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-  const failure = res.timedOut ? `timed out after ${Math.trunc(NPM_INSTALL_TIMEOUT_MS / 1000)}s` : `exit ${res.status ?? "?"}`;
+  const failure = res.timedOut
+    ? `timed out after ${Math.trunc(NPM_INSTALL_TIMEOUT_MS / 1000)}s`
+    : res.error
+      ? `could not run: ${res.error.message}`
+      : `exit ${res.status ?? "?"}`;
   console.error(`\nUpdate failed (${npm} ${failure}). Try manually:  ${npm} install -g ${PKG}@${tag}`);
   process.exit(1);
 }

@@ -49,6 +49,7 @@ const RESTART_HEALTH_TIMEOUT_MS = 15_000;
 const RESTART_STABILITY_WINDOW_MS = 15_000;
 const UPDATE_LIVENESS_PROBE_ATTEMPTS = 3;
 const UPDATE_LIVENESS_PROBE_DELAY_MS = 250;
+const MAX_NPM_RECOVERY_CANDIDATES = 2;
 /** How long update restart waits for the captured port to become bindable after stop. */
 export const RESTART_PORT_RECLAIM_MS = 30_000;
 
@@ -128,21 +129,40 @@ function isPathInside(parent: string, child: string): boolean {
     && !isAbsolute(fromParent);
 }
 
+function hasTrustedRecoveryOwner(uid: number): boolean {
+  const currentUid = process.getuid?.();
+  // Root-owned global installations are trusted and otherwise unrecoverable by
+  // an unprivileged GUI process; reject packages planted by every other account.
+  return currentUid === undefined || uid === currentUid || uid === 0;
+}
+
 /** Validate the on-disk identity before any candidate code is executed. */
 function inspectNpmRecoveryPackage(packageRoot: string, expectedVersion: string): ValidatedNpmLauncher | null {
   try {
     const rootStat = lstatSync(packageRoot);
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
+    if (
+      !rootStat.isDirectory()
+      || rootStat.isSymbolicLink()
+      || !hasTrustedRecoveryOwner(rootStat.uid)
+    ) return null;
 
     const manifestPath = join(packageRoot, "package.json");
     const manifestStat = lstatSync(manifestPath);
-    if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) return null;
+    if (
+      !manifestStat.isFile()
+      || manifestStat.isSymbolicLink()
+      || !hasTrustedRecoveryOwner(manifestStat.uid)
+    ) return null;
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown; version?: unknown };
     if (manifest.name !== PKG || manifest.version !== expectedVersion) return null;
 
     const launcherPath = join(packageRoot, "bin", "ocx.mjs");
     const launcherStat = lstatSync(launcherPath);
-    if (!launcherStat.isFile() || launcherStat.isSymbolicLink()) return null;
+    if (
+      !launcherStat.isFile()
+      || launcherStat.isSymbolicLink()
+      || !hasTrustedRecoveryOwner(launcherStat.uid)
+    ) return null;
     const canonicalRoot = realpathSync(packageRoot);
     const canonicalLauncher = realpathSync(launcherPath);
     if (!isPathInside(canonicalRoot, canonicalLauncher)) return null;
@@ -189,7 +209,7 @@ export async function findNpmRecoveryLaunchers(
   }
 
   const launchers: string[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of candidates.slice(0, MAX_NPM_RECOVERY_CANDIDATES)) {
     try {
       // `--version` loads the launcher's static imports, resolves the bundled Bun
       // binary, and imports the complete CLI graph without starting or stopping a proxy.
@@ -1052,18 +1072,18 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
     */
     const result = runLoggedCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
     if (result.status !== 0) {
-      if (trayWasRunning) {
+      const mayRecover = installerFailureAllowsRecovery(result);
+      if (trayWasRunning && mayRecover) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
           startWindowsTray();
         } catch { /* retain the primary update failure */ }
       }
-      const mayRecover = installerFailureAllowsRecovery(result);
-      const recovery = mayRecover
-        ? await recoverFailedGuiUpdate(job, captured, proxyWasActive)
-        : "failed";
+      let recovery: FailedUpdateRecovery | null = null;
       if (!mayRecover) {
         updateJob(job, {}, "Automatic proxy recovery was skipped because installer process-tree shutdown was not confirmed. Wait for installer processes to exit before restoring the package or proxy.");
+      } else {
+        recovery = await recoverFailedGuiUpdate(job, captured, proxyWasActive);
       }
       updateJob(job, {
         status: "failed",

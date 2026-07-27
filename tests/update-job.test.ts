@@ -157,6 +157,38 @@ describe("GUI update execution decisions", () => {
       .toEqual([realpathSync(join(retiredRoot, "bin", "ocx.mjs"))]);
   });
 
+  test("bounds npm recovery candidates before running launcher probes", async () => {
+    const scopeRoot = join(dir, "global", "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    const retiredRoots = [
+      join(scopeRoot, ".opencodex-Ab12Cd34"),
+      join(scopeRoot, ".opencodex-Ef56Gh78"),
+      join(scopeRoot, ".opencodex-Ij90Kl12"),
+    ];
+    for (const root of [currentRoot, ...retiredRoots]) {
+      mkdirSync(join(root, "bin"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "@bitkyc08/opencodex",
+        version: "2.7.40",
+      }));
+      writeFileSync(join(root, "bin", "ocx.mjs"), "process.exit(0);\n");
+    }
+    const probed: string[] = [];
+
+    const launchers = await findNpmRecoveryLaunchers(
+      join(currentRoot, "bin", "ocx.mjs"),
+      "2.7.40",
+      async launcher => {
+        probed.push(launcher);
+        return true;
+      },
+    );
+
+    expect(probed).toHaveLength(2);
+    expect(launchers).toEqual(probed);
+    expect(launchers[0]).toBe(realpathSync(join(currentRoot, "bin", "ocx.mjs")));
+  });
+
   test("only recovers after a clean installer exit", () => {
     expect(installerFailureAllowsRecovery({ status: 1, signal: null, timedOut: false })).toBe(true);
     expect(installerFailureAllowsRecovery({ status: 75, signal: null, timedOut: false })).toBe(false);
@@ -192,7 +224,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, {
       port: 12345,
       hostname: "127.0.0.1",
@@ -237,7 +269,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 4242 }, {
       serviceInstalledFn: () => false,
       waitForPort: async (_port, _hostname, opts) => {
@@ -268,7 +300,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, {
       port: 10100,
       hostname: "127.0.0.1",
@@ -304,7 +336,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, {
       port: 10100,
       hostname: "127.0.0.1",
@@ -340,7 +372,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, {
       port: 10100,
       hostname: "127.0.0.1",
@@ -378,7 +410,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1" }, {
       serviceInstalledFn: () => false,
       waitForPort: async () => false,
@@ -408,7 +440,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const prev = process.env.OCX_BAKE_PORT;
     delete process.env.OCX_BAKE_PORT;
     try {
@@ -454,7 +486,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
       serviceInstalledFn: () => true,
       waitForPort: async () => true,
@@ -515,7 +547,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -546,7 +578,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1" },
@@ -577,7 +609,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -609,7 +641,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -643,7 +675,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -682,7 +714,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -723,7 +755,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
 
     const recovery = await recoverFailedGuiUpdateForTests(
       job,
@@ -764,7 +796,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await confirmRestartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1" }, {
       probeProxy: async () => false,
       now: () => now,
@@ -793,7 +825,7 @@ describe("GUI update execution decisions", () => {
       command: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await confirmRestartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1" }, {
       probeProxy: async () => now < 12_000,
       now: () => now,
@@ -823,7 +855,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await confirmRestartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1" }, {
       probeProxy: async () => now >= 1_000,
       now: () => now,
@@ -850,7 +882,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -888,7 +920,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -937,7 +969,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -980,7 +1012,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
@@ -1027,7 +1059,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "npm", {
       serviceInstalledFn: () => false,
       probeProxy: async () => {
@@ -1070,7 +1102,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "npm", {
       serviceInstalledFn: () => true,
       // Soft probe times out (proxy down after npm update); confirm after explicit restart succeeds.
@@ -1109,7 +1141,7 @@ describe("GUI update execution decisions", () => {
       releaseNotesUrl: "",
       log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "bun", {
       probeProxy: async () => true,
       now: () => now,
