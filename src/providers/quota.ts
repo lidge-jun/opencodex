@@ -219,7 +219,7 @@ async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQu
     const customWindows: ProviderQuotaWindow[] = [];
     if (opus?.percent !== undefined) customWindows.push({ label: "Opus", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
     if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
-    return {
+    const quota: ProviderQuota = {
       // Claude's 5-hour window is a first-class rate limit, same as the Codex login 5h/weekly
       // rows: report it in the canonical fields so the dashboard renders it with the standard
       // "5-hour limit" label and ordering instead of as a generic extra window.
@@ -230,6 +230,8 @@ async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQu
       ...(customWindows.length > 0 ? { customWindows } : {}),
       updatedAt: Date.now(),
     };
+    // Empty / schema-changed payloads must not cache as "success with no bars".
+    return hasQuotaRows(quota) ? quota : null;
   })().finally(() => {
     if (anthropicUsageInflight.get(accessToken) === probe) anthropicUsageInflight.delete(accessToken);
   });
@@ -238,6 +240,9 @@ async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQu
 }
 
 async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  // Capture the account we intend to probe before awaiting — a mid-flight active
+  // switch must not seed the wrong account's cache with this response.
+  const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
   let accessToken: string;
   try {
     accessToken = await getValidAccessToken("anthropic");
@@ -248,9 +253,11 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
   if (!quota) return null;
   // Share the active-account probe with the per-account cache so Providers-page
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
-  const activeId = getAccountSet("anthropic")?.activeAccountId;
-  if (activeId) {
-    accountQuotaCache.set(accountCacheKey("anthropic", activeId), { ts: Date.now(), quota });
+  if (probedAccountId) {
+    const stillOwnsToken = getAccountCredential("anthropic", probedAccountId)?.access === accessToken;
+    if (stillOwnsToken) {
+      accountQuotaCache.set(accountCacheKey("anthropic", probedAccountId), { ts: Date.now(), quota });
+    }
   }
   return report(provider, "anthropic:oauth-usage", quota);
 }
@@ -317,16 +324,18 @@ export function clearAccountQuotaCache(provider?: string): void {
  *
  * - Fresh stored access → use as-is (no refresh).
  * - Active account with expired access → normal refresh path.
- * - Background account with expired access → fail closed (unavailable) instead of
- *   calling `getValidAccessTokenForAccount`, which can persist a mismatched CLI identity.
+ * - Background `local-cli` with expired access → fail closed (unavailable):
+ *   `getValidAccessTokenForAccount` can persist a mismatched Claude CLI identity.
+ * - Background ordinary OAuth (`source !== "local-cli"`) → safe to refresh;
+ *   Anthropic's lock only adopts disk credentials for `local-cli` rows.
  */
 async function getTokenForAccountQuotaProbe(provider: string, accountId: string): Promise<string> {
   const stored = getAccountCredential(provider, accountId);
   if (!stored) throw new Error("account credential missing");
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;
-  if (activeId !== accountId) {
-    throw new Error("background account token expired; skip CLI-adopting refresh for quota probe");
+  if (activeId !== accountId && stored.source === "local-cli") {
+    throw new Error("background local-cli token expired; skip CLI-adopting refresh for quota probe");
   }
   return getValidAccessTokenForAccount(provider, accountId);
 }

@@ -667,6 +667,15 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
   } else {
     await saveCredential(provider, cred);
   }
+  if (provider !== "chatgpt") {
+    try {
+      const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
+      clearProviderQuotaCache();
+      clearAccountQuotaCache(provider);
+    } catch {
+      // Quota module may be unavailable in tightly scoped unit tests.
+    }
+  }
   if (provider === "chatgpt") return cred;
   const config = loadConfig();
   upsertOAuthProvider(config, provider);

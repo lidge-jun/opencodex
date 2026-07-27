@@ -80,15 +80,34 @@ export function useProviderAccountPools(deps: {
       const generation = (accountRequestGenerationRef.current[provider] ?? 0) + 1;
       accountRequestGenerationRef.current[provider] = generation;
       try {
-        // `quota=1` asks the proxy for each account's own rate limits (Anthropic reports usage
-        // per credential), so every logged-in account can show its 5h/weekly bars — not just
-        // the active one.
-        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
+        // Cheap local read first so account switch / reauth / remove controls appear
+        // even when Anthropic's usage endpoint is slow or timing out.
+        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
         if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;
         setAccountSets(current => ({ ...current, [provider]: { activeAccountId: data.activeAccountId ?? null, accounts: data.accounts ?? [] } }));
         setAccountLoadStates(current => ({ ...current, [provider]: "ready" }));
+
+        // Enrich with per-account rate limits asynchronously (Anthropic reports usage
+        // per credential). Failures leave the already-ready account rows untouched.
+        void (async () => {
+          try {
+            const quotaRes = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
+            if (!quotaRes.ok) return;
+            const quotaData = await quotaRes.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
+            if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return;
+            setAccountSets(current => ({
+              ...current,
+              [provider]: {
+                activeAccountId: quotaData.activeAccountId ?? data.activeAccountId ?? null,
+                accounts: quotaData.accounts ?? data.accounts ?? [],
+              },
+            }));
+          } catch {
+            /* keep local account rows without quota enrichment */
+          }
+        })();
         return true;
       } catch {
         if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;

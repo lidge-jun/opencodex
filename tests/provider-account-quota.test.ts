@@ -250,4 +250,127 @@ describe("fetchProviderAccountQuotas", () => {
     const sibling = rows.find(row => row.accountId !== first!.id);
     expect(sibling?.quota?.fiveHourPercent).toBe(3);
   });
+
+  test("empty Anthropic usage payloads are treated as probe failures", async () => {
+    await seedTwoAccounts();
+    globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+    const rows = await fetchProviderAccountQuotas("anthropic");
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.unavailable && row.quota === null)).toBe(true);
+  });
+
+  test("expired ordinary OAuth background accounts still refresh for quota probes", async () => {
+    const expires = Date.now() - 60_000;
+    await saveCredential("anthropic", {
+      access: "token-active", refresh: "refresh-active", expires: Date.now() + 60 * 60_000,
+      accountId: "acct-active", email: "active@example.com", source: "oauth",
+    });
+    await saveCredential("anthropic", {
+      access: "token-bg", refresh: "refresh-bg", expires,
+      accountId: "acct-bg", email: "bg@example.com", source: "oauth",
+    });
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const set = getAccountSet("anthropic");
+    const active = set?.accounts.find(a => a.credential.email === "active@example.com");
+    const background = set?.accounts.find(a => a.credential.email === "bg@example.com");
+    expect(active && background).toBeTruthy();
+    await setActiveAccount("anthropic", active!.id);
+
+    let refreshCalls = 0;
+    let usageForBg = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/v1/oauth/token")) {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({
+          access_token: "token-bg-fresh",
+          refresh_token: "refresh-bg",
+          expires_in: 3600,
+        }), { status: 200 });
+      }
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (auth.endsWith("token-bg-fresh")) {
+        usageForBg += 1;
+        return new Response(usageBody(44, 55), { status: 200 });
+      }
+      return new Response(usageBody(11, 22), { status: 200 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("anthropic");
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+    expect(refreshCalls).toBeGreaterThanOrEqual(1);
+    expect(usageForBg).toBe(1);
+    expect(byId[background!.id]?.quota?.fiveHourPercent).toBe(44);
+    expect(byId[background!.id]?.unavailable).toBeUndefined();
+  });
+
+  test("clearing account quota cache after failure allows a fresh probe", async () => {
+    await seedTwoAccounts();
+    globalThis.fetch = (async () => new Response("rate limited", { status: 429 })) as typeof fetch;
+    const failed = await fetchProviderAccountQuotas("anthropic");
+    expect(failed.every(row => row.unavailable)).toBe(true);
+
+    // runLogin / reauth clears this cache after credentials are replaced.
+    clearAccountQuotaCache("anthropic");
+    globalThis.fetch = (async () => new Response(usageBody(9, 8), { status: 200 })) as typeof fetch;
+    const after = await fetchProviderAccountQuotas("anthropic");
+    expect(after.every(row => row.quota && !row.unavailable)).toBe(true);
+  });
+
+  test("provider-report seeding binds to the probed account across an active switch", async () => {
+    await seedTwoAccounts();
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const set = getAccountSet("anthropic");
+    const first = set?.accounts.find(a => a.credential.email === "first@example.com");
+    const second = set?.accounts.find(a => a.credential.email === "second@example.com");
+    expect(first && second).toBeTruthy();
+    await setActiveAccount("anthropic", first!.id);
+
+    let releaseUsage!: () => void;
+    const usageGate = new Promise<void>(resolve => { releaseUsage = resolve; });
+    let usageCalls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (auth.endsWith("token-first")) {
+        usageCalls += 1;
+        await usageGate;
+        return new Response(usageBody(70, 15), { status: 200 });
+      }
+      return new Response(usageBody(3, 21), { status: 200 });
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 1455,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          authMode: "oauth",
+          baseUrl: "https://api.anthropic.com/v1",
+        },
+      },
+    };
+    const reportPromise = fetchProviderQuotaReports(config, true);
+    // Switch active mid-flight before Anthropic responds.
+    await setActiveAccount("anthropic", second!.id);
+    releaseUsage();
+    await reportPromise;
+
+    // First account still owns token-first — seed must land on first, not second.
+    clearProviderQuotaCache();
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      const body = auth.endsWith("token-first") ? usageBody(70, 15) : usageBody(3, 21);
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+    const rows = await fetchProviderAccountQuotas("anthropic");
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+    // First was seeded (no re-probe); only second needs a fresh probe after the switch.
+    expect(usageCalls).toBe(1);
+    expect(byId[first!.id]?.quota?.fiveHourPercent).toBe(70);
+    expect(byId[second!.id]?.quota?.fiveHourPercent).toBe(3);
+    expect(calls).toBe(1);
+  });
 });
