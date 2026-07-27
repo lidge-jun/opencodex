@@ -25,14 +25,31 @@ export function attachStaleAppServerHint<T extends {
   return { ...result };
 }
 /**
+ * Rust-style target-triple body on official platform-baked Codex binaries
+ * (e.g. `x86_64-unknown-linux-musl`, `aarch64-apple-darwin`,
+ * `x86_64-pc-windows-msvc`). Requires arch-vendor-os with an optional env
+ * segment — not a broad `codex-*` wildcard.
+ */
+const CODEX_TARGET_TRIPLE_BODY = "[a-z0-9_]+-[a-z0-9_]+-[a-z0-9_]+(?:-[a-z0-9_]+)?";
+
+/**
  * Narrow Win32_Process CommandLine pre-filter (JS + .NET compatible).
  * Allows an optional closing quote after the executable basename so paths like
  * `"C:\Program Files\...\codex.exe" app-server` still reach GetOwner.
+ * Also admits official target-triple basenames such as
+ * `codex-x86_64-pc-windows-msvc.exe`.
  */
-export const WINDOWS_CODEX_BASENAME_CANDIDATE_RE =
-  /(^|[/\\\s'"=])codex([.]exe|[.]cmd)?['"]?(\s|$)/i;
+export const WINDOWS_CODEX_BASENAME_CANDIDATE_RE = new RegExp(
+  `(^|[/\\\\\\s'"=])codex(-${CODEX_TARGET_TRIPLE_BODY})?([.]exe|[.]cmd)?['"]?(\\s|$)`,
+  "i",
+);
 
 export const WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE = /codex-code-mode-host/i;
+
+/** Basename of an official Codex release binary (plain or target-triple). */
+const CODEX_TARGET_TRIPLE_BASENAME_RE = new RegExp(
+  `^codex-${CODEX_TARGET_TRIPLE_BODY}(?:\\.exe|\\.cmd)?$`,
+);
 
 /** True when a Windows CommandLine is worth paying GetOwner for (current-user scoped later). */
 export function isWindowsCodexCandidateCommandLine(commandLine: string): boolean {
@@ -102,7 +119,8 @@ function tokenBasename(token: string): string {
 
 function isCodexExecutableToken(token: string): boolean {
   const base = tokenBasename(token);
-  return base === "codex" || base === "codex.exe" || base === "codex.cmd";
+  return base === "codex" || base === "codex.exe" || base === "codex.cmd"
+    || CODEX_TARGET_TRIPLE_BASENAME_RE.test(base);
 }
 
 function isCodeModeHostToken(token: string): boolean {
@@ -298,9 +316,10 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
-  // Codex candidates only: basename token codex / codex.exe / codex.cmd (optional
-  // closing quote after the basename), or code-mode-host — not incidental
-  // substrings like a repo path with "opencodex".
+  // Codex candidates only: basename token codex / codex.exe / codex.cmd /
+  // official target-triple binaries (optional closing quote after the
+  // basename), or code-mode-host — not incidental substrings like a repo
+  // path with "opencodex".
   const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
   const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
   const psCommand = [

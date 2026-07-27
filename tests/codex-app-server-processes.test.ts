@@ -27,6 +27,24 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("node /opt/codex-code-mode-host --session 1")).toBe(true);
   });
 
+  test("matches official platform-baked Codex target-triple basenames", () => {
+    expect(isCodexAppServerCommandLine(
+      "/opt/codex/codex-x86_64-unknown-linux-musl app-server --listen unix:///tmp/c.sock",
+    )).toBe(true);
+    expect(isCodexAppServerCommandLine(
+      "/Applications/Codex.app/Contents/Resources/codex-aarch64-apple-darwin app-server",
+    )).toBe(true);
+    expect(isCodexAppServerCommandLine(
+      "C:\\Users\\a\\.codex\\bin\\codex-x86_64-pc-windows-msvc.exe app-server --listen pipe",
+    )).toBe(true);
+    expect(isCodexAppServerCommandLine(
+      "\"C:\\Program Files\\Codex\\codex-aarch64-pc-windows-msvc.exe\" app-server",
+    )).toBe(true);
+    expect(isCodexAppServerCommandLine(
+      "codex-x86_64-apple-darwin --profile prod app-server",
+    )).toBe(true);
+  });
+
   test("matches app-server after value-taking Codex global options", () => {
     expect(isCodexAppServerCommandLine("codex --enable js_repl app-server")).toBe(true);
     expect(isCodexAppServerCommandLine("codex --enable=js_repl app-server")).toBe(true);
@@ -46,7 +64,13 @@ describe("Codex app-server process matching (#476)", () => {
 
   test("rejects unrelated processes and app-server / code-mode-host only in later arguments", () => {
     expect(isCodexAppServerCommandLine("hermes-codex-bridge-mcp --port 9")).toBe(false);
+    expect(isCodexAppServerCommandLine("hermes-codex-x86_64-unknown-linux-gnu app-server")).toBe(false);
     expect(isCodexAppServerCommandLine("node ./opencodex/src/cli/index.ts start")).toBe(false);
+    expect(isCodexAppServerCommandLine("opencodex app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("/usr/bin/opencodex app-server")).toBe(false);
+    // Broad codex-* tools without a Rust target-triple shape must stay unmatched.
+    expect(isCodexAppServerCommandLine("codex-bridge app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("codex-helper-tool app-server")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec 'hello'")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec \"debug app-server behavior\"")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec debug app-server behavior")).toBe(false);
@@ -68,11 +92,20 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isWindowsCodexCandidateCommandLine("codex.exe\" app-server")).toBe(true);
     expect(isWindowsCodexCandidateCommandLine("codex.cmd' app-server")).toBe(true);
     expect(isWindowsCodexCandidateCommandLine("codex app-server")).toBe(true);
+    expect(isWindowsCodexCandidateCommandLine(
+      "\"C:\\Program Files\\Codex\\codex-x86_64-pc-windows-msvc.exe\" app-server",
+    )).toBe(true);
+    expect(isWindowsCodexCandidateCommandLine(
+      "C:\\Users\\a\\.codex\\bin\\codex-aarch64-pc-windows-msvc.exe app-server",
+    )).toBe(true);
     // Stay narrow: incidental "opencodex" paths must not pay GetOwner.
     expect(isWindowsCodexCandidateCommandLine(
       "node C:\\Users\\a\\opencodex\\src\\cli\\index.ts start",
     )).toBe(false);
+    expect(isWindowsCodexCandidateCommandLine("opencodex app-server")).toBe(false);
     expect(isWindowsCodexCandidateCommandLine("hermes-codex-bridge-mcp")).toBe(false);
+    expect(isWindowsCodexCandidateCommandLine("hermes-codex-x86_64-pc-windows-msvc.exe")).toBe(false);
+    expect(isWindowsCodexCandidateCommandLine("codex-bridge app-server")).toBe(false);
   });
 
   test("listCodexAppServerProcesses filters injected snapshots", () => {
