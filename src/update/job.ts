@@ -9,7 +9,7 @@ import {
   readAlivePid,
   readPid,
   readRuntimePort,
-  verifyPidIdentity,
+  verifyPidIdentityFresh,
 } from "../config";
 import { killProxy } from "../lib/process-control";
 import { reclaimListenPort } from "../server/port-reclaim";
@@ -35,6 +35,10 @@ import {
   updateCommandStr,
 } from "./index";
 import { isNewer } from "./notify";
+import {
+  INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE,
+  runProcessTreeCommand,
+} from "./install-process.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
@@ -114,6 +118,8 @@ interface ValidatedNpmLauncher {
   mtimeMs: number;
 }
 
+type RecoveryLauncherProbe = (launcher: string) => Promise<boolean>;
+
 function isPathInside(parent: string, child: string): boolean {
   const fromParent = relative(parent, child);
   return fromParent !== ""
@@ -122,8 +128,8 @@ function isPathInside(parent: string, child: string): boolean {
     && !isAbsolute(fromParent);
 }
 
-/** Validate that a package root still contains the exact pre-update package launcher. */
-function validateNpmRecoveryPackage(packageRoot: string, expectedVersion: string): ValidatedNpmLauncher | null {
+/** Validate the on-disk identity before any candidate code is executed. */
+function inspectNpmRecoveryPackage(packageRoot: string, expectedVersion: string): ValidatedNpmLauncher | null {
   try {
     const rootStat = lstatSync(packageRoot);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
@@ -146,31 +152,59 @@ function validateNpmRecoveryPackage(packageRoot: string, expectedVersion: string
   }
 }
 
+async function probeNpmRecoveryLauncher(launcher: string): Promise<boolean> {
+  const result = await runProcessTreeCommand(nodeBin(), [launcher, "--version"], {
+    stdio: "ignore",
+    timeoutMs: 10_000,
+  });
+  return result.status === 0 && result.treeExited;
+}
+
 /**
  * npm retires a package to a hidden sibling such as `.opencodex-Ab12Cd34`
  * before replacing it. On a late install failure, prefer an intact current root;
  * otherwise recover through the validated retired copy of the pre-update version.
  */
-export function findNpmRecoveryLauncher(
+export async function findNpmRecoveryLaunchers(
   currentLauncher: string,
   expectedVersion: string,
-): string | null {
+  probeLauncher: RecoveryLauncherProbe = probeNpmRecoveryLauncher,
+): Promise<string[]> {
   const packageRoot = dirname(dirname(resolve(currentLauncher)));
-  const current = validateNpmRecoveryPackage(packageRoot, expectedVersion);
-  if (current) return current.launcher;
-
   const scopeRoot = dirname(packageRoot);
   const prefix = `.${basename(packageRoot)}-`;
+  const candidates: ValidatedNpmLauncher[] = [];
+  const current = inspectNpmRecoveryPackage(packageRoot, expectedVersion);
+  if (current) candidates.push(current);
   try {
-    const candidates = readdirSync(scopeRoot, { encoding: "utf8" })
+    const retired = readdirSync(scopeRoot, { encoding: "utf8" })
       .filter(name => name.startsWith(prefix) && /^[A-Za-z0-9]{8}$/.test(name.slice(prefix.length)))
-      .map(name => validateNpmRecoveryPackage(join(scopeRoot, name), expectedVersion))
+      .map(name => inspectNpmRecoveryPackage(join(scopeRoot, name), expectedVersion))
       .filter((candidate): candidate is ValidatedNpmLauncher => candidate !== null)
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return candidates[0]?.launcher ?? null;
+    candidates.push(...retired);
   } catch {
-    return null;
+    // The current package can still be a valid recovery candidate when the scope
+    // directory itself cannot be enumerated.
   }
+
+  const launchers: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      // `--version` loads the launcher's static imports, resolves the bundled Bun
+      // binary, and imports the complete CLI graph without starting or stopping a proxy.
+      if (await probeLauncher(candidate.launcher)) launchers.push(candidate.launcher);
+    } catch { /* an un-runnable candidate is equivalent to a partial package */ }
+  }
+  return launchers;
+}
+
+export async function findNpmRecoveryLauncher(
+  currentLauncher: string,
+  expectedVersion: string,
+  probeLauncher?: RecoveryLauncherProbe,
+): Promise<string | null> {
+  return (await findNpmRecoveryLaunchers(currentLauncher, expectedVersion, probeLauncher))[0] ?? null;
 }
 
 function formatCommand(bin: string, args: string[]): string {
@@ -345,7 +379,13 @@ export function startUpdateJob(channel: Channel, restart: boolean): UpdateJobSta
   return { ...job, pid: child.pid };
 }
 
-function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], timeout: number): { status: number | null; signal: NodeJS.Signals | null } {
+interface LoggedCommandResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+}
+
+function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], timeout: number): LoggedCommandResult {
   job = updateJob(job, {}, `$ ${formatCommand(bin, args)}`);
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -356,7 +396,17 @@ function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], time
   const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
   if (stdout) job = updateJob(job, {}, stdout.slice(-4000));
   if (stderr) updateJob(job, {}, stderr.slice(-4000));
-  return { status: result.status, signal: result.signal };
+  return {
+    status: result.status,
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
+}
+
+export function installerFailureAllowsRecovery(result: LoggedCommandResult): boolean {
+  return !result.timedOut
+    && result.signal === null
+    && result.status !== INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE;
 }
 
 function spawnDetachedStart(
@@ -396,7 +446,7 @@ export interface RestartIo {
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
   verifyPidIdentityFn?: (pid: number) => number | null;
-  recoveryLauncherFn?: (currentLauncher: string, expectedVersion: string) => string | null;
+  recoveryLaunchersFn?: (currentLauncher: string, expectedVersion: string) => Promise<string[]> | string[];
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
@@ -429,7 +479,7 @@ async function restartAfterUpdate(
     ? captured.oldPid
     : undefined;
   const readCurrentPid = io.readPidFn ?? readPid;
-  const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentity;
+  const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentityFresh;
   const readPidForRestart = (context: string): { pid: number | null; refused: boolean } => {
     const rawPid = readCurrentPid();
     const currentPid = rawPid !== null && verifyCurrentPid(rawPid) === rawPid
@@ -675,7 +725,7 @@ export async function findLiveProxyForUpdate(io: UpdateLivenessIo = {}): Promise
 
   const candidatePid = (io.readAlivePidFn ?? readAlivePid)();
   if (candidatePid === null) return null;
-  const verifiedPid = (io.verifyPidIdentityFn ?? verifyPidIdentity)(candidatePid);
+  const verifiedPid = (io.verifyPidIdentityFn ?? verifyPidIdentityFresh)(candidatePid);
   if (verifiedPid !== candidatePid) return null;
   const runtime = (io.readRuntimePortFn ?? readRuntimePort)(candidatePid);
   if (!runtime) return null;
@@ -697,7 +747,7 @@ async function recoverFailedGuiUpdate(
   }
 
   const oldPidIdentityMatches = captured.oldPid != null
-    && (io.verifyPidIdentityFn ?? verifyPidIdentity)(captured.oldPid) === captured.oldPid;
+    && (io.verifyPidIdentityFn ?? verifyPidIdentityFresh)(captured.oldPid) === captured.oldPid;
   if (oldPidIdentityMatches) {
     updateJob(job, {}, `Update command failed and health probes timed out, but pre-update PID ${captured.oldPid} still identifies as OpenCodex; refusing an automatic restart.`);
     return "still-running";
@@ -710,29 +760,37 @@ async function recoverFailedGuiUpdate(
 
   updateJob(job, {}, "Update command failed after the proxy stopped; attempting to restore the proxy...");
   try {
-    let recoveryCaptured: {
-      port: number;
-      hostname: string;
-      oldPid?: number;
-      recoveryLauncher?: string;
-    } = captured;
+    let recoveryLaunchers: Array<string | undefined> = [undefined];
     if (job.installer === "npm") {
       const currentLauncher = packageLauncherPath();
-      const resolveRecoveryLauncher = io.recoveryLauncherFn ?? findNpmRecoveryLauncher;
-      const recoveryLauncher = resolveRecoveryLauncher(currentLauncher, job.currentVersion);
-      if (!recoveryLauncher) {
-        updateJob(job, {}, "Could not find a validated current or npm-retired launcher for the pre-update package.");
+      const resolveRecoveryLaunchers = io.recoveryLaunchersFn ?? findNpmRecoveryLaunchers;
+      recoveryLaunchers = await resolveRecoveryLaunchers(currentLauncher, job.currentVersion);
+      if (recoveryLaunchers.length === 0) {
+        updateJob(job, {}, "Could not find a runnable current or npm-retired launcher for the pre-update package.");
         updateJob(job, {}, `Automatic proxy recovery failed. Restore the package, then run 'ocx service install' or 'ocx start --port ${captured.port}'.`);
         return "failed";
       }
-      recoveryCaptured = { ...captured, recoveryLauncher };
     }
+
     const restartFn = io.restartAfterUpdateFn ?? restartAfterUpdate;
-    await restartFn(job, recoveryCaptured, io);
-    const healthy = await awaitRestartedProxyHealthy(job, recoveryCaptured, io);
-    if (healthy.ok) {
-      updateJob(job, {}, `Previous proxy availability restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
-      return "restarted";
+    for (let index = 0; index < recoveryLaunchers.length; index += 1) {
+      const recoveryLauncher = recoveryLaunchers[index];
+      const recoveryCaptured = recoveryLauncher === undefined
+        ? captured
+        : { ...captured, recoveryLauncher };
+      if (index > 0) {
+        updateJob(job, {}, `Recovery candidate ${index} did not restore the proxy; trying candidate ${index + 1} of ${recoveryLaunchers.length}.`);
+      }
+      try {
+        await restartFn(job, recoveryCaptured, io);
+        const healthy = await awaitRestartedProxyHealthy(job, recoveryCaptured, io);
+        if (healthy.ok) {
+          updateJob(job, {}, `Previous proxy availability restored on ${captured.hostname}:${captured.port}; the update itself still failed.`);
+          return "restarted";
+        }
+      } catch {
+        updateJob(job, {}, `Recovery candidate ${index + 1} failed before health confirmation.`);
+      }
     }
   } catch (error) {
     updateJob(job, {}, `Automatic proxy recovery threw: ${error instanceof Error ? error.message : String(error)}`);
@@ -1000,7 +1058,13 @@ export async function runGuiUpdateWorker(jobId: string, channel: Channel, restar
           startWindowsTray();
         } catch { /* retain the primary update failure */ }
       }
-      const recovery = await recoverFailedGuiUpdate(job, captured, proxyWasActive);
+      const mayRecover = installerFailureAllowsRecovery(result);
+      const recovery = mayRecover
+        ? await recoverFailedGuiUpdate(job, captured, proxyWasActive)
+        : "failed";
+      if (!mayRecover) {
+        updateJob(job, {}, "Automatic proxy recovery was skipped because installer process-tree shutdown was not confirmed. Wait for installer processes to exit before restoring the package or proxy.");
+      }
       updateJob(job, {
         status: "failed",
         exitCode: result.status,

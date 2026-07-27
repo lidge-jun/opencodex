@@ -7,7 +7,9 @@ import {
   confirmRestartAfterUpdateForTests,
   findLiveProxyForUpdate,
   findNpmRecoveryLauncher,
+  findNpmRecoveryLaunchers,
   finishGuiUpdateRestart,
+  installerFailureAllowsRecovery,
   npmSelfUpdateRestartEvidence,
   readUpdateJob,
   recoverFailedGuiUpdateForTests,
@@ -106,7 +108,7 @@ describe("GUI update execution decisions", () => {
     });
   });
 
-  test("finds a validated npm-retired launcher when the current package is partial", () => {
+  test("finds a validated npm-retired launcher when the current package is partial", async () => {
     const scopeRoot = join(dir, "global", "@bitkyc08");
     const currentRoot = join(scopeRoot, "opencodex");
     const retiredRoot = join(scopeRoot, ".opencodex-Ab12Cd34");
@@ -119,11 +121,11 @@ describe("GUI update execution decisions", () => {
       writeFileSync(join(root, "bin", "ocx.mjs"), "#!/usr/bin/env node\n");
     }
 
-    expect(findNpmRecoveryLauncher(join(currentRoot, "bin", "ocx.mjs"), "2.7.40"))
+    expect(await findNpmRecoveryLauncher(join(currentRoot, "bin", "ocx.mjs"), "2.7.40"))
       .toBe(realpathSync(join(retiredRoot, "bin", "ocx.mjs")));
   });
 
-  test("rejects an npm-retired launcher with the wrong package identity", () => {
+  test("rejects an npm-retired launcher with the wrong package identity", async () => {
     const scopeRoot = join(dir, "global", "@bitkyc08");
     const currentRoot = join(scopeRoot, "opencodex");
     const retiredRoot = join(scopeRoot, ".opencodex-Ab12Cd34");
@@ -134,7 +136,31 @@ describe("GUI update execution decisions", () => {
     }));
     writeFileSync(join(retiredRoot, "bin", "ocx.mjs"), "#!/usr/bin/env node\n");
 
-    expect(findNpmRecoveryLauncher(join(currentRoot, "bin", "ocx.mjs"), "2.7.40")).toBeNull();
+    expect(await findNpmRecoveryLauncher(join(currentRoot, "bin", "ocx.mjs"), "2.7.40")).toBeNull();
+  });
+
+  test("skips a matching current package whose complete launcher runtime cannot load", async () => {
+    const scopeRoot = join(dir, "global", "@bitkyc08");
+    const currentRoot = join(scopeRoot, "opencodex");
+    const retiredRoot = join(scopeRoot, ".opencodex-Ab12Cd34");
+    for (const root of [currentRoot, retiredRoot]) {
+      mkdirSync(join(root, "bin"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "@bitkyc08/opencodex",
+        version: "2.7.40",
+      }));
+    }
+    writeFileSync(join(currentRoot, "bin", "ocx.mjs"), 'import "../src/cli/index.ts";\n');
+    writeFileSync(join(retiredRoot, "bin", "ocx.mjs"), "process.exit(0);\n");
+
+    expect(await findNpmRecoveryLaunchers(join(currentRoot, "bin", "ocx.mjs"), "2.7.40"))
+      .toEqual([realpathSync(join(retiredRoot, "bin", "ocx.mjs"))]);
+  });
+
+  test("only recovers after a clean installer exit", () => {
+    expect(installerFailureAllowsRecovery({ status: 1, signal: null, timedOut: false })).toBe(true);
+    expect(installerFailureAllowsRecovery({ status: 75, signal: null, timedOut: false })).toBe(false);
+    expect(installerFailureAllowsRecovery({ status: null, signal: "SIGTERM", timedOut: true })).toBe(false);
   });
 
   test("proxy restart pins --port so post-update start does not hop to an ephemeral port", () => {
@@ -628,7 +654,7 @@ describe("GUI update execution decisions", () => {
         ),
         verifyPidIdentityFn: () => null,
         sleepMs: async () => {},
-        recoveryLauncherFn: () => { throw new Error("must not resolve a launcher"); },
+        recoveryLaunchersFn: () => { throw new Error("must not resolve a launcher"); },
         restartAfterUpdateFn: async () => { restartCalls += 1; },
       },
     );
@@ -664,7 +690,7 @@ describe("GUI update execution decisions", () => {
       {
         probeProxyIdentity: async () => null,
         verifyPidIdentityFn: () => null,
-        recoveryLauncherFn: () => "/retired/bin/ocx.mjs",
+        recoveryLaunchersFn: () => ["/retired/bin/ocx.mjs"],
         probeProxy: async () => restarted,
         restartAfterUpdateFn: async (_job, captured) => {
           recoveryLauncher = captured?.recoveryLauncher;
@@ -677,6 +703,50 @@ describe("GUI update execution decisions", () => {
     expect(recovery).toBe("restarted");
     expect(recoveryLauncher).toBe("/retired/bin/ocx.mjs");
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("update itself still failed"))).toBe(true);
+  });
+
+  test("failed install tries the next runnable recovery package when the first does not start", async () => {
+    let now = 0;
+    let activeLauncher: string | undefined;
+    const attempted: Array<string | undefined> = [];
+    const job: UpdateJobState = {
+      id: "failed-install-recovery-fallback",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    const recovery = await recoverFailedGuiUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      true,
+      {
+        probeProxyIdentity: async () => null,
+        verifyPidIdentityFn: () => null,
+        recoveryLaunchersFn: () => ["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"],
+        probeProxy: async () => activeLauncher === "/retired/bin/ocx.mjs",
+        restartAfterUpdateFn: async (_job, captured) => {
+          activeLauncher = captured?.recoveryLauncher;
+          attempted.push(activeLauncher);
+          if (activeLauncher === "/current/bin/ocx.mjs") throw new Error("partial runtime");
+        },
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+
+    expect(recovery).toBe("restarted");
+    expect(attempted).toEqual(["/current/bin/ocx.mjs", "/retired/bin/ocx.mjs"]);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("trying candidate 2 of 2"))).toBe(true);
   });
 
   test("restart confirmation fails when the proxy never becomes healthy", async () => {

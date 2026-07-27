@@ -885,6 +885,13 @@ describe("opencodex config defaults", () => {
     expect(isOcxStartCommandLine("notepad.exe")).toBe(false);
   });
 
+  test("exposes a fresh process identity path for lifecycle boundaries", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf8");
+    const freshCheck = /export function verifyPidIdentityFresh[\s\S]*?\n}/.exec(source)?.[0] ?? "";
+    expect(freshCheck).toContain("isLikelyOcxStartProcessUncached(candidatePid)");
+    expect(freshCheck).not.toContain("isLikelyOcxStartProcess(candidatePid)");
+  });
+
   test("writes pid file as a numeric pid", () => {
     writePid(process.pid);
 

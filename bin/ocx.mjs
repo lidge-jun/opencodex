@@ -15,6 +15,10 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkNpmCacheOwnership, formatNpmCacheOwnershipFailure } from "../src/update/npm-cache-preflight.mjs";
+import {
+  INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE,
+  runProcessTreeCommand,
+} from "../src/update/install-process.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
 const PKG = "@bitkyc08/opencodex";
@@ -114,7 +118,7 @@ function runTrayLifecycle(launcher, action) {
   });
 }
 
-function runNpmSelfUpdate() {
+async function runNpmSelfUpdate() {
   const current = currentPackageVersion();
   const tag = updateTag(current);
   const npm = npmBin();
@@ -230,12 +234,24 @@ function runNpmSelfUpdate() {
   }
 
   console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ ${npm} install -g ${PKG}@${tag}`);
-  const res = spawnSync(npm, ["install", "-g", `${PKG}@${tag}`], {
+  const res = await runProcessTreeCommand(npm, ["install", "-g", `${PKG}@${tag}`], {
     stdio: "inherit",
-    timeout: NPM_INSTALL_TIMEOUT_MS,
+    timeoutMs: NPM_INSTALL_TIMEOUT_MS,
     windowsHide: true,
     shell: winShell,
   });
+  if (!res.treeExited) {
+    if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+    console.error("\nopencodex: installer process-tree cleanup could not be confirmed; automatic recovery is unsafe until those processes exit.");
+    process.exit(INSTALLER_TREE_CLEANUP_FAILED_EXIT_CODE);
+  }
+  if (res.interruptedSignal) {
+    if (process.platform === "win32") {
+      process.exit(res.interruptedSignal === "SIGINT" ? 130 : 143);
+    }
+    process.kill(process.pid, res.interruptedSignal);
+    return;
+  }
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     repairCodexShimIfNeeded();
@@ -286,7 +302,8 @@ function runNpmSelfUpdate() {
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-  console.error(`\nUpdate failed (${npm} exit ${res.status ?? "?"}). Try manually:  ${npm} install -g ${PKG}@${tag}`);
+  const failure = res.timedOut ? `timed out after ${Math.trunc(NPM_INSTALL_TIMEOUT_MS / 1000)}s` : `exit ${res.status ?? "?"}`;
+  console.error(`\nUpdate failed (${npm} ${failure}). Try manually:  ${npm} install -g ${PKG}@${tag}`);
   process.exit(1);
 }
 
@@ -359,7 +376,7 @@ if (updateHelpRequested) {
 }
 
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
-  runNpmSelfUpdate();
+  await runNpmSelfUpdate();
 }
 
 const bun = resolveBun();

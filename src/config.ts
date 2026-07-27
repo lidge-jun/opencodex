@@ -1225,15 +1225,19 @@ export function isOcxStartCommandLine(commandLine: string): boolean {
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }
 
+function isLikelyOcxStartProcessUncached(pid: number): boolean {
+  const commandLine = readProcessCommandLine(pid);
+  if (commandLine === undefined) return false;
+  return isOcxStartCommandLine(commandLine);
+}
+
 /** Per-process memo: waitForProxy/findLiveProxy used to spawn powershell on every 150ms poll. */
 const ocxStartProcessCache = new Map<number, boolean>();
 
 function isLikelyOcxStartProcess(pid: number): boolean {
   const cached = ocxStartProcessCache.get(pid);
   if (cached !== undefined) return cached;
-  const commandLine = readProcessCommandLine(pid);
-  if (commandLine === undefined) return false;
-  const ok = isOcxStartCommandLine(commandLine);
+  const ok = isLikelyOcxStartProcessUncached(pid);
   ocxStartProcessCache.set(pid, ok);
   return ok;
 }
@@ -1269,6 +1273,19 @@ export function verifyPidIdentity(candidatePid: number): number | null {
     if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
   }
   return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
+}
+
+/**
+ * Re-read the process command line for update/recovery decisions that span enough
+ * time for the OS to reuse a PID. Never trust the per-process polling cache here.
+ */
+export function verifyPidIdentityFresh(candidatePid: number): number | null {
+  try {
+    process.kill(candidatePid, 0);
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
+  }
+  return isLikelyOcxStartProcessUncached(candidatePid) ? candidatePid : null;
 }
 
 function readProcessCommandLine(pid: number): string | undefined {

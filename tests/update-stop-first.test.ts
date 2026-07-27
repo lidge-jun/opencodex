@@ -44,7 +44,7 @@ describe("update stops the running proxy before replacing files", () => {
   test("npm launcher update path stops via its own launcher path before npm install", () => {
     expect(launcherSource).toContain('spawnSync(process.execPath, [launcher, "stop"]');
     const stopAt = launcherSource.indexOf('[launcher, "stop"]');
-    const installAt = launcherSource.indexOf('spawnSync(npm, ["install", "-g"');
+    const installAt = launcherSource.indexOf('runProcessTreeCommand(npm, ["install", "-g"');
     expect(stopAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(installAt);
     expect(launcherSource).toContain('existsSync(join(configDir(), "ocx.pid"))');
@@ -78,7 +78,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(launcherSource).toContain("if (historyRestoreIncomplete())");
     const warnAt = launcherSource.indexOf("Codex resume history was NOT restored");
-    const installAt = launcherSource.indexOf('spawnSync(npm, ["install", "-g"');
+    const installAt = launcherSource.indexOf('runProcessTreeCommand(npm, ["install", "-g"');
     expect(warnAt).toBeGreaterThan(-1);
     expect(warnAt).toBeLessThan(installAt);
   });
@@ -93,18 +93,18 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateJobSource).toContain("const liveBeforeUpdate = await findLiveProxyForUpdate()");
     expect(updateJobSource).toContain("const proxyWasActive = liveBeforeUpdate !== null");
     expect(updateJobSource).toContain("(io.readAlivePidFn ?? readAlivePid)()");
-    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentity)(candidatePid)");
+    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentityFresh)(candidatePid)");
     expect(updateJobSource).toContain("(io.readRuntimePortFn ?? readRuntimePort)(candidatePid)");
     expect(updateJobSource).not.toContain("const proxyWasActive = isServiceInstalled() || runtimeTrusted");
   });
 
   test("GUI failure recovery identity-checks the old PID and threads a validated launcher", () => {
-    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentity)(captured.oldPid)");
-    expect(updateJobSource).toContain("io.recoveryLauncherFn ?? findNpmRecoveryLauncher");
-    expect(updateJobSource).toContain("recoveryCaptured = { ...captured, recoveryLauncher }");
+    expect(updateJobSource).toContain("(io.verifyPidIdentityFn ?? verifyPidIdentityFresh)(captured.oldPid)");
+    expect(updateJobSource).toContain("io.recoveryLaunchersFn ?? findNpmRecoveryLaunchers");
+    expect(updateJobSource).toContain("{ ...captured, recoveryLauncher }");
     expect(updateJobSource).toContain("captured?.recoveryLauncher ?? packageLauncherPath()");
     expect(updateJobSource).toContain("const readPidForRestart = (context: string)");
-    expect(updateJobSource).toContain("const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentity");
+    expect(updateJobSource).toContain("const verifyCurrentPid = io.verifyPidIdentityFn ?? verifyPidIdentityFresh");
     expect(updateJobSource).toContain("verifyCurrentPid(rawPid) === rawPid");
     expect(updateJobSource).toContain('if (readPidForRestart("after service port reclaim").refused) return');
     expect(updateJobSource).toContain('const directPid = readPidForRestart("before direct restart")');
@@ -119,7 +119,9 @@ describe("update stops the running proxy before replacing files", () => {
     const outerMs = Number(outerRaw?.replaceAll("_", ""));
     const innerMs = Number(innerRaw?.replaceAll("_", ""));
     expect(outerMs).toBeGreaterThanOrEqual(innerMs + 60_000);
-    expect(launcherSource).toContain("timeout: NPM_INSTALL_TIMEOUT_MS");
+    expect(launcherSource).toContain("timeoutMs: NPM_INSTALL_TIMEOUT_MS");
+    expect(launcherSource).toContain("await runProcessTreeCommand(npm");
+    expect(updateJobSource).toContain("installerFailureAllowsRecovery(result)");
   });
 
   test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {
@@ -146,7 +148,7 @@ describe("ocx update --help has no side effects (#168)", () => {
 
   test("the npm launcher intercepts update --help before the self-update path", () => {
     const helpAt = launcherSource.indexOf("updateHelpRequested");
-    const updateAt = launcherSource.indexOf("runNpmSelfUpdate();");
+    const updateAt = launcherSource.indexOf("await runNpmSelfUpdate();");
     expect(helpAt).toBeGreaterThan(-1);
     expect(launcherSource).toContain('process.argv[2] === "update" &&');
     // The guard that CALLS the self-update must come after the help exit.
