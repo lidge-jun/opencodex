@@ -7,12 +7,12 @@
  * the model produces a real tool call or the budget is exhausted, the passthrough events are
  * replayed to the bridge for final SSE output.
  *
- * Removed vs web-search: no sidecar backend selection, no 429 key-failover, no forced-answer
- * nudge, no failed-query dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
+ * Removed vs web-search: no sidecar backend selection, no forced-answer nudge, no failed-query
+ * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
 import type { ProviderAdapter } from "../adapters/base";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxThinkingContent } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline } from "../lib/abort";
@@ -32,7 +32,18 @@ const SSE_HEADERS = {
 
 const CONNECT_TIMEOUT_MS = 200_000;
 const STALL_TIMEOUT_MS = 200_000;
-const DEFAULT_MAX_ROUNDS = 3;
+export const DEFAULT_MAX_ROUNDS = 3;
+/** Absolute ceiling so a hand-edited `images.maxRounds: 10000` cannot unbound paid xAI calls. */
+export const MAX_ROUNDS_HARD_LIMIT = 10;
+
+/**
+ * Clamp a configured maxRounds value to a safe integer in [0, MAX_ROUNDS_HARD_LIMIT].
+ * Non-finite / non-number inputs fall back to DEFAULT_MAX_ROUNDS.
+ */
+export function clampImageMaxRounds(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_ROUNDS;
+  return Math.max(0, Math.min(MAX_ROUNDS_HARD_LIMIT, Math.floor(value)));
+}
 
 interface ImageCall {
   id: string;
@@ -140,8 +151,15 @@ export interface ImageBridgeDeps {
   onAttemptSend?: () => void;
   abortSignal?: AbortSignal;
   onFirstOutput?: () => void;
-  /** Max image-generation rounds before forcing a final answer. Defaults to 3. */
+  /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
+  /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
+  onUsage?: (usage: OcxUsage | undefined) => void;
+  /**
+   * Optional 429 key-failover for the routed (non-xAI) model. Return a rebuilt adapter for the
+   * rotated key, or null when the pool is exhausted.
+   */
+  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
 }
 
 /**
@@ -151,15 +169,23 @@ export interface ImageBridgeDeps {
  * inject the answer as a tool_result, and loop (bounded by `maxRounds`).
  */
 export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Response> {
-  const { parsed, adapter, plan, abortSignal } = deps;
-  const maxRounds = Math.max(0, deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
+  const { parsed, plan, abortSignal } = deps;
+  let adapter = deps.adapter;
+  const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
 
   const messages: OcxMessage[] = [...parsed.context.messages];
   const allTools = parsed.context.tools ?? [];
-  // For the forced-final pass we drop image tools so the model MUST answer from the results already
-  // in `messages` (can't generate again) — this guarantees a non-empty final answer.
-  const toolsNoImage = allTools.filter(t => !t.imageGeneration);
+  // Forced-final must strip every image-generation alias the plan knows about — not only tools
+  // flagged `imageGeneration:true`. Hosted `image_generation` / function aliases would otherwise
+  // remain callable; scanEventsForImageCall would strip the call while forceFinal blocks fulfillment,
+  // leaving the client an empty completion.
+  const toolsNoImage = allTools.filter(t => {
+    if (t.imageGeneration) return false;
+    if (plan.toolNames.has(t.name)) return false;
+    if (t.namespace && plan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+    return true;
+  });
   const budget = createImageBudget();
 
   // Link an internal AbortController to the turn signal so a client cancel of the SSE body aborts
@@ -179,7 +205,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   type IterationSplit = ReturnType<typeof scanEventsForImageCall>;
 
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
-  // connect/header/HTTP failure stays a non-2xx JSON response.
+  // connect/header/HTTP failure stays a non-2xx JSON response — except for runTurn adapters, which
+  // have no HTTP status surface and must not block SSE headers behind queue.collect().
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
@@ -205,7 +232,28 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           queue.close();
         });
 
-      const events = await queue.collect();
+      // Yield heartbeats to the live SSE stream while the turn collects — clients already hold
+      // response headers (eager drain is skipped for runTurn) and must not starve on a slow first turn.
+      const collectPromise = queue.collect();
+      let events: AdapterEvent[] | undefined;
+      while (events === undefined) {
+        const raced = await Promise.race([
+          collectPromise.then(value => ({ done: true as const, value })),
+          new Promise<{ done: false }>(resolve => {
+            const timer = setTimeout(() => resolve({ done: false }), 15_000);
+            void collectPromise.finally(() => clearTimeout(timer));
+          }),
+        ]);
+        if (raced.done) events = raced.value;
+        else yield { type: "heartbeat" };
+      }
+
+      // Preserve Cursor conversation continuity across image-loop iterations. runTurn mutates
+      // iterParsed (shallow copy); copy the id back onto the shared parsed request.
+      if (iterParsed._cursorConversationId) {
+        parsed._cursorConversationId = iterParsed._cursorConversationId;
+      }
+
       deps.onAttemptSend?.();
 
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
@@ -214,9 +262,6 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         throw new LoopError(502, errorEvent.message);
       }
 
-      // Wrap as an adapter whose parseStream replays the collected events. The pseudo-response
-      // carries an empty (but non-null) body so parseStreamWithProgress can acquire a reader
-      // without crashing; the wrapped parseStream never reads from it.
       const wrappedAdapter: ProviderAdapter = {
         ...adapter,
         async *parseStream() {
@@ -228,52 +273,70 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
 
     const headerDeadline = clearableDeadline(CONNECT_TIMEOUT_MS, signal);
     try {
-      const request = await adapter.buildRequest(iterParsed, {
-        headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
-        abortSignal: headerDeadline.signal,
-      });
-      deps.onAttemptSend?.();
-      const response = adapter.fetchResponse
-        ? await adapter.fetchResponse(request, {
-            abortSignal: headerDeadline.signal,
-            timeoutMs: CONNECT_TIMEOUT_MS,
-            returnRawErrors: true,
-            stream: true,
-          })
-        : await fetchWithResetRetry(
-            () => {
-              const h = new Headers(request.headers);
-              if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-              return fetch(request.url, {
-                method: request.method,
-                headers: h,
-                body: request.body,
-                signal: headerDeadline.signal,
-              });
-            },
-            { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
-          );
+      const fetchOnce = async (requestAdapter: ProviderAdapter): Promise<IterationResponse> => {
+        const request = await requestAdapter.buildRequest(iterParsed, {
+          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+          abortSignal: headerDeadline.signal,
+        });
+        deps.onAttemptSend?.();
+        const response = requestAdapter.fetchResponse
+          ? await requestAdapter.fetchResponse(request, {
+              abortSignal: headerDeadline.signal,
+              timeoutMs: CONNECT_TIMEOUT_MS,
+              returnRawErrors: true,
+              stream: true,
+            })
+          : await fetchWithResetRetry(
+              () => {
+                const h = new Headers(request.headers);
+                if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
+                return fetch(request.url, {
+                  method: request.method,
+                  headers: h,
+                  body: request.body,
+                  signal: headerDeadline.signal,
+                });
+              },
+              { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
+            );
+        return { response, responseAdapter: requestAdapter };
+      };
+
+      let prepared = await fetchOnce(adapter);
+      // 429 key-failover parity with web-search / normal routed path.
+      while (prepared.response.status === 429 && deps.on429) {
+        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+        if (!rotated) break;
+        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        adapter = rotated;
+        yield { type: "heartbeat" };
+        prepared = await fetchOnce(adapter);
+      }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
       headerDeadline.clear();
-      if (!response.ok) {
+      if (!prepared.response.ok) {
         let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
         try {
-          body = await readBoundedResponseBody(response, { signal });
+          body = await readBoundedResponseBody(prepared.response, { signal });
         } catch {
           if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-          throw new LoopError(response.status, `Provider error ${response.status}`);
+          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
         }
         let formatted = "";
-        if (body.displaySafe && !body.truncated && body.text.trim() && adapter.formatErrorBody) {
+        if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
           try {
-            formatted = adapter.formatErrorBody(response.status, response.headers, body.text).trim();
+            formatted = prepared.responseAdapter.formatErrorBody(
+              prepared.response.status,
+              prepared.response.headers,
+              body.text,
+            ).trim();
           } catch { /* formatter hooks are best-effort */ }
         }
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
-        throw new LoopError(response.status, `Provider error ${response.status}${suffix}`);
+        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
       }
-      return { response, responseAdapter: adapter };
+      return prepared;
     } catch (error) {
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${CONNECT_TIMEOUT_MS}ms during image-bridge`);
@@ -324,14 +387,18 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   };
 
   // Eagerly acquire only the FIRST iteration's final headers so connect/header/HTTP failures remain
-  // non-2xx JSON.
-  let firstPrepared: IterationResponse;
-  try {
-    firstPrepared = await prepareIterationDrained(maxRounds <= 0);
-  } catch (e) {
-    if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-    if (e instanceof LoopError) return jsonError(e.status, e.message);
-    throw e;
+  // non-2xx JSON. Skip for runTurn adapters: their "headers" are synthetic, and awaiting
+  // queue.collect() before returning SSE starves clients of headers/heartbeats on slow first turns.
+  const skipEagerDrain = !!adapter.runTurn;
+  let firstPrepared: IterationResponse | undefined;
+  if (!skipEagerDrain) {
+    try {
+      firstPrepared = await prepareIterationDrained(maxRounds <= 0);
+    } catch (e) {
+      if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+      if (e instanceof LoopError) return jsonError(e.status, e.message);
+      throw e;
+    }
   }
 
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
@@ -351,13 +418,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       for (let i = 0; i < HARD_CAP; i++) {
         const forceFinal = i >= maxRounds;
         try {
-          // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
-          if (i > 0) {
+          // First loop turn reuses the eager HEADERS when present. runTurn (and later iterations)
+          // acquire headers inside the live SSE stream so clients already have the response open.
+          if (!prepared || i > 0) {
             yield { type: "heartbeat" };
             prepared = yield* prepareIterationEvents(forceFinal);
           }
           // Raw-byte progress heartbeats reach the bridge; semantic events remain buffered.
           const split = yield* consumeIterationEvents(prepared);
+          prepared = undefined;
 
           // Loop (fulfill + re-ask) ONLY when the model's actionable output is purely image_gen. A
           // real tool call means this turn is terminal for Codex — finalize so those calls reach
@@ -368,16 +437,17 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             return;
           }
 
-          // Fulfill each image call, then inject assistant + toolResult into messages.
+          // Fulfill each image call, then inject ONE assistant turn (thinking once + all tool
+          // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.
           const iterationThinking = extractIterationThinking(split.passthrough);
-          for (const [callIndex, call] of split.calls.entries()) {
+          const fulfilled: Array<{ call: ImageCall; result: Awaited<ReturnType<typeof fulfillImageCall>>; args: Record<string, unknown> }> = [];
+          for (const call of split.calls) {
             yield { type: "heartbeat" };
             const result = await fulfillImageCall(
               { id: call.id, name: call.name, arguments: call.args },
               plan, budget, signal,
             );
             if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-            const now = Date.now();
             let parsedArgs: Record<string, unknown> = {};
             try {
               const raw: unknown = JSON.parse(call.args || "{}");
@@ -385,14 +455,23 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 parsedArgs = raw as Record<string, unknown>;
               }
             } catch { /* malformed args */ }
-            messages.push({
-              role: "assistant",
-              content: [
-                ...(callIndex === 0 && iterationThinking ? [iterationThinking] : []),
-                { type: "toolCall" as const, id: call.id, name: call.name, arguments: parsedArgs },
-              ],
-              timestamp: now,
-            });
+            fulfilled.push({ call, result, args: parsedArgs });
+          }
+          const now = Date.now();
+          messages.push({
+            role: "assistant",
+            content: [
+              ...(iterationThinking ? [iterationThinking] : []),
+              ...fulfilled.map(({ call, args }) => ({
+                type: "toolCall" as const,
+                id: call.id,
+                name: call.name,
+                arguments: args,
+              })),
+            ],
+            timestamp: now,
+          });
+          for (const { call, result } of fulfilled) {
             messages.push({
               role: "toolResult",
               toolCallId: call.id,
@@ -424,6 +503,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       responseId: "",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
+      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });

@@ -743,13 +743,13 @@ export interface OcxTokenGuardianConfig {
 export interface OcxImagesConfig {
   /** Optional custom API-key provider for /v1/images relays. Built-in OpenAI tiers remain automatic. */
   provider?: string;
-  /** Upstream timeout (ms) for one /v1/images relay. Default 300000 — generation is slow. */
+  /** Upstream timeout (ms) for one image generation/edit call (bridge xAI + /v1/images relay). Default 60000 for the bridge; relay may use a higher default (300000). */
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
   /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
   bridgeModel?: string;
-  /** Max image-generation loop iterations before forced-final. Default 3 (see DEFAULT_MAX_ROUNDS in images/loop.ts). */
+  /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;
 }
 

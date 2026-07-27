@@ -60,5 +60,8 @@ export async function planImageBridge(
     auth: { baseUrl: pinnedBaseUrl, token },
     model: config.images?.bridgeModel ?? DEFAULT_MODEL,
     toolNames,
+    ...(typeof config.images?.timeoutMs === "number" && Number.isFinite(config.images.timeoutMs) && config.images.timeoutMs > 0
+      ? { timeoutMs: Math.floor(config.images.timeoutMs) }
+      : {}),
   };
 }
