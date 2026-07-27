@@ -1,6 +1,8 @@
 # 003 — enhancement 전수 판단
 
-대상: `enhancement` 라벨이 붙은 열린 이슈 11건 + 라벨 없는 신규 2건.
+대상: `enhancement` 라벨이 붙은 열린 이슈 **13건**
+(`[540,476,425,415,414,401,386,294,201,178,177,95,42]`) + 라벨 없는 신규 2건
+(#545, #546).
 
 ## 판단 축
 
@@ -17,7 +19,7 @@ enhancement에 대한 오너 결정은 세 가지 중 하나로 수렴한다:
 
 | # | 제목 | 라벨 | 현재 상태 | 결정 필요 지점 |
 | --- | --- | --- | --- | --- |
-| 42 | Storage 페이지 + 세션 정리 정책 | enhancement, roadmap | Phase 1 완료, Phase 2가 PR #529 | Phase 3(자동 정리 정책) 착수 여부 |
+| 42 | Storage 페이지 + 세션 정리 정책 | enhancement, roadmap | Phase 1·2 완료 (**#529 MERGED**) | Phase 2.1(복원 UI) / Phase 3(자동 정책) 착수 여부 |
 | 95 | 멀티유저 프록시 + LiteLLM | enhancement, roadmap | 07-22 "long-term roadmap" 확정 | 프로젝트 사이클 배정 시점. **아래 A 참조** |
 | 177 | Warp 프로바이더 | enhancement, roadmap | 07-22 roadmap 일괄 라벨 | 인증 경로 실재 여부 미조사 |
 | 178 | Factory 프로바이더 | enhancement, roadmap | 07-22 roadmap 일괄 라벨 | 동일 |
@@ -28,8 +30,19 @@ enhancement에 대한 오너 결정은 세 가지 중 하나로 수렴한다:
 | 414 | Exa 등 검색 프로바이더 사이드카 | enhancement | 자체 제출 (#398 분할) | 착수 순서 |
 | 415 | Gemini 등 자체 검색 API 사이드카 | enhancement | 자체 제출 (#398 분할) | 414와 선후 관계. **아래 C 참조** |
 | 425 | Codex 계정 네임스페이스 | enhancement | PR #512가 foundation 담당 | 나머지 레이어 착수 |
-| 476 | 카탈로그 변경이 running app-server 미반영 | enhancement | PR #526/#527 승계 | #527이 잘못된 base를 향함 |
+| 476 | 카탈로그 변경이 running app-server 미반영 | enhancement | PR #526/#527 승계 | #527 base 수동 리타깃 (순서 의존 없음) |
 | 540 | WordPress Studio Code 프로바이더 | enhancement, provider-compat, roadmap | 07-27 ACCEPT-GATED 확정 | **이미 결정 완료** — 모범 사례 |
+
+### 라벨 없는 신규 2건
+
+| # | 제목 | 라벨 | 현재 상태 | 결정 필요 지점 |
+| --- | --- | --- | --- | --- |
+| 545 | Auto Mode 권한 분류기 64토큰 절단 | **없음** | 미분류, 응답 없음 | 라벨 + 조사 착수. bug 후보 |
+| 546 | Desktop 3P 모델 피커 미반영 | **없음** | 미분류, 응답 없음 | 라벨 + 문서 수정 경로 채택 여부 |
+
+> `roadmap` 라벨 7건(`[540,294,201,178,177,95,42]`)은 아래 세 판단 축 중
+> 어디에도 속하지 않는 상태다. 이 자기모순은 묶음 G에서 다룬다 —
+> `001_decision_bundles.md` G, `006_corrections.md` S5.
 
 ## A — 프로바이더 요청군의 구조적 문제 (#177 / #178 / #201 / #540)
 
