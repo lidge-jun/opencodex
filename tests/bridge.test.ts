@@ -904,9 +904,10 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     const json = buildResponseJSON([
       { type: "text_delta", text: "partial" },
       { type: "done", stopReason: "content_filter" },
-    ], "routed/model");
+    ], "routed/model", { compaction: true });
     expect(json.status).toBe("incomplete");
     expect(json.incomplete_details).toEqual({ reason: "content_filter" });
+    expect((json.output as Record<string, unknown>[]).some(item => item.type === "compaction")).toBe(false);
   });
 
   test("batch buildResponseJSON without stopReason returns completed status", () => {
