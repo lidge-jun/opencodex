@@ -6,6 +6,13 @@ import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME } from "./synthetic-tool";
 
 const DEFAULT_MODEL = "grok-imagine-image-quality";
+/** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
+export const MAX_IMAGE_TIMEOUT_MS = 300_000;
+
+function clampImageTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.max(1, Math.min(MAX_IMAGE_TIMEOUT_MS, Math.floor(value)));
+}
 
 export function findXaiProvider(config: OcxConfig): { name: string; provider: OcxProviderConfig } | undefined {
   // Primary: well-known name "xai"
@@ -69,6 +76,7 @@ export async function planImageBridge(
   const original = parsed._imageGeneration.originalTool;
   const hostedSize = typeof original?.size === "string" ? original.size : undefined;
   const hostedQuality = typeof original?.quality === "string" ? original.quality : undefined;
+  const timeoutMs = clampImageTimeoutMs(config.images?.timeoutMs);
   return {
     provider: found.provider,
     auth: { baseUrl: pinnedBaseUrl, token },
@@ -76,8 +84,6 @@ export async function planImageBridge(
     toolNames,
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
     ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),
-    ...(typeof config.images?.timeoutMs === "number" && Number.isFinite(config.images.timeoutMs) && config.images.timeoutMs > 0
-      ? { timeoutMs: Math.floor(config.images.timeoutMs) }
-      : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   };
 }

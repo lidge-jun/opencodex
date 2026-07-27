@@ -139,6 +139,42 @@ describe("pinnedHttpsGet transport", () => {
     expect(received).toBeLessThanOrEqual(maxBytes + small.byteLength);
   });
 
+  test("3xx redirect status rejects without following", async () => {
+    let resDestroyed = false;
+    const requestMock = mock((
+      _options: unknown,
+      onResponse?: (res: EventEmitter & {
+        statusCode: number;
+        headers: Record<string, string>;
+        destroy: () => void;
+      }) => void,
+    ) => {
+      const req = new EventEmitter() as EventEmitter & { setTimeout: () => void; end: () => void; destroy: () => void };
+      req.setTimeout = () => {};
+      req.destroy = () => {};
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          headers: Record<string, string>;
+          destroy: () => void;
+        };
+        res.statusCode = 301;
+        res.headers = { location: "https://evil.example/redirect" };
+        res.destroy = () => { resDestroyed = true; };
+        queueMicrotask(() => onResponse?.(res));
+      };
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    const { pinnedHttpsGet } = await import("../../src/images/artifacts");
+    await expect(pinnedHttpsGet(
+      "https://cdn.example/redirect.png",
+      { address: "93.184.216.34", family: 4 },
+    )).rejects.toThrow(/301/);
+    expect(resDestroyed).toBe(true);
+  });
+
   test("non-2xx destroys the transport immediately without buffering body chunks", async () => {
     // Regression: a 500 that keeps emitting must not resolve a streaming Response
     // whose body nobody will read — destroy on status and reject before any data
@@ -230,5 +266,56 @@ describe("pinnedHttpsGet transport", () => {
       undefined,
       { idleTimeoutMs: 1 },
     )).rejects.toThrow(/timed out/);
+  });
+
+  test("forwards idleTimeoutMs to request and response socket timers", async () => {
+    let reqIdleMs: number | undefined;
+    let resIdleMs: number | undefined;
+    const requestMock = mock((
+      _options: unknown,
+      onResponse?: (res: EventEmitter & {
+        statusCode: number;
+        headers: Record<string, string>;
+        setTimeout: (ms: number, cb: () => void) => void;
+        resume: () => void;
+      }) => void,
+    ) => {
+      const req = new EventEmitter() as EventEmitter & {
+        setTimeout: (ms: number, cb: () => void) => void;
+        end: () => void;
+        destroy: () => void;
+      };
+      req.destroy = () => {};
+      req.setTimeout = (ms) => { reqIdleMs = ms; };
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          headers: Record<string, string>;
+          setTimeout: (ms: number, cb: () => void) => void;
+          resume: () => void;
+        };
+        res.statusCode = 200;
+        res.headers = { "content-type": "image/png" };
+        res.resume = () => {};
+        res.setTimeout = (ms) => { resIdleMs = ms; };
+        queueMicrotask(() => {
+          onResponse?.(res);
+          queueMicrotask(() => res.emit("end"));
+        });
+      };
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    const { pinnedHttpsGet } = await import("../../src/images/artifacts");
+    const resp = await pinnedHttpsGet(
+      "https://cdn.example/img.png",
+      { address: "93.184.216.34", family: 4 },
+      undefined,
+      { idleTimeoutMs: 12_345 },
+    );
+    expect(reqIdleMs).toBe(12_345);
+    expect(resIdleMs).toBe(12_345);
+    await resp.arrayBuffer();
   });
 });

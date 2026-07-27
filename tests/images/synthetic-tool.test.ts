@@ -10,8 +10,8 @@ describe("isImageGenName", () => {
     expect(isImageGenName("IMAGE_GENERATION")).toBe(true);
   });
 
-  test("'imagegen' → true", () => {
-    expect(isImageGenName("imagegen")).toBe(true);
+  test("'imagegen' → false without hosted image tool context", () => {
+    expect(isImageGenName("imagegen")).toBe(false);
   });
 
   test("'not_image' → false", () => {
@@ -46,6 +46,22 @@ describe("extractHostedImageGeneration", () => {
     expect(
       extractHostedImageGeneration([{ type: "function", function: { name: "shell" } }]),
     ).toBeUndefined();
+  });
+
+  test("generate_image alone → undefined (alias requires hosted entry)", () => {
+    expect(
+      extractHostedImageGeneration([{ type: "function", name: "generate_image", parameters: { type: "object" } }]),
+    ).toBeUndefined();
+  });
+
+  test("generate_image with hosted image_generation → matched", () => {
+    const result = extractHostedImageGeneration([
+      { type: "image_generation" },
+      { type: "function", name: "generate_image", parameters: { type: "object" } },
+    ]);
+    expect(result).toBeDefined();
+    expect(result!.toolNames.has("generate_image")).toBe(true);
+    expect(result!.toolNames.has("image_generation")).toBe(true);
   });
 
   test("undefined → undefined", () => {

@@ -25,8 +25,6 @@ import type { ProviderAdapter } from "../../src/adapters/base";
  */
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
 
 // --- Activation spies, flipped by the stubbed runners ---
 let imageBridgeRun = false;
@@ -38,72 +36,79 @@ let runTurnCalled = false;
 /** Controlled return value for the stubbed planWebSearch (truthy ⇒ web-search plan active). */
 let mockWsPlan: unknown = undefined;
 
-// --- Stub adapter-resolve: inject a minimal adapter so no real upstream is hit ---
-const actualResolver = await import("../../src/server/adapter-resolve");
-mock.module("../../src/server/adapter-resolve", () => ({
-  ...actualResolver,
-  resolveAdapter(provider: OcxProviderConfig) {
-    const base = {
-      name: "test",
-      buildRequest: async () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
-      async fetchResponse() {
-        return new Response("data: {\"type\":\"done\"}\n\n", {
-          status: 200, headers: { "content-type": "text/event-stream" },
-        });
-      },
-      async *parseStream() { yield { type: "done" as const }; },
-    };
-    if (useRunTurnAdapter) {
-      return {
-        ...base,
-        async runTurn(_parsed: unknown, _incoming: unknown, emit: (event: { type: string }) => void) {
-          runTurnCalled = true;
-          emit({ type: "done" });
+let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
+
+beforeAll(async () => {
+  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+
+  const actualResolver = await import("../../src/server/adapter-resolve");
+  mock.module("../../src/server/adapter-resolve", () => ({
+    ...actualResolver,
+    resolveAdapter(provider: OcxProviderConfig) {
+      const base = {
+        name: "test",
+        buildRequest: async () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
+        async fetchResponse() {
+          return new Response("data: {\"type\":\"done\"}\n\n", {
+            status: 200, headers: { "content-type": "text/event-stream" },
+          });
         },
-      } as ProviderAdapter;
-    }
-    return base as ProviderAdapter;
-  },
-}));
-
-// --- Stub the image bridge runner: detect activation without hitting the real loop ---
-// --- Stub the image bridge runner: detect activation without hitting the real loop ---
-const actualLoop = await import("../../src/images/loop");
-mock.module("../../src/images/loop", () => ({
-  ...actualLoop,
-  runWithImageBridge: async () => {
-    imageBridgeRun = true;
-    return new Response("data: {\"type\":\"done\"}\n\n", {
-      status: 200, headers: { "content-type": "text/event-stream" },
-    });
-  },
-}));
-
-// --- Stub the web-search planner + runner: control eligibility and detect activation ---
-mock.module("../../src/web-search/index", () => ({
-  // Re-export the symbols parser.ts imports statically (deep path → no mock there).
-  buildWebSearchTool: () => ({ name: "web_search", parameters: { type: "object", properties: {} } }),
-  WEB_SEARCH_TOOL_NAME: "web_search",
-  extractHostedWebSearch: (tools: unknown[]) => {
-    if (!Array.isArray(tools)) return undefined;
-    for (const t of tools) {
-      if (t && typeof t === "object" && (t as Record<string, unknown>).type === "web_search") {
-        return { search_context_size: "medium" };
+        async *parseStream() { yield { type: "done" as const }; },
+      };
+      if (useRunTurnAdapter) {
+        return {
+          ...base,
+          async runTurn(_parsed: unknown, _incoming: unknown, emit: (event: { type: string }) => void) {
+            runTurnCalled = true;
+            emit({ type: "done" });
+          },
+        } as ProviderAdapter;
       }
-    }
-    return undefined;
-  },
-  runWithWebSearch: async () => {
-    webSearchRun = true;
-    return new Response("data: {\"type\":\"done\"}\n\n", {
-      status: 200, headers: { "content-type": "text/event-stream" },
-    });
-  },
-  planWebSearch: () => mockWsPlan,
-  shouldResolveOpenAiWebSearchSidecar: () => false,
-}));
+      return base as ProviderAdapter;
+    },
+  }));
 
-const { handleResponses } = await import("../../src/server/responses");
+  const actualLoop = await import("../../src/images/loop");
+  mock.module("../../src/images/loop", () => ({
+    ...actualLoop,
+    runWithImageBridge: async () => {
+      imageBridgeRun = true;
+      return new Response("data: {\"type\":\"done\"}\n\n", {
+        status: 200, headers: { "content-type": "text/event-stream" },
+      });
+    },
+  }));
+
+  mock.module("../../src/web-search/index", () => ({
+    buildWebSearchTool: () => ({ name: "web_search", parameters: { type: "object", properties: {} } }),
+    WEB_SEARCH_TOOL_NAME: "web_search",
+    extractHostedWebSearch: (tools: unknown[]) => {
+      if (!Array.isArray(tools)) return undefined;
+      for (const t of tools) {
+        if (t && typeof t === "object" && (t as Record<string, unknown>).type === "web_search") {
+          return { search_context_size: "medium" };
+        }
+      }
+      return undefined;
+    },
+    runWithWebSearch: async () => {
+      webSearchRun = true;
+      return new Response("data: {\"type\":\"done\"}\n\n", {
+        status: 200, headers: { "content-type": "text/event-stream" },
+      });
+    },
+    planWebSearch: () => mockWsPlan,
+    shouldResolveOpenAiWebSearchSidecar: () => false,
+  }));
+
+  ({ handleResponses } = await import("../../src/server/responses"));
+});
+
+afterAll(() => {
+  if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = PREV_HOME;
+  mock.restore();
+});
 
 /** Routed (non-OpenAI) keyed provider + an xAI provider with an API key so the real planImageBridge returns a plan. */
 function makeConfig(): OcxConfig {
@@ -143,14 +148,12 @@ describe("image bridge dispatch priority (handler activation)", () => {
     imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
     const res = await post(false, [{ type: "image_generation" }]);
     expect(res.status).toBe(400);
-    // The runner must not execute when the request is rejected upfront.
     expect(imageBridgeRun).toBe(false);
     expect((await res.text())).toContain("image bridge requires stream=true");
   });
 
   test("dual-tool (image_generation + web_search), both eligible → web-search wins, image bridge deferred", async () => {
     imageBridgeRun = false; webSearchRun = false;
-    // A truthy plan ⇒ web-search is eligible; the image bridge must defer to it.
     mockWsPlan = { backend: "openai" };
     const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
     expect(webSearchRun).toBe(true);
@@ -160,10 +163,6 @@ describe("image bridge dispatch priority (handler activation)", () => {
 
   test("routed compaction with image_generation tool → image bridge does NOT hijack compaction (#424)", async () => {
     imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
-    // A routed-compaction request carries both _compactionRequest and _imageGeneration:
-    // compaction clears tools/_webSearch but leaves _imageGeneration, so without the
-    // routedCompaction guard planImageBridge would activate and return a normal Responses
-    // completion instead of the synthetic compaction item Codex expects.
     const res = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -189,9 +188,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     mockWsPlan = { backend: "openai" };
     try {
       const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
-      // Web-search sidecar cannot drive runTurn adapters — skip it.
       expect(webSearchRun).toBe(false);
-      // Image bridge supports runTurn, so it handles the dual-tool turn instead.
       expect(imageBridgeRun).toBe(true);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");

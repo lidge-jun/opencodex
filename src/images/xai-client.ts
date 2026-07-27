@@ -89,7 +89,8 @@ export async function callXaiImages(
   const timeout = AbortSignal.timeout(deadlineMs);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await fetch(`${auth.baseUrl}${endpoint}`, {
+  const baseUrl = auth.baseUrl.replace(/\/+$/, "");
+  const resp = await fetch(`${baseUrl}${endpoint}`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${auth.token}`,

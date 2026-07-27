@@ -7,28 +7,37 @@ import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
+let runWithImageBridge: typeof import("../../src/images/loop")["runWithImageBridge"];
+let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
+let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
+let MAX_ROUNDS_HARD_LIMIT: typeof import("../../src/images/loop")["MAX_ROUNDS_HARD_LIMIT"];
 
-// --- Mock parseStreamWithProgress: simplify to direct delegation ---
-mock.module("../../src/web-search/progress-stream", () => ({
-  parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
-    for await (const e of parse(_resp)) yield e;
-  },
-  RoutedModelInactivityError: class extends Error { readonly timeoutMs = 0; },
-  WebSearchStreamProtocolError: class extends Error { /* */ },
-}));
-
-// --- Mock fulfillImageCall ---
 let fulfillResult: ImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
   files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
 };
-mock.module("../../src/images/fulfill", () => ({
-  fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
-}));
 
-const { runWithImageBridge, clampImageMaxRounds, DEFAULT_MAX_ROUNDS, MAX_ROUNDS_HARD_LIMIT } = await import("../../src/images/loop");
+beforeAll(async () => {
+  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  mock.restore();
+  mock.module("../../src/web-search/progress-stream", () => ({
+    parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
+      for await (const e of parse(_resp)) yield e;
+    },
+    RoutedModelInactivityError: class extends Error { readonly timeoutMs = 0; },
+    WebSearchStreamProtocolError: class extends Error { /* */ },
+  }));
+  mock.module("../../src/images/fulfill", () => ({
+    fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
+  }));
+  ({
+    runWithImageBridge,
+    clampImageMaxRounds,
+    DEFAULT_MAX_ROUNDS,
+    MAX_ROUNDS_HARD_LIMIT,
+  } = await import("../../src/images/loop"));
+});
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
 
 // --- Mock adapter: yields canned events per iteration from a queue ---
 let streamQueue: AdapterEvent[][] = [];
@@ -41,6 +50,7 @@ const defaultFulfillResult: ImageCallResult = {
 beforeEach(() => {
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
+  streamQueue = [];
 });
 
 const mockAdapter: ProviderAdapter = {
@@ -280,8 +290,9 @@ describe("runWithImageBridge", () => {
   test("429 key rotation rebuilds the adapter and retries the iteration", async () => {
     let fetchCalls = 0;
     let rotations = 0;
-    const rotatingAdapter: ProviderAdapter = {
-      name: "test",
+    let activeAdapter: ProviderAdapter | undefined;
+    const makeRotatingAdapter = (label: string): ProviderAdapter => ({
+      name: label,
       buildRequest: async () => ({ url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }),
       fetchResponse: async () => {
         fetchCalls++;
@@ -293,19 +304,24 @@ describe("runWithImageBridge", () => {
         const events = streamQueue.shift();
         if (events) for (const e of events) yield e;
       },
-    };
+    });
+    const firstAdapter = makeRotatingAdapter("before-rotate");
+    const secondAdapter = makeRotatingAdapter("after-rotate");
+    activeAdapter = firstAdapter;
     const response = await runWithImageBridge({
       parsed: makeParsed(),
-      adapter: rotatingAdapter,
+      adapter: firstAdapter,
       plan,
       on429: () => {
         rotations++;
-        return rotatingAdapter;
+        activeAdapter = secondAdapter;
+        return secondAdapter;
       },
     });
     const sse = await response.text();
     expect(rotations).toBe(1);
     expect(fetchCalls).toBe(2);
+    expect(activeAdapter).toBe(secondAdapter);
     expect(sse).toContain("after rotate");
   });
 });

@@ -3,13 +3,18 @@ import type { OcxTool } from "../types";
 /** The function name the chat model sees + the name the loop intercepts. */
 export const IMAGE_GEN_TOOL_NAME = "image_gen";
 
-const IMAGE_GEN_NAMES = new Set([
-  "image_gen", "image_generation", "imagegen",
-  "generate_image", "generateimage",
-]);
+/** Aliases that only activate when a hosted image_generation/image_gen tool is also present. */
+const IMAGE_GEN_ALIASES = new Set(["imagegen", "generate_image", "generateimage"]);
 
 export function isImageGenName(name: string): boolean {
-  return IMAGE_GEN_NAMES.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  return lower === IMAGE_GEN_TOOL_NAME || lower === "image_generation";
+}
+
+function isHostedImageGenFunctionName(name: string, hasHostedEntry: boolean): boolean {
+  const lower = name.toLowerCase();
+  if (lower === IMAGE_GEN_TOOL_NAME || lower === "image_generation") return true;
+  return hasHostedEntry && IMAGE_GEN_ALIASES.has(lower);
 }
 
 /**
@@ -22,6 +27,15 @@ export function extractHostedImageGeneration(
   tools: unknown[] | undefined,
 ): { toolNames: Set<string>; originalTool?: Record<string, unknown> } | undefined {
   if (!Array.isArray(tools)) return undefined;
+  let hasHostedEntry = false;
+  for (const t of tools) {
+    if (!t || typeof t !== "object") continue;
+    const obj = t as Record<string, unknown>;
+    if (obj.type === "image_generation" || obj.type === "image_gen") {
+      hasHostedEntry = true;
+      break;
+    }
+  }
   const toolNames = new Set<string>();
   let originalTool: Record<string, unknown> | undefined;
   for (const t of tools) {
@@ -36,7 +50,7 @@ export function extractHostedImageGeneration(
       // Also handle the nested Chat Completions shape {type:"function", function:{name:"..."}} for safety.
       const fnName =
         typeof obj.name === "string" ? obj.name : (obj as { function?: { name?: string } }).function?.name;
-      if (fnName && isImageGenName(fnName)) {
+      if (fnName && isHostedImageGenFunctionName(fnName, hasHostedEntry)) {
         if (!originalTool) originalTool = obj;
         toolNames.add(fnName);
       }

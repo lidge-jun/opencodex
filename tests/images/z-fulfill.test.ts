@@ -6,8 +6,27 @@ import type { ImageBridgePlan } from "../../src/images/types";
 import type { XaiImageRequest } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
-beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; });
+let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
+
+beforeAll(async () => {
+  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  mock.restore();
+  mock.module("../../src/images/xai-client", () => ({
+    callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
+      xaiCalls.push(req);
+      capturedTimeoutMs = timeoutMs;
+      if (xaiError) throw xaiError;
+      return xaiResult;
+    },
+  }));
+  mock.module("../../src/images/artifacts", () => ({
+    createImageBudget: () => ({ spent: 0 }),
+    materializeInlineImage: async () => materializeFn(matIdx++),
+    downloadImageToArtifact: async () => downloadFn(dlIdx++),
+  }));
+  ({ fulfillImageCall } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
+});
+afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
 
 // --- Mutable mock state (reset() restores defaults before each test) ---
 let xaiResult: { images: Array<{ b64_json?: string; url?: string }> } = { images: [{ b64_json: "dGVzdA==" }] };
@@ -19,21 +38,6 @@ let materializeFn: (i: number) => Promise<string> = async (i) => `/test/img-${i}
 let downloadFn: (i: number) => Promise<string> = async (i) => `/test/dl-${i}.png`;
 
 let capturedTimeoutMs: number | undefined;
-mock.module("../../src/images/xai-client", () => ({
-  callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
-    xaiCalls.push(req);
-    capturedTimeoutMs = timeoutMs;
-    if (xaiError) throw xaiError;
-    return xaiResult;
-  },
-}));
-mock.module("../../src/images/artifacts", () => ({
-  createImageBudget: () => ({ spent: 0 }),
-  materializeInlineImage: async () => materializeFn(matIdx++),
-  downloadImageToArtifact: async () => downloadFn(dlIdx++),
-}));
-
-const { fulfillImageCall } = await import("../../src/images/fulfill");
 
 const plan = {
   provider: {} as never,
@@ -159,5 +163,35 @@ describe("fulfillImageCall", () => {
       plan, { spent: 0 },
     );
     expect(xaiCalls[0]!.imageUrl).toBe("https://example.com/i.png");
+  });
+
+  test("plan.defaultSize and defaultQuality fill omitted args", async () => {
+    reset();
+    const sizedPlan = {
+      ...plan,
+      defaultSize: "1024x1024",
+      defaultQuality: "hd",
+    } as ImageBridgePlan;
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "a cat" }) },
+      sizedPlan, { spent: 0 },
+    );
+    expect(xaiCalls[0]!.size).toBe("1024x1024");
+    expect(xaiCalls[0]!.quality).toBe("hd");
+  });
+
+  test("explicit size/quality override plan defaults", async () => {
+    reset();
+    const sizedPlan = {
+      ...plan,
+      defaultSize: "1024x1024",
+      defaultQuality: "hd",
+    } as ImageBridgePlan;
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "a cat", size: "512x512", quality: "standard" }) },
+      sizedPlan, { spent: 0 },
+    );
+    expect(xaiCalls[0]!.size).toBe("512x512");
+    expect(xaiCalls[0]!.quality).toBe("standard");
   });
 });
