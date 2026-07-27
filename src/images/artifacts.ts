@@ -1,3 +1,4 @@
+import { mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
@@ -6,6 +7,9 @@ import { assessUrlDestination, assertUrlResolvesPublic } from "../lib/destinatio
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
+
+/** Default cap on files retained under artifacts/. Oldest files are pruned when exceeded. */
+export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
 // characters, so malformed payloads would otherwise decode to garbage bytes.
@@ -21,6 +25,45 @@ export function createImageBudget(): ImageBudget {
 
 function getArtifactsDir(): string {
   return join(getConfigDir(), "artifacts");
+}
+
+/**
+ * Best-effort retention cap: when the artifact directory holds more than `maxFiles`,
+ * delete the oldest (by mtime) until the count is back under the limit. Synchronous
+ * on purpose — it runs right after each successful write and touches at most a handful
+ * of files. All errors are swallowed and logged so a prune failure never breaks an image write.
+ */
+export function pruneOldArtifacts(dir: string, maxFiles: number): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (e) {
+    console.warn(`[images] prune: could not read ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+  if (entries.length <= maxFiles) return;
+
+  let stats: Array<{ name: string; mtime: number }>;
+  try {
+    stats = entries.map(name => {
+      const st = statSync(join(dir, name));
+      return { name, mtime: st.mtimeMs };
+    });
+  } catch (e) {
+    console.warn(`[images] prune: could not stat files in ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+
+  // Sort oldest-first, delete the excess.
+  stats.sort((a, b) => a.mtime - b.mtime);
+  const toDelete = stats.slice(0, stats.length - maxFiles);
+  for (const { name } of toDelete) {
+    try {
+      unlinkSync(join(dir, name));
+    } catch (e) {
+      console.warn(`[images] prune: could not delete ${name}:`, e instanceof Error ? e.message : e);
+    }
+  }
 }
 
 function timestampPrefix(): string {
@@ -75,6 +118,7 @@ export function guessExtFromMagic(bytes: Uint8Array): string {
 export async function materializeInlineImage(
   base64Data: string,
   budget?: ImageBudget,
+  keepCount?: number,
 ): Promise<string> {
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -98,18 +142,21 @@ export async function materializeInlineImage(
 
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = guessExtFromMagic(buf);
-  return writeArtifactUnique(dir, "img-", buf, ext);
+  const filePath = await writeArtifactUnique(dir, "img-", buf, ext);
+  pruneOldArtifacts(dir, keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
+  return filePath;
 }
 
 export async function downloadImageToArtifact(
   url: string,
   budget?: ImageBudget,
   signal?: AbortSignal,
+  keepCount?: number,
 ): Promise<string> {
   if (url.startsWith("data:")) {
     const m = /^data:([^;]+);base64,(.+)$/.exec(url);
     if (!m) throw new Error("data URL is not a valid base64 image");
-    return materializeInlineImage(m[2], budget);
+    return materializeInlineImage(m[2], budget, keepCount);
   }
 
   // SSRF protection: validate the provider-returned URL before fetching.
@@ -163,5 +210,7 @@ export async function downloadImageToArtifact(
   await mkdir(dir, { recursive: true, mode: 0o700 });
   if (budget) budget.spent += bytes.length;
 
-  return writeArtifactUnique(dir, "dl-", bytes, ext);
+  const filePath = await writeArtifactUnique(dir, "dl-", bytes, ext);
+  pruneOldArtifacts(dir, keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
+  return filePath;
 }

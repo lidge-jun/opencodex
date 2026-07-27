@@ -85,7 +85,8 @@ streams the response back **untranslated**.
   `inlineData` parts are materialized to the `artifacts/` subdirectory of the configured OpenCodex
   config directory and surfaced to the client
   as a markdown image link (`![image](path)`). Each image is capped at 50 MB and each response at
-  100 MB of decoded data; malformed base64 payloads are rejected.
+  100 MB of decoded data; malformed base64 payloads are rejected. Artifacts are pruned automatically
+  when the count exceeds 200 files.
 
 ## `kiro`
 
