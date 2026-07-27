@@ -85,7 +85,7 @@ function timestampPrefix(): string {
 
 export function guessExtFromMagic(bytes: Uint8Array): string {
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
-  if (sig.startsWith("\x89PNG")) return "png";
+  if (sig.startsWith("\x89PNG\r\n\x1a\n")) return "png";
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";
