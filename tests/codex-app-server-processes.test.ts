@@ -27,12 +27,27 @@ describe("Codex app-server process matching (#476)", () => {
     expect(isCodexAppServerCommandLine("node /opt/codex-code-mode-host --session 1")).toBe(true);
   });
 
+  test("matches app-server after value-taking Codex global options", () => {
+    expect(isCodexAppServerCommandLine("codex --enable js_repl app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --enable=js_repl app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --disable multi_agent_v2 app-server --listen unix://x")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --config model=gpt-5.4 app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex -c model=gpt-5.4 app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex --profile production app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex -p production app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine(
+      "codex --enable js_repl --profile prod -c model=gpt-5.4 app-server --listen stdio://",
+    )).toBe(true);
+  });
+
   test("rejects unrelated processes and app-server / code-mode-host only in later arguments", () => {
     expect(isCodexAppServerCommandLine("hermes-codex-bridge-mcp --port 9")).toBe(false);
     expect(isCodexAppServerCommandLine("node ./opencodex/src/cli/index.ts start")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec 'hello'")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec \"debug app-server behavior\"")).toBe(false);
     expect(isCodexAppServerCommandLine("codex exec debug app-server behavior")).toBe(false);
+    expect(isCodexAppServerCommandLine("codex exec app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("node worker.js codex app-server")).toBe(false);
     expect(isCodexAppServerCommandLine("something-app-server-without-codex-bin")).toBe(false);
     expect(isCodexAppServerCommandLine("node worker.js codex-code-mode-host")).toBe(false);
     expect(isCodexAppServerCommandLine("bash -c codex-code-mode-host")).toBe(false);

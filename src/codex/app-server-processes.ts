@@ -117,6 +117,61 @@ function isInterpreterToken(token: string): boolean {
     || base === "deno" || base === "deno.exe";
 }
 
+/**
+ * Codex global options that take a following value when written without `=`.
+ * Keep this list explicit so unknown flags stay boolean (narrow matching).
+ */
+const CODEX_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  "--enable",
+  "--disable",
+  "--config",
+  "-c",
+  "--profile",
+  "-p",
+  "--model",
+  "-m",
+  "--sandbox",
+  "-s",
+  "--cd",
+  "-C",
+  "--color",
+  "--image",
+  "-i",
+  "--output-schema",
+  "--output-last-message",
+  "-o",
+]);
+
+/** Parse a CLI option token into its flag name and whether a value is inline (`--opt=value`). */
+function splitCliOptionToken(token: string): { name: string; hasInlineValue: boolean } | null {
+  if (!token.startsWith("-") || token === "-" || token === "--") return null;
+  if (token.startsWith("--")) {
+    const eq = token.indexOf("=");
+    if (eq >= 0) return { name: token.slice(0, eq).toLowerCase(), hasInlineValue: true };
+    return { name: token.toLowerCase(), hasInlineValue: false };
+  }
+  // Preserve short-option case: `-c` (config) vs `-C` (cd).
+  const eq = token.indexOf("=");
+  if (eq >= 0) return { name: token.slice(0, eq), hasInlineValue: true };
+  return { name: token, hasInlineValue: false };
+}
+
+/** Advance past one argv token, consuming a value for known Codex global options. */
+function advancePastCodexGlobalOption(tokens: readonly string[], index: number): number {
+  const option = splitCliOptionToken(tokens[index]!);
+  if (!option) return index + 1;
+  let next = index + 1;
+  if (
+    !option.hasInlineValue
+    && CODEX_GLOBAL_OPTIONS_WITH_VALUE.has(option.name)
+    && next < tokens.length
+    && !tokens[next]!.startsWith("-")
+  ) {
+    next += 1; // skip the option value
+  }
+  return next;
+}
+
 /** True when code-mode-host is the process executable or interpreter entrypoint, not a later arg. */
 function isCodeModeHostProcess(tokens: readonly string[]): boolean {
   if (tokens.length === 0) return false;
@@ -135,11 +190,18 @@ export function isCodexAppServerCommandLine(commandLine: string): boolean {
   if (tokens.length === 0) return false;
   if (isCodeModeHostProcess(tokens)) return true;
 
-  const codexIdx = tokens.findIndex(isCodexExecutableToken);
-  if (codexIdx < 0) return false;
-  for (let i = codexIdx + 1; i < tokens.length; i++) {
+  // Require Codex as argv0 so later-argument occurrences stay unmatched
+  // (e.g. `node worker.js codex app-server`).
+  if (!isCodexExecutableToken(tokens[0]!)) return false;
+
+  let i = 1;
+  while (i < tokens.length) {
     const token = tokens[i]!;
-    if (token.startsWith("-")) continue;
+    if (token.startsWith("-")) {
+      i = advancePastCodexGlobalOption(tokens, i);
+      continue;
+    }
+    // First non-option after globals is the Codex subcommand.
     return token.toLowerCase() === "app-server";
   }
   return false;
