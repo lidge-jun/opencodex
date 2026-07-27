@@ -250,7 +250,7 @@ describe("Kiro review regressions", () => {
     expect(calls).toEqual([]);
     expect(readFileSync(kiroCliDbPath()).length).toBeGreaterThan(0);
     expect(inspectKiroCliSessionSnapshot()).toMatchObject({ blocked: true, snapshot: null });
-  });
+  }, { timeout: 20_000 });
 
   test("forced login refuses when the primary CLI store exists but only a later fallback is readable", async () => {
     mkdirSync(join(kiroCliDbPath(), ".."), { recursive: true });

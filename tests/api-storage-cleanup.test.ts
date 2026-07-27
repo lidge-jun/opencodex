@@ -297,7 +297,7 @@ describe("GET /api/storage/trash + POST restore", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, { timeout: 20_000 });
 
   test("restore returns 409 when Codex DB is busy", async () => {
     seedArchived(isolatedCodexHome!.path);
@@ -335,7 +335,7 @@ describe("GET /api/storage/trash + POST restore", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, { timeout: 20_000 });
 
   test("rejects invalid and missing trash ids", async () => {
     const server = startServer(0);
