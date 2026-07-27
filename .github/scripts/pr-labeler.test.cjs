@@ -165,8 +165,15 @@ describe("pr-labeler workflow", () => {
   it("keeps trusted default-branch checkout, concurrency cancel, and minimal permissions", () => {
     assert.match(workflow, /ref:\s*\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}/);
     assert.match(workflow, /cancel-in-progress:\s*true/);
-    assert.match(workflow, /pull-requests:\s*read/);
     assert.match(workflow, /issues:\s*write/);
-    assert.doesNotMatch(workflow, /pull-requests:\s*write/);
+    // The issues label endpoints are shared with pull requests: writing a label
+    // onto a PR number needs pull_requests=write alongside issues=write, which
+    // GitHub reports as `issues=write; pull_requests=write`. Pinning this to
+    // read made the workflow fail closed on the first PR that actually needed a
+    // label applied (#565), so write is the minimum here, not an escalation.
+    assert.match(workflow, /pull-requests:\s*write/);
+    // contents stays read — the labeler never pushes.
+    assert.match(workflow, /contents:\s*read/);
+    assert.doesNotMatch(workflow, /contents:\s*write/);
   });
 });
