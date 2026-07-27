@@ -14,8 +14,8 @@ test("the controller is the single data owner and exposes the agreed contract", 
 
   // Data layer (Q6): list / active / loading / switching plus the mutating actions.
   for (const member of [
-    "accounts", "activeId", "loadState", "switchingId", "pauseUpdatingId", "activeNeedsReauth",
-    "load", "switchAccount", "setAccountPaused", "saveAlias", "removeAccount", "syncAfterAccountAdded",
+    "accounts", "activeId", "loadState", "switchingId", "pauseUpdatingId", "pausingExhausted", "activeNeedsReauth",
+    "load", "switchAccount", "setAccountPaused", "pauseExhaustedAccounts", "saveAlias", "removeAccount", "syncAfterAccountAdded",
   ]) {
     expect(hook).toContain(member);
   }
@@ -41,6 +41,16 @@ test("main and added account cards expose the same persisted pause control", asy
   expect(addedCards).toContain("onTogglePause(a)");
   expect(mainCard).toContain('t(main.paused ? "codexAuth.resume" : "codexAuth.pause")');
   expect(addedCards).toContain('t(a.paused ? "codexAuth.resume" : "codexAuth.pause")');
+});
+
+test("the pool header exposes one bulk action backed by the atomic endpoint", async () => {
+  const pool = await read("../src/components/CodexAccountPool.tsx");
+  const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");
+  const hook = await read("../src/hooks/useCodexAccountPool.ts");
+
+  expect(pool).toContain("controller.pauseExhaustedAccounts()");
+  expect(mainCard).toContain('t("codexAuth.pauseExhausted")');
+  expect(hook).toContain("/api/codex-auth/accounts/pause-exhausted");
 });
 
 test("pause is a token lease, so two holders cannot cancel each other", async () => {

@@ -51,6 +51,17 @@ beforeEach(() => {
         ));
         return { ok: true, json: async () => ({ activeCodexAccountId: null }) } as unknown as Response;
       }
+      if (path === "codex-auth/accounts/pause-exhausted") {
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account && account.id === "a2"
+            ? { ...account, paused: true }
+            : account
+        ));
+        return {
+          ok: true,
+          json: async () => ({ pausedAccountIds: ["a2"], pausedCount: 1, activeCodexAccountId: null }),
+        } as unknown as Response;
+      }
       if (path.startsWith("codex-auth/accounts")) {
         return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
       }
@@ -125,6 +136,23 @@ test("pausing an account writes the persisted endpoint and updates shared state"
   expect(calls).toContain("PUT codex-auth/accounts/pause");
   expect(seen.current!.accounts[0]?.paused).toBe(true);
   expect(seen.current!.activeId).toBeNull();
+});
+
+test("bulk pausing writes one endpoint and updates every returned account", async () => {
+  accounts = [
+    { id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null },
+    { id: "a2", email: "account-two", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.pauseExhaustedAccounts()).toEqual({ ok: true, pausedCount: 1 });
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause-exhausted");
+  expect(seen.current!.accounts.find(account => account.id === "a2")?.paused).toBe(true);
+  expect(seen.current!.pausingExhausted).toBe(false);
 });
 
 test("two pause holders both have to release before polling resumes", async () => {

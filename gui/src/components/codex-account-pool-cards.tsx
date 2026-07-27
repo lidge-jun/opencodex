@@ -26,6 +26,7 @@ export function CodexAccountPoolCards({
   onSwitch,
   onTogglePause,
   pauseUpdatingId,
+  pauseBusy,
   onReauth,
   onEditAlias,
   onRemove,
@@ -41,6 +42,7 @@ export function CodexAccountPoolCards({
   onSwitch: (account: CodexAccountEntry) => void;
   onTogglePause: (account: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
+  pauseBusy: boolean;
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
@@ -96,7 +98,7 @@ export function CodexAccountPoolCards({
               type="button"
               className={`btn btn-sm ${a.paused ? "btn-primary" : "btn-ghost"}`}
               onClick={() => onTogglePause(a)}
-              disabled={pauseUpdatingId !== null}
+              disabled={pauseBusy}
             >
               {a.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
               {pauseUpdatingId === a.id ? t("common.saving") : t(a.paused ? "codexAuth.resume" : "codexAuth.pause")}

@@ -79,6 +79,8 @@ on quota, cooldown, and health.
 Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
 retry/failover selection, cooldown recovery probes, and manual activation. The exclusion survives
 restarts; if every account is paused, Pool routing fails instead of silently selecting one.
+**Pause exhausted** first refreshes every account and pauses only those whose relevant quota window
+is freshly confirmed at 100%; unknown quota and failed refreshes are left unchanged.
 :::
 
 ### claudeCode (OcxClaudeCodeConfig)

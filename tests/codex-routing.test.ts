@@ -37,7 +37,7 @@ import {
   parseUsageQuota,
   updateAccountQuota,
 } from "../src/codex/auth-api";
-import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
@@ -125,6 +125,16 @@ describe("codex routing", () => {
   test("usage score treats unknown quota conservatively", () => {
     expect(computeCodexUsageScore(null)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
     expect(computeCodexUsageScore({})).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
+  test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
+    expect(isCodexQuotaExhausted(null, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({}, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 99.9 }, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ monthlyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100, monthlyPercent: 20 }, "free")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 20, monthlyPercent: 100 }, "go")).toBe(true);
   });
 
   test("weekly threshold breach switches new threads", () => {

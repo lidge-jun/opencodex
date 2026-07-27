@@ -22,6 +22,8 @@ provider may not fall through to Codex-login credentials.
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
 affinity, quota rotation, cooldown probes, transient failover, and manual activation. In-flight
 requests keep their captured credential. An all-paused pool fails closed.
+The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
+plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option

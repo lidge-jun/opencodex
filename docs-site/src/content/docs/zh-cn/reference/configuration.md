@@ -73,6 +73,7 @@ metadata；access/refresh token 存放在加固的 Codex account credential stor
 保留 account affinity，新 session 可按 quota、cooldown 和 health 自动路由。
 暂停后仍会显示账号及其 quota metadata，但不会参与自动切换、重试/failover 选择、cooldown 恢复探测或手动激活。
 暂停状态会跨重启保留；如果所有账号均已暂停，Pool 路由会明确失败，而不会暗中选择某个账号。
+**暂停已达上限账号** 会先刷新全部账号，只暂停相关 quota window 本次明确返回 100% 的账号；未知额度或刷新失败的账号保持不变。
 :::
 
 ### 受管 record 形状

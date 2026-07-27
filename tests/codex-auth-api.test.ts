@@ -1143,6 +1143,79 @@ describe("codex-auth API", () => {
     expect(resolveCodexAccountForThread("pause-thread", config)).toBe("pool-next");
   });
 
+  test("PUT /api/codex-auth/accounts/pause-exhausted pauses only freshly confirmed exhausted accounts", async () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "exhausted", email: "exhausted@example.test", plan: "plus", isMain: false },
+        { id: "available", email: "available@example.test", plan: "plus", isMain: false },
+        { id: "free-weekly-only", email: "free@example.test", plan: "free", isMain: false },
+        { id: "stale-unknown", email: "stale@example.test", plan: "plus", isMain: false },
+        { id: "already-paused", email: "paused@example.test", plan: "plus", isMain: false },
+      ],
+      activeCodexAccountId: "exhausted",
+      pausedCodexAccountIds: ["already-paused"],
+    });
+    for (const account of config.codexAccounts ?? []) {
+      saveCodexAccountCredential(account.id, {
+        accessToken: `access-${account.id}`,
+        refreshToken: `refresh-${account.id}`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: account.id,
+      });
+    }
+    updateAccountQuota("stale-unknown", 100);
+    expect(resolveCodexAccountForThread("bulk-pause-thread", config)).toBe("exhausted");
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const accountId = new Headers(init?.headers).get("ChatGPT-Account-Id");
+      if (accountId === "stale-unknown") return new Response(null, { status: 502 });
+      const weekly = accountId === "exhausted" || accountId === "already-paused" || accountId === "free-weekly-only"
+        ? 100
+        : 72;
+      const monthly = accountId === "free-weekly-only" ? 20 : 40;
+      return Response.json({
+        plan_type: accountId === "free-weekly-only" ? "free" : "plus",
+        rate_limit: {
+          primary_window: { used_percent: weekly, limit_window_seconds: 7 * 24 * 60 * 60 },
+          tertiary_window: { used_percent: monthly, limit_window_seconds: 30 * 24 * 60 * 60 },
+        },
+      });
+    }) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({
+      pausedAccountIds: ["exhausted"],
+      pausedCount: 1,
+      activeCodexAccountId: null,
+      appliesImmediately: true,
+    });
+    expect(config.pausedCodexAccountIds).toEqual(["already-paused", "exhausted"]);
+    expect(resolveCodexAccountForThread("bulk-pause-thread", config)).toBe("free-weekly-only");
+  });
+
+  test("PUT /api/codex-auth/accounts/pause-exhausted includes a freshly exhausted main account", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-account" },
+    }));
+    globalThis.fetch = (async () => Response.json({
+      email: "main@example.test",
+      plan_type: "plus",
+      rate_limit: { primary_window: { used_percent: 100 } },
+    })) as typeof fetch;
+    const config = makeConfig();
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(await resp!.json()).toMatchObject({
+      pausedAccountIds: [MAIN_CODEX_ACCOUNT_ID],
+      pausedCount: 1,
+    });
+    expect(config.pausedCodexAccountIds).toEqual([MAIN_CODEX_ACCOUNT_ID]);
+  });
+
   test("resuming restores eligibility and manual activation rejects paused accounts", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "work", email: "work@example.test", isMain: false }],

@@ -26,6 +26,7 @@ export function CodexAccountPoolMainCard({
   onSwitch,
   onTogglePause,
   pauseUpdatingId,
+  pauseBusy,
   onOpenReset,
   onCopyDoctor,
   copiedDoctorFor,
@@ -39,6 +40,7 @@ export function CodexAccountPoolMainCard({
   onSwitch: (entry: CodexAccountEntry) => void;
   onTogglePause: (entry: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
+  pauseBusy: boolean;
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   copiedDoctorFor?: DoctorCopyFeedback | null;
@@ -96,7 +98,7 @@ export function CodexAccountPoolMainCard({
             type="button"
             className={`btn btn-sm ${main.paused ? "btn-primary" : "btn-ghost"}`}
             onClick={() => onTogglePause(mainSwitchEntry)}
-            disabled={pauseUpdatingId !== null}
+            disabled={pauseBusy}
           >
             {main.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
             {pauseUpdatingId === main.id ? t("common.saving") : t(main.paused ? "codexAuth.resume" : "codexAuth.pause")}
@@ -123,20 +125,41 @@ export function CodexAccountPoolPageHead({
   t,
   embedded,
   refreshingQuota,
+  pausingExhausted,
   onRefresh,
+  onPauseExhausted,
 }: {
   t: TFn;
   embedded: boolean;
   refreshingQuota: boolean;
+  pausingExhausted: boolean;
   onRefresh: () => void;
+  onPauseExhausted: () => void;
 }) {
-  if (embedded) return null;
   return (
-    <div className="page-head">
-      <h2 className="page-title">{t("nav.codexAuth")}</h2>
-      <button type="button" className="btn btn-sm btn-ghost" onClick={onRefresh} disabled={refreshingQuota}>
-        <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-      </button>
+    <div
+      className={embedded ? "row" : "page-head"}
+      style={embedded ? { justifyContent: "flex-end", marginBottom: 8 } : undefined}
+    >
+      {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
+      <div className="row">
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onPauseExhausted}
+          disabled={refreshingQuota || pausingExhausted}
+        >
+          <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onRefresh}
+          disabled={refreshingQuota || pausingExhausted}
+        >
+          <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+        </button>
+      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth }
 import {
   clearAccountQuota,
   getAccountQuota,
+  isCodexQuotaExhausted,
   listAccountQuotas,
   parseUsageQuota,
   setAccountQuotaFromParsed,
@@ -274,6 +275,8 @@ async function isTerminalMainAuthResponse(resp: Response): Promise<boolean> {
 
 interface MainAccountInfoFetchResult {
   info: MainAccountInfo;
+  /** Present only when this call freshly parsed a WHAM usage response. */
+  freshQuota?: Omit<StoredAccountQuota, "updatedAt">;
   /** Present only when this call's WHAM response included `rate_limit_reset_credits.available_count`. */
   freshResetCredits?: number;
 }
@@ -352,6 +355,7 @@ async function fetchMainAccountInfoAttempt(forceRefresh: boolean, retriesRemaini
     }
     return {
       info: result,
+      ...(quota ? { freshQuota: quota } : {}),
       ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
     };
   } catch {
@@ -363,6 +367,8 @@ async function fetchMainAccountInfoAttempt(forceRefresh: boolean, retriesRemaini
 interface PoolQuotaResult {
   quota: StoredAccountQuota | null;
   needsReauth: boolean;
+  /** Present only when this call freshly parsed a WHAM usage response. */
+  freshQuota?: Omit<StoredAccountQuota, "updatedAt">;
   /** Present only when this call's WHAM response included `rate_limit_reset_credits.available_count`. */
   freshResetCredits?: number;
 }
@@ -404,6 +410,7 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
     return {
       quota: getAccountQuota(accountId),
       needsReauth: false,
+      freshQuota: quota,
       ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
     };
   } catch (e) {
@@ -504,6 +511,43 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
     ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
   };
   return [main, ...withQuota];
+}
+
+async function pauseExhaustedCodexAccounts(config: OcxConfig): Promise<string[]> {
+  const poolAccounts = (config.codexAccounts ?? []).filter(account => !account.isMain);
+  const [mainResult, poolResults] = await Promise.all([
+    fetchMainAccountInfoAttempt(true, 1),
+    mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
+      if (!getCodexAccountCredential(account.id)) return { account, quotaResult: null };
+      return {
+        account,
+        quotaResult: await fetchPoolAccountQuota(account.id, true, account.plan),
+      };
+    }),
+  ]);
+
+  const exhaustedIds: string[] = [];
+  if (
+    !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
+    && isCodexQuotaExhausted(mainResult.freshQuota ?? null, mainResult.info.plan)
+  ) {
+    exhaustedIds.push(MAIN_CODEX_ACCOUNT_ID);
+  }
+  for (const { account, quotaResult } of poolResults) {
+    if (
+      !isCodexAccountPaused(config, account.id)
+      && isCodexQuotaExhausted(quotaResult?.freshQuota ?? null, account.plan)
+    ) {
+      exhaustedIds.push(account.id);
+    }
+  }
+
+  for (const id of exhaustedIds) {
+    setCodexAccountPaused(config, id, true);
+    clearThreadAccountMapForAccount(id);
+    if (config.activeCodexAccountId === id) config.activeCodexAccountId = undefined;
+  }
+  return exhaustedIds;
 }
 
 export async function handleCodexAuthAPI(
@@ -609,6 +653,19 @@ export async function handleCodexAuthAPI(
       ok: true,
       id,
       paused: body.paused,
+      activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
+      appliesImmediately: true,
+    });
+  }
+
+  if (url.pathname === "/api/codex-auth/accounts/pause-exhausted" && req.method === "PUT") {
+    const runtimeConfig = getRuntimeConfig(config);
+    const pausedAccountIds = await pauseExhaustedCodexAccounts(runtimeConfig);
+    if (pausedAccountIds.length > 0) saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({
+      ok: true,
+      pausedAccountIds,
+      pausedCount: pausedAccountIds.length,
       activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
       appliesImmediately: true,
     });
