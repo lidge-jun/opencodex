@@ -18,3 +18,5 @@
 {"ts":"2026-07-27T12:08:50.093Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP3"}
 {"ts":"2026-07-27T12:09:30.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"steering","detail":"corrected next active work-phase from WP3 to WP6 because PR #527 explicitly depends on the PR #526 decision; WP2 and WP3 remain pending"}
 {"ts":"2026-07-27T12:09:30.000Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP6"}
+{"ts":"2026-07-27T12:16:35.216Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_done","detail":"closed WP6"}
+{"ts":"2026-07-27T12:16:35.216Z","slug":"opencodex-live-unfinished-issues-and-prs-triage","event":"workphase_started","detail":"started WP7"}
