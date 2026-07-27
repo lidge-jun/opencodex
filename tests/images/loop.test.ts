@@ -359,6 +359,43 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(sse).toContain("slow ok");
   });
 
+  test("runTurn adapter → stall deadline aborts the in-flight runTurn signal", async () => {
+    let seenSignal: AbortSignal | undefined;
+    let aborted = false;
+    const hangingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed, incoming) => {
+        seenSignal = incoming.abortSignal;
+        await new Promise<void>((resolve, reject) => {
+          if (!incoming.abortSignal) {
+            reject(new Error("missing abortSignal"));
+            return;
+          }
+          if (incoming.abortSignal.aborted) {
+            aborted = true;
+            resolve();
+            return;
+          }
+          incoming.abortSignal.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          }, { once: true });
+        });
+      },
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: hangingAdapter,
+      plan,
+      // Short stall so the collect deadline wins without waiting on real upstream silence.
+      stallTimeoutSec: 0.05,
+    });
+    const sse = await response.text();
+    expect(seenSignal).toBeDefined();
+    expect(aborted).toBe(true);
+    expect(sse).toContain("runTurn inactivity timeout");
+  });
+
   test("runTurn adapter → preserves _cursorConversationId across iterations", async () => {
     const seenIds: Array<string | undefined> = [];
     const cursorAdapter: ProviderAdapter = {
