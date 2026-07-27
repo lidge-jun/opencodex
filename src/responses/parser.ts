@@ -125,6 +125,7 @@ function allowedToolName(tool: unknown): string | undefined {
   if (!isObj(tool)) return undefined;
   if (typeof tool.name === "string" && tool.name.length > 0) return tool.name;
   if (tool.type === "web_search" || tool.type === "web_search_preview") return WEB_SEARCH_TOOL_NAME;
+  if (tool.type === "image_generation" || tool.type === "image_gen") return "image_gen";
   if (tool.type === "tool_search") return "tool_search";
   return undefined;
 }

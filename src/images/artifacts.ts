@@ -91,6 +91,8 @@ export async function downloadImageToArtifact(
 
   // SSRF protection: validate the provider-returned URL before fetching.
   // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
+  // DNS is checked before fetch; pinning the connected peer across a second resolution
+  // (rebinding) remains a recorded residual for this loopback proxy (destination-policy.ts).
   let parsedUrl: URL;
   try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
   if (parsedUrl.protocol !== "https:") {

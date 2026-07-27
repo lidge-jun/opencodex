@@ -33,8 +33,8 @@ export async function fulfillImageCall(
   const n = typeof obj.n === "number" ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
   const imageUrl =
     typeof obj.image_url === "string" ? obj.image_url : typeof obj.image === "string" ? obj.image : undefined;
-  const size = typeof obj.size === "string" ? obj.size : undefined;
-  const quality = typeof obj.quality === "string" ? obj.quality : undefined;
+  const size = typeof obj.size === "string" ? obj.size : plan.defaultSize;
+  const quality = typeof obj.quality === "string" ? obj.quality : plan.defaultQuality;
 
   let result;
   try {

@@ -67,19 +67,16 @@ mock.module("../../src/server/adapter-resolve", () => ({
 }));
 
 // --- Stub the image bridge runner: detect activation without hitting the real loop ---
+// --- Stub the image bridge runner: detect activation without hitting the real loop ---
+const actualLoop = await import("../../src/images/loop");
 mock.module("../../src/images/loop", () => ({
+  ...actualLoop,
   runWithImageBridge: async () => {
     imageBridgeRun = true;
     return new Response("data: {\"type\":\"done\"}\n\n", {
       status: 200, headers: { "content-type": "text/event-stream" },
     });
   },
-  clampImageMaxRounds: (value: unknown) => {
-    if (typeof value !== "number" || !Number.isFinite(value)) return 3;
-    return Math.max(0, Math.min(10, Math.floor(value)));
-  },
-  DEFAULT_MAX_ROUNDS: 3,
-  MAX_ROUNDS_HARD_LIMIT: 10,
 }));
 
 // --- Stub the web-search planner + runner: control eligibility and detect activation ---
@@ -115,7 +112,7 @@ function makeConfig(): OcxConfig {
     defaultProvider: "fixture",
     providers: {
       fixture: { adapter: "openai-chat", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-key" },
-      xai: { adapter: "openai", baseUrl: "https://api.x.ai", apiKey: "xai-test-token" },
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
     },
     images: { bridgeEnabled: true },
   } as OcxConfig;
@@ -186,17 +183,31 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
-  test("dual-tool on a runTurn adapter → web-search path wins, runTurn does not eat the request (#424)", async () => {
+  test("dual-tool on a runTurn adapter → image bridge wins (web-search loop has no runTurn support)", async () => {
     imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
     useRunTurnAdapter = true;
     mockWsPlan = { backend: "openai" };
     try {
       const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
-      // Web-search sidecar must handle the turn.
-      expect(webSearchRun).toBe(true);
-      // Image bridge must not activate (design: image defers to web-search).
-      expect(imageBridgeRun).toBe(false);
-      // runTurn must NOT be reached — the web-search dispatch now runs before the runTurn early-return.
+      // Web-search sidecar cannot drive runTurn adapters — skip it.
+      expect(webSearchRun).toBe(false);
+      // Image bridge supports runTurn, so it handles the dual-tool turn instead.
+      expect(imageBridgeRun).toBe(true);
+      expect(runTurnCalled).toBe(false);
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+    } finally {
+      useRunTurnAdapter = false;
+    }
+  });
+
+  test("image-only on a runTurn adapter → image bridge activates before runTurn early-return", async () => {
+    imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
+    useRunTurnAdapter = true;
+    mockWsPlan = undefined;
+    try {
+      const res = await post(true, [{ type: "image_generation" }]);
+      expect(imageBridgeRun).toBe(true);
+      expect(webSearchRun).toBe(false);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
     } finally {
