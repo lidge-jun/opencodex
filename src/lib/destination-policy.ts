@@ -79,6 +79,16 @@ function classifyIpv6(hostname: string): DestinationAssessment {
   if (BLOCKED_METADATA_IPV6.has(hostname)) return { kind: "metadata", detail: "blocked metadata endpoint" };
   const mappedIpv4 = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
   if (mappedIpv4) return classifyIpv4(mappedIpv4);
+  // Decode hex IPv4-mapped IPv6: ::ffff:7f00:1 → 127.0.0.1
+  // The dotted-decimal regex above only matches ::ffff:127.0.0.1; without this,
+  // hex form bypasses all private/loopback checks (hextet is 0 → classified "public").
+  const hexMapped = hostname.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (hexMapped) {
+    const hi = Number.parseInt(hexMapped[1], 16);
+    const lo = Number.parseInt(hexMapped[2], 16);
+    const ipv4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+    return classifyIpv4(ipv4);
+  }
   if (hostname === "::1") return { kind: "loopback", detail: "loopback address" };
   if (hostname === "::") return { kind: "unspecified", detail: "unspecified address" };
   const hextet = firstIpv6Hextet(hostname);
