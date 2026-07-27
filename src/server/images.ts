@@ -49,6 +49,9 @@ export async function handleImages(
   logCtx: RequestLogContext,
 ): Promise<Response> {
   const candidates = selectImagesProvider(config);
+  if (candidates.error) {
+    return formatErrorResponse(400, "invalid_request_error", candidates.error);
+  }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   if (!explicitKeyedProvider) {
     try { validateForwardAdmissionCredential(req.headers, config); }
@@ -66,9 +69,6 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  if (candidates.error) {
-    return formatErrorResponse(400, "invalid_request_error", candidates.error);
-  }
   if (candidates.forwardCandidates.length === 0 && !candidates.keyed) {
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
     // configuration state that must surface on the first attempt.

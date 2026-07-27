@@ -391,6 +391,42 @@ test("an explicit Images provider accepts bearer admission without leaking the p
   }
 });
 
+test("an invalid explicit Images provider returns 400 after bearer admission", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-admission-secret";
+  saveConfig({
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "custom-images",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "custom-images": {
+        adapter: "openai-chat",
+        baseUrl: "https://images.example.test/v1",
+        apiKey: "custom-images-key",
+      },
+    },
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-admission-secret",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toContain("must be an API-key openai-responses provider");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("an invalid explicit Images provider fails closed instead of using another upstream", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
