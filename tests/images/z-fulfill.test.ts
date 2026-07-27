@@ -235,4 +235,17 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.size).toBe("512x512");
     expect(xaiCalls[0]!.quality).toBe("standard");
   });
+
+  test("markdown uses a file: URI for Windows-safe destinations", async () => {
+    reset();
+    const r = await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "a cat" }) },
+      plan, { spent: 0 },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.path).toBeDefined();
+    expect(r.markdown).toMatch(/^!\[image\]\(file:\/\//);
+    expect(r.files[0]).toBe(r.path);
+    expect(r.markdown).not.toContain("\\");
+  });
 });

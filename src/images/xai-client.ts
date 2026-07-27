@@ -101,6 +101,7 @@ export async function callXaiImages(
   });
 
   if (!resp.ok) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
     const err = new Error("xAI images API returned " + resp.status) as Error & { status: number };
     err.status = resp.status;
     throw err;

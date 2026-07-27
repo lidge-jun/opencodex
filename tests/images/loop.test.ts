@@ -148,6 +148,30 @@ describe("runWithImageBridge", () => {
     expect(buildRequestCalls).toBe(1);
   });
 
+  test("forced-final clears named image tool_choice", async () => {
+    streamQueue = [
+      [{ type: "text_delta" as const, text: "done" }, { type: "done" as const }],
+    ];
+    const seenChoices: unknown[] = [];
+    const capturingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async (parsed) => {
+        buildRequestCalls++;
+        seenChoices.push(parsed.options.toolChoice);
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+    };
+    const parsed = makeParsed();
+    parsed.options.toolChoice = { name: "image_gen" };
+    parsed.context.tools = [
+      { name: "image_gen", parameters: {}, description: "img", imageGeneration: true },
+      { name: "Bash", parameters: {}, description: "shell" },
+    ];
+    const response = await runWithImageBridge({ parsed, adapter: capturingAdapter, plan, maxRounds: 0 });
+    await response.text();
+    expect(seenChoices[0]).toBe("auto");
+  });
+
   test("clampImageMaxRounds bounds hand-edited / fractional values", () => {
     expect(clampImageMaxRounds(10000)).toBe(MAX_ROUNDS_HARD_LIMIT);
     expect(clampImageMaxRounds(2.9)).toBe(2);

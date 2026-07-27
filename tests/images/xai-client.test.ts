@@ -53,6 +53,23 @@ describe("callXaiImages", () => {
     await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toThrow("429");
   });
 
+  test("non-2xx cancels the response body before throwing", async () => {
+    let cancelled = false;
+    globalThis.fetch = (async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":"rate limited"}'));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(stream, { status: 429, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toThrow("429");
+    expect(cancelled).toBe(true);
+  });
+
   test("2xx with b64_json → returns normalized XaiImageResult", async () => {
     stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
     const result = await callXaiImages({ prompt: "x" }, AUTH);

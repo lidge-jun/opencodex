@@ -1611,6 +1611,7 @@ export async function handleResponses(
         );
       },
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
       onCompletedResponse: (response, providerState) =>
         rememberResponseState(
           parsed._rawBody,

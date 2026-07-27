@@ -12,7 +12,7 @@
  */
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxThinkingContent, OcxUsage } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
@@ -21,6 +21,7 @@ import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { createImageBudget } from "./artifacts";
+import { IMAGE_GEN_TOOL_NAME } from "./synthetic-tool";
 import type { ImageBridgePlan } from "./types";
 
 const SSE_HEADERS = {
@@ -45,6 +46,30 @@ export const MAX_IMAGE_CALLS_PER_TURN = 10;
 export function clampImageMaxRounds(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_ROUNDS;
   return Math.max(0, Math.min(MAX_ROUNDS_HARD_LIMIT, Math.floor(value)));
+}
+
+/** Drop image-specific tool_choice when image tools are stripped for a forced-final pass. */
+function stripImageToolChoice(
+  options: OcxRequestOptions,
+  plan: ImageBridgePlan,
+): OcxRequestOptions {
+  const tc = options.toolChoice;
+  if (!tc || typeof tc !== "object") return options;
+  if ("name" in tc && typeof tc.name === "string") {
+    if (tc.name === IMAGE_GEN_TOOL_NAME || plan.toolNames.has(tc.name)) {
+      return { ...options, toolChoice: "auto" };
+    }
+    return options;
+  }
+  if ("allowedTools" in tc && Array.isArray(tc.allowedTools)) {
+    const filtered = tc.allowedTools.filter(
+      (name) => name !== IMAGE_GEN_TOOL_NAME && !plan.toolNames.has(name),
+    );
+    if (filtered.length === tc.allowedTools.length) return options;
+    if (filtered.length === 0) return { ...options, toolChoice: "auto" };
+    return { ...options, toolChoice: { ...tc, allowedTools: filtered } };
+  }
+  return options;
 }
 
 interface ImageCall {
@@ -191,6 +216,8 @@ export interface ImageBridgeDeps {
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
   /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
+  /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
+  forceEmptyResponseId?: boolean;
 }
 
 /**
@@ -281,8 +308,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   // have no HTTP status surface and must not block SSE headers behind queue.collect().
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
     const iterParsed: OcxParsedRequest = {
-      ...parsed, stream: true,
+      ...parsed,
+      stream: true,
       context: { ...parsed.context, messages, tools: forceFinal ? toolsNoImage : allTools },
+      options: forceFinal ? stripImageToolChoice(parsed.options, plan) : parsed.options,
     };
 
     // runTurn adapters (Cursor) own all upstream communication via an emit callback. They don't
@@ -599,6 +628,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             type: "error",
             message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
             ...(e instanceof LoopError ? { status: e.status } : {}),
+            ...(hiddenUsage ? { usage: hiddenUsage } : {}),
           };
           return;
         }
@@ -613,7 +643,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
-      responseId: "",
+      ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
