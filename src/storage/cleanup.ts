@@ -15,6 +15,7 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -338,6 +339,13 @@ export function previewArchivedCleanup(
 
 function openDbWritable(dbPath: string, busyTimeoutMs = 100): Database {
   const db = new Database(dbPath);
+  try {
+    // bun:sqlite exposes a binding-level timeout; set both so Windows lock waits
+    // honor the caller's budget (pragma alone has been flaky under CI contention).
+    (db as Database & { timeout?: number }).timeout = busyTimeoutMs;
+  } catch {
+    /* older bindings */
+  }
   try {
     db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   } catch {
@@ -701,6 +709,38 @@ function rollbackMoves(moved: StagedFile[]): void {
       if (existsSync(item.to) && !existsSync(item.from)) renameSync(item.to, item.from);
     } catch { /* best-effort */ }
   }
+}
+
+/**
+ * Same-volume move that never replaces an existing destination.
+ *
+ * `existsSync` + `renameSync` is TOCTOU: a live file created between the check
+ * and rename can be overwritten (Windows rename replaces files). Hard-link then
+ * unlink fails with EEXIST if `to` appears, which is what trash → archived_sessions
+ * restore needs. Callers under the same `CODEX_HOME` volume should not hit EXDEV.
+ */
+function renameNoReplace(from: string, to: string): void {
+  try {
+    linkSync(from, to);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    // Hard links unavailable (rare FS) — refuse rather than clobber via rename.
+    if (code === "EXDEV" || code === "EPERM" || code === "ENOTSUP" || code === "EINVAL") {
+      throw Object.assign(new Error("rename_no_replace_unsupported"), { code, cause: error });
+    }
+    throw error;
+  }
+  try {
+    unlinkSync(from);
+  } catch (error) {
+    // Roll back the hard link so we do not leave the file at both paths.
+    try { unlinkSync(to); } catch { /* best-effort */ }
+    throw error;
+  }
+}
+
+function isExistError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "EEXIST";
 }
 
 function updateRowFromSnapshot(
@@ -2102,14 +2142,21 @@ export function restoreTrashEntry(
   try {
     mkdirSync(join(codexHome, ARCHIVED_SESSIONS_DIR), { recursive: true });
     for (const item of moves) {
-      // Same-volume rename (.trash ↔ archived_sessions); rollbackMoves undoes a partial run.
-      renameSync(item.from, item.to);
+      // Atomic no-replace (.trash ↔ archived_sessions); rollbackMoves undoes a partial run.
+      renameNoReplace(item.from, item.to);
       moved.push(item);
     }
-  } catch {
+  } catch (error) {
     rollbackMoves(moved);
     if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
-    return { ok: false, trashDir: id, count: 0, bytes: 0, restoredPaths: [], error: "fs_failed" };
+    return {
+      ok: false,
+      trashDir: id,
+      count: 0,
+      bytes: 0,
+      restoredPaths: [],
+      error: isExistError(error) ? "dest_exists" : "fs_failed",
+    };
   }
 
   const restoredPaths = [...new Set(entries.map(e => e.relPath))];

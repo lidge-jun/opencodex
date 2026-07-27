@@ -373,6 +373,7 @@ describe("executeArchivedCleanup", () => {
     }
   });
 
+  // Windows CI: SQLite lock contention across satellite DBs can exceed the default 5s.
   test("busy final satellite lock rolls back earlier satellite write locks", () => {
     home = buildHome({ withSatelliteStores: true });
     const goalsLocker = new Database(join(home, "goals_1.sqlite"));
@@ -416,7 +417,7 @@ describe("executeArchivedCleanup", () => {
       try { logsRead?.close(); } catch { /* */ }
       try { memoriesRead?.close(); } catch { /* */ }
     }
-  });
+  }, { timeout: 20_000 });
 
   test("rolls back staged renames when a later rename fails", () => {
     home = buildHome();
@@ -592,6 +593,7 @@ describe("executeArchivedCleanup", () => {
     expect(ids).toEqual(["active"]);
   });
 
+  // Windows CI: multi-satellite permanent cleanup can exceed the default 5s under lock/IO load.
   test("permanent cleanup removes logs, goals, and memory rows for deleted threads", () => {
     home = buildHome({ withSatelliteStores: true });
     const result = runWithDigest(100, "permanent", home);
@@ -636,7 +638,7 @@ describe("executeArchivedCleanup", () => {
     const ids = state.query<{ id: string }, []>("SELECT id FROM threads").all().map(r => r.id);
     state.close();
     expect(ids).toEqual(["active"]);
-  });
+  }, { timeout: 20_000 });
 
   test("threads read failure leaves every file and database unchanged", () => {
     home = buildHome({ withSatelliteStores: true });
