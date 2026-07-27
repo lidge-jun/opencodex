@@ -76,6 +76,18 @@ describe("guessExtFromMagic", () => {
     expect(() => guessExtFromMagic(new Uint8Array())).toThrow("unrecognized image format");
     expect(() => guessExtFromMagic(Buffer.from([0x00, 0x01, 0x02, 0x03]))).toThrow("unrecognized image format");
   });
+
+  test("truncated PNG signature (first 4 bytes only) is rejected", () => {
+    // Regression for Wibias R4 finding 4: \x89PNG is only the first 4 bytes of the
+    // 8-byte PNG signature (89 50 4E 47 0D 0A 1A 0A). The old startsWith("\x89PNG")
+    // accepted malformed data with a truncated/fake signature. The full 8-byte
+    // signature must now be validated.
+    const truncated = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00]);
+    expect(() => guessExtFromMagic(truncated)).toThrow("unrecognized image format");
+    // First 4 bytes matching but followed by non-PNG data is also rejected.
+    const fake = Buffer.from("\x89PNGXXXX", "latin1");
+    expect(() => guessExtFromMagic(fake)).toThrow("unrecognized image format");
+  });
 });
 
 describe("CCA image endpoint registry pinning (token-exfiltration guard)", () => {

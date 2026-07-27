@@ -8,6 +8,15 @@ const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 
+/**
+ * Upper bound on the raw base64 string length before it is decoded. Base64
+ * encoding expands 3 decoded bytes to 4 encoded chars, so this corresponds to
+ * MAX_DECODED_BYTES_PER_IMAGE. Checking this in the adapter (before calling
+ * materializeInlineImage) rejects oversized payloads before normalization
+ * copies them — see Wibias R4 finding 5.
+ */
+export const MAX_ENCODED_BYTES_PER_IMAGE = Math.ceil(MAX_DECODED_BYTES_PER_IMAGE * 4 / 3);
+
 /** Default cap on files retained under artifacts/. Oldest files are pruned when exceeded. */
 export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 
@@ -108,7 +117,7 @@ async function writeArtifactUnique(
 
 export function guessExtFromMagic(bytes: Uint8Array): string {
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
-  if (sig.startsWith("\x89PNG")) return "png";
+  if (sig.startsWith("\x89PNG\r\n\x1a\n")) return "png";
   if (sig.startsWith("\xff\xd8\xff")) return "jpg";
   if (sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP") return "webp";
   if (sig.startsWith("GIF8")) return "gif";

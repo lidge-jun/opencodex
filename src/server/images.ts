@@ -65,10 +65,15 @@ async function tryCcaImageGeneration(
     return formatErrorResponse(400, "invalid_request_error", "prompt is required and must not be empty");
   }
 
+  // Create the deadline before credential resolution so the timeout covers
+  // OAuth token refresh and project discovery, not just the upstream fetch.
+  const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
+  const linkedSignal = signalWithTimeout(timeoutMs, signal);
   let token: string;
   try {
     token = await getValidAccessToken("google-antigravity");
   } catch (err) {
+    linkedSignal.cleanup();
     // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
     const errName = err instanceof Error ? err.name : "";
     if (errName === "OAuthLoginRequiredError") {
@@ -76,8 +81,22 @@ async function tryCcaImageGeneration(
     }
     return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
   }
+  // Client cancellation or deadline expiry during OAuth preflight.
+  // Parent abort propagates into the linked signal, so check parent first (499)
+  // before the linked signal (504).
+  if (signal.aborted) {
+    linkedSignal.cleanup();
+    return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
+  }
+  if (linkedSignal.signal.aborted) {
+    linkedSignal.cleanup();
+    return formatErrorResponse(504, "upstream_error", "CCA image generation timed out during authentication");
+  }
   const project = getOAuthCredentialProjectId("google-antigravity");
-  if (!project) return undefined;
+  if (!project) {
+    linkedSignal.cleanup();
+    return undefined;
+  }
 
   logCtx.provider = "google-antigravity";
   logCtx.model = CCA_IMAGE_MODEL;
@@ -97,9 +116,6 @@ async function tryCcaImageGeneration(
       sessionId: `ocx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
-
-  const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
-  const linkedSignal = signalWithTimeout(timeoutMs, signal);
   let upstream: Response;
   try {
     try {
@@ -166,13 +182,14 @@ async function tryCcaImageGeneration(
       // Body-read timeout/abort: when CCA returns headers then stalls, the linked
       // signal's timeout aborts reader.read(), which rejects here. The rejection
       // often surfaces as AbortError (not TimeoutError), so distinguish by signal
-      // state, not error name. Linked deadline won → 504 (upstream stall); parent
-      // abort → 499 (client cancelled); anything else → 502 body-read failure.
-      if (linkedSignal.signal.aborted) {
-        return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
-      }
+      // state, not error name. Parent abort propagates into the linked signal, so
+      // check the parent first: parent abort → 499 (client cancelled); linked-only
+      // abort → 504 (upstream stall); anything else → 502 body-read failure.
       if (signal.aborted) {
         return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
+      }
+      if (linkedSignal.signal.aborted) {
+        return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
       }
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");

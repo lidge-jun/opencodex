@@ -2,7 +2,7 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { createImageBudget, materializeInlineImage } from "../images/artifacts";
+import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -483,13 +483,17 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
-              try {
-                const filePath = await materializeInlineImage(inline.data, imageBudget);
-                const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
-                emittedContentEvent = true;
-                yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
-              } catch {
-                yield { type: "error", message: "failed to materialize inline image" };
+              if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+                yield { type: "error", message: "inline image exceeds per-image size cap" };
+              } else {
+                try {
+                  const filePath = await materializeInlineImage(inline.data, imageBudget);
+                  const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
+                  emittedContentEvent = true;
+                  yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
+                } catch {
+                  yield { type: "error", message: "failed to materialize inline image" };
+                }
               }
             }
             if (part.functionCall) {
@@ -598,12 +602,16 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.text) events.push({ type: "text_delta", text: part.text });
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
-            try {
-              const filePath = await materializeInlineImage(inline.data, imageBudget);
-              const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
-              events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
-            } catch {
-              events.push({ type: "error", message: "failed to materialize inline image" });
+            if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+              events.push({ type: "error", message: "inline image exceeds per-image size cap" });
+            } else {
+              try {
+                const filePath = await materializeInlineImage(inline.data, imageBudget);
+                const escapedPath = artifactFileUrl(filePath).replace(/([()])/g, "\\$1");
+                events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
+              } catch {
+                events.push({ type: "error", message: "failed to materialize inline image" });
+              }
             }
           }
           if (part.functionCall) {

@@ -1228,6 +1228,59 @@ test("CCA body-read timeout returns 504 when upstream stalls after sending heade
   }
 }, 5_000);
 
+test("CCA body-read client cancellation returns 499, not 504", async () => {
+  // Regression for Wibias R4 finding 1: when the client aborts during the body-read
+  // phase, both the parent signal and the linked signal are aborted (parent abort
+  // propagates into the linked signal). The body-read catch must check the PARENT
+  // signal first (499) before the linked signal (504), otherwise client cancellation
+  // is misreported as an upstream timeout.
+  //
+  // We call handleImages directly (not via server fetch) because a client-side
+  // fetch abort tears down the connection before the server response can be read.
+  const { handleImages } = await import("../src/server/images");
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      const fetchSignal = init?.signal;
+      const stalledBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const abortError = new DOMException("The operation was aborted.", "AbortError");
+          if (fetchSignal) {
+            if (fetchSignal.aborted) controller.error(abortError);
+            else fetchSignal.addEventListener("abort", () => controller.error(abortError), { once: true });
+          }
+        },
+      });
+      return new Response(stalledBody, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  // Use a long timeout so the deadline does NOT fire — only the client abort triggers.
+  const cfg = { ...ccaConfig(), images: { timeoutMs: 30_000 } } as OcxConfig;
+  saveConfig(cfg);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const ctrl = new AbortController();
+  const req = new Request("http://localhost:0/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+    signal: ctrl.signal,
+  });
+  const logCtx = { model: "", provider: "" } as never;
+
+  // Start the handler — it enters the body-read loop and stalls on the mocked body.
+  const responsePromise = handleImages(req, cfg, "generations", logCtx);
+  // Abort the parent signal after the body read has started.
+  setTimeout(() => ctrl.abort(), 100);
+  const response = await responsePromise;
+  expect(response.status).toBe(499);
+  const json = await response.json() as { error: { message: string } };
+  expect(json.error.message).toContain("canceled");
+}, 5_000);
+
 test("CCA image fallback preserves upstream 400 (not collapsed to 502)", async () => {
   const registryHits: CcaFetchRequest[] = [];
   const otherHits: CcaFetchRequest[] = [];
