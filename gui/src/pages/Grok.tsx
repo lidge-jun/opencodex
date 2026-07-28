@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState, Notice, Switch } from "../ui";
 import { IconChevron } from "../icons";
 import { useT, type TKey } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { grokGroupView, type GrokCandidate } from "./grok-groups";
 
@@ -52,19 +53,22 @@ function formatContext(value: number | undefined, t: TFn): string {
  */
 export default function Grok({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [status, setStatus] = useState<GrokStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `ocx.grok.status.v1:${apiBase}`;
+  const cached = readSessionListCache<GrokStatus>(cacheKey);
+  const [status, setStatus] = useState<GrokStatus | null>(() => cached);
+  const [loading, setLoading] = useState(() => !cached);
   const [error, setError] = useState("");
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [savedExcluded, setSavedExcluded] = useState<Set<string>>(new Set());
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set(cached?.excluded ?? []));
+  const [savedExcluded, setSavedExcluded] = useState<Set<string>>(() => new Set(cached?.excluded ?? []));
   // null = no stored preference; both groups start open because Grok has only two.
   const [collapsed, setCollapsed] = useState<Set<string>>(() => GROUP_COLLAPSE.read() ?? new Set());
   const [pending, setPending] = useState<"save" | "apply" | null>(null);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const hasCacheRef = useRef(Boolean(cached));
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasCacheRef.current) setLoading(true);
     setError("");
     try {
       const response = await fetch(`${apiBase}/api/grok`);
@@ -72,16 +76,21 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       if (!payload) throw new Error(t("grok.loadFail"));
       // Tolerate an older proxy that predates the selection routes: the page degrades
       // to the read-only fence view instead of crashing on a missing field.
-      setStatus({ ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] });
+      const next = { ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] };
+      setStatus(next);
       const saved = new Set(payload.excluded ?? []);
       setExcluded(saved);
       setSavedExcluded(saved);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("grok.loadFail"));
+      if (!hasCacheRef.current) {
+        setError(err instanceof Error ? err.message : t("grok.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   // Deferred like the Desktop page: kicking the fetch off synchronously inside the effect
   // triggers cascading renders (and the react-doctor lint that guards against them).

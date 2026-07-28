@@ -6,11 +6,16 @@ import { hashLogConversationQuery, matchesLogConversationId } from "../log-conve
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+
+function logsCacheKey(apiBase: string): string {
+  return `ocx.logs.list.v1:${apiBase}`;
+}
 
 interface UsageBreakdown {
   inputTokens: number;
@@ -307,8 +312,9 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
 
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedLogs = readSessionListCache<LogEntry[]>(logsCacheKey(apiBase));
+  const [logs, setLogs] = useState<LogEntry[]>(() => cachedLogs ?? []);
+  const [loading, setLoading] = useState(() => !(cachedLogs && cachedLogs.length > 0));
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
@@ -316,16 +322,24 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const hasLogsRef = useRef(Boolean(cachedLogs?.length));
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
   const [tab, setTab] = useState<LogsTab>(readTabFromHash);
+  // Lazy-mount Debug on first visit, then keep it mounted so switch toggles
+  // and Logs↔Debug hops do not remount (avoids settings/log refetch storms).
+  const [debugMounted, setDebugMounted] = useState(() => readTabFromHash() === "debug");
 
   useEffect(() => {
     const onHash = () => setTab(readTabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (tab === "debug") setDebugMounted(true);
+  }, [tab]);
 
   const selectTab = selectLogsTab;
 
@@ -337,7 +351,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     try {
       const res = await fetch(`${apiBase}/api/logs`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      setLogs(await res.json());
+      const next = await res.json() as LogEntry[];
+      setLogs(next);
+      writeSessionListCache(logsCacheKey(apiBase), next);
       setError(null);
     } catch (cause) {
       if (silent) return;
@@ -350,11 +366,16 @@ export default function Logs({ apiBase }: { apiBase: string }) {
 
   useEffect(() => {
     if (tab !== "logs") return;
-    void fetchLogs();
+    // Re-entering the Logs tab keeps held rows; only cold mounts flash loading.
+    void fetchLogs({ silent: hasLogsRef.current });
     if (!autoRefresh) return;
     const interval = setInterval(() => void fetchLogs({ silent: true }), 2000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs, tab]);
+
+  useEffect(() => {
+    hasLogsRef.current = logs.length > 0;
+  }, [logs.length]);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
   const conversationQuery = conversationFilter.trim();
@@ -432,14 +453,23 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         </button>
       </div>
 
-      {tab === "debug" && (
-        <div role="tabpanel" id="logs-panel-debug" aria-labelledby="logs-tab-debug">
-          <Debug apiBase={apiBase} embedded />
+      {debugMounted && (
+        <div
+          role="tabpanel"
+          id="logs-panel-debug"
+          aria-labelledby="logs-tab-debug"
+          hidden={tab !== "debug"}
+        >
+          <Debug apiBase={apiBase} embedded active={tab === "debug"} />
         </div>
       )}
 
-      {tab === "logs" && (
-      <div role="tabpanel" id="logs-panel-logs" aria-labelledby="logs-tab-logs">
+      <div
+        role="tabpanel"
+        id="logs-panel-logs"
+        aria-labelledby="logs-tab-logs"
+        hidden={tab !== "logs"}
+      >
       <p className="page-sub">{t("logs.subtitle")}</p>
 
       <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -637,7 +667,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         />
       )}
       </div>
-      )}
     </>
   );
 }

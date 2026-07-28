@@ -3,6 +3,7 @@ import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
@@ -68,6 +69,11 @@ function openaiProviderFromConfig(config: unknown): {
   };
 }
 
+type CachedMode = {
+  bannerState: OpenAiAccountBannerState;
+  accountModeState: CodexAccountModeState | null;
+};
+
 /**
  * Codex Auth page — a thin wrapper around CodexAccountPool (WP060 extraction).
  * The page owns the /api/config fetch feeding the account-mode banner and
@@ -75,8 +81,12 @@ function openaiProviderFromConfig(config: unknown): {
  */
 export default function CodexAuth({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(null);
-  const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(null);
+  const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedMode>(configCacheKey);
+  const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
+  const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(
+    () => cached?.accountModeState ?? null,
+  );
   const [enableBusy, setEnableBusy] = useState(false);
   const [enableError, setEnableError] = useState("");
 
@@ -89,17 +99,19 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
       if (providerState === "absent" || providerState === "disabled" || providerState === "invalid") {
         setBannerState(providerState);
         // Non-canonical / missing rows are not a live Codex account mode.
-        setAccountModeState(providerState === "disabled" ? "disabled" : "absent");
+        const mode = providerState === "disabled" ? "disabled" as const : "absent" as const;
+        setAccountModeState(mode);
+        writeSessionListCache(configCacheKey, { bannerState: providerState, accountModeState: mode });
         return;
       }
       const mode = codexAccountModeState(config);
       setBannerState(mode);
       setAccountModeState(mode);
+      writeSessionListCache(configCacheKey, { bannerState: mode, accountModeState: mode });
     } catch {
-      setBannerState(null);
-      setAccountModeState(null);
+      // Keep last-good banner on transient config failures.
     }
-  }, [apiBase]);
+  }, [apiBase, configCacheKey]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void loadMode(); }, 0);

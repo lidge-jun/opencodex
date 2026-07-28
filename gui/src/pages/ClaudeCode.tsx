@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { readJsonOrThrow } from "../fetch-json";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv } from "./claude-manual-env";
 import {
@@ -17,17 +18,23 @@ import { SmallFastModelSetting } from "./claude-code-settings";
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
+type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[] };
+
 export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const t = useT();
   const { locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
-  const [state, setState] = useState<ClaudeCodeState | null>(null);
-  const [rows, setRows] = useState<MapRow[]>([]);
+  const cacheKey = `ocx.claude-code.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedClaudeCode>(cacheKey);
+  const [state, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
+  const [rows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cached?.state);
+  const hasCacheRef = useRef(Boolean(cached?.state));
 
   const load = useCallback(async () => {
+    if (!hasCacheRef.current) setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/claude-code`);
       const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
@@ -39,7 +46,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         setStatus(t("claude.loadFail"));
         return;
       }
-      setState({
+      const nextState: ClaudeCodeState = {
         ...r,
         // No coercion: an absent config key is AUTO, and coercing it to subscription is
         // what silently converted an untouched auto config on every save.
@@ -51,15 +58,21 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         autoCompactWindow: r.autoCompactWindow ?? null,
         injectAgents: r.injectAgents !== false,
         effectiveModelEnv: r.effectiveModelEnv ?? {},
-      });
-      setRows(Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) })));
+      };
+      const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
+      setState(nextState);
+      setRows(nextRows);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, { state: nextState, rows: nextRows });
     } catch (error) {
-      setOk(false);
-      setStatus(error instanceof Error && error.message ? error.message : t("claude.loadFail"));
+      if (!hasCacheRef.current) {
+        setOk(false);
+        setStatus(error instanceof Error && error.message ? error.message : t("claude.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     // Deferred initial load (matches Models/Usage): avoids synchronous setState

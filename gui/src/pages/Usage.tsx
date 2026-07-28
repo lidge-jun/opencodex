@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
 import { modelLabel } from "../model-display";
 
@@ -580,29 +581,62 @@ function UsageCoveragePanel({
   );
 }
 
+/** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
+const usageMemoryCache = new Map<string, UsageResponse>();
+
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
+  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+}
+
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface);
+  return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
+}
+
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface);
+  usageMemoryCache.set(key, value);
+  writeSessionListCache(key, value);
+}
+
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
-  const [data, setData] = useState<UsageResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialHeld = readHeldUsage(apiBase, "30d", "all");
+  const [data, setData] = useState<UsageResponse | null>(() => initialHeld);
+  const [loading, setLoading] = useState(() => !initialHeld);
   const [error, setError] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const loadGenerationRef = useRef(0);
 
   const fetchUsage = useCallback(async (nextRange: Range, nextSurface: UsageSurface, signal: AbortSignal) => {
     const generation = ++loadGenerationRef.current;
-    setLoading(true);
-    setError(null);
+    const held = readHeldUsage(apiBase, nextRange, nextSurface);
+    if (held) {
+      // Instant tab switch: show held data and revalidate quietly.
+      setData(held);
+      setLoading(false);
+      setError(null);
+    } else {
+      setLoading(true);
+      setError(null);
+      // Drop mismatched payload so we never paint the wrong surface/range.
+      setData(prev => (prev && prev.range === nextRange && prev.surface === nextSurface ? prev : null));
+    }
     try {
       const res = await fetch(`${apiBase}/api/usage?range=${nextRange}&surface=${nextSurface}`, { signal });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
       const json = await res.json() as UsageResponse;
       if (signal.aborted || generation !== loadGenerationRef.current) return;
+      writeHeldUsage(apiBase, nextRange, nextSurface, json);
       setData(json);
+      setError(null);
     } catch (cause) {
       // A stale request (range/apiBase changed, or unmount) must not overwrite newer state.
       if (signal.aborted || generation !== loadGenerationRef.current) return;
+      // Keep held data visible when a background revalidate fails.
+      if (held) return;
       const detail = cause instanceof Error ? cause.message : "";
       setError(detail ? `${t("usage.loadError")} ${detail}` : t("usage.loadError"));
     } finally {

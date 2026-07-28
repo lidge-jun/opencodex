@@ -3,6 +3,7 @@ import { useI18n, type TFn, type TKey, type Locale } from "../i18n/shared";
 import { EmptyState } from "../ui";
 import { IconRefresh } from "../icons";
 import { formatBytes } from "../format-bytes";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
 interface StorageLargestEntry {
   path: string;
@@ -1152,29 +1153,35 @@ function AutoCleanupPolicyPanel({
 
 export default function Storage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [data, setData] = useState<StorageReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const storageCacheKey = `ocx.storage.report.v1:${apiBase}`;
+  const cachedReport = readSessionListCache<StorageReport>(storageCacheKey);
+  const [data, setData] = useState<StorageReport | null>(() => cachedReport);
+  const [loading, setLoading] = useState(() => !cachedReport);
   const [trashReloadToken, setTrashReloadToken] = useState(0);
   // Stamp trash awareness with apiBase so a base change invalidates without an effect.
   const [trashInfo, setTrashInfo] = useState({ apiBase, settled: false, hasEntries: false });
   const loadGenerationRef = useRef(0);
+  const hasReportRef = useRef(Boolean(cachedReport));
 
   const fetchStorage = useCallback(async (signal?: AbortSignal) => {
     const generation = ++loadGenerationRef.current;
-    setLoading(true);
+    // Soft refresh when a prior scan is already painted.
+    if (!hasReportRef.current) setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/storage`, { signal });
       if (!res.ok) throw new Error("fetch failed");
       const json = await res.json() as StorageReport;
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setData(json);
+      hasReportRef.current = true;
+      writeSessionListCache(storageCacheKey, json);
     } catch {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      setData(null);
+      if (!hasReportRef.current) setData(null);
     } finally {
       if (generation === loadGenerationRef.current) setLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, storageCacheKey]);
 
   useEffect(() => {
     const controller = new AbortController();

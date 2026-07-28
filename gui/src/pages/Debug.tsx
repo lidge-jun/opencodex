@@ -2,6 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { setClientResourceData, useKeyedClientResource } from "../client-resource";
 import { useI18n } from "../i18n/shared";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { DebugClaudeInboundPanel } from "./debug-claude-inbound-panel";
 import { DebugLogViewer } from "./debug-log-viewer";
 import { DebugPageHeader, DebugSettingsPanel } from "./debug-settings-panel";
@@ -16,8 +17,10 @@ function debugSettingsKey(apiBase: string): string {
   return `debug-settings:${apiBase}`;
 }
 
-export default function Debug({ apiBase, embedded }: { apiBase: string; embedded?: boolean }) {
+export default function Debug({ apiBase, embedded, active = true }: { apiBase: string; embedded?: boolean; active?: boolean }) {
   const { t } = useI18n();
+  const settingsCacheKey = `ocx.debug.settings.v1:${apiBase}`;
+  const cachedSettings = readSessionListCache<DebugSettings>(settingsCacheKey);
   const [debugBusy, setDebugBusy] = useState(false);
   const [stream, setStream] = useState<LogStream>("provider");
   const [entries, setEntries] = useState<import("./debug-shared").DebugLogEntry[]>([]);
@@ -27,6 +30,9 @@ export default function Debug({ apiBase, embedded }: { apiBase: string; embedded
   const mutationGenerationRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void> | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Only reset the log viewer when the active stream identity changes — not when
+  // unrelated debug flags toggle (those used to rebuild fetchLogs and storm GETs).
+  const streamIdentityRef = useRef<string | null>(null);
 
   const debugPoll = useKeyedClientResource(
     debugSettingsKey(apiBase),
@@ -34,11 +40,13 @@ export default function Debug({ apiBase, embedded }: { apiBase: string; embedded
     async (signal) => {
       const res = await fetch(`${apiBase}/api/debug`, { signal });
       if (!res.ok) return null;
-      return res.json() as Promise<DebugSettings>;
+      const next = await res.json() as DebugSettings;
+      writeSessionListCache(settingsCacheKey, next);
+      return next;
     },
-    { pollMs: 2000 },
+    { pollMs: 2000, enabled: active },
   );
-  const debug = debugPoll.data ?? null;
+  const debug = debugPoll.data ?? cachedSettings ?? null;
 
   const claudePoll = useKeyedClientResource(
     `debug-claude-inbound:${apiBase}`,
@@ -49,7 +57,7 @@ export default function Debug({ apiBase, embedded }: { apiBase: string; embedded
       const data = await res.json() as { entries?: import("./debug-shared").ClaudeInboundEntry[] };
       return Array.isArray(data.entries) ? data.entries : [];
     },
-    { pollMs: 2000, enabled: !!debug?.claude },
+    { pollMs: 2000, enabled: active && !!debug?.claude },
   );
   const claudeEntries = claudePoll.data ?? [];
 
@@ -105,23 +113,30 @@ export default function Debug({ apiBase, embedded }: { apiBase: string; embedded
   }, [logsPath, streamEnabled]);
 
   useEffect(() => {
+    if (!active) return;
+    const identity = `${stream}:${streamEnabled}`;
+    const changed = streamIdentityRef.current !== identity;
+    streamIdentityRef.current = identity;
+    if (!changed && entries.length > 0) return;
     afterRef.current = 0;
     const timeout = window.setTimeout(() => {
-      setEntries([]);
+      if (changed) setEntries([]);
       void fetchLogs(true);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [stream, streamEnabled, fetchLogs]);
+    // Intentionally omit fetchLogs/entries — identity gate prevents switch storms.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stream identity only
+  }, [active, stream, streamEnabled]);
 
   const pollLogs = useEffectEvent((initial: boolean) => {
     void fetchLogs(initial);
   });
 
   useEffect(() => {
-    if (!follow || !streamEnabled) return;
+    if (!active || !follow || !streamEnabled) return;
     const interval = setInterval(() => pollLogs(false), 1000);
     return () => clearInterval(interval);
-  }, [follow, streamEnabled]);
+  }, [active, follow, streamEnabled]);
 
   useEffect(() => {
     if (follow && entries.length > 0) {
@@ -144,6 +159,7 @@ export default function Debug({ apiBase, embedded }: { apiBase: string; embedded
         if (!res.ok) return;
         const next = await res.json() as DebugSettings;
         if (generation !== mutationGenerationRef.current) return;
+        writeSessionListCache(settingsCacheKey, next);
         setClientResourceData(debugSettingsKey(apiBase), next);
       } catch { /* ignore */ }
     };

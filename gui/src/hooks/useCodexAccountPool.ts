@@ -73,10 +73,14 @@ export interface CodexAccountPoolController {
 
 const REFRESH_INTERVAL_MS = 30_000;
 
+/** In-memory last-good snapshot (not sessionStorage — accounts carry emails/ids). */
+const lastGoodByBase = new Map<string, { accounts: CodexAccountEntry[]; activeId: string | null }>();
+
 export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
-  const [accounts, setAccounts] = useState<CodexAccountEntry[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [loadState, setLoadState] = useState<CodexAccountLoadState>("loading");
+  const seed = lastGoodByBase.get(apiBase);
+  const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
+  const [activeId, setActiveId] = useState<string | null>(() => seed?.activeId ?? null);
+  const [loadState, setLoadState] = useState<CodexAccountLoadState>(() => (seed?.accounts.length ? "ready" : "loading"));
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   // Pause leases live in a ref: pausing must not re-render, and the effect below reads
   // the live set rather than a captured snapshot.
@@ -91,6 +95,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // load already finished read it to seed their UI instead of waiting a poll interval.
   const lastThresholdRef = useRef<{ value: unknown } | null>(null);
   const switchingRef = useRef<string | null>(null);
+  const hasAccountsRef = useRef(Boolean(seed?.accounts.length));
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current.add(observer);
@@ -106,14 +111,24 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     const observers = [...observersRef.current];
     const revisions = new Map<CodexAccountLoadObserver, number>();
     for (const observer of observers) revisions.set(observer, observer.beginActiveRead());
-    if (!refreshQuota) setLoadState("loading");
+    // Soft refresh when boxes are already on screen — avoid full-page loading flash.
+    if (!refreshQuota && !hasAccountsRef.current) setLoadState("loading");
+
+    let nextAccounts: CodexAccountEntry[] | null = null;
+    let nextActiveId: string | null | undefined;
 
     const accountsTask = (async (): Promise<boolean> => {
       try {
         const response = await fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`);
         if (!response.ok) throw new Error("account load failed");
         const payload = await response.json();
-        if (loadGenerationRef.current === generation) setAccounts(payload.accounts ?? []);
+        if (loadGenerationRef.current === generation) {
+          nextAccounts = (payload.accounts ?? []) as CodexAccountEntry[];
+          setAccounts(nextAccounts);
+          hasAccountsRef.current = nextAccounts.length > 0;
+          // Progressive: paint account/quota boxes as soon as /accounts returns.
+          setLoadState("ready");
+        }
         return true;
       } catch {
         return false;
@@ -132,6 +147,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             // Stale read: keep the accepted value and let the next load reconcile.
           } else {
             pendingActiveIdRef.current = null;
+            nextActiveId = serverActiveId;
             setActiveId(serverActiveId);
           }
           lastThresholdRef.current = { value: active.autoSwitchThreshold };
@@ -151,8 +167,17 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     const [accountsOk, activeOk] = await Promise.all([accountsTask, activeTask]);
     // A newer load already superseded this one; leave its state in place.
     if (loadGenerationRef.current !== generation) return false;
-    setLoadState(accountsOk && activeOk ? "ready" : "error");
-    return accountsOk && activeOk;
+    if (accountsOk) {
+      setLoadState("ready");
+      const prior = lastGoodByBase.get(apiBase);
+      lastGoodByBase.set(apiBase, {
+        accounts: nextAccounts ?? prior?.accounts ?? [],
+        activeId: nextActiveId !== undefined ? nextActiveId : (prior?.activeId ?? null),
+      });
+      return activeOk;
+    }
+    if (!hasAccountsRef.current) setLoadState("error");
+    return false;
   }, [apiBase]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface

@@ -5,37 +5,49 @@ import { IconArrowUp, IconArrowDown, IconX, IconCheck, IconSearch, IconBot, Icon
 import { useT } from "../i18n/shared";
 import { Trans } from "../i18n/provider";
 import { modelLabel } from "../model-display";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+
+type CachedSubagents = { available: string[]; chosen: string[] };
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [available, setAvailable] = useState<string[]>([]);
-  const [chosen, setChosen] = useState<string[]>([]);
+  const cacheKey = `ocx.subagents.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedSubagents>(cacheKey);
+  const [available, setAvailable] = useState<string[]>(() => cached?.available ?? []);
+  const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cached);
   const [busy, setBusy] = useState(false);
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
+  const hasCacheRef = useRef(Boolean(cached));
 
   const chosenSet = useMemo(() => new Set(chosen), [chosen]);
 
   const load = useCallback(async () => {
+    if (!hasCacheRef.current) setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/subagent-models`);
       const r = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
       if (!r) throw new Error(t("sub.loadFail"));
       const avail: string[] = r.available ?? [];
       const availSet = new Set(avail);
+      const nextChosen = (r.chosen ?? []).filter((m: string) => availSet.has(m));
       setAvailable(avail);
-      setChosen((r.chosen ?? []).filter((m: string) => availSet.has(m)));
+      setChosen(nextChosen);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, { available: avail, chosen: nextChosen });
     } catch {
-      setOk(false);
-      setStatus(t("sub.loadFail"));
+      if (!hasCacheRef.current) {
+        setOk(false);
+        setStatus(t("sub.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void load();

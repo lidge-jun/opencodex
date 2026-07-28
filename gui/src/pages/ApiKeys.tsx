@@ -7,6 +7,7 @@ import {
   externalModelId,
   type ExternalModelRow,
 } from "../api-access-models";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   DEFAULT_ENDPOINTS,
   deriveApiEndpoints,
@@ -37,16 +38,27 @@ interface CreateKeyResponse {
   key?: unknown;
 }
 
+type CachedKeysShape = {
+  keys: ApiKeyEntry[];
+  endpoints: ApiEndpointInfo;
+  claudeCodeEnabled: boolean;
+};
+
 export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
-  const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
-  const [endpoints, setEndpoints] = useState<ApiEndpointInfo>(DEFAULT_ENDPOINTS);
-  const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(true);
+  const keysCacheKey = `ocx.apikeys.list.v1:${apiBase}`;
+  const modelsCacheKey = `ocx.apikeys.models.v1:${apiBase}`;
+  const cachedKeys = readSessionListCache<CachedKeysShape>(keysCacheKey);
+  const cachedModels = readSessionListCache<ExternalModelRow[]>(modelsCacheKey);
+  const hasModelsCacheRef = useRef(Boolean(cachedModels));
+  const [keys, setKeys] = useState<ApiKeyEntry[]>(() => cachedKeys?.keys ?? []);
+  const [endpoints, setEndpoints] = useState<ApiEndpointInfo>(() => cachedKeys?.endpoints ?? DEFAULT_ENDPOINTS);
+  const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(() => cachedKeys?.claudeCodeEnabled ?? true);
   const [keysLoadFailed, setKeysLoadFailed] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [models, setModels] = useState<ExternalModelRow[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const [models, setModels] = useState<ExternalModelRow[]>(() => cachedModels ?? []);
+  const [modelsLoading, setModelsLoading] = useState(() => !cachedModels);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
   const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
@@ -68,28 +80,37 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         return;
       }
       const derived = deriveApiEndpoints(data.endpoint ?? "");
-      setKeys(data.keys ?? []);
-      setEndpoints({
+      const nextKeys = data.keys ?? [];
+      const nextEndpoints = {
         baseUrl: data.baseUrl ?? derived.baseUrl,
         responses: data.responsesEndpoint ?? data.endpoint ?? DEFAULT_ENDPOINTS.responses,
         chatCompletions: data.chatCompletionsEndpoint ?? derived.chatCompletions,
         messages: data.messagesEndpoint ?? derived.messages,
         models: data.modelsEndpoint ?? derived.models,
+      };
+      const nextClaude = data.claudeCodeEnabled !== false;
+      setKeys(nextKeys);
+      setEndpoints(nextEndpoints);
+      setClaudeCodeEnabled(nextClaude);
+      // Prefixes only — never the secret key material.
+      writeSessionListCache(keysCacheKey, {
+        keys: nextKeys,
+        endpoints: nextEndpoints,
+        claudeCodeEnabled: nextClaude,
       });
-      setClaudeCodeEnabled(data.claudeCodeEnabled !== false);
       setKeysLoadFailed(false);
     } catch {
       setKeysLoadFailed(true);
     }
-  }, [apiBase]);
+  }, [apiBase, keysCacheKey]);
 
   const fetchModels = useCallback(async () => {
-    setModelsLoading(true);
+    if (!hasModelsCacheRef.current) setModelsLoading(true);
     setModelsLoadFailed(false);
     try {
       const res = await fetch(`${apiBase}/v1/models`);
       if (!res.ok) {
-        setModels([]);
+        if (!hasModelsCacheRef.current) setModels([]);
         setModelsLoadFailed(true);
         return;
       }
@@ -100,7 +121,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
           ? (data as { data: unknown[] }).data
           : null);
       if (!rawRows) {
-        setModels([]);
+        if (!hasModelsCacheRef.current) setModels([]);
         setModelsLoadFailed(true);
         return;
       }
@@ -113,16 +134,19 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         .map(row => classifyExternalModel(row))
         .sort((a, b) => externalModelId(a).localeCompare(externalModelId(b)));
       setModels(rows);
+      hasModelsCacheRef.current = true;
+      writeSessionListCache(modelsCacheKey, rows);
     } catch {
-      setModels([]);
+      if (!hasModelsCacheRef.current) setModels([]);
       setModelsLoadFailed(true);
     } finally {
       setModelsLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, modelsCacheKey]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
+      // Independent: keys panel and model catalog must not block each other.
       void fetchKeys();
       void fetchModels();
     }, 0);

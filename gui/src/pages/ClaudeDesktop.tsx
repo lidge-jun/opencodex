@@ -6,6 +6,7 @@ import { EmptyState, Notice } from "../ui";
 import { useT, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { createBoundedFetch } from "../bounded-fetch";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
 const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
 type Family = typeof FAMILIES[number];
@@ -122,12 +123,20 @@ function formatContextWindow(value: number | undefined, t: TFn): string | null {
 
 export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   const t = useT();
+  const cacheKey = `ocx.claude-desktop.v1:${apiBase}`;
+  const cached = readSessionListCache<{ data: DesktopResponse; profile: DesktopProfile }>(cacheKey);
   const [status, setStatus] = useState<DesktopStatus | null>(null);
-  const [data, setData] = useState<DesktopResponse | null>(null);
-  const [profile, setProfile] = useState<DesktopProfile | null>(null);
-  const [savedProfile, setSavedProfile] = useState<DesktopProfile | null>(null);
-  const [destinations, setDestinations] = useState<Record<string, Family>>({});
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DesktopResponse | null>(() => cached?.data ?? null);
+  const [profile, setProfile] = useState<DesktopProfile | null>(() => cached?.profile ?? null);
+  const [savedProfile, setSavedProfile] = useState<DesktopProfile | null>(() => (
+    cached?.profile ? cloneProfile(cached.profile) : null
+  ));
+  const [destinations, setDestinations] = useState<Record<string, Family>>(() => (
+    cached?.data
+      ? Object.fromEntries(cached.data.models.map(model => [model.route, cached.profile.assignments[model.route]?.family ?? "opus"]))
+      : {}
+  ));
+  const [loading, setLoading] = useState(() => !cached?.data);
   const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -146,9 +155,10 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   // is not, and restoring five open rows on reload would rebuild the wall this removes.
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const importRef = useRef<HTMLInputElement>(null);
+  const hasCacheRef = useRef(Boolean(cached?.data));
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasCacheRef.current) setLoading(true);
     setLoadError("");
     try {
       const response = await fetch(`${apiBase}/api/claude-desktop`);
@@ -164,6 +174,8 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
       setProfile(normalized);
       setSavedProfile(cloneProfile(normalized));
       setDestinations(Object.fromEntries(payload.models.map(model => [model.route, normalized.assignments[model.route]?.family ?? "opus"])));
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, { data: payload, profile: normalized });
       // Fold empty families on load, but only while the user has no stored preference.
       // Doing it here rather than per render means a later move or import can never
       // re-fold a section the user opened.
@@ -173,11 +185,13 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
         setCollapsedFamilies(defaultCollapsedFamilies(counts));
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("claudeDesktop.loadFail"));
+      if (!hasCacheRef.current) {
+        setLoadError(error instanceof Error ? error.message : t("claudeDesktop.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
