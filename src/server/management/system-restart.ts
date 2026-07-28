@@ -2,13 +2,26 @@
  * Dashboard memory-card drain-and-restart (#563).
  *
  * Longer than POST /api/stop's short drain: waits up to 60s for active turns,
- * then respawns via detached `ocx ensure` (or lets an installed service
- * respawn). Never runs restoreNativeCodex / stripGrokConfig — this is a
+ * then respawns. Never runs restoreNativeCodex / stripGrokConfig — this is a
  * recycle to reclaim RSS, not a teardown.
+ *
+ * Respawn policy (matches real supervisor configs in src/service.ts):
+ * - Supervised child (`OCX_SERVICE=1` + service installed): exit(1) so
+ *   failure-only supervisors (systemd Restart=on-failure, WinSW onfailure,
+ *   Task Scheduler ERRORLEVEL loop) bring the proxy back.
+ * - Otherwise: detached `ocx start --port <live>` (bypasses ensure's
+ *   codexAutoStart gate), mark recycle so exit cleanup keeps injection, exit(0).
  */
 import { spawn } from "node:child_process";
-import { drainAndShutdown, getActiveTurnCount, isDraining } from "../lifecycle";
+import {
+  drainAndShutdown,
+  getActiveTurnCount,
+  getServerListenPort,
+  isDraining,
+  markRecyclingForExit,
+} from "../lifecycle";
 import { isServiceInstalled } from "../../service";
+import { readRuntimePort } from "../../config";
 
 /** Fixed v1 drain window for the memory-card action (not config-driven). */
 export const MEMORY_DRAIN_RESTART_MS = 60_000;
@@ -16,11 +29,14 @@ export const MEMORY_DRAIN_RESTART_MS = 60_000;
 export interface SystemRestartIo {
   drainAndShutdown?: typeof drainAndShutdown;
   isServiceInstalled?: () => boolean;
-  spawnEnsure?: () => void;
+  isSupervisedServiceChild?: () => boolean;
+  spawnStart?: (port?: number) => void;
+  markRecycling?: () => void;
   exitProcess?: (code: number) => void;
   schedule?: (fn: () => void | Promise<void>, ms: number) => void;
   isDraining?: () => boolean;
   getActiveTurnCount?: () => number;
+  listenPort?: () => number | undefined;
 }
 
 let restartIo: SystemRestartIo = {};
@@ -33,8 +49,24 @@ export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   restartAccepted = false;
 }
 
-function spawnDetachedEnsure(): void {
-  const child = spawn(process.execPath, [process.argv[1], "ensure"], {
+function resolveListenPort(): number | undefined {
+  const live = getServerListenPort();
+  if (live) return live;
+  const runtime = readRuntimePort(process.pid);
+  if (runtime && runtime.port > 0) return runtime.port;
+  return undefined;
+}
+
+function isSupervisedServiceChild(): boolean {
+  return process.env.OCX_SERVICE === "1" && isServiceInstalled();
+}
+
+function spawnDetachedStart(port?: number): void {
+  const args = [process.argv[1], "start"];
+  if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
+    args.push("--port", String(Math.trunc(port)));
+  }
+  const child = spawn(process.execPath, args, {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -63,11 +95,15 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
     schedule(async () => {
       const drain = io.drainAndShutdown ?? drainAndShutdown;
       await drain(undefined, MEMORY_DRAIN_RESTART_MS);
-      const serviceInstalled = (io.isServiceInstalled ?? isServiceInstalled)();
-      // Service supervisors respawn on exit; spawning ensure would race a second start.
-      if (!serviceInstalled) {
-        (io.spawnEnsure ?? spawnDetachedEnsure)();
+      const supervised = (io.isSupervisedServiceChild ?? isSupervisedServiceChild)();
+      if (supervised) {
+        // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
+        (io.exitProcess ?? ((code: number) => { process.exit(code); }))(1);
+        return;
       }
+      const port = (io.listenPort ?? resolveListenPort)();
+      (io.spawnStart ?? spawnDetachedStart)(port);
+      (io.markRecycling ?? markRecyclingForExit)();
       (io.exitProcess ?? ((code: number) => { process.exit(code); }))(0);
     }, 200);
   }

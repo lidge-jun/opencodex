@@ -38,6 +38,7 @@ afterEach(() => {
 });
 
 const MEMORY_PAYLOAD = {
+  pid: 4242,
   rss: 1536,
   heapUsed: 2_097_152,
   heapTotal: 4_194_304,

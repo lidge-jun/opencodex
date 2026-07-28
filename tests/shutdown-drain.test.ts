@@ -5,6 +5,8 @@ import {
   isDraining,
   getActiveTurnCount,
   trackStreamLifetime,
+  isRecyclingForExit,
+  markRecyclingForExit,
 } from "../src/server";
 
 describe("active turn tracking", () => {
@@ -68,5 +70,13 @@ describe("trackStreamLifetime", () => {
     await tracked.cancel("test cancel");
     expect(getActiveTurnCount()).toBe(before);
     expect(ac.signal.aborted).toBe(true);
+  });
+});
+
+describe("recycling exit flag (#563)", () => {
+  test("markRecyclingForExit flips the recycle sentinel for syncCleanup", () => {
+    expect(isRecyclingForExit()).toBe(false);
+    markRecyclingForExit();
+    expect(isRecyclingForExit()).toBe(true);
   });
 });

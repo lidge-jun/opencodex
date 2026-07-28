@@ -30,19 +30,21 @@ afterEach(() => {
 });
 
 describe("acceptSystemRestart", () => {
-  test("schedules a 60s drain, spawns ensure when no service, then exits", async () => {
+  test("schedules a 60s drain, spawns start on the live port, marks recycle, then exits 0", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
 
     const result = acceptSystemRestart({
       isDraining: () => false,
       getActiveTurnCount: () => 3,
-      isServiceInstalled: () => false,
+      isSupervisedServiceChild: () => false,
+      listenPort: () => 10123,
       schedule: (fn) => { scheduled = fn; },
       drainAndShutdown: async (_server, timeoutMs) => {
         calls.push(`drain:${timeoutMs}`);
       },
-      spawnEnsure: () => { calls.push("ensure"); },
+      spawnStart: (port) => { calls.push(`start:${port}`); },
+      markRecycling: () => { calls.push("recycle"); },
       exitProcess: (code) => { calls.push(`exit:${code}`); },
     });
 
@@ -55,25 +57,26 @@ describe("acceptSystemRestart", () => {
     expect(MEMORY_DRAIN_RESTART_MS).toBe(60_000);
     expect(scheduled).not.toBeNull();
     await scheduled!();
-    expect(calls).toEqual(["drain:60000", "ensure", "exit:0"]);
+    expect(calls).toEqual(["drain:60000", "start:10123", "recycle", "exit:0"]);
   });
 
-  test("skips ensure when a service is installed (supervisor respawns)", async () => {
+  test("supervised service child exits 1 so failure-only supervisors respawn", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
 
     acceptSystemRestart({
       isDraining: () => false,
       getActiveTurnCount: () => 0,
-      isServiceInstalled: () => true,
+      isSupervisedServiceChild: () => true,
       schedule: (fn) => { scheduled = fn; },
       drainAndShutdown: async () => { calls.push("drain"); },
-      spawnEnsure: () => { calls.push("ensure"); },
+      spawnStart: () => { calls.push("start"); },
+      markRecycling: () => { calls.push("recycle"); },
       exitProcess: (code) => { calls.push(`exit:${code}`); },
     });
 
     await scheduled!();
-    expect(calls).toEqual(["drain", "exit:0"]);
+    expect(calls).toEqual(["drain", "exit:1"]);
   });
 
   test("does not schedule a second drain while already draining", async () => {

@@ -31,6 +31,7 @@ interface ResponseState {
 }
 
 interface SystemMemory {
+  pid?: number;
   rss: number;
   heapUsed: number;
   heapTotal: number;
@@ -142,6 +143,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   const [restartError, setRestartError] = useState<string | null>(null);
   const [noSupervisor, setNoSupervisor] = useState(false);
   const [supportsRestart, setSupportsRestart] = useState(false);
+  const [restartFromPid, setRestartFromPid] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,6 +190,18 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           setUnavailable(false);
           setSupportsRestart(typeof json.activeTurnCount === "number");
           if (json.isDraining && restartPhase === "idle") setRestartPhase("draining");
+          // Fast recycle can finish between polls with no observed outage — detect pid change.
+          if (
+            (restartPhase === "draining" || restartPhase === "reconnecting")
+            && restartFromPid != null
+            && typeof json.pid === "number"
+            && json.pid !== restartFromPid
+            && !json.isDraining
+          ) {
+            setRestartPhase("idle");
+            setRestartFromPid(null);
+            setRestartError(null);
+          }
         }
       } catch {
         // Old servers (pre-#314) 404 this route; degrade to a quiet unavailable note.
@@ -212,7 +226,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       activeController?.abort();
       clearInterval(interval);
     };
-  }, [apiBase, restartPhase]);
+  }, [apiBase, restartPhase, restartFromPid]);
 
   useEffect(() => {
     if (restartPhase !== "reconnecting") return;
@@ -222,9 +236,21 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       try {
         const res = await fetch(`${apiBase}/healthz`, { cache: "no-store" });
         if (res.ok && !cancelled) {
-          setRestartPhase("idle");
-          setRestartError(null);
-          return;
+          let replaced = restartFromPid == null;
+          if (restartFromPid != null) {
+            try {
+              const health = await res.json() as { pid?: number };
+              replaced = typeof health.pid === "number" && health.pid !== restartFromPid;
+            } catch {
+              replaced = true;
+            }
+          }
+          if (replaced) {
+            setRestartPhase("idle");
+            setRestartFromPid(null);
+            setRestartError(null);
+            return;
+          }
         }
       } catch {
         /* still down */
@@ -240,7 +266,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       cancelled = true;
       clearInterval(interval);
     };
-  }, [apiBase, restartPhase, t]);
+  }, [apiBase, restartPhase, restartFromPid, t]);
 
   const confirmRestart = () => {
     const count = data?.activeTurnCount ?? 0;
@@ -251,13 +277,15 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     if (!window.confirm(lines.join("\n\n"))) return;
     void (async () => {
       setRestartError(null);
+      setRestartFromPid(typeof data?.pid === "number" ? data.pid : null);
       setRestartPhase("draining");
       try {
         const res = await fetch(`${apiBase}/api/system/restart`, { method: "POST" });
         if (!res.ok) throw new Error("restart_failed");
-        // Proxy will drain then exit; memory poll will trip reconnecting.
+        // Proxy will drain then exit; memory poll will trip reconnecting or pid change.
       } catch {
         setRestartPhase("error");
+        setRestartFromPid(null);
         setRestartError(t("dash.mem.restartFailed"));
       }
     })();

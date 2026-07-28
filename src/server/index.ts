@@ -56,6 +56,8 @@ export {
   drainAndShutdown,
   getActiveTurnCount,
   isDraining,
+  isRecyclingForExit,
+  markRecyclingForExit,
   registerTurn,
   trackStreamLifetime,
   unregisterTurn,

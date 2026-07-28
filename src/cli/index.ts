@@ -31,7 +31,7 @@ import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
-import { drainAndShutdown, startServer } from "../server";
+import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
@@ -233,10 +233,15 @@ async function handleStart(options: { block?: boolean } = {}) {
     cleaned = true;
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
-    try { revertSystemEnv(); } catch { /* best-effort */ }
+    // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
+    // process expects Codex/Grok/env fences to still be in place.
+    const recycling = isRecyclingForExit();
+    if (!recycling) {
+      try { revertSystemEnv(); } catch { /* best-effort */ }
+    }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
+    if (!recycling && !process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
       try {
         const restored = restoreNativeCodex();
         if (!restored.success) {
@@ -252,7 +257,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Grok fence is shared state we must not remove — that service keeps running and would be
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
-    if (!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
+    if (!recycling && !process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
     return cleanupSucceeded;
