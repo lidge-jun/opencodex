@@ -241,6 +241,9 @@ test("bulk pausing translates the main sentinel to its distinct account row", as
     releaseReload();
     await new Promise((resolve) => setTimeout(resolve, 30));
   });
+
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+  expect(seen.current!.activeId).toBe("a2");
 });
 
 test("two pause holders both have to release before polling resumes", async () => {
