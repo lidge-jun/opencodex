@@ -4,7 +4,8 @@
  * Default OFF. When enabled:
  * - Sticky session affinity across requests that share a session key
  * - 429 cools the failed account and fails over to another eligible account
- * - New sessions prefer the lowest known fiveHour usage (#493 cache) when above threshold
+ * - New sessions use `strategy` (default quota): lowest known fiveHour usage (#493),
+ *   round-robin, or fill-first — affinity still wins for bound sessions
  *
  * Intentionally narrower than the Codex pool: no mid-session quota rotation,
  * soft-avoid ladders, or probe leases. Anthropic OAuth is ToS-sensitive.
@@ -17,7 +18,15 @@ import { createHash } from "node:crypto";
 import { setActiveAccount, getAccountSet, getAccountCredential } from "./store";
 import { getCachedProviderAccountQuota } from "../providers/quota";
 import { fallbackCodexAccountLogLabel } from "../codex/account-label";
-import type { OcxConfig } from "../types";
+import {
+  normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
+  notePoolRotationFailure,
+  notePoolRotationSuccess,
+  pickRoundRobinAccount,
+  POOL_KEY_ANTHROPIC,
+} from "../codex/pool-rotation";
+import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 
 const PROVIDER = "anthropic";
 const DEFAULT_COOLDOWN_MS = 60_000;
@@ -33,6 +42,10 @@ export interface AnthropicAccountPoolConfig {
   enabled?: boolean;
   /** Usage % for new-session pick. Default 80. 0 = disable quota-based pick (active / affinity only). */
   autoSwitchThreshold?: number;
+  /** New-session rotation strategy. Default quota (today's behaviour). */
+  strategy?: OcxAccountPoolRotationStrategy;
+  /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
+  stickyLimit?: number;
 }
 
 interface AccountHealth {
@@ -187,12 +200,87 @@ export type AnthropicAccountSelectionReason =
   | "active"
   | "lowest-usage"
   | "only-eligible"
+  | "round-robin"
+  | "fill-first"
   | "none"
   | "all-cooled";
 
 export interface AnthropicAccountSelection {
   accountId: string | null;
   reason: AnthropicAccountSelectionReason;
+}
+
+function stickyLimitForPool(config: OcxConfig): number {
+  return normalizeAccountPoolStickyLimit(anthropicAccountPoolConfig(config).stickyLimit);
+}
+
+function anthropicPoolStrategy(config: OcxConfig): OcxAccountPoolRotationStrategy {
+  return normalizeAccountPoolStrategy(anthropicAccountPoolConfig(config).strategy);
+}
+
+function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
+  const threshold = anthropicAutoSwitchThreshold(config);
+  if (threshold <= 0) return true;
+  // Unknown usage must not force fill-first to abandon the active account.
+  if (!hasKnownUsage(accountId)) return true;
+  return usageScore(accountId) < threshold;
+}
+
+/**
+ * Fill-first: keep eligible active under threshold; otherwise advance to the next
+ * eligible id in stable sorted order after the current active (wrapping).
+ */
+function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string | null {
+  const eligible = getEligibleAnthropicAccounts(now);
+  if (eligible.length === 0) return null;
+
+  const set = getAccountSet(PROVIDER);
+  const active = set?.activeAccountId;
+  if (active && eligible.includes(active) && isActiveUnderFillFirstThreshold(config, active)) {
+    return active;
+  }
+
+  const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+  if (!active || !set) return ordered[0] ?? null;
+
+  const stableAll = [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b));
+  const startIdx = stableAll.indexOf(active);
+  if (startIdx < 0) return ordered[0] ?? null;
+
+  for (let step = 1; step <= stableAll.length; step++) {
+    const candidate = stableAll[(startIdx + step) % stableAll.length]!;
+    if (eligible.includes(candidate)) return candidate;
+  }
+  return ordered[0] ?? null;
+}
+
+/**
+ * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
+ * to the legacy quota path (or when the strategy is quota).
+ */
+function pickUnboundStrategyAccount(
+  config: OcxConfig,
+  now: number,
+): { accountId: string; reason: "round-robin" | "fill-first" } | null {
+  const strategy = anthropicPoolStrategy(config);
+  if (strategy === "quota") return null;
+
+  if (strategy === "round-robin") {
+    const eligible = getEligibleAnthropicAccounts(now);
+    const limit = stickyLimitForPool(config);
+    const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
+    if (!picked) return null;
+    notePoolRotationSuccess(POOL_KEY_ANTHROPIC, picked, limit);
+    return { accountId: picked, reason: "round-robin" };
+  }
+
+  if (strategy === "fill-first") {
+    const picked = pickFillFirstAnthropicAccount(config, now);
+    if (!picked) return null;
+    return { accountId: picked, reason: "fill-first" };
+  }
+
+  return null;
 }
 
 /**
@@ -223,6 +311,18 @@ export function resolveAnthropicAccountForSession(
       }
       sessionAffinity.delete(key);
     }
+  }
+
+  const strategyPick = pickUnboundStrategyAccount(config, now);
+  if (strategyPick) {
+    if (strategyPick.accountId !== set.activeAccountId) {
+      promoteAnthropicActiveAccount(strategyPick.accountId);
+    }
+    if (key) {
+      sessionAffinity.set(key, { accountId: strategyPick.accountId, lastUsedAt: now });
+      pruneExpiredAffinity(now);
+    }
+    return { accountId: strategyPick.accountId, reason: strategyPick.reason };
   }
 
   const threshold = anthropicAutoSwitchThreshold(config);
@@ -309,6 +409,7 @@ export function rotateAnthropicAccountOn429(
     cooldownSource: parsedRetry ? "retry-after" : "default",
   });
   clearAnthropicSessionAffinityForAccount(failedAccountId);
+  notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
 
   const next = pickLowestUsage(failedAccountId, now);
   if (!next) {

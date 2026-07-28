@@ -1,6 +1,7 @@
 import type { OcxAccountPoolRotationStrategy } from "../types";
 
 export const POOL_KEY_CODEX = "codex";
+export const POOL_KEY_ANTHROPIC = "anthropic";
 
 interface SelectionState {
   activeKey?: string;

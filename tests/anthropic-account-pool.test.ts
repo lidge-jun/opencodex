@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearPoolRotationState } from "../src/codex/pool-rotation";
 import {
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
@@ -14,7 +15,7 @@ import {
 } from "../src/oauth/anthropic-routing";
 import { saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
-import type { OcxConfig } from "../src/types";
+import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -23,11 +24,13 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-anthropic-pool-"));
   process.env.OPENCODEX_HOME = home;
   clearAnthropicAccountPoolState();
+  clearPoolRotationState();
   clearAccountQuotaCache("anthropic");
 });
 
 afterEach(() => {
   clearAnthropicAccountPoolState();
+  clearPoolRotationState();
   clearAccountQuotaCache("anthropic");
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
@@ -58,15 +61,54 @@ async function seedTwoAccounts() {
   return { aId: a.id, bId: b.id };
 }
 
-function cfg(enabled: boolean, threshold = 80): OcxConfig {
+function cfg(
+  enabled: boolean,
+  threshold = 80,
+  pool: { strategy?: OcxAccountPoolRotationStrategy; stickyLimit?: number } = {},
+): OcxConfig {
   return {
     port: 0,
     defaultProvider: "anthropic",
     providers: {
       anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
     },
-    anthropicAccountPool: { enabled, autoSwitchThreshold: threshold },
+    anthropicAccountPool: {
+      enabled,
+      autoSwitchThreshold: threshold,
+      ...pool,
+    },
   } as OcxConfig;
+}
+
+async function seedThreeAccounts() {
+  await saveCredential("anthropic", {
+    access: "access-a",
+    refresh: "refresh-a",
+    expires: Date.now() + 3_600_000,
+    accountId: "uuid-aaaa",
+    email: "a@example.test",
+  });
+  await saveCredential("anthropic", {
+    access: "access-b",
+    refresh: "refresh-b",
+    expires: Date.now() + 3_600_000,
+    accountId: "uuid-bbbb",
+    email: "b@example.test",
+  });
+  await saveCredential("anthropic", {
+    access: "access-c",
+    refresh: "refresh-c",
+    expires: Date.now() + 3_600_000,
+    accountId: "uuid-cccc",
+    email: "c@example.test",
+  });
+  const { getAccountSet } = await import("../src/oauth/store");
+  const set = getAccountSet("anthropic")!;
+  const a = set.accounts.find(acc => acc.credential.accountId === "uuid-aaaa")!;
+  const b = set.accounts.find(acc => acc.credential.accountId === "uuid-bbbb")!;
+  const c = set.accounts.find(acc => acc.credential.accountId === "uuid-cccc")!;
+  await setActiveAccount("anthropic", a.id);
+  return { aId: a.id, bId: b.id, cId: c.id };
 }
 
 describe("anthropic account pool", () => {
@@ -152,5 +194,59 @@ describe("anthropic account pool", () => {
     const label = formatAnthropicProviderForLog("anthropic", "deadbeefdeadbeef");
     expect(label).toMatch(/^anthropic-p[a-f0-9]{6}$/);
     expect(label).not.toContain("deadbeef");
+  });
+
+  test("round-robin strategy rotates unbound new sessions", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "round-robin" });
+
+    const picks = [
+      resolveAnthropicAccountForSession(null, config).accountId,
+      resolveAnthropicAccountForSession(null, config).accountId,
+      resolveAnthropicAccountForSession(null, config).accountId,
+    ];
+    expect(new Set(picks).size).toBe(3);
+  });
+
+  test("affinity still wins over round-robin", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "round-robin" });
+
+    const first = resolveAnthropicAccountForSession("T", config);
+    expect(first.accountId).toBeTruthy();
+    const pinned = first.accountId!;
+    await setActiveAccount("anthropic", pinned === aId ? bId : aId);
+    expect(resolveAnthropicAccountForSession("T", config).accountId).toBe(pinned);
+    expect(resolveAnthropicAccountForSession("T", config).accountId).toBe(pinned);
+    expect(resolveAnthropicAccountForSession("T", config).reason).toBe("affinity");
+  });
+
+  test("omitted strategy preserves quota / active behaviour", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true);
+
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(aId);
+    expect(resolveAnthropicAccountForSession("new-sess", config).accountId).toBe(aId);
+  });
+
+  test("disabled pool ignores round-robin strategy", async () => {
+    const { aId } = await seedThreeAccounts();
+    const config = cfg(false, 80, { strategy: "round-robin" });
+    const picks = [
+      resolveAnthropicAccountForSession(null, config).accountId,
+      resolveAnthropicAccountForSession(null, config).accountId,
+      resolveAnthropicAccountForSession(null, config).accountId,
+    ];
+    expect(picks).toEqual([aId, aId, aId]);
+    expect(resolveAnthropicAccountForSession(null, config).reason).toBe("pool-disabled");
   });
 });

@@ -253,6 +253,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     config.anthropicAccountPool = {
       enabled: body.enabled,
       autoSwitchThreshold: threshold,
+      // Preserve strategy fields until Task 4 adds full PATCH validation.
+      ...(config.anthropicAccountPool?.strategy !== undefined
+        ? { strategy: config.anthropicAccountPool.strategy }
+        : {}),
+      ...(config.anthropicAccountPool?.stickyLimit !== undefined
+        ? { stickyLimit: config.anthropicAccountPool.stickyLimit }
+        : {}),
     };
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({
