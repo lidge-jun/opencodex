@@ -44,7 +44,7 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 
 注入的 per-model `api_key` 在這些模型的 Grok 憑證鏈中排在第一位，因此對 opencodex 的回合不需要額外的 Grok 登入。請為原生 grok 模型，以及任何直接聯絡 xAI 的 harness 功能，保留你平常的 `grok login` / `XAI_API_KEY` 設定。
 
-## 手動配方（不使用自動註冊）
+## 手動配方（不使用自動註冊） {#manual-recipe-without-auto-registration}
 
 若你自行管理 `~/.grok/config.toml`——或 opencodex 綁定在非 loopback——請在 `# >>> opencodex managed block` 標記之外，以**直接欄位**新增 per-model 表格：
 

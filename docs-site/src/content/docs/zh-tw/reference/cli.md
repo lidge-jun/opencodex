@@ -175,13 +175,13 @@ session 開始生效，正在執行的 session 保持已固定的 surface。
 | 資源 | 命令 |
 | --- | --- |
 | 路由 | `ocx combo ...` 或 `ocx route combo ...` |
-| 代理政策 | `ocx agent injection|effort|subagents|fallback|sidecar ...` |
-| 可觀測性 | `ocx observe logs|usage|storage|memory|debug ...` |
-| API 准入 | `ocx access key|endpoints|models|test ...` |
-| Claude Code | `ocx claude config status|set ...` |
-| Grok Build | `ocx grok status|exclude|include|set|clear|apply ...` |
-| 執行期控制 | `ocx system status|settings|startup|diagnostics|sync|update ...` |
-| 離線設定 | `ocx config show|get|set|unset|validate|export|import ...` |
+| 代理政策 | `ocx agent injection\|effort\|subagents\|fallback\|sidecar ...` |
+| 可觀測性 | `ocx observe logs\|usage\|storage\|memory\|debug ...` |
+| API 准入 | `ocx access key\|endpoints\|models\|test ...` |
+| Claude Code | `ocx claude config status\|set ...` |
+| Grok Build | `ocx grok status\|exclude\|include\|set\|clear\|apply ...` |
+| 執行期控制 | `ocx system status\|settings\|startup\|diagnostics\|sync\|update ...` |
+| 離線設定 | `ocx config show\|get\|set\|unset\|validate\|export\|import ...` |
 
 在語意明確時，預設是 list/status。使用 `--json` 取得結構化快照，並以
 `ocx observe logs --follow --jsonl` 取得串流請求日誌。破壞性的移除／匯入與更新動作需要

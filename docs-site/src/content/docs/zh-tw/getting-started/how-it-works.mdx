@@ -63,19 +63,20 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
    token 作為 bearer key,從而讓現有的 adapter 無需改動即可完成認證。對於 ChatGPT/Codex 帳號池，
    `codex/auth-context.ts` 會先解析帳號；若必要的池憑證不可用，直通 adapter 會拒絕繼續。
 
-4. **Vision sidecar(可選)** —— 如果已路由的模型被列在 `provider.noVisionModels` 中,且
-   請求攜帶了圖像，opencodex 會透過你的 ChatGPT 登入憑證，使用已設定的 vision sidecar 描述
-   每張圖像並將其替換為文字，讓純文字模型仍可對圖像進行推理。
+4. **Vision sidecar（可選）** —— 如果已路由的模型被列在 `provider.noVisionModels` 中，且
+   請求攜帶了圖像，opencodex 會透過已設定的 vision sidecar 描述每張圖像並替換為文字，讓純文字
+   模型仍可對圖像進行推理。後端可選 `openai`（ChatGPT 登入）或 `anthropic`（OAuth）；未設定時
+   會自動選擇，顯式 `anthropic` 但無可用憑證時會關閉失敗。
    參見 [Sidecar](/zh-tw/guides/sidecars/)。
 
 5. **直通快速路徑** —— 對於 Responses 直通 adapter（`openai-responses` 或 `azure-openai`），
    opencodex 會保留 Responses body，只執行必要的路由與相容性改寫，然後直接轉發 provider 回應，
    不再轉換為 `AdapterEvent`。
 
-6. **網路搜尋 sidecar(可選)** —— 如果 Codex 啟用了託管的 `web_search`,但已路由的模型
-   並非 OpenAI,opencodex 會暴露一個合成的 `web_search` 函式工具,並在一個小型
-   agentic 迴圈中執行該模型，預設透過你的 ChatGPT 登入憑證呼叫 `gpt-5.6-luna` 執行真實搜尋，
-   再將結果作為工具結果注入回去。
+6. **網路搜尋 sidecar（可選）** —— 如果 Codex 啟用了託管的 `web_search`，但已路由的模型
+   並非 OpenAI，opencodex 會暴露一個合成的 `web_search` 函式工具，並在一個小型
+   agentic 迴圈中執行該模型；真實搜尋由所選 sidecar 後端執行（`openai` 預設以 ChatGPT 登入
+   呼叫 `gpt-5.6-luna`，或 `anthropic` OAuth），再將結果作為工具結果注入回去。
 
 7. **壓縮（按需）** —— Codex v1 會呼叫 `POST /v1/responses/compact`，v2 則在 Responses turn 中
    加入 `compaction_trigger`。原生直通路由會把壓縮請求傳送到上游；已路由模型則在停用工具的

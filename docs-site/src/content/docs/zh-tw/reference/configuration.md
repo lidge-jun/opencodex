@@ -214,7 +214,7 @@ x-opencodex-api-key: your-secret-token
   "providers": {
     "custom-gateway": {
       "adapter": "openai-responses",
-      "baseUrl": "https://gateway.example/v1",
+      "baseUrl": "https://gateway.example",
       "apiKey": "${GATEWAY_KEY}",
       "responsesItemIdRepair": {
         "reasoning": ["rs_0"],
