@@ -76,6 +76,11 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
   }) => {
     const previousStrategy = strategy;
     const previousSticky = stickyLimit;
+    if (next.strategy !== undefined) setStrategy(next.strategy);
+    if (next.stickyLimit !== undefined) {
+      setStickyLimit(next.stickyLimit);
+      setStickyDraft(String(next.stickyLimit));
+    }
     setSaving(true);
     setError(null);
     const result = await putCodexPoolStrategy(apiBase, next);

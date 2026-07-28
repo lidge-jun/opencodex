@@ -82,6 +82,13 @@ export default function AnthropicAccountPoolSettings({
     strategy: AccountPoolStrategy;
     stickyLimit: number;
   }) => {
+    const previousState = state;
+    setState({
+      enabled: next.enabled,
+      threshold: next.threshold,
+      strategy: next.strategy,
+      stickyLimit: next.stickyLimit,
+    });
     setSaving(true);
     setError(null);
     try {
@@ -113,7 +120,11 @@ export default function AnthropicAccountPoolSettings({
       setStickyDraft(String(savedSticky));
     } catch {
       setError(t("anthropicPool.saveFailed"));
-      if (state) setStickyDraft(String(state.stickyLimit));
+      if (previousState) {
+        setState(previousState);
+        setDraft(String(previousState.threshold));
+        setStickyDraft(String(previousState.stickyLimit));
+      }
     } finally {
       setSaving(false);
     }
