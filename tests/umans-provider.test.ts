@@ -4,11 +4,12 @@ import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
-function umansProvider(apiKey = "sk-umans"): OcxProviderConfig {
+function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
   return {
     adapter: "anthropic",
     baseUrl: "https://api.code.umans.ai",
     apiKey,
+    ...(apiKeyTransport ? { apiKeyTransport } : {}),
     defaultModel: "umans-coder",
     escapeBuiltinToolNames: true,
   };
@@ -111,6 +112,14 @@ describe("Umans provider", () => {
     expect(body.system?.[0]?.text).toContain("Valid tool names for this turn are exactly `cx_web_search`.");
     expect(body.tools[0].name).toBe("cx_web_search");
     expect(body.tool_choice).toEqual({ type: "tool", name: "cx_web_search" });
+  });
+
+  test("Anthropic adapter honors apiKeyTransport=bearer for key-auth gateways", async () => {
+    const req = await createAnthropicAdapter(umansProvider("sk-umans", "bearer")).buildRequest(parsedWithWebSearchTool());
+
+    expect(req.headers.Authorization).toBe("Bearer sk-umans");
+    expect(req.headers["x-api-key"]).toBeUndefined();
+    expect(req.headers["anthropic-version"]).toBe("2023-06-01");
   });
 
   test("Anthropic adapter filters Umans tools for Responses allowed_tools choices", async () => {

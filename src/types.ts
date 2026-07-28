@@ -874,6 +874,12 @@ export interface OcxProviderConfig {
   codexAccountMode?: CodexAccountMode;
   apiKey?: string;
   /**
+   * Key-auth header style for Anthropic-compatible providers.
+   * Defaults to the native Anthropic `x-api-key`; gateways may require
+   * `Authorization: Bearer <key>` instead.
+   */
+  apiKeyTransport?: "x-api-key" | "bearer";
+  /**
    * Multi-key pool (API-key twin of OAuth multiauth). `apiKey` always mirrors the ACTIVE
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare
    * `apiKey` seeds a one-entry pool on first management touch.

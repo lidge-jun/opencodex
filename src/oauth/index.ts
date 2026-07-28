@@ -464,8 +464,9 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
 /**
  * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
- * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` (key) or
- * `Authorization: Bearer` + the OAuth beta (oauth) — not a bare Bearer. Google (ai-studio mode)
+ * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` by default
+ * (or `Authorization: Bearer` when `apiKeyTransport = "bearer"`), plus the OAuth beta for oauth
+ * mode — not a bare Bearer. Google (ai-studio mode)
  * is the other special case: `x-goog-api-key` + `/v1beta/models`, returning `{ models: [...] }`.
  * The catalog authority gate intentionally degrades that non-OpenAI shape to stale/static data.
  * Everyone else uses the OpenAI-style `/models` + Bearer with a `{ data: [{ id, owned_by? }] }`
@@ -488,14 +489,16 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     return { url: `${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`, headers };
   }
   if (effectiveProvider.adapter === "anthropic") {
+    const base = effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
     headers["anthropic-version"] = "2023-06-01";
     if (effectiveProvider.authMode === "oauth") {
       headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
       if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     } else if (apiKey) {
-      headers["x-api-key"] = apiKey;
+      if (effectiveProvider.apiKeyTransport === "bearer") headers["Authorization"] = `Bearer ${apiKey}`;
+      else headers["x-api-key"] = apiKey;
     }
-    return { url: `${effectiveProvider.baseUrl}/v1/models?limit=1000`, headers };
+    return { url: `${base}/v1/models?limit=1000`, headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   return { url: `${effectiveProvider.baseUrl}/models`, headers };
