@@ -32,6 +32,7 @@ export const zh: Record<TKey, string> = {
   "startup.title": "启动安全",
   "startup.subtitle": "检查重启后 Codex 是否仍能连接 opencodex，避免本地代理路由陷入重复重连。",
   "startup.refresh": "刷新",
+  "startup.backToDashboard": "返回仪表盘",
   "startup.loading": "正在检查启动保护…",
   "startup.error": "无法读取启动保护状态。",
   "startup.staleData": "最新启动检查失败。以下数据已过期，不能视为已受保护的证明。",

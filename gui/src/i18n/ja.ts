@@ -37,6 +37,7 @@ export const ja: Record<TKey, string> = {
   "startup.title": "起動安全性",
   "startup.subtitle": "再起動後にローカルプロキシへの接続が再接続ループになる前に、Codex が opencodex へ到達できるか確認します。",
   "startup.refresh": "更新",
+  "startup.backToDashboard": "ダッシュボードに戻る",
   "startup.loading": "起動保護を確認中…",
   "startup.error": "起動保護を読み取れませんでした。",
   "startup.staleData": "最新の確認に失敗しました。以下は古い値であり、保護の証明にはなりません。",

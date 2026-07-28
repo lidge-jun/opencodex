@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconRefresh } from "../icons";
-import { useI18n } from "../i18n/shared";
+import { type TFn, useI18n } from "../i18n/shared";
 import { EmptyState } from "../ui";
 import {
   StartupDetailsSection,
@@ -14,6 +14,40 @@ import {
   type StartupInstallAction,
   type TrayStatusData,
 } from "./startup-shared";
+
+type CodexRuntimeSettings = {
+  version?: string | null;
+  newerAvailable?: { path?: string; version?: string | null } | null;
+  catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
+};
+
+function deriveCodexRuntimeNotice(
+  runtime: CodexRuntimeSettings | undefined,
+  t: TFn,
+): { warning: string | null; fix: string | null } {
+  if (!runtime) return { warning: null, fix: null };
+  const clampActive = Boolean(runtime.catalogClamp?.active);
+  const newer = Boolean(runtime.newerAvailable);
+  const version = (clampActive
+    ? runtime.catalogClamp?.runtimeVersion
+    : runtime.version) ?? runtime.version ?? "unknown";
+  const efforts = (runtime.catalogClamp?.removedEfforts ?? []).join(", ");
+  if (clampActive) {
+    return {
+      warning: efforts
+        ? t("startup.codexRuntime.clampHiddenWithEfforts", { version, efforts })
+        : t("startup.codexRuntime.clampHidden", { version }),
+      fix: newer ? "ocx doctor --fix-codex-runtime && ocx sync" : "ocx sync",
+    };
+  }
+  if (newer) {
+    return {
+      warning: t("startup.codexRuntime.olderBinary", { version }),
+      fix: "ocx doctor --fix-codex-runtime && ocx sync",
+    };
+  }
+  return { warning: null, fix: null };
+}
 
 export default function Startup({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
@@ -40,78 +74,49 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       if (!res.ok) throw new Error("fetch failed");
       const next = await res.json() as StartupHealthData;
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
+
+      // Load settings + tray in parallel, then commit once so the page never paints
+      // without the runtime notice / tray actions (avoids layout shift).
+      const settingsPromise = fetch(`${apiBase}/api/settings`, { signal })
+        .then(async (settingsRes) => {
+          if (!settingsRes.ok) return null;
+          return await settingsRes.json() as { codexRuntime?: CodexRuntimeSettings };
+        })
+        .catch(() => null);
+
+      const trayPromise = next.platform === "win32"
+        ? fetch(`${apiBase}/api/windows-tray`, { signal })
+          .then(async (trayRes) => {
+            if (!trayRes.ok) throw new Error("tray status failed");
+            const trayNext = await trayRes.json() as unknown;
+            if (!isTrayStatusData(trayNext)) throw new Error("invalid tray status");
+            return { tray: trayNext, error: false as const };
+          })
+          .catch(() => ({ tray: null, error: true as const }))
+        : Promise.resolve({ tray: null, error: false as const });
+
+      const [settings, trayResult] = await Promise.all([settingsPromise, trayPromise]);
+      if (signal?.aborted || generation !== loadGenerationRef.current) return;
+
+      const notice = deriveCodexRuntimeNotice(settings?.codexRuntime, t);
       setData(next);
       setFailed(next.diagnosticStale);
-      try {
-        const settingsRes = await fetch(`${apiBase}/api/settings`, { signal });
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json() as {
-            codexRuntime?: {
-              version?: string | null;
-              newerAvailable?: { path?: string; version?: string | null } | null;
-              catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
-            };
-          };
-          if (!signal?.aborted && generation === loadGenerationRef.current) {
-            const runtime = settings.codexRuntime;
-            const clampActive = Boolean(runtime?.catalogClamp?.active);
-            const newer = Boolean(runtime?.newerAvailable);
-            const version = (clampActive
-              ? runtime?.catalogClamp?.runtimeVersion
-              : runtime?.version) ?? runtime?.version ?? "unknown";
-            const efforts = (runtime?.catalogClamp?.removedEfforts ?? []).join(", ");
-            if (clampActive) {
-              setCodexRuntimeWarning(
-                efforts
-                  ? t("startup.codexRuntime.clampHiddenWithEfforts", { version, efforts })
-                  : t("startup.codexRuntime.clampHidden", { version }),
-              );
-            } else if (newer) {
-              setCodexRuntimeWarning(t("startup.codexRuntime.olderBinary", { version }));
-            } else {
-              setCodexRuntimeWarning(null);
-            }
-            setCodexRuntimeFix(
-              newer
-                ? "ocx doctor --fix-codex-runtime && ocx sync"
-                : clampActive
-                  ? "ocx sync"
-                  : null,
-            );
-          }
-        } else if (!signal?.aborted && generation === loadGenerationRef.current) {
-          setCodexRuntimeWarning(null);
-          setCodexRuntimeFix(null);
-        }
-      } catch {
-        if (!signal?.aborted && generation === loadGenerationRef.current) {
-          setCodexRuntimeWarning(null);
-          setCodexRuntimeFix(null);
-        }
-      }
+      setCodexRuntimeWarning(notice.warning);
+      setCodexRuntimeFix(notice.fix);
       if (next.platform === "win32") {
+        setTray(trayResult.tray);
+        setTrayError(trayResult.error);
+      } else {
+        setTray(null);
         setTrayError(false);
-        try {
-          const trayRes = await fetch(`${apiBase}/api/windows-tray`, { signal });
-          if (!trayRes.ok) throw new Error("tray status failed");
-          const trayNext = await trayRes.json() as unknown;
-          if (!isTrayStatusData(trayNext)) throw new Error("invalid tray status");
-          if (!signal?.aborted && generation === loadGenerationRef.current) {
-            setTray(trayNext);
-            setTrayError(false);
-          }
-        } catch {
-          if (!signal?.aborted && generation === loadGenerationRef.current) {
-            setTray(null);
-            setTrayError(true);
-          }
-        }
       }
     } catch {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setFailed(true);
       setTray(null);
       setTrayError(true);
+      setCodexRuntimeWarning(null);
+      setCodexRuntimeFix(null);
     } finally {
       if (generation === loadGenerationRef.current) {
         setTrayLoading(false);
@@ -199,9 +204,12 @@ export default function Startup({ apiBase }: { apiBase: string }) {
           <h2>{t("startup.title")}</h2>
           <p className="page-sub startup-page-sub">{t("startup.subtitle")}</p>
         </div>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refresh()} disabled={loading}>
-          <IconRefresh /> {t("startup.refresh")}
-        </button>
+        <div className="startup-page-head-actions">
+          <a className="btn btn-ghost btn-sm" href="#dashboard">{t("startup.backToDashboard")}</a>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refresh()} disabled={loading}>
+            <IconRefresh /> {t("startup.refresh")}
+          </button>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -212,15 +220,15 @@ export default function Startup({ apiBase }: { apiBase: string }) {
         <>
           {failed && <div className="notice notice-warn" role="alert">{t("startup.staleData")}</div>}
           {codexRuntimeWarning && (
-            <div className="notice notice-warn" role="status">
-              <p>{codexRuntimeWarning}</p>
+            <div className="notice notice-warn startup-runtime-notice" role="status">
+              <p className="startup-runtime-notice__text">{codexRuntimeWarning}</p>
               {codexRuntimeFix && (
-                <p>
+                <div className="startup-runtime-notice__fix">
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyCommand(codexRuntimeFix)}>
                     {copied === codexRuntimeFix ? t("startup.copied") : t("startup.copy")}
                   </button>
-                  <code style={{ marginLeft: "0.5rem" }}>{codexRuntimeFix}</code>
-                </p>
+                  <code>{codexRuntimeFix}</code>
+                </div>
               )}
             </div>
           )}

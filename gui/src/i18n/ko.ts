@@ -32,6 +32,7 @@ export const ko: Record<TKey, string> = {
   "startup.title": "시작 안전성",
   "startup.subtitle": "재부팅 후 로컬 프록시 라우팅이 재연결 반복으로 이어지기 전에 Codex가 opencodex에 연결될 수 있는지 확인합니다.",
   "startup.refresh": "새로고침",
+  "startup.backToDashboard": "대시보드로 돌아가기",
   "startup.loading": "시작 보호 상태 확인 중…",
   "startup.error": "시작 보호 상태를 읽지 못했습니다.",
   "startup.staleData": "최신 시작 상태 확인에 실패했습니다. 아래 값은 이전 결과이며 보호 증거로 사용하면 안 됩니다.",

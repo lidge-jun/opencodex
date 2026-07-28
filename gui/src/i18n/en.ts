@@ -37,6 +37,7 @@ export const en = {
   "startup.title": "Startup safety",
   "startup.subtitle": "Verify that Codex can reach opencodex after a restart, before local proxy routing becomes a reconnect loop.",
   "startup.refresh": "Refresh",
+  "startup.backToDashboard": "Back to Dashboard",
   "startup.loading": "Checking startup protection…",
   "startup.error": "Could not read startup protection.",
   "startup.staleData": "The latest startup check failed. The values below are stale and must not be treated as proof of protection.",

@@ -30,6 +30,7 @@ export const de: Record<TKey, string> = {
   "startup.title": "Startsicherheit",
   "startup.subtitle": "Prüft, ob Codex opencodex nach einem Neustart erreicht, bevor lokales Proxy-Routing in einer Wiederverbindungsschleife endet.",
   "startup.refresh": "Aktualisieren",
+  "startup.backToDashboard": "Zurück zum Dashboard",
   "startup.loading": "Startschutz wird geprüft…",
   "startup.error": "Startschutz konnte nicht gelesen werden.",
   "startup.staleData": "Die aktuelle Prüfung ist fehlgeschlagen. Die Werte unten sind veraltet und kein Nachweis für Schutz.",

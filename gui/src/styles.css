@@ -925,6 +925,25 @@ dialog.modal-overlay::backdrop {
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
 .startup-page-sub { margin-bottom: 0; }
+.startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.startup-runtime-notice {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.startup-runtime-notice__text { margin: 0; }
+.startup-runtime-notice__fix {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.startup-runtime-notice__fix code {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .startup-hero { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
 .startup-hero--safe { border-color: color-mix(in srgb, var(--green) 34%, var(--border)); background: color-mix(in srgb, var(--green-soft) 64%, var(--surface)); }
 .startup-hero--risk { border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); background: color-mix(in srgb, var(--amber-soft) 72%, var(--surface)); }
@@ -942,7 +961,7 @@ dialog.modal-overlay::backdrop {
 .startup-detail-row > .startup-detail-actions { flex-direction: row; align-items: center; justify-content: flex-end; flex: 0 0 auto; gap: 8px; }
 .startup-detail-row span:not(.badge) { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
 .startup-actions > .muted { margin: -4px 0 14px; font-size: var(--text-control); }
-.startup-tray-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.startup-tray-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; min-height: 36px; }
 .startup-tray-error { margin-top: 12px; }
 .startup-command-list { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden; }
 .startup-command-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; }
