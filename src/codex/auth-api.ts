@@ -10,6 +10,12 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
+  parseAccountPoolStickyLimit,
+  parseAccountPoolStrategy,
+} from "./pool-rotation";
 import { clearCodexAccountCooldown, resetCodexRoutingForManualSelection } from "./routing";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
@@ -618,6 +624,8 @@ export async function handleCodexAuthAPI(
       activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
+      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
     });
   }
 
@@ -631,6 +639,38 @@ export async function handleCodexAuthAPI(
     runtimeConfig.autoSwitchThreshold = body.threshold;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true });
+  }
+
+  if (
+    url.pathname === "/api/codex-auth/pool-strategy"
+    && (req.method === "PUT" || req.method === "PATCH")
+  ) {
+    let body: { strategy?: unknown; stickyLimit?: unknown };
+    try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    if (body.strategy === undefined && body.stickyLimit === undefined) {
+      return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
+    }
+    const runtimeConfig = getRuntimeConfig(config);
+    if (body.strategy !== undefined) {
+      const strategy = parseAccountPoolStrategy(body.strategy);
+      if (strategy === null) {
+        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first' }, 400);
+      }
+      runtimeConfig.accountPoolStrategy = strategy;
+    }
+    if (body.stickyLimit !== undefined) {
+      const stickyLimit = parseAccountPoolStickyLimit(body.stickyLimit);
+      if (stickyLimit === null) {
+        return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+      }
+      runtimeConfig.accountPoolStickyLimit = stickyLimit;
+    }
+    saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({
+      ok: true,
+      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+    });
   }
 
   if (url.pathname === "/api/codex-auth/failover" && req.method === "PUT") {

@@ -17,18 +17,28 @@ const MAX_STICKY_LIMIT = 100;
 const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
 const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
 
-export function normalizeAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy {
+/** Strict parse for management APIs — returns null instead of defaulting. */
+export function parseAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | null {
   if (typeof raw === "string" && VALID_STRATEGIES.has(raw as OcxAccountPoolRotationStrategy)) {
     return raw as OcxAccountPoolRotationStrategy;
   }
-  return DEFAULT_STRATEGY;
+  return null;
 }
 
-export function normalizeAccountPoolStickyLimit(raw: unknown): number {
+/** Strict parse for management APIs — returns null instead of defaulting. */
+export function parseAccountPoolStickyLimit(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isInteger(raw) && raw >= MIN_STICKY_LIMIT && raw <= MAX_STICKY_LIMIT) {
     return raw;
   }
-  return DEFAULT_STICKY_LIMIT;
+  return null;
+}
+
+export function normalizeAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy {
+  return parseAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
+}
+
+export function normalizeAccountPoolStickyLimit(raw: unknown): number {
+  return parseAccountPoolStickyLimit(raw) ?? DEFAULT_STICKY_LIMIT;
 }
 
 function getOrCreateState(poolKey: string): SelectionState {

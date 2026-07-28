@@ -30,6 +30,12 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, supportsPerAccountQuota } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
+import {
+  normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
+  parseAccountPoolStickyLimit,
+  parseAccountPoolStrategy,
+} from "../../codex/pool-rotation";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
@@ -217,7 +223,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
-  // Opt-in Anthropic OAuth account pool (#294): enable/threshold + clear cooldown.
+  // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
@@ -226,14 +232,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       provider,
       enabled: pool.enabled === true,
       autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
+      strategy: normalizeAccountPoolStrategy(pool.strategy),
+      stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
       experimental: true,
     });
   }
-  if (url.pathname === "/api/oauth/accounts/pool" && req.method === "PUT") {
+  if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
     const body = await req.json().catch(() => ({})) as {
       provider?: unknown;
       enabled?: unknown;
       autoSwitchThreshold?: unknown;
+      strategy?: unknown;
+      stickyLimit?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
@@ -250,16 +260,27 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       threshold = body.autoSwitchThreshold;
     }
+    let strategy = config.anthropicAccountPool?.strategy;
+    if (body.strategy !== undefined) {
+      const parsed = parseAccountPoolStrategy(body.strategy);
+      if (parsed === null) {
+        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+      }
+      strategy = parsed;
+    }
+    let stickyLimit = config.anthropicAccountPool?.stickyLimit;
+    if (body.stickyLimit !== undefined) {
+      const parsed = parseAccountPoolStickyLimit(body.stickyLimit);
+      if (parsed === null) {
+        return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+      }
+      stickyLimit = parsed;
+    }
     config.anthropicAccountPool = {
       enabled: body.enabled,
       autoSwitchThreshold: threshold,
-      // Preserve strategy fields until Task 4 adds full PATCH validation.
-      ...(config.anthropicAccountPool?.strategy !== undefined
-        ? { strategy: config.anthropicAccountPool.strategy }
-        : {}),
-      ...(config.anthropicAccountPool?.stickyLimit !== undefined
-        ? { stickyLimit: config.anthropicAccountPool.stickyLimit }
-        : {}),
+      ...(strategy !== undefined ? { strategy } : {}),
+      ...(stickyLimit !== undefined ? { stickyLimit } : {}),
     };
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({
@@ -267,6 +288,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       provider,
       enabled: body.enabled,
       autoSwitchThreshold: threshold,
+      strategy: normalizeAccountPoolStrategy(strategy),
+      stickyLimit: normalizeAccountPoolStickyLimit(stickyLimit),
       experimental: true,
     });
   }
