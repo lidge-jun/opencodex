@@ -1,4 +1,5 @@
 import { collectResponsesToolGroups } from "../responses/tool-groups";
+import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 
 interface NamespacedTool {
   namespace: string;
@@ -96,45 +97,12 @@ export function restoreImageGenCallsInJson(
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 
-/** Split one complete SSE event block while retaining its original blank-line delimiter. */
-function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
-  const match = buffer.match(/\r?\n\r?\n/);
-  if (!match || match.index === undefined) return null;
-  return {
-    block: buffer.slice(0, match.index),
-    delimiter: match[0],
-    rest: buffer.slice(match.index + match[0].length),
-  };
-}
-
-/** Join all data lines from one SSE event according to the event-stream field rules. */
-function sseDataPayload(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const value = line.slice(5);
-    data.push(value.startsWith(" ") ? value.slice(1) : value);
-  }
-  return data.length > 0 ? data.join("\n") : null;
-}
-
-/** Replace an SSE event's data field while preserving non-data fields and newline style. */
-function replaceSseDataPayload(block: string, payload: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
-  const rewritten: string[] = [];
-  let replaced = false;
-  for (const line of lines) {
-    if (!line.startsWith("data:")) {
-      rewritten.push(line);
-      continue;
-    }
-    if (!replaced) {
-      rewritten.push(`data: ${payload}`);
-      replaced = true;
-    }
-  }
-  return replaced ? rewritten.join(newline) : block;
+/** Payload rewrite for composition with other client-facing SSE transforms. */
+export function createImageGenCallRestoreRewrite(
+  aliases: ReadonlyMap<string, NamespacedTool>,
+): SsePayloadRewrite | undefined {
+  if (aliases.size === 0) return undefined;
+  return (payload) => restoreImageGenCallsInJson(payload, aliases);
 }
 
 /**
@@ -145,51 +113,6 @@ export function relaySseWithImageGenCallRestore(
   body: ReadableStream<Uint8Array>,
   aliases: ReadonlyMap<string, NamespacedTool>,
 ): ReadableStream<Uint8Array> {
-  if (aliases.size === 0) return body;
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-
-  const emitProcessedBlocks = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    flushFinal = false,
-  ): void => {
-    let next: { block: string; delimiter: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      buffer = next.rest;
-      const payload = sseDataPayload(next.block);
-      const restoredPayload = payload ? restoreImageGenCallsInJson(payload, aliases) : undefined;
-      const block = payload && restoredPayload !== undefined && restoredPayload !== payload
-        ? replaceSseDataPayload(next.block, restoredPayload)
-        : next.block;
-      controller.enqueue(encoder.encode(block + next.delimiter));
-    }
-    if (flushFinal && buffer.length > 0) {
-      const payload = sseDataPayload(buffer);
-      const restoredPayload = payload ? restoreImageGenCallsInJson(payload, aliases) : undefined;
-      const block = payload && restoredPayload !== undefined && restoredPayload !== payload
-        ? replaceSseDataPayload(buffer, restoredPayload)
-        : buffer;
-      controller.enqueue(encoder.encode(block));
-      buffer = "";
-    }
-  };
-
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        emitProcessedBlocks(controller, true);
-        controller.close();
-        return;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      emitProcessedBlocks(controller);
-    },
-    cancel(reason) {
-      reader.cancel(reason).catch(() => {});
-    },
-  });
+  const rewrite = createImageGenCallRestoreRewrite(aliases);
+  return rewrite ? relaySseWithPayloadRewrite(body, rewrite) : body;
 }

@@ -74,7 +74,9 @@ namespaces do not remove the hosted fallback. Discovery and normalization span b
 
 Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
-extension. Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
+pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
+Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
 replays to return upstream without leaking a client-only namespace shape. Malformed, empty, and
 unrelated namespaces remain untouched. ChatGPT forward mode preserves the private namespace and
 hosted tool because that backend understands their native semantics.
