@@ -320,7 +320,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     : null;
   const mainAccount = accounts.find(a => a.isMain);
   // Include health-only reauth so Providers overview attention matches row CTAs.
-  const activeNeedsReauth = accountNeedsReauth(activePoolAccount ?? mainAccount);
+  const activeAccount = activePoolAccount ?? mainAccount;
+  const activeNeedsReauth = !activeAccount?.paused && accountNeedsReauth(activeAccount);
 
   return {
     accounts,

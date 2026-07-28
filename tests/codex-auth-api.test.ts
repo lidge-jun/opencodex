@@ -7,7 +7,7 @@ import {
   handleCodexAuthAPI, updateAccountQuota, getAccountQuota,
   checkAccountIdCollision, getMainChatgptAccountId,
   markAccountNeedsReauth, isAccountNeedsReauth, clearAccountNeedsReauth, clearAccountQuota,
-  maskEmail,
+  clearMainAccountInfoCache, maskEmail,
 } from "../src/codex/auth-api";
 import { getCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
@@ -22,7 +22,7 @@ import {
 } from "../src/codex/websocket-registry";
 import type { OcxConfig } from "../src/types";
 import type { WsData } from "../src/server/ws-bridge";
-import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
 import {
   reconcileMainCodexAccountRuntimeState,
   resetMainCodexAccountIdentityTrackingForTests,
@@ -117,6 +117,8 @@ beforeEach(() => {
   clearAccountNeedsReauth("__main__");
   clearAccountQuota();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  clearMainAccountInfoCache();
+  setMainAccountPlan(null);
   clearCodexWebSocketRegistry();
   resetMainCodexAccountIdentityTrackingForTests();
 });
@@ -125,6 +127,8 @@ afterEach(() => {
   clearAccountNeedsReauth("__main__");
   clearAccountQuota();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  clearMainAccountInfoCache();
+  setMainAccountPlan(null);
   clearCodexWebSocketRegistry();
   globalThis.fetch = previousFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -1137,9 +1141,9 @@ describe("codex-auth API", () => {
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
 
     expect(resp!.status).toBe(200);
-    expect(await resp!.json()).toMatchObject({ id: "pool-active", paused: true, activeCodexAccountId: null });
+    expect(await resp!.json()).toMatchObject({ id: "pool-active", paused: true, activeCodexAccountId: "pool-next" });
     expect(config.pausedCodexAccountIds).toEqual(["pool-active"]);
-    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(config.activeCodexAccountId).toBe("pool-next");
     expect(resolveCodexAccountForThread("pause-thread", config)).toBe("pool-next");
   });
 
@@ -1190,11 +1194,130 @@ describe("codex-auth API", () => {
     expect(await resp!.json()).toMatchObject({
       pausedAccountIds: ["exhausted", "upgraded-plus"],
       pausedCount: 2,
-      activeCodexAccountId: null,
+      activeCodexAccountId: "free-weekly-only",
+      checkedAccountCount: 5,
+      failedAccountCount: 1,
+      complete: false,
       appliesImmediately: true,
     });
     expect(config.pausedCodexAccountIds).toEqual(["already-paused", "exhausted", "upgraded-plus"]);
+    expect(config.activeCodexAccountId).toBe("free-weekly-only");
     expect(resolveCodexAccountForThread("bulk-pause-thread", config)).toBe("free-weekly-only");
+  });
+
+  test("bulk pause preserves a known Free main plan when WHAM omits plan_type", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-account" },
+    }));
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      return Response.json({
+        email: "main@example.test",
+        ...(call === 1 ? { plan_type: "free" } : {}),
+        rate_limit: {
+          primary_window: { used_percent: call === 1 ? 10 : 100, limit_window_seconds: 7 * 24 * 60 * 60 },
+          tertiary_window: { used_percent: 20, limit_window_seconds: 30 * 24 * 60 * 60 },
+        },
+      });
+    }) as typeof fetch;
+    const config = makeConfig();
+
+    const prime = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    expect((await handleCodexAuthAPI(prime, new URL(prime.url), config))!.status).toBe(200);
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({
+      pausedAccountIds: [],
+      pausedCount: 0,
+      checkedAccountCount: 1,
+      failedAccountCount: 0,
+    });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+  });
+
+  test("bulk pause fails closed when the main quota plan cannot be established", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-account" },
+    }));
+    globalThis.fetch = (async () => Response.json({
+      email: "main@example.test",
+      rate_limit: {
+        primary_window: { used_percent: 100, limit_window_seconds: 7 * 24 * 60 * 60 },
+        tertiary_window: { used_percent: 20, limit_window_seconds: 30 * 24 * 60 * 60 },
+      },
+    })) as typeof fetch;
+    const config = makeConfig();
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(502);
+    expect(await resp!.json()).toMatchObject({ ok: false, checkedAccountCount: 0, failedAccountCount: 1 });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+  });
+
+  test("bulk pause reports an error when every quota refresh fails", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "offline", email: "offline@example.test", plan: "plus", isMain: false }],
+    });
+    saveCodexAccountCredential("offline", {
+      accessToken: "offline-access",
+      refreshToken: "offline-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "offline",
+    });
+    globalThis.fetch = (async () => new Response(null, { status: 502 })) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(502);
+    expect(await resp!.json()).toMatchObject({ ok: false, checkedAccountCount: 0, failedAccountCount: 1 });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+  });
+
+  test("bulk pause discards an exhausted result after the account is deleted and recreated", async () => {
+    const config = makeConfig({
+      codexAccounts: [{ id: "reused", email: "old@example.test", plan: "plus", isMain: false }],
+    });
+    saveCodexAccountCredential("reused", {
+      accessToken: "old-access",
+      refreshToken: "old-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "old-account",
+    });
+    let releaseFetch!: () => void;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    const fetchGate = new Promise<void>(resolve => { releaseFetch = resolve; });
+    globalThis.fetch = (async () => {
+      markFetchStarted();
+      await fetchGate;
+      return Response.json({
+        plan_type: "plus",
+        rate_limit: { primary_window: { used_percent: 100 } },
+      });
+    }) as typeof fetch;
+
+    const bulkReq = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const bulkPromise = handleCodexAuthAPI(bulkReq, new URL(bulkReq.url), config);
+    await fetchStarted;
+    const deleteReq = new Request("http://localhost/api/codex-auth/accounts?id=reused", { method: "DELETE" });
+    expect((await handleCodexAuthAPI(deleteReq, new URL(deleteReq.url), config))!.status).toBe(200);
+    config.codexAccounts = [{ id: "reused", email: "new@example.test", plan: "plus", isMain: false }];
+    saveCodexAccountCredential("reused", {
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "new-account",
+    });
+    releaseFetch();
+    const resp = await bulkPromise;
+
+    expect(resp!.status).toBe(502);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(getAccountQuota("reused")).toBeNull();
   });
 
   test("PUT /api/codex-auth/accounts/pause-exhausted includes a freshly exhausted main account", async () => {
