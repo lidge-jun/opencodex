@@ -125,16 +125,31 @@ async function mountHarness(): Promise<Harness> {
     value: () => {},
   });
 
+  const defaultActivePayload = {
+    activeCodexAccountId: null,
+    autoSwitchThreshold: 80,
+    accountPoolStrategy: "quota",
+    accountPoolStickyLimit: 1,
+  };
   const fetchRouter = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     if (url.endsWith("/api/codex-auth/accounts") && method === "GET") {
       return Response.json({ accounts: [] });
     }
+    // Pool controller + strategy card both GET /active; prefer queued responses for
+    // stale-refresh tests, otherwise return a stable default so neither consumer fails.
     if (url.endsWith("/api/codex-auth/active") && method === "GET") {
       const response = activeResponses.shift();
-      if (!response) throw new Error("unexpected active-account read");
-      return await response;
+      if (response) return await response;
+      return Response.json(defaultActivePayload);
+    }
+    if (url.endsWith("/api/codex-auth/pool-strategy") && (method === "PUT" || method === "PATCH")) {
+      return Response.json({
+        ok: true,
+        accountPoolStrategy: "quota",
+        accountPoolStickyLimit: 1,
+      });
     }
     if (url.endsWith("/api/codex-auth/auto-switch") && method === "PUT") {
       const body = JSON.parse(String(init?.body)) as { threshold: number };
