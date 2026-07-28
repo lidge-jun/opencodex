@@ -490,9 +490,8 @@ function QuarantineTrashPanel({
     try {
       const res = await fetch(`${apiBase}/api/storage/trash`, { signal });
       if (!res.ok) {
-        const json = await res.json().catch(() => ({})) as { error?: string };
         if (signal?.aborted || generation !== loadGenerationRef.current) return;
-        throw new Error(json.error ?? "list_failed");
+        throw new Error(t("storage.trash.listFailed"));
       }
       const json = await res.json() as TrashList;
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
@@ -709,7 +708,8 @@ function AutoCleanupPolicyPanel({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [targetMode, setTargetMode] = useState<"percent" | "reduce">("percent");
-  const [percent, setPercent] = useState(25);
+  /** Draft string so blank/invalid percent targets are rejected instead of coerced. */
+  const [percent, setPercent] = useState("25");
   /** Draft string so blank/invalid reduce targets are rejected instead of coerced to 0. */
   const [reduceGb, setReduceGb] = useState("4");
   /** Draft string so a cleared threshold is rejected instead of coerced to 0. */
@@ -732,7 +732,7 @@ function AutoCleanupPolicyPanel({
         setReduceGb(String(Math.max(0, Math.round((json.target.reduceToBytes / GB) * 100) / 100)));
       } else {
         setTargetMode("percent");
-        setPercent(Math.min(100, Math.max(1, Math.floor(json.target.removeOldestPercent ?? 25))));
+        setPercent(String(Math.min(100, Math.max(1, Math.floor(json.target.removeOldestPercent ?? 25)))));
       }
     } catch {
       if (signal?.aborted) return;
@@ -1049,12 +1049,7 @@ function AutoCleanupPolicyPanel({
               value={percent}
               disabled={saving || running}
               aria-label={t("storage.policy.targetPercent")}
-              onChange={e => {
-                const raw = e.target.value;
-                if (raw.trim() === "") return;
-                const next = Number(raw);
-                if (Number.isFinite(next)) setPercent(next);
-              }}
+              onChange={e => setPercent(e.target.value)}
               onBlur={() => void savePolicy()}
               style={{ display: "block", marginTop: 4, width: "100%" }}
             />

@@ -1917,7 +1917,9 @@ describe("GitHub Actions hardening", () => {
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784");
-    expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+    expect(workflow).not.toMatch(
+      /^\s*-\s+uses:\s+\S+@(?![0-9a-f]{40}\b)\S+/m,
+    );
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
     expect(workflow).toContain('version: "0.9.2"');
@@ -1930,10 +1932,10 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("contents: read");
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).not.toContain(": write");
-    expect(workflow).toContain("blocking: warning");
-    expect(workflow).toContain("comment: false");
-    expect(workflow).toContain("review-comments: false");
-    expect(workflow).toContain("commit-status: false");
+    expect(workflow).toMatch(/^\s+blocking:\s+warning\s*$/m);
+    expect(workflow).toMatch(/^\s+comment:\s+false\s*$/m);
+    expect(workflow).toMatch(/^\s+review-comments:\s+false\s*$/m);
+    expect(workflow).toMatch(/^\s+commit-status:\s+false\s*$/m);
     expect(workflow).toContain("timeout-minutes: 10");
   });
 

@@ -135,6 +135,13 @@ const DRAIN_TIMEOUT_S = 60;
 const RECONNECT_POLL_MS = 1500;
 const RECONNECT_GIVE_UP_MS = 120_000;
 
+/** Bound a fetch with AbortSignal.timeout when available; else unmount-abort only. */
+function boundedSignal(controller: AbortController, ms: number): AbortSignal {
+  return typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
+    ? AbortSignal.any([controller.signal, AbortSignal.timeout(ms)])
+    : controller.signal;
+}
+
 export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }) {
   const { locale, t } = useI18n();
   const [data, setData] = useState<SystemMemory | null>(null);
@@ -174,9 +181,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       // unmount-only abort when the browser lacks timeout/any.
       const controller = new AbortController();
       activeController = controller;
-      const signal = typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
-        ? AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
-        : controller.signal;
+      const signal = boundedSignal(controller, 10_000);
       try {
         const res = await fetch(`${apiBase}/api/system/memory`, { signal });
         if (!res.ok) throw new Error("memory unavailable");
@@ -232,9 +237,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       inFlight = true;
       const controller = new AbortController();
       activeController = controller;
-      const signal = typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
-        ? AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)])
-        : controller.signal;
+      const signal = boundedSignal(controller, 5_000);
       void fetch(`${apiBase}/healthz`, { cache: "no-store", signal })
         .then(async (res) => {
           if (cancelled) return;

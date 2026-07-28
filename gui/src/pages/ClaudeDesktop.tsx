@@ -208,18 +208,32 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   // Poll Desktop status every 5s for applied-state + health.
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let controller: AbortController | null = null;
     const poll = () => {
-      void fetch(`${apiBase}/api/claude-desktop/status`)
+      if (inFlight) return;
+      inFlight = true;
+      controller = new AbortController();
+      const active = controller;
+      void fetch(`${apiBase}/api/claude-desktop/status`, { signal: active.signal })
         .then((response) => readJsonIfOk<DesktopStatus>(response))
         .then((data) => {
           if (cancelled) return;
           if (data) setStatus(data);
         })
-        .catch(() => { /* offline / older proxy */ });
+        .catch(() => { /* offline / older proxy / aborted */ })
+        .finally(() => {
+          if (controller === active) controller = null;
+          inFlight = false;
+        });
     };
     poll();
     const timer = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      controller?.abort();
+    };
   }, [apiBase]);
 
   const moveModel = (route: string, family: Family) => {
