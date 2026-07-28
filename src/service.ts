@@ -9,11 +9,11 @@ import { execFileSync, execSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
+import { getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
-import { isWslRuntime } from "./codex/home";
+import { isWslRuntime, resolveCodexHomeDir } from "./codex/home";
 import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
@@ -87,8 +87,9 @@ function serviceStatePaths(): string[] {
 }
 
 function currentCodexHome(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
+  // Service ownership must use the same CODEX_HOME resolver as Codex injection,
+  // tray startup, and the rest of the runtime. On this host that is E:\\codex.
+  return resolveCodexHomeDir();
 }
 
 function currentOpenCodexHome(): string {
