@@ -398,6 +398,26 @@ function isPlaceholder(text) {
   return isPlaceholderOnlyValue(text);
 }
 
+/**
+ * True when Version is an "I don't know" stand-in rather than an install id.
+ * Kept separate from PLACEHOLDER_ONLY_RE so legacy N/A / No response soft-pass
+ * behaviour is unchanged.
+ */
+const UNUSABLE_VERSION_RE =
+  /^[\s_*~`]*(?:unknown|unkown|uknown|don'?t\s+know|do\s+not\s+know|idk|dunno|not\s+sure|unsure|\?+|모름|잘\s*모름|모르겠(?:습니다|음)?|不明|わからない|分からない|不知道|不清楚|keine\s+ahnung|wei[sß]{1,2}\s+nicht)[\s_*~`]*[.!?]*$/i;
+
+function isUnusableVersion(raw) {
+  if (typeof raw !== "string") return false;
+  let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!value) return false;
+  const unwrapped = unwrapSingleEnclosingFence(value);
+  if (unwrapped !== null) {
+    value = unwrapped.trim();
+    if (!value) return false;
+  }
+  return UNUSABLE_VERSION_RE.test(value);
+}
+
 const CJK_RE =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
 
@@ -431,6 +451,16 @@ function isTooTerseFeatureSection(text) {
   if (words >= 8) return false;
   if (words >= 6 && hasConcreteDetail(text)) return false;
   return true;
+}
+
+/**
+ * Bug Reproduction needs steps or concrete signals. A title-like phrase with
+ * no commands, paths, digits, or product keywords is not actionable.
+ */
+function isTooTerseBugReproduction(text) {
+  if (isEmpty(text) || isPlaceholder(text)) return false;
+  if (hasConcreteDetail(text)) return false;
+  return countWords(text) < 12;
 }
 
 /**
@@ -628,6 +658,8 @@ function validateIssue(issue) {
     const repro = extractSection(body, "Reproduction");
     const version = extractSection(body, "Version");
     const os = extractSection(body, "Operating system") ?? extractSection(body, "OS");
+    // New Bug report template always includes Client or integration.
+    const isNewBugForm = extractSection(body, "Client or integration") !== null;
 
     if (isEmpty(summary) && isEmpty(repro)) {
       // Soft-pass substantial non-English / freeform structured reports once
@@ -655,17 +687,53 @@ function validateIssue(issue) {
       if (isEmpty(repro)) {
         reasons.push("Reproduction is empty.");
         guidance.push("List the exact steps to reproduce the problem.");
+      } else if (!softPass && isTooTerseBugReproduction(repro)) {
+        reasons.push("Reproduction is too vague to act on.");
+        guidance.push("List exact steps, commands, and the observed failure — not only a short phrase.");
       }
     }
 
-    // Required environment fields removed after submission.
-    // Only fire when the headings exist in the body (new form). Legacy bug
-    // reports never had Version or OS fields, so null means absent, not removed.
-    // Skip when the raw value is a "No response" placeholder -- the old form had
-    // both fields as optional, so legacy issues legitimately contain those headings
-    // with the GitHub placeholder. Only close when the field was actively cleared.
-    if (!softPass && version !== null && os !== null && isEmpty(version) && isEmpty(os) &&
-        !isRawPlaceholder(version) && !isRawPlaceholder(os)) {
+    // Version "Unknown" / "모름" / "idk" is never actionable, on any form.
+    if (!softPass && version !== null && isUnusableVersion(version)) {
+      reasons.push("Version is missing or unknown.");
+      guidance.push("Report the installed `@bitkyc08/opencodex` version (for example `2.7.42`) or a commit SHA from `ocx --version`.");
+    } else if (
+      !softPass &&
+      isNewBugForm &&
+      version !== null &&
+      (isEmpty(version) || isRawPlaceholder(version))
+    ) {
+      // New form requires Version. Legacy N/A / No response soft-pass stays
+      // only for bodies without Client or integration.
+      reasons.push("Version is missing.");
+      guidance.push("Add your OpenCodex version so we can reproduce the environment.");
+    }
+
+    if (
+      !softPass &&
+      isNewBugForm &&
+      os !== null &&
+      (isEmpty(os) || isRawPlaceholder(os))
+    ) {
+      reasons.push("Operating system is missing.");
+      guidance.push("Add your OS name and version (for example Windows 11 24H2).");
+    }
+
+    // Required environment fields removed after submission on bodies that are
+    // not the new form (no Client or integration). Legacy reports never had
+    // Version or OS fields, so null means absent, not removed. Skip when the
+    // raw value is a "No response" placeholder — the old form had both fields
+    // as optional. Only close when the field was actively cleared.
+    if (
+      !softPass &&
+      !isNewBugForm &&
+      version !== null &&
+      os !== null &&
+      isEmpty(version) &&
+      isEmpty(os) &&
+      !isRawPlaceholder(version) &&
+      !isRawPlaceholder(os)
+    ) {
       reasons.push("Version and Operating system are both missing.");
       guidance.push("Add your OpenCodex version and OS so we can reproduce the environment.");
     }
@@ -873,6 +941,7 @@ module.exports = {
   isPlaceholderOnlyValue,
   isPlaceholder,
   isRawPlaceholder,
+  isUnusableVersion,
   countWords,
   hasConcreteDetail,
   labelForKind,
