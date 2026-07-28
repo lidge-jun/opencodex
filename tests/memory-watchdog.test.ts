@@ -180,6 +180,7 @@ describe("GET /api/system/memory", () => {
 	      responseState: { count: number; totalBytes: number; largestBytes: number; oldestAgeMs: number };
 	      streamMode: string; eagerRelay: unknown;
 	      watchdog: { samples: unknown[]; warnThresholdBytes: number; observedBytes: number; observedMetric: string } | null;
+	      activeTurnCount: number; isDraining: boolean;
 	    };
     expect(body.pid).toBe(process.pid);
     expect(body.bunVersion).toBe(Bun.version);
@@ -205,6 +206,9 @@ describe("GET /api/system/memory", () => {
 	    expect(body.watchdog!.samples.length).toBeLessThanOrEqual(60);
 	    expect(typeof body.watchdog!.observedBytes).toBe("number");
 	    expect(["rss", "external", "arrayBuffers"]).toContain(body.watchdog!.observedMetric);
+	    expect(typeof body.activeTurnCount).toBe("number");
+	    expect(body.activeTurnCount).toBeGreaterThanOrEqual(0);
+	    expect(typeof body.isDraining).toBe("boolean");
 	  });
 
   test("watchdog null when no instance is running", async () => {

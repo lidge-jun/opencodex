@@ -50,8 +50,13 @@ runtime the leak itself remains an upstream problem:
   whereas a flat `responseState` under rising observed memory points away from
   that store. The values are scalar-only — no request bodies, tokens, paths, or
   account identifiers — and the read is side-effect free (it never prunes or
-  evicts). The dashboard's read-only **Memory observability** card renders the
-  same fields.
+  evicts). The dashboard's **Memory observability** card renders the
+  same fields and offers a confirm-gated **Drain & restart** action: it shows
+  the current in-flight request count, waits up to 60s for active turns (reusing
+  the existing 503 + `Retry-After` drain), then restarts the proxy via
+  `ocx ensure` (or the installed service supervisor) without tearing down Codex
+  injection. That is a longer, informed recycle than the short drain on
+  `POST /api/stop`.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the unbounded buffering shape entirely. It becomes the default
   automatically once a bundled Bun release verifiably carries the #32111 fix;
