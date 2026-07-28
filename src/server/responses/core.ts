@@ -228,6 +228,135 @@ async function shouldRetryCodexPoolAccountModel400(
   }
 }
 
+/** Pre-stream quota/billing rejections that warrant one alternate-account attempt (#584). */
+function shouldRetryCodexPoolAccountQuota(response: Response): boolean {
+  return response.status === 429 || response.status === 402;
+}
+
+interface CodexPoolAccountRetryArgs {
+  req: Request;
+  config: OcxConfig;
+  route: { providerName: string; modelId: string; provider: OcxProviderConfig };
+  parsed: OcxParsedRequest;
+  logCtx: RequestLogContext;
+  options: {
+    abortSignal?: AbortSignal;
+    onCodexAuthContextResolved?: (ctx: CodexAuthContext) => void;
+  };
+  firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+  firstResponse: Response;
+  outcomeStatus: number;
+  upstream: AbortController;
+  connectMs: number;
+  passthroughEstimate?: number;
+  stream: boolean;
+}
+
+type CodexPoolAccountRetryResult =
+  | {
+    kind: "retried";
+    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+    request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>>;
+    upstreamResponse: Response;
+    selectedForwardHeaders: Headers;
+  }
+  | { kind: "no-alternate" }
+  | { kind: "transport"; error: unknown };
+
+/**
+ * One bounded alternate-account retry for Codex pool auth. Used for allow-listed
+ * model-400 and for pre-stream 429/402 quota failures (#584).
+ */
+async function retryCodexPoolOnAlternateAccount(
+  args: CodexPoolAccountRetryArgs,
+): Promise<CodexPoolAccountRetryResult> {
+  const {
+    req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
+    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+  } = args;
+  let retryAuthCtx: CodexAuthContext | undefined;
+  try {
+    retryAuthCtx = await resolveCodexAuthContext(
+      req.headers,
+      config,
+      "pool",
+      { excludeAccountId: firstAuthCtx.accountId },
+    );
+  } catch (error) {
+    if (
+      !(error instanceof CodexPoolAuthenticationError)
+      && !(error instanceof CodexAuthContextError)
+      && !(error instanceof CodexAccountCooldownError)
+    ) throw error;
+  }
+  if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
+    return { kind: "no-alternate" };
+  }
+
+  const retryAfterRaw = firstResponse.headers.get("retry-after");
+  if (outcomeStatus === 429 || outcomeStatus === 402) {
+    const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+    applyAccountQuotaFromUpstreamHeaders(firstAuthCtx.accountId, firstResponse.headers);
+  }
+  recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+    retryAfter: retryAfterRaw,
+    resetAt: [
+      firstResponse.headers.get("x-codex-primary-reset-at"),
+      firstResponse.headers.get("x-codex-secondary-reset-at"),
+      firstResponse.headers.get("x-codex-tertiary-reset-at"),
+    ].filter(Boolean),
+    threadId: req.headers.get("x-codex-parent-thread-id"),
+    probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+  });
+
+  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
+  const retryProvider = applyCodexAuthContextToProvider(
+    stripCodexRuntimeProviderFields(route.provider),
+    retryAuthCtx,
+    "pool",
+  );
+  const retryAdapter = resolveAdapter(
+    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider),
+    config.cacheRetention,
+  );
+  const request = await retryAdapter.buildRequest(parsed, { headers: retryHeaders });
+  recordAdapterReasoning(logCtx, request);
+
+  await firstResponse.body?.cancel().catch(() => undefined);
+  options.onCodexAuthContextResolved?.(retryAuthCtx);
+  route.provider = retryProvider;
+  logCtx.provider = formatCodexProviderForLog(
+    route.providerName,
+    retryAuthCtx.accountId,
+    config,
+  );
+
+  noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+  try {
+    const upstreamResponse = await fetchWithHeaderTimeout(
+      request.url,
+      {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      },
+      upstream.signal,
+      connectMs,
+      stream,
+      providerFetch(route.provider),
+    );
+    return {
+      kind: "retried",
+      authCtx: retryAuthCtx,
+      request,
+      upstreamResponse,
+      selectedForwardHeaders: retryHeaders,
+    };
+  } catch (error) {
+    return { kind: "transport", error };
+  }
+}
+
 
 
 export function codexForwardTerminalOutcomeRecorder(
@@ -1273,77 +1402,43 @@ export async function handleResponses(
       return transportFailureResponse(err);
     }
 
-    if (
-      usesCodexForwardPoolAuth(authCtx, route.provider)
-      && await shouldRetryCodexPoolAccountModel400(
+    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+      let poolRetryOutcome: number | undefined;
+      if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
-      )
-    ) {
-      const firstAuthCtx = authCtx;
-      let retryAuthCtx: CodexAuthContext | undefined;
-      try {
-        retryAuthCtx = await resolveCodexAuthContext(
-          req.headers,
-          config,
-          "pool",
-          { excludeAccountId: firstAuthCtx.accountId },
-        );
-      } catch (error) {
-        if (
-          !(error instanceof CodexPoolAuthenticationError)
-          && !(error instanceof CodexAuthContextError)
-          && !(error instanceof CodexAccountCooldownError)
-        ) throw error;
+      )) {
+        poolRetryOutcome = 400;
+      } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
+        // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
+        poolRetryOutcome = upstreamResponse.status;
       }
 
-      if (retryAuthCtx?.kind === "pool" || retryAuthCtx?.kind === "main-pool") {
-        recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, 400, {
-          threadId: req.headers.get("x-codex-parent-thread-id"),
-          probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-        });
-
-        const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
-        const retryProvider = applyCodexAuthContextToProvider(
-          stripCodexRuntimeProviderFields(route.provider),
-          retryAuthCtx,
-          "pool",
-        );
-        const retryAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider),
-          config.cacheRetention,
-        );
-        request = await retryAdapter.buildRequest(parsed, { headers: retryHeaders });
-        recordAdapterReasoning(logCtx, request);
-
-        await upstreamResponse.body?.cancel().catch(() => undefined);
-        authCtx = retryAuthCtx;
-        options.onCodexAuthContextResolved?.(retryAuthCtx);
-        selectedForwardHeaders = retryHeaders;
-        route.provider = retryProvider;
-        logCtx.provider = formatCodexProviderForLog(
-          route.providerName,
-          retryAuthCtx.accountId,
+      if (poolRetryOutcome !== undefined) {
+        const retry = await retryCodexPoolOnAlternateAccount({
+          req,
           config,
-        );
-
-        noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
-        try {
-          upstreamResponse = await fetchWithHeaderTimeout(
-            request.url,
-            {
-              method: request.method,
-              headers: request.headers,
-              body: request.body,
-            },
-            upstream.signal,
-            connectMs,
-            parsed.stream,
-            providerFetch(route.provider),
-          );
-        } catch (err) {
-          return transportFailureResponse(err);
+          route,
+          parsed,
+          logCtx,
+          options,
+          firstAuthCtx: authCtx,
+          firstResponse: upstreamResponse,
+          outcomeStatus: poolRetryOutcome,
+          upstream,
+          connectMs,
+          passthroughEstimate,
+          stream: parsed.stream,
+        });
+        if (retry.kind === "transport") {
+          return transportFailureResponse(retry.error);
+        }
+        if (retry.kind === "retried") {
+          authCtx = retry.authCtx;
+          request = retry.request;
+          upstreamResponse = retry.upstreamResponse;
+          selectedForwardHeaders = retry.selectedForwardHeaders;
         }
       }
     }

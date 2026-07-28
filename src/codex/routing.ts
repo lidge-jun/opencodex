@@ -637,21 +637,24 @@ export function resolveCodexAccountForThreadDetailed(
       // it crosses autoSwitchThreshold and a strictly-cooler account exists.
       // Without this the reuse branch returns before applyQuotaAutoSwitch and the
       // thread stays pinned for the full idle TTL (the WSL "never switches" report).
-      if (now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
+      // Over-threshold pins re-eval immediately so a depleted primary does not keep
+      // serving for up to 60s after a secondary with quota is available (#584).
+      const threshold = config.autoSwitchThreshold ?? 80;
+      const usage = threshold > 0
+        ? computeCodexUsageScore(
+          getAccountQuota(entry.accountId),
+          getPoolAccountPlan(config, entry.accountId),
+        )
+        : 0;
+      const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+      if (overThreshold || now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
         entry.lastReevalAt = now;
-        const threshold = config.autoSwitchThreshold ?? 80;
-        if (threshold > 0) {
-          const usage = computeCodexUsageScore(
-            getAccountQuota(entry.accountId),
-            getPoolAccountPlan(config, entry.accountId),
-          );
-          if (!isUnknownUsage(usage) && usage >= threshold) {
-            const best = pickLowerUsageAccount(config, entry.accountId, usage, now);
-            if (best !== entry.accountId) {
-              setActiveCodexAccount(config, best);
-              bindThreadAffinity(threadId, best, now); // rebinds + resets clocks
-              return { status: "selected", accountId: best };
-            }
+        if (overThreshold) {
+          const best = pickLowerUsageAccount(config, entry.accountId, usage, now);
+          if (best !== entry.accountId) {
+            setActiveCodexAccount(config, best);
+            bindThreadAffinity(threadId, best, now); // rebinds + resets clocks
+            return { status: "selected", accountId: best };
           }
         }
       }

@@ -100,7 +100,9 @@ also force the same native-provider recovery with `ocx recover-history --legacy-
 Use the dashboard's **Codex Auth** page to add pool accounts and refresh quotas. The config stores
 non-secret account metadata only; access and refresh tokens are kept in the hardened Codex account
 credential store. Existing thread ids keep account affinity, while new sessions can auto-route based
-on quota, cooldown, and health.
+on quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool account is retried
+once on an eligible alternate account in the same request (so Codex CLI does not stall on a depleted
+primary while another account still has quota).
 :::
 
 ### anthropicAccountPool (experimental)
