@@ -24,6 +24,10 @@
  *     icacls cannot block OAuth logins or token refresh (field report: Kimi auth
  *     stuck behind ETIMEDOUT). Real EPERM/EACCES/exit-code failures still throw:
  *     availability never silently overrides confidentiality for those.
+ *   hardenSecretPathAsync / hardenSecretDirAsync — same policy, async icacls
+ *     runner so the event loop is not held for the child lifetime (#612).
+ *   HardenOptions.timeoutMemoKey — optional destination-path key for the
+ *     timeout memo (atomic writers mint unique temps; never a parent directory).
  *   hardenSecretDir  — same contract for directories.
  */
 
@@ -42,6 +46,13 @@ export interface HardenResult {
 
 export interface HardenOptions {
   required: boolean;
+  /**
+   * Optional timeout-memo key distinct from `targetPath` (issue #612).
+   * Atomic writers mint a fresh `.tmp` path per write; keying the timeout cache by the
+   * final destination path prevents re-stalling the event loop on every subsequent temp.
+   * Must NOT be a parent directory — directory ACLs are not authoritative for new files.
+   */
+  timeoutMemoKey?: string;
 }
 
 /**
@@ -72,6 +83,7 @@ export interface IcaclsResult {
 }
 
 type IcaclsRunner = (args: string[], timeoutMs: number) => IcaclsResult;
+type AsyncIcaclsRunner = (args: string[], timeoutMs: number) => Promise<IcaclsResult>;
 
 function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
   // Bun.spawnSync with windowsHide: Node execFileSync has hung under the GUI/proxy even
@@ -91,13 +103,54 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
   };
 }
 
+/**
+ * Async icacls runner (#612): yields the event loop while waiting for the child.
+ * Timeout provenance is recorded by our timer (async Subprocess has no exitedDueToTimeout);
+ * we still await process exit before classifying so settlement is confirmed.
+ */
+async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
+  const proc = Bun.spawn(["icacls.exe", ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+    windowsHide: true,
+  });
+  let timedOutByUs = false;
+  const timer = setTimeout(() => {
+    timedOutByUs = true;
+    try { proc.kill(); } catch { /* already exited */ }
+  }, Math.max(1, timeoutMs));
+  let exitCode: number | null = null;
+  try {
+    exitCode = await proc.exited;
+  } finally {
+    clearTimeout(timer);
+  }
+  const stdout = proc.stdout
+    ? await new Response(proc.stdout).text().catch(() => "")
+    : "";
+  const timedOut = timedOutByUs;
+  return {
+    success: !timedOut && exitCode === 0,
+    exitCode: timedOut ? null : exitCode,
+    timedOut,
+    stdout,
+  };
+}
+
 let icaclsRunner: IcaclsRunner = defaultIcaclsRunner;
+let asyncIcaclsRunner: AsyncIcaclsRunner = defaultAsyncIcaclsRunner;
 let platformOverride: string | null = null;
 let nowFn: () => number = Date.now;
 
 /** Test seam: replace the icacls process runner. Pass null to restore the default. */
 export function setIcaclsRunnerForTests(runner: IcaclsRunner | null): void {
   icaclsRunner = runner ?? defaultIcaclsRunner;
+}
+
+/** Test seam: replace the async icacls runner. Pass null to restore the default. */
+export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): void {
+  asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
 }
 
 /** Test seam: force the platform gate (e.g. "win32") so CI on POSIX reaches the runner. */
@@ -156,6 +209,10 @@ function currentWindowsUser(): string | undefined {
  */
 const BROAD_SIDS = ["*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545"] as const;
 
+function grantAce(user: string, directory: boolean): string {
+  return directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
+}
+
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
   const user = currentWindowsUser();
   if (!user) {
@@ -177,8 +234,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
   // Step 1: grant current user full control BEFORE any destructive ACL change.
   // If this fails, inheritance is untouched and the writer keeps inherited access.
-  const grant = directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
-  runOrThrow("/grant:r", [targetPath, "/grant:r", grant]);
+  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
 
   // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
   // from step 1 survives this transition, so a later failure still leaves cleanup access.
@@ -198,6 +254,41 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
       // icacls /findsid echoes the target path in its "SID Found" line only when the SID
       // still holds an ACE; the summary lines carry only counts. Matching the path echo —
       // not the (localized) prose — keeps the check locale-independent.
+      if (found.stdout.includes(targetPath)) {
+        throw icaclsError("/remove:g", removal);
+      }
+    }
+  }
+}
+
+/** Async counterpart of runIcacls — same step order and timeout/error classification (#612). */
+async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: number): Promise<void> {
+  const user = currentWindowsUser();
+  if (!user) {
+    throw new Error("Cannot determine current Windows user for ACL hardening");
+  }
+
+  const run = async (step: string, args: string[]): Promise<IcaclsResult> => {
+    const remaining = deadline - nowFn();
+    if (remaining <= 0) {
+      throw icaclsError(step, { success: false, exitCode: null, timedOut: true, stdout: "" });
+    }
+    return asyncIcaclsRunner(args, remaining);
+  };
+  const runOrThrow = async (step: string, args: string[]): Promise<void> => {
+    const result = await run(step, args);
+    if (!result.success) throw icaclsError(step, result);
+  };
+
+  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
+
+  const removal = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
+  if (!removal.success) {
+    if (removal.timedOut) throw icaclsError("/remove:g", removal);
+    for (const sid of BROAD_SIDS) {
+      const found = await run("/findsid", [targetPath, "/findsid", sid]);
+      if (!found.success) throw icaclsError("/findsid", found);
       if (found.stdout.includes(targetPath)) {
         throw icaclsError("/remove:g", removal);
       }
@@ -254,6 +345,27 @@ function describeAclStateAfterTimeout(targetPath: string, deadline: number): str
   }
 }
 
+async function describeAclStateAfterTimeoutAsync(targetPath: string, deadline: number): Promise<string> {
+  try {
+    for (const sid of BROAD_SIDS) {
+      const remaining = deadline - nowFn();
+      if (remaining <= 0) return "ACL state unverified (budget exhausted)";
+      const found = await asyncIcaclsRunner([targetPath, "/findsid", sid], remaining);
+      if (!found.success) return "ACL state unverified (probe failed)";
+      if (found.stdout.includes(targetPath)) return "broad ACL grants still present";
+    }
+    return "no broad ACL grants detected (hardening still incomplete)";
+  } catch {
+    return "ACL state unverified (probe failed)";
+  }
+}
+
+function timeoutMemoKey(targetPath: string, opts: HardenOptions): string {
+  // Destination-path memo only (issue #612). Never a parent directory — directory ACLs
+  // are not authoritative for newly created temps.
+  return opts.timeoutMemoKey ?? targetPath;
+}
+
 /**
  * Shared harden flow for files and directories: one total budget (env-configurable)
  * covering the initial attempt, ONE timeout retry, and the diagnostic verification.
@@ -269,7 +381,8 @@ function hardenEntry(
   if (!existsSync(targetPath)) return { ok: true };
   if (effectivePlatform() !== "win32") return { ok: true };
   if (cache.has(targetPath)) return { ok: true };
-  if (timedOutPaths.has(targetPath)) {
+  const memoKey = timeoutMemoKey(targetPath, opts);
+  if (timedOutPaths.has(memoKey)) {
     return { ok: false, diagnostics: "ACL hardening skipped — previous attempt timed out" };
   }
 
@@ -289,11 +402,52 @@ function hardenEntry(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(targetPath);
+    timedOutPaths.add(memoKey);
     const state = describeAclStateAfterTimeout(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
     // Timeout-only soft-fail: a hung icacls must not block OAuth/token writes.
     // chmod is still applied by the caller.
+    console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
+    return { ok: false, diagnostics: annotated };
+  }
+  if (opts.required) throw new Error(diagnostics);
+  return { ok: false, diagnostics };
+}
+
+/** Async counterpart of hardenEntry — yields while waiting on icacls (#612). */
+async function hardenEntryAsync(
+  targetPath: string,
+  directory: boolean,
+  opts: HardenOptions,
+  cache: Set<string>,
+): Promise<HardenResult> {
+  if (!existsSync(targetPath)) return { ok: true };
+  if (effectivePlatform() !== "win32") return { ok: true };
+  if (cache.has(targetPath)) return { ok: true };
+  const memoKey = timeoutMemoKey(targetPath, opts);
+  if (timedOutPaths.has(memoKey)) {
+    return { ok: false, diagnostics: "ACL hardening skipped — previous attempt timed out" };
+  }
+
+  const deadline = nowFn() + resolveHardenDeadlineMs();
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0 && deadline - nowFn() <= 0) break;
+    try {
+      await runIcaclsAsync(targetPath, directory, deadline);
+      cache.add(targetPath);
+      return { ok: true };
+    } catch (err) {
+      lastErr = err;
+      if (!isTimeoutError(err)) break;
+    }
+  }
+
+  const diagnostics = sanitizeDiagnostics(lastErr);
+  if (isTimeoutError(lastErr)) {
+    timedOutPaths.add(memoKey);
+    const state = await describeAclStateAfterTimeoutAsync(targetPath, deadline);
+    const annotated = `${diagnostics}; ${state}`;
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
@@ -313,6 +467,14 @@ export function hardenSecretPath(targetPath: string, opts: HardenOptions): Harde
 }
 
 /**
+ * Async harden for write paths that must not block the event loop (#612).
+ * Same success/timeout/error policy as hardenSecretPath.
+ */
+export function hardenSecretPathAsync(targetPath: string, opts: HardenOptions): Promise<HardenResult> {
+  return hardenEntryAsync(targetPath, false, opts, hardenedPaths);
+}
+
+/**
  * Harden a directory path with per-user NTFS ACLs on Windows.
  * On non-Windows platforms, returns ok:true immediately (caller owns chmod).
  *
@@ -321,4 +483,11 @@ export function hardenSecretPath(targetPath: string, opts: HardenOptions): Harde
  */
 export function hardenSecretDir(targetPath: string, opts: HardenOptions): HardenResult {
   return hardenEntry(targetPath, true, opts, hardenedDirectories);
+}
+
+/**
+ * Async directory harden (#612). Same policy as hardenSecretDir.
+ */
+export function hardenSecretDirAsync(targetPath: string, opts: HardenOptions): Promise<HardenResult> {
+  return hardenEntryAsync(targetPath, true, opts, hardenedDirectories);
 }

@@ -522,14 +522,14 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
-  test("byte accounting survives restart (sizes recomputed on load)", () => {
+  test("byte accounting survives restart (sizes recomputed on load)", async () => {
     setResponseStateByteCapForTests(4_000);
     try {
       const bulk = "y".repeat(1_500);
       const bodyA = { model: "cursor/grok-4.5", input: `${bulk}-a`, store: false };
       const jsonA = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
       rememberResponseState(bodyA, jsonA, { cursor: { conversationId: "conv_a" } }, { force: true });
-      flushResponseState();
+      await flushResponseState();
 
       // Simulated restart: memory wiped, snapshot reloaded lazily.
       clearResponseStateMemoryForTests();
@@ -625,14 +625,14 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
-  test("snapshot survives a simulated restart (memory clear + disk load)", () => {
+  test("snapshot survives a simulated restart (memory clear + disk load)", async () => {
     const firstBody = { model: "gpt-5.5", input: "hello" };
     const first = buildResponseJSON([
       { type: "text_delta", text: "hi" },
       { type: "done" },
     ], "gpt-5.5");
     rememberResponseState(firstBody, first, "cursor_conv_9");
-    flushResponseState();
+    await flushResponseState();
 
     // Simulate restart: wipe memory, keep the snapshot file.
     clearResponseStateMemoryForTests();
@@ -747,7 +747,7 @@ describe("Responses previous_response_id state", () => {
     expect(previousResponseConversationId("resp_v1")).toBe("cursor_v1");
   });
 
-  test("persists provider-keyed Cursor and Kiro continuation state across restart", () => {
+  test("persists provider-keyed Cursor and Kiro continuation state across restart", async () => {
     const first = buildResponseJSON([
       { type: "text_delta", text: "answer", phase: "final_answer" },
       { type: "done", endTurn: true },
@@ -760,7 +760,7 @@ describe("Responses previous_response_id state", () => {
         kiro: { conversationId: "kiro_conv_2" },
       },
     );
-    flushResponseState();
+    await flushResponseState();
     clearResponseStateMemoryForTests();
 
     expect(previousResponseProviderState(first.id as string)).toEqual({
@@ -771,13 +771,13 @@ describe("Responses previous_response_id state", () => {
     expect(snapshot.version).toBe(2);
   });
 
-  test("stale snapshot entries are pruned on load", () => {
+  test("stale snapshot entries are pruned on load", async () => {
     const first = buildResponseJSON([
       { type: "text_delta", text: "old" },
       { type: "done" },
     ], "gpt-5.5");
     rememberResponseState({ model: "gpt-5.5", input: "old turn" }, first);
-    flushResponseState();
+    await flushResponseState();
     clearResponseStateMemoryForTests();
 
     // Rewrite the snapshot with an expired createdAt (2h ago > 1h TTL).
@@ -821,7 +821,7 @@ describe("Responses previous_response_id state", () => {
     expect(expanded.input).toHaveLength(3);
   });
 
-  test("oversized entries stay in memory but are skipped on disk", () => {
+  test("oversized entries stay in memory but are skipped on disk", async () => {
     const big = "x".repeat(3 * 1024 * 1024); // > 2MiB per-entry cap
     const first = buildResponseJSON([
       { type: "text_delta", text: big },
@@ -834,7 +834,7 @@ describe("Responses previous_response_id state", () => {
       { type: "done" },
     ], "gpt-5.5");
     rememberResponseState({ model: "gpt-5.5", input: "small turn" }, small);
-    flushResponseState();
+    await flushResponseState();
 
     // In-memory: both expand.
     expect((expandPreviousResponseInput({
@@ -964,10 +964,10 @@ describe("Responses previous_response_id state", () => {
       }
     });
 
-    test("is side-effect free: it never lazy-loads the disk snapshot, prunes, or evicts", () => {
+    test("is side-effect free: it never lazy-loads the disk snapshot, prunes, or evicts", async () => {
       const first = buildResponseJSON([{ type: "text_delta", text: "persisted" }, { type: "done" }], "gpt-5.5");
       rememberResponseState({ model: "gpt-5.5", input: "persisted turn" }, first);
-      flushResponseState();
+      await flushResponseState();
       // Simulated restart: memory wiped, snapshot on disk, `loaded` reset to false.
       clearResponseStateMemoryForTests();
 
