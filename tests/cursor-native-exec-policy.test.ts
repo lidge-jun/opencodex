@@ -142,6 +142,8 @@ describe("Cursor native exec sandbox policy", () => {
     expect(deniedShellText).toContain("exec_command");
     expect(deniedShellText).toContain("mcp_opencodex-responses_*");
     expect(deniedShellText).toContain("Do not tell the user");
+    expect(deniedShellText).not.toContain("with the same command");
+    expect(deniedShellText).toContain("do not repeat the same failing command");
     expect(deniedShellText).not.toContain("disabled by OpenCodex policy");
     expect(deniedShellText).not.toContain("sandbox denial");
     expect(deniedShell.message.case).toBe("shellResult");

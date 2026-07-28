@@ -401,8 +401,10 @@ function discoveryToolLabel(wireNames: readonly string[]): string | undefined {
 export function buildCursorToolGuidanceSystemNote(
   tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  options?: { platform?: NodeJS.Platform },
 ): string | undefined {
   if (!tools?.length) return undefined;
+  const platform = options?.platform ?? process.platform;
   const wireNames = [...new Set(
     tools
       .filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools))
@@ -417,6 +419,14 @@ export function buildCursorToolGuidanceSystemNote(
   const hasApplyPatch = cursorRequestAdvertisesApplyPatch(tools, toolChoice);
   const discoveryTools = discoveryToolLabel(wireNames);
   const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
+  const windowsShellNote = hasBareExec && platform === "win32"
+    ? "Host shell is Windows PowerShell 5.1-compatible: use PowerShell syntax only. Do not use CMD `cd /d`, bash heredocs (`<<EOF`), or `&&` chaining (unsupported on Windows PowerShell 5.1). Prefer `Set-Location`, `Get-Content`, `Select-String`, and `;` between statements. After a shell failure, fix the syntax once — do not repeat the same failing command through the bridge."
+    : undefined;
+  const bridgeFallbackNote = hasBareExec
+    ? (platform === "win32"
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent PowerShell-safe command (e.g. \`Get-Content\`, \`Get-ChildItem\`, \`Select-String\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
+      : `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with the equivalent shell command instead (e.g. \`cat\`, \`ls\`, \`rg\`, \`grep\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`)
+    : undefined;
   const notes = [
     `Cursor tool calls: available tool names are exactly ${listedNames}.`,
     "Use the current tool catalog as ground truth and call only those exact names with their listed argument keys.",
@@ -432,6 +442,7 @@ export function buildCursorToolGuidanceSystemNote(
     hasBareExec
       ? "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Prefer the bridge over Cursor-native Shell/Read; do not narrate phrases like \"Native shell access is blocked\" — silently call `shell_command` / `exec_command`."
       : undefined,
+    windowsShellNote,
     "Cursor product features (Chronicle, screen recording, Notes, Plans, background agents) are available only if this turn's catalog lists a matching tool; do not offer or promise them otherwise.",
     hasBareExec
       ? `For file read/search/listing, use ${shellBridgeLabel} when no more specific listed tool is available.`
@@ -450,9 +461,7 @@ export function buildCursorToolGuidanceSystemNote(
       ? `Use ${discoveryTools} only for explicit discovery/resource tasks, not generic tool-count demos.`
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
-    hasBareExec
-      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with the equivalent shell command instead (e.g. \`cat\`, \`ls\`, \`rg\`, \`grep\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
-      : undefined,
+    bridgeFallbackNote,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");
 }
