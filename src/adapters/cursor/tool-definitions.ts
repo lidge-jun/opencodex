@@ -401,10 +401,8 @@ function discoveryToolLabel(wireNames: readonly string[]): string | undefined {
 export function buildCursorToolGuidanceSystemNote(
   tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
-  options?: { platform?: NodeJS.Platform },
 ): string | undefined {
   if (!tools?.length) return undefined;
-  const platform = options?.platform ?? process.platform;
   const wireNames = [...new Set(
     tools
       .filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools))
@@ -419,13 +417,10 @@ export function buildCursorToolGuidanceSystemNote(
   const hasApplyPatch = cursorRequestAdvertisesApplyPatch(tools, toolChoice);
   const discoveryTools = discoveryToolLabel(wireNames);
   const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
-  const windowsShellNote = hasBareExec && platform === "win32"
-    ? "Host shell is Windows PowerShell 5.1-compatible: use PowerShell syntax only. Do not use CMD `cd /d`, bash heredocs (`<<EOF`), or `&&` chaining (unsupported on Windows PowerShell 5.1). Prefer `Set-Location`, `Get-Content`, `Select-String`, and `;` between statements. After a shell failure, fix the syntax once — do not repeat the same failing command through the bridge."
-    : undefined;
-  const bridgeFallbackNote = hasBareExec
-    ? (platform === "win32"
-      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent PowerShell-safe command (e.g. \`Get-Content\`, \`Get-ChildItem\`, \`Select-String\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
-      : `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with the equivalent shell command instead (e.g. \`cat\`, \`ls\`, \`rg\`, \`grep\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`)
+  // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
+  // the OpenCodex proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
+  const hostShellNote = hasBareExec
+    ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` when a later step must run only after success — do not treat `;` as a substitute for `&&`. POSIX: use portable commands. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
     : undefined;
   const notes = [
     `Cursor tool calls: available tool names are exactly ${listedNames}.`,
@@ -442,7 +437,7 @@ export function buildCursorToolGuidanceSystemNote(
     hasBareExec
       ? "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Prefer the bridge over Cursor-native Shell/Read; do not narrate phrases like \"Native shell access is blocked\" — silently call `shell_command` / `exec_command`."
       : undefined,
-    windowsShellNote,
+    hostShellNote,
     "Cursor product features (Chronicle, screen recording, Notes, Plans, background agents) are available only if this turn's catalog lists a matching tool; do not offer or promise them otherwise.",
     hasBareExec
       ? `For file read/search/listing, use ${shellBridgeLabel} when no more specific listed tool is available.`
@@ -461,7 +456,9 @@ export function buildCursorToolGuidanceSystemNote(
       ? `Use ${discoveryTools} only for explicit discovery/resource tasks, not generic tool-count demos.`
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
-    bridgeFallbackNote,
+    hasBareExec
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
+      : undefined,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");
 }
