@@ -95,10 +95,10 @@ export function useDashboardData(apiBase: string) {
     () => readSessionListCache<UsageSummary30d>(`${USAGE_CACHE_PREFIX}${apiBase}`),
     [apiBase],
   );
-  const cachedStartup = useMemo(
-    () => readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`),
-    [apiBase],
-  );
+  const cachedStartup = useMemo(() => {
+    const cached = readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`);
+    return cached === "error" ? null : cached;
+  }, [apiBase]);
   const cachedMaMode = useMemo(
     () => readSessionListCache<MaMode>(`${MA_MODE_CACHE_PREFIX}${apiBase}`),
     [apiBase],
@@ -269,7 +269,10 @@ export function useDashboardData(apiBase: string) {
       startupHealthGenerationRef.current += 1;
       setStartupHealth(startupHealthPoll.data);
       startupHealthRef.current = startupHealthPoll.data;
-      writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, startupHealthPoll.data);
+      // Never persist hard errors — a cold SWR miss used to poison revisits.
+      if (startupHealthPoll.data !== "error") {
+        writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, startupHealthPoll.data);
+      }
     }
   }, [startupHealthPoll.data, apiBase]);
 
