@@ -79,3 +79,21 @@ Same proxy measurements as PERF-1:
 - Claude mounts both panels on first visit (extra parallel network) — intentional for tab-switch TTI.
 - Debug stays mounted while on the Logs tab (polls paused via `active={false}`).
 - No measured after numbers in this pass (code-path reasoning + existing GUI tests).
+
+## Measured locally (2026-07-28, proxy `:10100`)
+
+Client-pattern timings (same machine/proxy). These approximate TTI gates, not full browser paint.
+
+| Pattern | ms |
+|---------|-----|
+| BEFORE Dashboard: core peers then controls (serial) | 5655 |
+| AFTER Dashboard: controls only (serial) | 1323 |
+| AFTER Dashboard: controls only (parallel) | 625 |
+| BEFORE Models: catalog then shadow | 1439 |
+| AFTER Models: shadow only | 16 |
+| Usage cold | 725 |
+| Usage warm (same query) | 9 |
+| Usage other surface | 458 |
+| Codex `/accounts` alone | 1020 |
+
+**Read:** PERF-1 wins are mostly “don’t wait for the slow path before enabling controls” (5.6s → ~tens–low hundreds ms for shadow/sidecar). PERF-2 wins are mostly “don’t refetch held page data” (usage revisit ~9ms network; UI session seed is even cheaper). Full browser TTI not instrumented in this pass.
