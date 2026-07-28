@@ -503,12 +503,15 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   // native AND routed so the advertised flag matches the implemented endpoint (phase 120.4) and a
   // native template can never leak supports_websockets while the flag is off.
   const wsEnabled = websocketsEnabled(config);
-  const openaiProv = config.providers?.openai;
-  const includeNativeOpenAi = Boolean(
-    openaiProv
-    && openaiProv.disabled !== true
-    && isCanonicalOpenAiForwardProvider(openaiProv),
+  const enabledProviders = Object.entries(config.providers ?? {})
+    .filter(([, prov]) => prov.disabled !== true);
+  const hasCanonicalOpenai = enabledProviders.some(([name, prov]) =>
+    name === "openai" && isCanonicalOpenAiForwardProvider(prov),
   );
+  // #636: when the user only configured non-OpenAI providers (e.g. kimi), do not advertise
+  // bare gpt-* rows that hard-404 via NoEnabledOpenAiProviderError. Keep natives when no
+  // providers are configured yet (fresh install / catalog bootstrap tests).
+  const includeNativeOpenAi = enabledProviders.length === 0 || hasCanonicalOpenai;
   catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
   clampCatalogModelsToCodexSupport(catalog.models);
 
