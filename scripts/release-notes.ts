@@ -13,8 +13,70 @@
  *   bun scripts/release-notes.ts assemble --npm-metadata ... --out ...
  */
 
+type ParsedReleaseTag = {
+  major: number;
+  minor: number;
+  patch: number;
+  /** null = stable release; otherwise the SemVer prerelease identifier string. */
+  prerelease: string | null;
+};
+
+function parseReleaseTag(tag: string): ParsedReleaseTag | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(tag.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+  };
+}
+
+/** SemVer identifier compare: numeric parts by number; numeric < non-numeric. */
+function comparePrereleaseIds(a: string, b: string): number {
+  const aParts = a.split(".");
+  const bParts = b.split(".");
+  const len = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < len; i += 1) {
+    const ap = aParts[i];
+    const bp = bParts[i];
+    if (ap === undefined) return -1;
+    if (bp === undefined) return 1;
+    const aNum = /^\d+$/.test(ap);
+    const bNum = /^\d+$/.test(bp);
+    if (aNum && bNum) {
+      const diff = Number(ap) - Number(bp);
+      if (diff !== 0) return diff;
+      continue;
+    }
+    if (aNum !== bNum) return aNum ? -1 : 1;
+    const cmp = ap.localeCompare(bp);
+    if (cmp !== 0) return cmp;
+  }
+  return 0;
+}
+
+/**
+ * Ascending SemVer-aware tag compare. Stable ranks after prereleases with the
+ * same core version (`v2.7.42-preview.*` < `v2.7.42`).
+ */
+export function compareReleaseTags(a: string, b: string): number {
+  const pa = parseReleaseTag(a);
+  const pb = parseReleaseTag(b);
+  if (!pa || !pb) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  }
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
+  if (pa.prerelease === null && pb.prerelease === null) return 0;
+  if (pa.prerelease === null) return 1;
+  if (pb.prerelease === null) return -1;
+  return comparePrereleaseIds(pa.prerelease, pb.prerelease);
+}
+
 function sortVersionTagsAscending(tags: string[]): string[] {
-  return [...tags].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+  return [...tags].sort(compareReleaseTags);
 }
 
 /** Newest matching preview tag for a stable version, or null. */
@@ -51,7 +113,7 @@ export function previousReleaseNotesTag(version: string, tags: string[]): string
   const releaseTag = version.startsWith("v") ? version : `v${version}`;
   const candidates = tags
     .map(tag => tag.trim())
-    .filter(tag => /^v\d/.test(tag) && tag !== releaseTag);
+    .filter(tag => /^v\d/.test(tag) && compareReleaseTags(tag, releaseTag) < 0);
   const filtered = version.includes("-preview.")
     ? candidates
     : candidates.filter(tag => !tag.includes("-preview."));

@@ -83,6 +83,20 @@ describe("previousReleaseNotesTag", () => {
     expect(previousReleaseNotesTag("2.7.43-preview.1", ["v2.7.43-preview.1"])).toBeNull();
     expect(previousReleaseNotesTag("2.7.43", ["v2.7.43-preview.1"])).toBeNull();
   });
+
+  test("ignores candidate tags newer than the target release", () => {
+    expect(previousReleaseNotesTag("2.7.43-preview.20260728", [
+      "v2.7.42",
+      "v2.8.0-preview.1",
+    ])).toBe("v2.7.42");
+  });
+
+  test("ranks a stable tag after its matching preview when both are prior", () => {
+    expect(previousReleaseNotesTag("2.7.43-preview.20260728", [
+      "v2.7.42-preview.20260727",
+      "v2.7.42",
+    ])).toBe("v2.7.42");
+  });
 });
 
 describe("stripCarriedReleaseNotes", () => {
