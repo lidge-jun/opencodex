@@ -23,19 +23,21 @@ Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 
 - **Default: tee + background inspection.** `upstreamResponse.body.tee()` sends
-  branch[0] to the client (pure native relay on win32 without item-id repair —
-  the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
+  branch[0] to the client (pure native relay on win32 without any client-facing
+  rewrite — the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
   and request logs. This is the only shape on the bundled Bun 1.3.14.
-- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32-no-repair
-  only, armed by `decideEagerRelay(config.streamMode)` from
+- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32 with no
+  client-facing rewrite only (neither image-gen aliases nor item-id repair), armed by
+  `decideEagerRelay(config.streamMode)` from
   `src/lib/bun-stream-caps.ts` — default-on only for runtimes proven to carry
   the Bun#32111 fix (`MIN_FIXED_BUN_VERSION`, null until a bundle bump), or by
   explicit `streamMode: "eager-relay"` opt-in. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee, preserving
-  the full inspection side-effect set (shared `createSseInspector` factory in
-  `relay.ts`) including the #44 late-terminal semantics.
+  client queue + post-cancel bounded discard-drain replaces the tee and goes
+  directly to the response without a JS rewrite wrapper, preserving the full
+  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
+  including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts` and
 source-invariant-tested by `tests/passthrough-abort.test.ts`; keep both in
@@ -60,13 +62,24 @@ explicit keyed Images provider accepts the proxy admission secret as either an O
 or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
 ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
 
-The API-key `openai-responses` path also prevents the standalone client tool from colliding with the
-hosted Responses tool. When a request declares `image_gen.imagegen` (as a flat function or an
-`image_gen` namespace), the adapter drops hosted `image_generation` while preserving unrelated
-tools. Conflict discovery spans both top-level `body.tools` and Codex Desktop Responses Lite
-`input[].type = "additional_tools"` containers because the platform validates their merged tool
-namespace. ChatGPT forward mode preserves the pair because that backend accepts it and owns native
-image generation.
+The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
+Responses tool surface. A complete `image_gen` namespace is lowered to safe
+`image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public
+Responses runtimes may reserve the namespace itself and reject dotted function names. Native and
+legacy dotted calls replayed in `body.input` are encoded to the same aliases. When any client
+image-gen declaration is replaced by a usable `image_gen__<inner-name>` alias, the adapter also drops
+hosted `image_generation` and deduplicates aliases in stable container order. Empty or malformed
+namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
+`body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
+
+Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
+items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
+extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
+pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
+Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+replays to return upstream without leaking a client-only namespace shape. Malformed, empty, and
+unrelated namespaces remain untouched. ChatGPT forward mode preserves the private namespace and
+hosted tool because that backend understands their native semantics.
 
 Per-model `modelReasoningSummaryDelivery` is a narrow compatibility layer for
 `openai-responses` gateways whose summary capability is real but whose accepted delivery enum
@@ -271,6 +284,22 @@ lookalike hosts, and custom proxy paths fail validation. A model override replac
 merges the provider-wide default, keeping precedence deterministic. With no preference configured,
 the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
 
+## Kimi Coding Plan prompt-cache affinity
+
+The canonical `kimi` OAuth and `kimi-code` API-key presets opt into forwarding the internal
+request's `prompt_cache_key` to Kimi's Chat Completions body. Kimi Code Plan documents a stable
+session/task key as required to improve cache hit rates. The chat adapter never invents a key of
+its own: it forwards what the request already carries — Codex's session key on
+`/v1/responses`, or the session-scoped key the Claude `/v1/messages` inbound derives
+(metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
+keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
+persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
+rotation keeps it — along with every other registry backfill — because the retry inherits the
+request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
+src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
+backends may reject the OpenAI-specific field.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
@@ -357,6 +386,26 @@ retried. Guarded paths: the ChatGPT passthrough and generic adapter fetch in
 `src/server/responses.ts`, the vision/web-search sidecars, and the web-search loop's direct-fetch
 fallback. Adapters with their own `fetchResponse` (kiro, cursor, google) keep their own retry
 policies; kiro imports the shared abort/sleep helpers from this module.
+
+## Same-provider combo quota fallback
+
+For a failover combo with multiple models on the same Codex-login OpenAI provider, a pre-stream
+429/402 carrying only `x-codex-*-reset-at` may advance to the later model on the same account. The
+failed physical combo target still enters its normal target cooldown. An explicit `Retry-After`
+remains an account-wide instruction and blocks the later target; a quota response with neither an
+explicit retry delay nor a usable reset timestamp keeps the conservative default account cooldown.
+This exception is request-scoped and is not applied to direct requests, round-robin combos, or a
+combo whose remaining eligible targets use other providers.
+
+```text
+[Decision Log]
+- 목적과 의도: Let an ordered combo recover when one model-specific Codex quota window is exhausted but another model on the same account remains usable.
+- 기존 구현 및 제약 조건: Account health is shared across models, and recording a reset-derived 429 before combo advancement rejected the later model locally.
+- 검토한 주요 대안: Make every quota cooldown model-scoped; ignore all combo 429 cooldowns; or defer only reset-derived cooldown recording for an eligible later same-provider failover target.
+- 선택한 방식: Use the narrow request-scoped deferral while retaining target cooldown and all explicit Retry-After/default account cooldown behavior.
+- 다른 대안 대신 이 방식을 선택한 이유: Reset timestamps identify quota windows rather than a literal account-wide retry instruction, but widening the exception would risk hot retries and provider abuse.
+- 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
+```
 
 ## Sidecars
 

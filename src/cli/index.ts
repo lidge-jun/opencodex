@@ -808,10 +808,19 @@ switch (command) {
     break;
   }
   case "sync": {
+    const restartCodex = args.slice(1).includes("--restart-codex");
     const synced = await syncModelsToCodex((await findLiveProxy())?.port);
     if (!synced.ok) {
       process.exitCode = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
+    }
+    // Only warn/restart when a catalog or models_cache write actually happened. This is
+    // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
+    // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
+    // exactly when a long-lived app-server is holding the stale list.
+    if (synced.catalogWritten || synced.cacheSynced) {
+      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }
     break;
   }
@@ -821,8 +830,13 @@ switch (command) {
     break;
   }
   case "sync-cache": {
+    const restartCodex = args.slice(1).includes("--restart-codex");
     const { invalidateCodexModelsCache } = await import("../codex/catalog");
-    invalidateCodexModelsCache();
+    // Only warn/restart when models_cache was actually rewritten from a readable catalog.
+    if (invalidateCodexModelsCache()) {
+      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    }
     break;
   }
   case "gui": {

@@ -3,7 +3,9 @@ import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
 import { EmptyState, Notice } from "../ui";
-import { useT, type TFn, type TKey } from "../i18n";
+import { useT, type TFn, type TKey } from "../i18n/shared";
+import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { createBoundedFetch } from "../bounded-fetch";
 
 const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
 type Family = typeof FAMILIES[number];
@@ -150,8 +152,11 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     setLoadError("");
     try {
       const response = await fetch(`${apiBase}/api/claude-desktop`);
-      const payload = await response.json() as DesktopResponse | { error?: string };
-      if (!response.ok || !("profile" in payload) || !("models" in payload)) {
+      const payload = await readJsonOrThrow<DesktopResponse | { error?: string }>(
+        response,
+        t("claudeDesktop.loadFail"),
+      );
+      if (!payload || !("profile" in payload) || !("models" in payload)) {
         throw new Error(errorMessage(payload, t("claudeDesktop.loadFail")));
       }
       const normalized = normalizeProfile(payload);
@@ -204,10 +209,34 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   // Poll Desktop status every 5s for applied-state + health.
   useEffect(() => {
     let cancelled = false;
-    const poll = () => fetch(`${apiBase}/api/claude-desktop/status`).then(r => r.json()).then(d => { if (!cancelled) setStatus(d as DesktopStatus); }).catch(() => {});
+    let inFlight = false;
+    let active: ReturnType<typeof createBoundedFetch> | null = null;
+    const poll = () => {
+      if (inFlight) return;
+      inFlight = true;
+      const bounded = createBoundedFetch(10_000);
+      active = bounded;
+      void fetch(`${apiBase}/api/claude-desktop/status`, { signal: bounded.signal })
+        .then((response) => readJsonIfOk<DesktopStatus>(response))
+        .then((data) => {
+          if (cancelled) return;
+          if (data) setStatus(data);
+        })
+        .catch(() => { /* offline / older proxy / aborted */ })
+        .finally(() => {
+          bounded.clear();
+          if (active === bounded) active = null;
+          inFlight = false;
+        });
+    };
     poll();
     const timer = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      active?.controller.abort();
+      active?.clear();
+    };
   }, [apiBase]);
 
   const moveModel = (route: string, family: Family) => {
@@ -248,15 +277,13 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ profile }),
       });
-      const payload = await response.json().catch(() => ({})) as { error?: string };
-      if (!response.ok) throw new Error(errorMessage(payload, t("claudeDesktop.saveFailed")));
+      await readJsonOrThrow<{ error?: string }>(response, t("claudeDesktop.saveFailed"));
       setSavedProfile(cloneProfile(profile));
 
       if (applyAfter) {
         setPending("apply");
         const applyResponse = await fetch(`${apiBase}/api/claude-desktop/apply`, { method: "POST" });
-        const applyPayload = await applyResponse.json().catch(() => ({})) as { error?: string };
-        if (!applyResponse.ok) throw new Error(errorMessage(applyPayload, t("claudeDesktop.applyFailed")));
+        await readJsonOrThrow<{ error?: string }>(applyResponse, t("claudeDesktop.applyFailed"));
         setMessage({ tone: "ok", text: t("claudeDesktop.savedApplied") });
         setAnnouncement(t("claudeDesktop.savedAppliedAnnounce"));
       } else {

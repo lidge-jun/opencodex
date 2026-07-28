@@ -10,7 +10,7 @@
  */
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { resolveProviderTransport } from "./xai-transport";
+import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -69,6 +69,11 @@ export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
  *
  * @returns A new OcxProviderConfig with the swapped key (and mutated config on disk),
  *          or `null` when no alternative key is available (all in cooldown or pool < 2).
+ *
+ * The returned object is a snapshot of the PERSISTED config — it carries none of the
+ * registry backfills `routedProviderConfig` merges in at request time. Request paths must
+ * not assign it to an active route wholesale; use `rotateProviderTransportOn429`, which
+ * takes only the swapped key and keeps the routed provider intact.
  */
 export function rotateKeyOn429(
   config: OcxConfig,
@@ -133,12 +138,23 @@ interface RotateProviderTransportOptions {
   promptCacheKey?: string;
 }
 
-/** Rotate a failed key and re-apply provider-specific transport metadata to the replacement. */
+/**
+ * Rotate a failed key and re-apply provider-specific transport metadata to the replacement.
+ *
+ * `routedProvider` is the request's active provider (the `routedProviderConfig` output the
+ * route was built with). The result inherits it and swaps ONLY the API key: the persisted
+ * config that `rotateKeyOn429` snapshots predates registry backfill, so building the retry
+ * provider from that snapshot would silently drop every field the registry merged in at
+ * routing time (scalar flags like `promptCacheKey`/`parallelToolCalls`, merged model
+ * metadata such as `noTemperatureModels`, a pinned baseUrl). Mirrors the OAuth-401 replay
+ * path in src/server/responses/core.ts, which spreads `route.provider` for the same reason.
+ */
 export function rotateProviderTransportOn429(
   config: OcxConfig,
   providerName: string,
+  routedProvider: OcxProviderTransport,
   options: RotateProviderTransportOptions = {},
-): OcxProviderConfig | null {
+): OcxProviderTransport | null {
   const rotated = rotateKeyOn429(
     config,
     providerName,
@@ -147,7 +163,11 @@ export function rotateProviderTransportOn429(
     options.attemptedKey,
   );
   return rotated
-    ? resolveProviderTransport(providerName, rotated, options.promptCacheKey)
+    ? resolveProviderTransport(
+        providerName,
+        { ...routedProvider, apiKey: rotated.apiKey },
+        options.promptCacheKey,
+      )
     : null;
 }
 

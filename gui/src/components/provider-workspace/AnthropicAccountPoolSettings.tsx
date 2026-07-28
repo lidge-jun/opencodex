@@ -4,10 +4,21 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
+import {
+  DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
+  DEFAULT_ACCOUNT_POOL_STRATEGY,
+  normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
+  parseAccountPoolStickyLimitDraft,
+  type AccountPoolStrategy,
+} from "../../account-pool-strategy";
+import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
 
 type PoolState = {
   enabled: boolean;
   threshold: number;
+  strategy: AccountPoolStrategy;
+  stickyLimit: number;
 };
 
 export default function AnthropicAccountPoolSettings({
@@ -20,6 +31,7 @@ export default function AnthropicAccountPoolSettings({
   const t = useT();
   const [state, setState] = useState<PoolState | null>(null);
   const [draft, setDraft] = useState("80");
+  const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -27,31 +39,58 @@ export default function AnthropicAccountPoolSettings({
   useEffect(() => {
     let cancelled = false;
     const ac = new AbortController();
-    void (async () => {
+    const load = async () => {
       try {
         const res = await fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, {
           signal: ac.signal,
         });
         if (!res.ok) throw new Error("load");
-        const json = await res.json() as { enabled?: boolean; autoSwitchThreshold?: number };
+        const json = await res.json() as {
+          enabled?: boolean;
+          autoSwitchThreshold?: number;
+          strategy?: unknown;
+          stickyLimit?: unknown;
+        };
         if (cancelled) return;
         const nextEnabled = json.enabled === true;
         const nextThreshold = typeof json.autoSwitchThreshold === "number" ? json.autoSwitchThreshold : 80;
-        setState({ enabled: nextEnabled, threshold: nextThreshold });
+        const nextStrategy = normalizeAccountPoolStrategy(json.strategy);
+        const nextSticky = normalizeAccountPoolStickyLimit(json.stickyLimit);
+        setState({
+          enabled: nextEnabled,
+          threshold: nextThreshold,
+          strategy: nextStrategy,
+          stickyLimit: nextSticky,
+        });
         setDraft(String(nextThreshold));
+        setStickyDraft(String(nextSticky));
         setLoadError(false);
       } catch {
         if (cancelled || ac.signal.aborted) return;
         setLoadError(true);
       }
-    })();
+    };
+    const timer = window.setTimeout(() => { void load(); }, 0);
     return () => {
       cancelled = true;
       ac.abort();
+      window.clearTimeout(timer);
     };
   }, [apiBase]);
 
-  const save = useCallback(async (nextEnabled: boolean, nextThreshold: number) => {
+  const save = useCallback(async (next: {
+    enabled: boolean;
+    threshold: number;
+    strategy: AccountPoolStrategy;
+    stickyLimit: number;
+  }) => {
+    const previousState = state;
+    setState({
+      enabled: next.enabled,
+      threshold: next.threshold,
+      strategy: next.strategy,
+      stickyLimit: next.stickyLimit,
+    });
     setSaving(true);
     setError(null);
     try {
@@ -60,22 +99,43 @@ export default function AnthropicAccountPoolSettings({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           provider: "anthropic",
-          enabled: nextEnabled,
-          autoSwitchThreshold: nextThreshold,
+          enabled: next.enabled,
+          autoSwitchThreshold: next.threshold,
+          strategy: next.strategy,
+          stickyLimit: next.stickyLimit,
         }),
       });
       if (!res.ok) throw new Error("save");
-      setState({ enabled: nextEnabled, threshold: nextThreshold });
-      setDraft(String(nextThreshold));
+      const json = await res.json().catch(() => null) as {
+        strategy?: unknown;
+        stickyLimit?: unknown;
+      } | null;
+      const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
+      const savedSticky = normalizeAccountPoolStickyLimit(json?.stickyLimit ?? next.stickyLimit);
+      setState({
+        enabled: next.enabled,
+        threshold: next.threshold,
+        strategy: savedStrategy,
+        stickyLimit: savedSticky,
+      });
+      setDraft(String(next.threshold));
+      setStickyDraft(String(savedSticky));
     } catch {
       setError(t("anthropicPool.saveFailed"));
+      if (previousState) {
+        setState(previousState);
+        setDraft(String(previousState.threshold));
+        setStickyDraft(String(previousState.stickyLimit));
+      }
     } finally {
       setSaving(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, state, t]);
 
   const enabled = state?.enabled === true;
   const threshold = state?.threshold ?? 80;
+  const strategy = state?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY;
+  const stickyLimit = state?.stickyLimit ?? DEFAULT_ACCOUNT_POOL_STICKY_LIMIT;
   const loading = state === null && !loadError;
   // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
   const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
@@ -102,7 +162,12 @@ export default function AnthropicAccountPoolSettings({
             disabled={toggleDisabled}
             onChange={(event) => {
               const next = event.target.checked;
-              void save(next, threshold);
+              void save({
+                enabled: next,
+                threshold,
+                strategy,
+                stickyLimit,
+              });
             }}
           />
           <span>{enabled ? t("anthropicPool.on") : t("anthropicPool.off")}</span>
@@ -127,31 +192,76 @@ export default function AnthropicAccountPoolSettings({
         <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
       )}
 
-      {enabled && (
-        <label className="field" style={{ display: "block", marginTop: 12 }}>
-          <span className="field-label">{t("anthropicPool.threshold")}</span>
-          <input
-            className="input mono"
-            type="number"
-            min={0}
-            max={100}
-            step={1}
-            value={draft}
+      {enabled && state && (
+        <>
+          <label className="field" style={{ display: "block", marginTop: 12 }}>
+            <span className="field-label">{t("anthropicPool.threshold")}</span>
+            <input
+              className="input mono"
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              value={draft}
+              disabled={saving}
+              aria-label={t("anthropicPool.thresholdAria")}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={() => {
+                const parsed = Number(draft);
+                if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+                  setDraft(String(threshold));
+                  setError(t("anthropicPool.thresholdInvalid"));
+                  return;
+                }
+                if (parsed !== threshold) {
+                  void save({
+                    enabled: true,
+                    threshold: parsed,
+                    strategy,
+                    stickyLimit,
+                  });
+                }
+              }}
+            />
+            <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
+          </label>
+
+          <AccountPoolStrategyControls
+            strategy={strategy}
+            stickyDraft={stickyDraft}
             disabled={saving}
-            aria-label={t("anthropicPool.thresholdAria")}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => {
-              const parsed = Number(draft);
-              if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
-                setDraft(String(threshold));
-                setError(t("anthropicPool.thresholdInvalid"));
+            strategySelectId="anthropic-pool-strategy"
+            stickyInputId="anthropic-pool-sticky-limit"
+            onStrategyChange={(next) => {
+              if (next === strategy) return;
+              void save({
+                enabled: true,
+                threshold,
+                strategy: next,
+                stickyLimit,
+              });
+            }}
+            onStickyDraftChange={setStickyDraft}
+            onStickyCommit={() => {
+              const parsed = parseAccountPoolStickyLimitDraft(stickyDraft);
+              if (parsed === null) {
+                setStickyDraft(String(stickyLimit));
+                setError(t("accountPool.stickyLimitInvalid"));
                 return;
               }
-              if (parsed !== threshold) void save(true, parsed);
+              if (parsed === stickyLimit) {
+                setStickyDraft(String(parsed));
+                return;
+              }
+              void save({
+                enabled: true,
+                threshold,
+                strategy,
+                stickyLimit: parsed,
+              });
             }}
           />
-          <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
-        </label>
+        </>
       )}
 
       {error && (

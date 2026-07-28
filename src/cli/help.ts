@@ -60,8 +60,22 @@ const helpEntries: Record<string, HelpEntry> = {
     ],
   },
   ensure: { usage: "ocx ensure", summary: "Ensure the proxy is running and Codex config/cache are current." },
-  sync: { usage: "ocx sync", summary: "Fetch provider models and inject them into Codex config." },
-  "sync-cache": { usage: "ocx sync-cache", summary: "Refresh Codex's model cache from the active catalog." },
+  sync: {
+    usage: "ocx sync [--restart-codex]",
+    summary: "Fetch provider models and inject them into Codex config.",
+    details: [
+      "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
+      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
+    ],
+  },
+  "sync-cache": {
+    usage: "ocx sync-cache [--restart-codex]",
+    summary: "Refresh Codex's model cache from the active catalog.",
+    details: [
+      "Warns when Codex app-server processes still hold an in-memory model list.",
+      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
+    ],
+  },
   status: { usage: "ocx status", summary: "Check proxy server status." },
   doctor: { usage: "ocx doctor", summary: "Diagnose environment/network issues (paths, WSL /mnt, proxy env, ChatGPT reachability)." },
   debug: {
@@ -246,8 +260,9 @@ Usage:
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
   ocx tray <sub>              Windows status tray (install|start|stop|status|uninstall)
   ocx ensure                  Ensure the proxy is running and Codex config/cache are current
-  ocx sync                    Fetch models from providers and inject into Codex config
-  ocx sync-cache              Refresh Codex's model cache from the active catalog
+  ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+  ocx sync-cache [--restart-codex]
+                              Refresh Codex's model cache from the active catalog
   ocx status                  Check proxy server status
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset

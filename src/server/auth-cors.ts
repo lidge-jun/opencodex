@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
+  apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   codexAutoStartEnabled,
@@ -245,6 +246,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (destinationError) return `provider ${name} ${destinationError}`;
   const headersError = providerHeadersConfigError(typed.headers);
   if (headersError) return `provider ${name} ${headersError}`;
+  const apiKeyTransportError = apiKeyTransportConfigError(typed);
+  if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
@@ -320,6 +323,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "disabled",
       "allowPrivateNetwork",
       "authMode",
+      "apiKeyTransport",
       "keyOptional",
       "freeTier",
       "liveModels",

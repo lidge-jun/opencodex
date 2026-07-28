@@ -22,6 +22,7 @@ export interface ProviderRegistryEntry {
   label: string;
   adapter: string;
   baseUrl: string;
+  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
@@ -88,7 +89,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
@@ -480,6 +481,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
     modelSuffixBracketStrip: true,
+    // Kimi Code Plan documents a stable session/task prompt_cache_key as required to improve
+    // cache hit rates.
+    // The chat adapter only forwards a key already on the internal request (Codex's session key,
+    // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
+    // Evidence: https://platform.kimi.com/docs/api/chat
+    promptCacheKey: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
@@ -1018,6 +1025,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
     modelSuffixBracketStrip: true,
+    // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
+    promptCacheKey: true,
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,

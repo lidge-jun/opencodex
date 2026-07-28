@@ -52,7 +52,7 @@ interface ProviderAdapter {
 ## `anthropic`
 
 **目标：** Anthropic **Messages**（`/v1/messages`）。
-**认证：** `key`（`x-api-key`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
+**认证：** `key`（默认 `x-api-key`，或设置 `apiKeyTransport: "bearer"` 后使用 `Authorization: Bearer`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
 
 - 把消息转换成 Anthropic content block（text、base64 image、`tool_use`、`thinking`）。
 - **Extended thinking 计算：** Anthropic 要求 `max_tokens > thinking.budget_tokens`。adapter 把

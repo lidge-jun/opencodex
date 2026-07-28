@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ResponsesItemIdRepairConfig } from "../types";
+import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 
 type RepairableItemType = "message" | "reasoning";
 
@@ -33,44 +34,6 @@ const ITEM_ID_EVENT_TYPES: Readonly<Record<string, RepairableItemType>> = {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
-  const match = buffer.match(/\r?\n\r?\n/);
-  if (!match || match.index === undefined) return null;
-  return {
-    block: buffer.slice(0, match.index),
-    delimiter: match[0],
-    rest: buffer.slice(match.index + match[0].length),
-  };
-}
-
-function sseDataPayload(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const value = line.slice(5);
-    data.push(value.startsWith(" ") ? value.slice(1) : value);
-  }
-  return data.length > 0 ? data.join("\n") : null;
-}
-
-function replaceSseDataPayload(block: string, payload: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
-  const rewritten: string[] = [];
-  let replaced = false;
-  for (const line of lines) {
-    if (!line.startsWith("data:")) {
-      rewritten.push(line);
-      continue;
-    }
-    if (!replaced) {
-      rewritten.push(`data: ${payload}`);
-      replaced = true;
-    }
-  }
-  return replaced ? rewritten.join(newline) : block;
 }
 
 function asOutputIndex(value: unknown): number | null {
@@ -221,57 +184,19 @@ function repairEventPayload(
  *   type에 재사용해도 function_call id/call_id는 보존된다. opt-in 게이트웨이는 sequential streams에서도
  *   고유한 canonical id를 얻지만, 보정이 필요한 경우에만 JS stream 재작성 비용을 지불한다.
  */
+/** Stateful payload rewrite for composition with other client-facing SSE transforms. */
+export function createResponsesItemIdPayloadRewrite(
+  config: ResponsesItemIdRepairConfig,
+): SsePayloadRewrite {
+  const state = createRepairState(config);
+  return (payload) => repairEventPayload(payload, state);
+}
+
 export function relaySseWithResponsesItemIdRepair(
   body: ReadableStream<Uint8Array>,
   config: ResponsesItemIdRepairConfig,
 ): ReadableStream<Uint8Array> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  const state = createRepairState(config);
-  let buffer = "";
-
-  const emitProcessedBlocks = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    flushFinal = false,
-  ): void => {
-    let next: { block: string; delimiter: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      buffer = next.rest;
-      const payload = sseDataPayload(next.block);
-      const repairedPayload = payload ? repairEventPayload(payload, state) : undefined;
-      const block = payload && repairedPayload !== undefined && repairedPayload !== payload
-        ? replaceSseDataPayload(next.block, repairedPayload)
-        : next.block;
-      controller.enqueue(encoder.encode(block + next.delimiter));
-    }
-    if (flushFinal && buffer.length > 0) {
-      const payload = sseDataPayload(buffer);
-      const repairedPayload = payload ? repairEventPayload(payload, state) : undefined;
-      const block = payload && repairedPayload !== undefined && repairedPayload !== payload
-        ? replaceSseDataPayload(buffer, repairedPayload)
-        : buffer;
-      controller.enqueue(encoder.encode(block));
-      buffer = "";
-    }
-  };
-
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        emitProcessedBlocks(controller, true);
-        controller.close();
-        return;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      emitProcessedBlocks(controller);
-    },
-    cancel(reason) {
-      reader.cancel(reason).catch(() => {});
-    },
-  });
+  return relaySseWithPayloadRewrite(body, createResponsesItemIdPayloadRewrite(config));
 }
 
 export function hasResponsesItemIdRepair(config: ResponsesItemIdRepairConfig | undefined): boolean {

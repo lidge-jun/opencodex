@@ -1,4 +1,5 @@
 import { IconAlert, IconExternal, IconInfo, IconRefresh } from "../icons";
+import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
 import type { useDashboardData } from "./use-dashboard-data";
@@ -195,7 +196,7 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             {t("dash.syncOk", { count: syncResult.added })}
             {syncResult.warning ? ` ${syncResult.warning}` : ""}
             {syncResult.nativeSubagentDefaultsWarning ? ` ${syncResult.nativeSubagentDefaultsWarning}` : ""}
-            {syncResult.staleAppServerHint ? ` ${t("dash.syncStaleHint")}` : ""}
+            {syncResult.staleAppServerHint ? <>{" "}<Trans k="dash.syncStaleHint" cmd="ocx sync --restart-codex" /></> : null}
           </span>
         </div>
       )}

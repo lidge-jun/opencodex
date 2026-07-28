@@ -54,6 +54,14 @@ OpenAI 上游：
   `codex features disable image_generation`（即 `config.toml` 的
   `[features] image_generation = false`）。
 
+工具声明仍会随模型的 Responses 请求一同发送。对于 API key 方式的 Responses 提供商，
+opencodex 会把 Codex 私有的 `image_gen` namespace 转换为上游安全的
+`image_gen__<inner-name>` alias（例如 `image_gen__imagegen`）。只有当这个可用 alias 替代了
+客户端声明时，才会移除重复的 hosted `image_generation` 声明。函数调用会在到达 Codex 前恢复为
+显式的 `image_gen` namespace，后续将历史记录重放到上游时再重新编码。因此，即使 OpenAI 兼容
+上游保留了该 namespace，或拒绝包含点号的函数名，客户端图像生成仍可正常调用。ChatGPT forward
+模式保持不变，并继续使用其原生 Responses Lite 格式。
+
 如果 `hostname` 不是 loopback 地址，Codex 必须发送自动生成的 API 认证请求头。此时注入器会改用
 专用提供商：
 

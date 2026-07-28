@@ -226,14 +226,16 @@ function attachLiveSidebandUpstream(ws: ServerWebSocket<WsData>): void {
 // Source invariant for tests/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
-// #314 gated shape (win32-no-repair only; default OFF on the bundled known-bad runtime):
+// const needsClientRewrite = imageGenCallAliases.size > 0
+// #314 gated shape (win32-no-client-rewrite only; default OFF on the bundled known-bad runtime):
 // decideEagerRelay(config.streamMode ?? "auto")
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
+// new Response(eagerBody,
 // Default shape (tee + background inspection):
 // upstreamResponse.body.tee()
 // const repairedBody = hasResponsesItemIdRepair(repairConfig)
 // process.platform === "win32"
-// && !hasResponsesItemIdRepair(repairConfig)
+// && !needsClientRewrite
 // ? nativeBody
 // relaySseWithFailedTail(repairedBody, upstream)
 // new Response(clientBody

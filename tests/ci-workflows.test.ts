@@ -1912,41 +1912,45 @@ describe("GitHub Actions hardening", () => {
     expect(helperSrc).not.toContain(".ocx-translation-state");
   });
 
-  test("React Doctor workflow is SHA-pinned, engine-pinned, advisory, and read-only", async () => {
+  test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784");
-    expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+    expect(workflow).not.toMatch(
+      /^\s*-\s+uses:\s+\S+@(?![0-9a-f]{40}(?=[ \t]*(?:#.*)?$))\S+/m,
+    );
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
-    expect(workflow).toContain('version: "0.9.1"');
+    expect(workflow).toContain('version: "0.9.2"');
 
-    // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.1).
+    // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.x).
     // v2.1.0's ensure-json-report only knew schemas 1–2 and failed every PR scan.
-    // Advisory + least privilege: read-only token, all write-scoped outputs off.
+    // Gating + least privilege: read-only token, all write-scoped outputs off.
     // pull-requests: read is required so the action can list PR files for
     // --changed-files-from; without it, fork PRs fail with ENOENT on that file.
     expect(workflow).toContain("contents: read");
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).not.toContain(": write");
-    expect(workflow).toContain("blocking: none");
-    expect(workflow).toContain("comment: false");
-    expect(workflow).toContain("review-comments: false");
-    expect(workflow).toContain("commit-status: false");
+    expect(workflow).toMatch(/^\s+blocking:\s+warning\s*$/m);
+    expect(workflow).toMatch(/^\s+comment:\s+false\s*$/m);
+    expect(workflow).toMatch(/^\s+review-comments:\s+false\s*$/m);
+    expect(workflow).toMatch(/^\s+commit-status:\s+false\s*$/m);
     expect(workflow).toContain("timeout-minutes: 10");
   });
 
   test("React Doctor package scripts pin the exact engine version with no @latest anywhere", async () => {
     const guiPkg = await readText("gui/package.json");
     const rootPkg = await readText("package.json");
+    const doctorConfig = await readText("gui/doctor.config.json");
 
-    expect(guiPkg).toContain("react-doctor@0.9.1");
+    expect(guiPkg).toContain("react-doctor@0.9.2");
     expect(guiPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).not.toContain("react-doctor@latest");
+    expect(doctorConfig).toContain('"blocking": "warning"');
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
-    // Gating steps (typecheck, eslint, tests, privacy) run before advisory React Doctor.
+    // Gating steps include React Doctor after privacy scan on gui/ pushes.
     expect(rootPkg).toContain("bun run typecheck && bun run lint:gui && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
@@ -1962,6 +1966,16 @@ describe("doctor-gui-if-changed", () => {
     expect(guiPathsChanged(["scripts/foo.ts"])).toBe(false);
     expect(guiPathsChanged(["guitools/x.ts"])).toBe(false);
     expect(guiPathsChanged([])).toBe(false);
+  });
+
+  test("looksLikeDoctorInfraFailure detects registry/network outages", async () => {
+    const { looksLikeDoctorInfraFailure } = await import("../scripts/doctor-gui-if-changed");
+    expect(looksLikeDoctorInfraFailure("npm ERR! network getaddrinfo ENOTFOUND registry.npmjs.org")).toBe(true);
+    expect(looksLikeDoctorInfraFailure("npm ERR! code ECONNRESET")).toBe(true);
+    expect(looksLikeDoctorInfraFailure("npm ERR! network timeout")).toBe(true);
+    expect(looksLikeDoctorInfraFailure("All 2 issues\nBugs > 1 errors")).toBe(false);
+    // Findings copy can mention "network" without being an infra outage.
+    expect(looksLikeDoctorInfraFailure("Network requests > 1 errors")).toBe(false);
   });
 
   test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {
@@ -1987,6 +2001,54 @@ describe("doctor-gui-if-changed", () => {
       },
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stderr.toString()).toContain("skipping advisory scan");
+    expect(run.stderr.toString()).toContain("skipping scan");
+  });
+
+  test("soft-skips when doctor exits nonzero due to a registry/network failure", () => {
+    // Simulate `bun run doctor` starting, then npx failing offline: numeric status
+    // plus registry noise in stderr — must not gate the push.
+    // cwd for DOCTOR_CMD is gui/, so reach fixtures via ../scripts/...
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-offline-exit.ts",
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stderr.toString()).toContain("skipping scan");
+  });
+
+  test("propagates a non-zero doctor exit so findings gate the push", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-findings-exit.ts",
+      },
+    });
+    expect(run.exitCode).not.toBe(0);
+  });
+
+  test("isDoctorBufferOverflow recognizes ENOBUFS / maxBuffer errors", async () => {
+    const { isDoctorBufferOverflow } = await import("../scripts/doctor-gui-if-changed");
+    expect(isDoctorBufferOverflow("ENOBUFS")).toBe(true);
+    expect(isDoctorBufferOverflow("ERR_CHILD_PROCESS_STDIO_MAXBUFFER")).toBe(true);
+    expect(isDoctorBufferOverflow("ENOENT")).toBe(false);
+    expect(isDoctorBufferOverflow(undefined)).toBe(false);
+  });
+
+  test("hard-fails when doctor output exceeds maxBuffer (does not soft-skip)", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-huge-output.ts",
+        // Tiny buffer so the fixture's stdout trips the overflow branch.
+        OCX_DOCTOR_MAX_BUFFER: "256",
+      },
+    });
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr.toString()).toContain("exceeded buffer");
   });
 });

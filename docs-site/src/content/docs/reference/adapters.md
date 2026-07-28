@@ -54,7 +54,7 @@ streams the response back **untranslated**.
 ## `anthropic`
 
 **Targets:** Anthropic **Messages** (`/v1/messages`).
-**Auth:** `key` (`x-api-key`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
+**Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
 - **Extended thinking math:** Anthropic requires `max_tokens > thinking.budget_tokens`. The adapter

@@ -34,8 +34,8 @@ the package layout used by `ocx gui`.
 ```bash
 cd gui
 bun run lint         # ESLint — hard local/CI gate (`GUI lint` in CI)
-bun run doctor       # React Doctor vs origin/main (changed-scope, advisory)
-bun run doctor:full  # Full-project React Doctor scan
+bun run doctor       # React Doctor vs origin/main (changed-scope, gates on findings)
+bun run doctor:full  # Full-tree React Doctor (gates on findings)
 ```
 
 From the repo root:
@@ -49,6 +49,6 @@ bun run setup:hooks             # pre-push runs doctor when gui/ changed
 | Tool | Role |
 |------|------|
 | **ESLint** (`bun run lint`) | Hard gate in CI and expected before merge |
-| **React Doctor** (`bun run doctor`) | Advisory React health check pinned to react-doctor 0.9.1. Pre-push runs it only if `gui/` changed and never blocks the push. The CI workflow reports to the step log only |
+| **React Doctor** (`bun run doctor`) | Gating React health check pinned to react-doctor 0.9.2 (`blocking: warning`). Pre-push runs it only if `gui/` changed and fails the push on findings. The CI workflow fails the job on any finding |
 
 Fix ESLint errors first. Use `doctor` / `doctor:full` for deeper React triage.

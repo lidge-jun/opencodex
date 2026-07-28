@@ -56,7 +56,7 @@ export function createInitialAddProviderState(
   return {
     preset: initialCustom ? customPreset : null,
     form: initialCustom
-      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", defaultModel: "", allowPrivateNetwork: false }
+      ? { name: "", adapter: "openai-chat", baseUrl: "", authMode: "key", apiKey: "", apiKeyTransport: undefined, defaultModel: "", allowPrivateNetwork: false }
       : null,
     saving: false,
     error: "",

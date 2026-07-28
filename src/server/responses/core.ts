@@ -72,6 +72,7 @@ import {
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
+  computeQuotaCooldown,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
@@ -132,7 +133,16 @@ import {
 import { relaySseEagerBounded } from "../relay-eager";
 import { decideEagerRelay } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
-import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
+import {
+  createResponsesItemIdPayloadRewrite,
+  hasResponsesItemIdRepair,
+} from "../responses-item-id-repair";
+import {
+  createImageGenCallRestoreRewrite,
+  imageGenToolCallAliases,
+  restoreImageGenCallsInJson,
+} from "../responses-image-gen-repair";
+import { composeSsePayloadRewrites, relaySseWithPayloadRewrite } from "../sse-payload-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
@@ -242,6 +252,7 @@ interface CodexPoolAccountRetryArgs {
   options: {
     abortSignal?: AbortSignal;
     onCodexAuthContextResolved?: (ctx: CodexAuthContext) => void;
+    deferCodexResetDerivedCooldown?: boolean;
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -266,6 +277,31 @@ type CodexPoolAccountRetryResult =
     error: unknown;
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   };
+
+function codexQuotaOutcomeMeta(response: Response): {
+  retryAfter: string | null;
+  resetAt: string[];
+} {
+  return {
+    retryAfter: response.headers.get("retry-after"),
+    resetAt: [
+      response.headers.get("x-codex-primary-reset-at"),
+      response.headers.get("x-codex-secondary-reset-at"),
+      response.headers.get("x-codex-tertiary-reset-at"),
+    ].filter((value): value is string => !!value),
+  };
+}
+
+/**
+ * A reset timestamp describes a quota window, not an explicit instruction to
+ * stop using the whole account. A combo may therefore try a later model in the
+ * same request, while Retry-After and headerless quota failures remain blocking.
+ */
+function shouldDeferCodexResetDerivedCooldown(response: Response, enabled?: boolean): boolean {
+  return enabled === true
+    && (response.status === 429 || response.status === 402)
+    && computeQuotaCooldown(codexQuotaOutcomeMeta(response)).source === "reset-derived";
+}
 
 /**
  * One bounded alternate-account retry for Codex pool auth. Used for allow-listed
@@ -297,21 +333,20 @@ async function retryCodexPoolOnAlternateAccount(
     return { kind: "no-alternate" };
   }
 
-  const retryAfterRaw = firstResponse.headers.get("retry-after");
+  const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
   if (outcomeStatus === 429 || outcomeStatus === 402) {
     const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
     applyAccountQuotaFromUpstreamHeaders(firstAuthCtx.accountId, firstResponse.headers);
   }
-  recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-    retryAfter: retryAfterRaw,
-    resetAt: [
-      firstResponse.headers.get("x-codex-primary-reset-at"),
-      firstResponse.headers.get("x-codex-secondary-reset-at"),
-      firstResponse.headers.get("x-codex-tertiary-reset-at"),
-    ].filter(Boolean),
-    threadId: req.headers.get("x-codex-parent-thread-id"),
-    probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-  });
+  if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
+    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+      ...quotaMeta,
+      threadId: req.headers.get("x-codex-parent-thread-id"),
+      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
+      ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
+    });
+  }
 
   const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
   const retryProvider = applyCodexAuthContextToProvider(
@@ -458,6 +493,8 @@ export interface HandleResponsesOptions {
   promptCacheKeyIsSharedCohort?: boolean;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
+  deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
 }
@@ -891,9 +928,17 @@ export async function handleComboResponses(
     const callbackGate = createChildPassthroughCallbackGate(options);
     let response: Response;
     try {
+      const currentTargetProvider = pick.target.provider;
+      const deferCodexResetDerivedCooldown = combo.strategy === "failover"
+        && combo.targets.slice(pick.targetIndex + 1).some(target =>
+          target.provider === currentTargetProvider
+          && payloadEligible(target)
+          && !isComboTargetInCooldown(comboId, target),
+        );
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
@@ -1337,6 +1382,9 @@ export async function handleResponses(
   }
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
+    const imageGenCallAliases = route.provider.authMode === "forward"
+      ? new Map<string, { namespace: string; name: string }>()
+      : imageGenToolCallAliases(buildToolBridgeMaps(parsed).toolNsMap, parsed._rawBody);
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -1474,7 +1522,7 @@ export async function handleResponses(
    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
       // primary was the 5h window; it now carries weekly data for GPT plans.
       // Prefer primary when present, fall back to secondary for compatibility.
-      const retryAfterRaw = upstreamResponse.headers.get("retry-after");
+      const quotaMeta = codexQuotaOutcomeMeta(upstreamResponse);
       const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
       applyAccountQuotaFromUpstreamHeaders(authCtx.accountId, upstreamResponse.headers);
       if (terminalBodyWillRecord) {
@@ -1498,16 +1546,14 @@ export async function handleResponses(
           }
           options.onNativePassthroughTerminal?.(status);
         });
-      } else {
+      } else if (!shouldDeferCodexResetDerivedCooldown(
+        upstreamResponse,
+        options.deferCodexResetDerivedCooldown,
+      )) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
-        retryAfter: retryAfterRaw,
-         resetAt: [
-           upstreamResponse.headers.get("x-codex-primary-reset-at"),
-           upstreamResponse.headers.get("x-codex-secondary-reset-at"),
-           upstreamResponse.headers.get("x-codex-tertiary-reset-at"),
-         ].filter(Boolean),
-         threadId: req.headers.get("x-codex-parent-thread-id"),
-         probeLeaseId: codexProbeLeaseId(authCtx),
+          ...quotaMeta,
+          threadId: req.headers.get("x-codex-parent-thread-id"),
+          probeLeaseId: codexProbeLeaseId(authCtx),
         });
       }
     }
@@ -1541,8 +1587,9 @@ export async function handleResponses(
     // known-bad runtime remains the tee path below.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const winNoRepair = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig);
-      const eagerDecision = winNoRepair ? decideEagerRelay(config.streamMode ?? "auto") : null;
+      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const winNoClientRewrite = process.platform === "win32" && !needsClientRewrite;
+      const eagerDecision = winNoClientRewrite ? decideEagerRelay(config.streamMode ?? "auto") : null;
       if (eagerDecision?.useEagerRelay) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
@@ -1593,6 +1640,8 @@ export async function handleResponses(
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
         });
+        // The eager branch is reachable only through winNoClientRewrite, so it must stay a pure
+        // native relay without an image-gen or item-id JS pull wrapper on win32 (Bun#32111).
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markNativePassthroughSseResponse(new Response(eagerBody, {
           status: upstreamResponse.status,
@@ -1652,12 +1701,19 @@ export async function handleResponses(
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
-      const repairedBody = hasResponsesItemIdRepair(repairConfig)
-        ? relaySseWithResponsesItemIdRepair(nativeBody, repairConfig!)
+      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
+      const payloadRewrites = [
+        createImageGenCallRestoreRewrite(imageGenCallAliases),
+        hasResponsesItemIdRepair(repairConfig)
+          ? createResponsesItemIdPayloadRewrite(repairConfig!)
+          : undefined,
+      ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      const rewrittenBody = payloadRewrites.length > 0
+        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites))
         : nativeBody;
-      const clientBody = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig)
+      const clientBody = process.platform === "win32" && !needsClientRewrite
         ? nativeBody
-        : relaySseWithFailedTail(repairedBody, upstream);
+        : relaySseWithFailedTail(rewrittenBody, upstream);
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
@@ -1671,7 +1727,7 @@ export async function handleResponses(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(text, {
+      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,
@@ -1756,7 +1812,7 @@ export async function handleResponses(
         }
       },
       on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -1822,7 +1878,7 @@ export async function handleResponses(
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -2094,7 +2150,7 @@ export async function handleResponses(
       // SAME request once per remaining key. OAuth/forward providers and single-key pools
       // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
       while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: upstreamResponse.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -2257,7 +2313,7 @@ export async function handleResponses(
       }
 
       if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,

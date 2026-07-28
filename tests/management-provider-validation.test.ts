@@ -1593,6 +1593,7 @@ describe("provider management validation", () => {
       providers: {
         openai: { ...canonicalDirect },
         extra: { adapter: "openai-chat", baseUrl: "https://extra.example.test/v1", apiKey: "sk-existing", note: "old note" },
+        gateway: { adapter: "anthropic", baseUrl: "https://gateway.example.test/v1", apiKey: "sk-gateway" },
         nvidia: { adapter: "openai-chat", baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "sk-nvidia" },
         ollama: { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1" },
       },
@@ -1633,6 +1634,17 @@ describe("provider management validation", () => {
     expect(keyWrite?.status).toBe(400);
     expect(await keyWrite?.json()).toMatchObject({ error: expect.stringContaining("API-key endpoints") });
     expect(liveConfig.providers.extra.apiKey).toBe("sk-existing");
+
+    // Key-auth Anthropic gateways can select bearer; other adapters and auth modes cannot.
+    const bearer = await patch("gateway", { apiKeyTransport: "bearer" });
+    expect(bearer?.status).toBe(200);
+    expect(liveConfig.providers.gateway.apiKeyTransport).toBe("bearer");
+    expect((await patch("gateway", { apiKeyTransport: "invalid" }))?.status).toBe(400);
+    expect((await patch("extra", { apiKeyTransport: "bearer" }))?.status).toBe(400);
+    expect((await patch("gateway", { authMode: "oauth" }))?.status).toBe(400);
+    const clearTransport = await patch("gateway", { apiKeyTransport: "" });
+    expect(clearTransport?.status).toBe(200);
+    expect(liveConfig.providers.gateway.apiKeyTransport).toBeUndefined();
 
     // authMode local is guarded by the registry: nvidia (key) → 400; ollama (local) → ok.
     const nvidiaLocal = await patch("nvidia", { authMode: "local" });

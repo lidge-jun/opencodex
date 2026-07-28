@@ -90,6 +90,7 @@ export type ProviderUpdatePatch = {
   baseUrl?: string;
   defaultModel?: string;
   apiKey?: string;
+  apiKeyTransport?: "x-api-key" | "bearer" | "";
   authMode?: string;
   note?: string;
   disabled?: boolean;

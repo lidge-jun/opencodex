@@ -78,6 +78,12 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |
 
+对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
+只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
+文档要求使用稳定的会话/任务 key 来提高 Code Plan 缓存命中率；没有 key 的请求仍保持不带 key。
+若已 opt-in 的上游拒绝该字段，opencodex 不会删除字段后重试，也不会改动已保存配置；其他
+provider 仍保持 deny-by-default。
+
 你也可以从 [web 仪表盘](/zh-cn/guides/web-dashboard/) 启动 OAuth。
 
 ### 多个 OAuth 账号

@@ -250,6 +250,10 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
+function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
+  return provider.apiKeyTransport === "bearer";
+}
+
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
   switch (effort) {
@@ -694,7 +698,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
         headers["x-client-request-id"] = crypto.randomUUID();
       } else {
-        headers["x-api-key"] = provider.apiKey;
+        if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+        else headers["x-api-key"] = provider.apiKey;
       }
       if (provider.headers) Object.assign(headers, provider.headers);
 

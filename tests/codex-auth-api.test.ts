@@ -11,10 +11,14 @@ import {
 } from "../src/codex/auth-api";
 import { getCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
+  clearCodexUpstreamHealth,
+  clearThreadAccountMap,
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
+  resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
+import { clearPoolRotationState } from "../src/codex/pool-rotation";
 import {
   clearCodexWebSocketRegistry,
   getTrackedCodexWebSocketCountForAccount,
@@ -119,6 +123,9 @@ beforeEach(() => {
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearMainAccountInfoCache();
   setMainAccountPlan(null);
+  clearCodexUpstreamHealth();
+  clearThreadAccountMap();
+  clearPoolRotationState();
   clearCodexWebSocketRegistry();
   resetMainCodexAccountIdentityTrackingForTests();
 });
@@ -129,6 +136,9 @@ afterEach(() => {
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearMainAccountInfoCache();
   setMainAccountPlan(null);
+  clearCodexUpstreamHealth();
+  clearThreadAccountMap();
+  clearPoolRotationState();
   clearCodexWebSocketRegistry();
   globalThis.fetch = previousFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -453,7 +463,13 @@ describe("codex-auth API", () => {
     const req = new Request("http://localhost/api/codex-auth/active", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     const data = await resp!.json() as { activeCodexAccountId: string | null; autoSwitchThreshold: number };
-    expect(data).toEqual({ activeCodexAccountId: "pool-live", autoSwitchThreshold: 55, upstreamFailoverThreshold: 3 });
+    expect(data).toEqual({
+      activeCodexAccountId: "pool-live",
+      autoSwitchThreshold: 55,
+      upstreamFailoverThreshold: 3,
+      accountPoolStrategy: "quota",
+      accountPoolStickyLimit: 1,
+    });
   });
 
   test("GET /api/codex-auth/accounts returns large live pools without dropping entries", async () => {
@@ -1145,6 +1161,82 @@ describe("codex-auth API", () => {
     expect(config.pausedCodexAccountIds).toEqual(["pool-active"]);
     expect(config.activeCodexAccountId).toBe("pool-next");
     expect(resolveCodexAccountForThread("pause-thread", config)).toBe("pool-next");
+  });
+
+  test("pausing the runtime-active round-robin account promotes an eligible replacement", async () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "pool-active", email: "active@example.test", isMain: false },
+        { id: "pool-next", email: "next@example.test", isMain: false },
+      ],
+      activeCodexAccountId: "pool-active",
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 2,
+    });
+    for (const id of ["pool-active", "pool-next"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `access-${id}`,
+        refreshToken: `refresh-${id}`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `acct-${id}`,
+      });
+    }
+    resetCodexRoutingForManualSelection("pool-active");
+    expect(resolveCodexAccountForThread("round-robin-pause", config)).toBe("pool-active");
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "pool-active", paused: true }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({
+      id: "pool-active",
+      paused: true,
+      activeCodexAccountId: "pool-next",
+    });
+    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(resolveCodexAccountForThread("round-robin-pause", config)).toBe("pool-next");
+  });
+
+  test("pausing a persisted non-active round-robin selection preserves the runtime account", async () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "pool-persisted", email: "persisted@example.test", isMain: false },
+        { id: "pool-runtime", email: "runtime@example.test", isMain: false },
+      ],
+      activeCodexAccountId: "pool-persisted",
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 2,
+    });
+    for (const id of ["pool-persisted", "pool-runtime"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `access-${id}`,
+        refreshToken: `refresh-${id}`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `acct-${id}`,
+      });
+    }
+    resetCodexRoutingForManualSelection("pool-runtime");
+    expect(resolveCodexAccountForThread("runtime-selection", config)).toBe("pool-runtime");
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "pool-persisted", paused: true }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({
+      id: "pool-persisted",
+      paused: true,
+      activeCodexAccountId: "pool-runtime",
+    });
+    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(resolveCodexAccountForThread("runtime-selection", config)).toBe("pool-runtime");
   });
 
   test("PUT /api/codex-auth/accounts/pause-exhausted pauses only freshly confirmed exhausted accounts", async () => {

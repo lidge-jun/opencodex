@@ -411,14 +411,67 @@ describe("icacls failure paths (injected seams)", () => {
 
   test("a thrown EPERM error on a required path still fails closed (no retry)", () => {
     let calls = 0;
-    setIcaclsRunnerForTests(() => {
+    const steps: string[] = [];
+    setIcaclsRunnerForTests(args => {
       calls += 1;
+      if (args.includes("/grant:r")) steps.push("grant-owner");
+      else if (args.includes("/inheritance:r")) steps.push("remove-inheritance");
+      else if (args.includes("/remove:g")) steps.push("remove-broad");
+      else if (args.includes("/findsid")) steps.push("findsid");
+      else steps.push("other");
       const err = new Error("icacls denied") as NodeJS.ErrnoException;
       err.code = "EPERM";
       throw err;
     });
 
     expect(() => hardenSecretPath(secretFile(), { required: true })).toThrow(/permission denied/);
-    expect(calls).toBe(1); // real failures do not consume the timeout retry
+    // Grant runs first: a grant failure must not have already mutated inheritance (#596).
+    expect(calls).toBe(1);
+    expect(steps).toEqual(["grant-owner"]);
+  });
+
+  test("successful harden runs grant-owner before inheritance removal (#596)", () => {
+    const steps: string[] = [];
+    setIcaclsRunnerForTests(args => {
+      if (args.includes("/grant:r")) steps.push("grant-owner");
+      else if (args.includes("/inheritance:r")) steps.push("remove-inheritance");
+      else if (args.includes("/remove:g")) steps.push("remove-broad");
+      else if (args.includes("/findsid")) steps.push("findsid");
+      return ok;
+    });
+
+    expect(hardenSecretPath(secretFile(), { required: true })).toEqual({ ok: true });
+    expect(steps).toEqual(["grant-owner", "remove-inheritance", "remove-broad"]);
+  });
+
+  test("remove:g timeout after owner grant leaves explicit Full Control (#596)", () => {
+    // Models the production strand: inheritance already removed, then a later step
+    // times out. With owner-first ordering the writer still has an explicit ACE.
+    let ownerHasExplicitAce = false;
+    let inheritanceRemoved = false;
+    const timeoutOnRemove: IcaclsResult = {
+      success: false,
+      exitCode: null,
+      timedOut: true,
+      stdout: "",
+    };
+    setIcaclsRunnerForTests(args => {
+      if (args.includes("/grant:r")) {
+        ownerHasExplicitAce = true;
+        return ok;
+      }
+      if (args.includes("/inheritance:r")) {
+        inheritanceRemoved = true;
+        return ok;
+      }
+      if (args.includes("/remove:g")) return timeoutOnRemove;
+      return ok;
+    });
+
+    const result = hardenSecretPath(secretFile(), { required: true });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContain("ETIMEDOUT");
+    expect(inheritanceRemoved).toBe(true);
+    expect(ownerHasExplicitAce).toBe(true);
   });
 });

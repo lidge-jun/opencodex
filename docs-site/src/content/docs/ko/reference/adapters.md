@@ -54,7 +54,7 @@ interface ProviderAdapter {
 ## `anthropic`
 
 **대상:** Anthropic **Messages**(`/v1/messages`).
-**인증:** `key`(`x-api-key`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
+**인증:** `key`(기본 `x-api-key`, 또는 `apiKeyTransport: "bearer"` 설정 시 `Authorization: Bearer`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
 
 - 메시지를 Anthropic content block(text, base64 image, `tool_use`, `thinking`)으로 변환합니다.
 - **Extended thinking 계산:** Anthropic은 `max_tokens > thinking.budget_tokens`를 요구합니다.

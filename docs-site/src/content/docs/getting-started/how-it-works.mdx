@@ -32,9 +32,11 @@ account before the request is forwarded upstream. The rule is intentionally spli
 - **Existing thread ids keep affinity.** A thread is bound to the account generation that started it,
   so a long SSH, tmux, or mobile-attached Codex session keeps using one account instead of being
   rebalanced mid-conversation.
-- **New sessions can rebalance.** For a new thread, opencodex compares known quota usage across 5h,
-  weekly, and 30d windows, skips accounts that need reauthentication or are in cooldown, and can
-  switch to a lower-usage eligible account when the active account crosses the configured threshold.
+- **New sessions can rebalance.** For a new thread, opencodex picks among eligible accounts using
+  `accountPoolStrategy` (`quota` by default, or `round-robin` / `fill-first`). The `quota` strategy
+  compares known usage across 5h, weekly, and 30d windows and can switch to a lower-usage account
+  when the active account crosses `autoSwitchThreshold`. Accounts in cooldown or needing
+  reauthentication are skipped regardless of strategy.
 - **Quota and failure signals feed routing.** The dashboard can force a quota refresh with
   `GET /api/codex-auth/accounts?refresh=1`; successful upstream responses capture quota headers,
   429 puts an account in cooldown, and 401/403 marks it for reauthentication.

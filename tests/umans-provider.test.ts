@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
-import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
+import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey, type KeyLoginProvider } from "../src/oauth/key-providers";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
-function umansProvider(apiKey = "sk-umans"): OcxProviderConfig {
+function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
   return {
     adapter: "anthropic",
     baseUrl: "https://api.code.umans.ai",
     apiKey,
+    ...(apiKeyTransport ? { apiKeyTransport } : {}),
     defaultModel: "umans-coder",
     escapeBuiltinToolNames: true,
   };
@@ -81,6 +82,16 @@ describe("Umans provider", () => {
     expect(provider.modelInputModalities?.["umans-kimi-k2.7"]).toEqual(["text", "image"]);
   });
 
+  test("CLI key-login save payload preserves apiKeyTransport when configured", () => {
+    const bearerGateway = {
+      ...KEY_LOGIN_PROVIDERS.umans,
+      apiKeyTransport: "bearer",
+    } satisfies KeyLoginProvider;
+    const provider = providerConfigFromKeyLoginProvider(bearerGateway, "sk-umans");
+
+    expect(provider.apiKeyTransport).toBe("bearer");
+  });
+
   test("OpenAI API key-login clones max-input metadata and never persists virtual maps", () => {
     const source = KEY_LOGIN_PROVIDERS["openai-apikey"];
     const provider = providerConfigFromKeyLoginProvider(source, "sk-openai");
@@ -111,6 +122,14 @@ describe("Umans provider", () => {
     expect(body.system?.[0]?.text).toContain("Valid tool names for this turn are exactly `cx_web_search`.");
     expect(body.tools[0].name).toBe("cx_web_search");
     expect(body.tool_choice).toEqual({ type: "tool", name: "cx_web_search" });
+  });
+
+  test("Anthropic adapter honors apiKeyTransport=bearer for key-auth gateways", async () => {
+    const req = await createAnthropicAdapter(umansProvider("sk-umans", "bearer")).buildRequest(parsedWithWebSearchTool());
+
+    expect(req.headers.Authorization).toBe("Bearer sk-umans");
+    expect(req.headers["x-api-key"]).toBeUndefined();
+    expect(req.headers["anthropic-version"]).toBe("2023-06-01");
   });
 
   test("Anthropic adapter filters Umans tools for Responses allowed_tools choices", async () => {
@@ -207,5 +226,24 @@ describe("Umans provider", () => {
     expect(headers.get("anthropic-version")).toBe("2023-06-01");
     expect(body.model).toBe("umans-coder");
     expect(body.max_tokens).toBe(1);
+  });
+
+  test("Anthropic API-key validation honors apiKeyTransport=bearer", async () => {
+    let seenInit: RequestInit | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      seenInit = init;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    const valid = await validateApiKey({
+      ...KEY_LOGIN_PROVIDERS.umans,
+      apiKeyTransport: "bearer",
+    }, "sk-umans-valid");
+    const headers = new Headers(seenInit?.headers);
+
+    expect(valid).toBe(true);
+    expect(headers.get("authorization")).toBe("Bearer sk-umans-valid");
+    expect(headers.get("x-api-key")).toBeNull();
+    expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 });

@@ -52,7 +52,9 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 仪表盘管理的 ChatGPT/Codex pool account metadata。secret 单独存放在 `codex-accounts.json`。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 在 Codex Auth 中恢复前，不参与任何后续 Pool 选择的账号 ID。暂停主账号时也包含 `__main__`。 |
 | `activeCodexAccountId?` | `string` | — | 手动选择的 pool account。选择时清除已有 thread affinity，并从下一次请求开始生效；进行中的请求保留原账号。 |
-| `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。 |
+| `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。`quota` 策略和 `fill-first` 的耗尽 threshold 都会用到。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool 的新 session 轮换策略。仅适用于**新 session**；已有 thread id 保留 affinity。`quota`（默认）：活跃账号超过 `autoSwitchThreshold` 时选已知 usage 最低者。`round-robin`：在合格账号间平滑加权均分。`fill-first`：持续使用活跃账号，直到 cooldown、不可用或（如已设置）超过 `autoSwitchThreshold`（未知 usage 不会强制切换），再按稳定排序进入下一个合格账号。 |
+| `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的成功新 session 绑定数。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 策略：禁用、5 分钟 ephemeral 或 1 小时 extended。 |
@@ -71,10 +73,16 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 :::note[Codex 账号池]
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account
 metadata；access/refresh token 存放在加固的 Codex account credential store 中。已有 thread id 会
-保留 account affinity，新 session 可按 quota、cooldown 和 health 自动路由。
+保留 account affinity；新 session 按 `accountPoolStrategy`、quota、cooldown 和 health 自动路由。
 暂停后仍会显示账号及其 quota metadata，但不会参与自动切换、重试/failover 选择、cooldown 恢复探测或手动激活。
 暂停状态会跨重启保留；如果所有账号均已暂停，Pool 路由会明确失败，而不会暗中选择某个账号。
 **暂停已达上限账号** 会先刷新全部账号，只暂停相关 quota window 本次明确返回 100% 的账号；未知额度或刷新失败的账号保持不变。
+
+**轮换策略**（仅新 session；已绑定 thread 不变）：`quota`（默认）— 活跃账号 usage 超过
+`autoSwitchThreshold` 时选最低者；`round-robin` — 均分，`accountPoolStickyLimit`（默认 `1`，
+1–100）控制一次选择保留多少成功绑定；`fill-first` — 耗尽活跃账号（cooldown、需重新认证或
+threshold；未知 usage 不强制切换）后按稳定排序进入下一个。轮换不能规避 provider enforcement —
+多账号使用可能违反服务条款。
 :::
 
 ### 受管 record 形状
@@ -135,6 +143,7 @@ x-opencodex-api-key: your-secret-token
 | `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API key 的请求头方式。默认使用原生 `x-api-key`；兼容 gateway 要求 `Authorization: Bearer <key>` 时设为 `"bearer"`。仅适用于使用 key 认证的 `anthropic` provider。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |
 | `defaultModel?` | `string` | 选中该 provider 但未指定明确模型时使用的模型。 |
 | `models?` | `string[]` | seed/fallback 模型列表。`liveModels` 为 `false` 时，只会发现这些模型。 |

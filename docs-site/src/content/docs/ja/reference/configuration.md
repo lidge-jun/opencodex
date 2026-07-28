@@ -53,7 +53,9 @@ namespaced selected id を bare id に変えます。
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth ダッシュボードが管理する ChatGPT/Codex pool アカウント metadata。secret は `codex-accounts.json` に別途置きます。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Codex Auth で再開するまで、今後のすべての Pool 選択から除外するアカウント ID。メインを一時停止した場合は `__main__` も含みます。 |
 | `activeCodexAccountId?` | `string` | — | 手動選択した pool アカウント。既存 thread affinity を消去して次のリクエストから適用し、処理中のリクエストは現在のアカウントを維持します。 |
-| `autoSwitchThreshold?` | `number` | `80` | 新しいセッション自動切替用の使用量百分率 threshold。既知の 5 時間、週次、30 日 quota window のうち最も高いスコアを使います。`0` なら quota 自動切替をオフにします。 |
+| `autoSwitchThreshold?` | `number` | `80` | 新しいセッション自動切替用の使用量百分率 threshold。既知の 5 時間、週次、30 日 quota window のうち最も高いスコアを使います。`0` なら quota 自動切替をオフにします。`quota` 戦略と `fill-first` の drain threshold にも使います。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool の新しいセッション rotation 戦略。**新しいセッションのみ**に適用され、既存 thread id は affinity を維持します。`quota`（既定）— アクティブアカウントが `autoSwitchThreshold` を超えたら既知 usage 最小を選択。`round-robin` — 適格アカウント間を smooth weighted で均等分散。`fill-first` — cooldown、使用不可、または（設定時）`autoSwitchThreshold` までアクティブアカウントを使い切り（未知 usage は強制切替しない）、安定ソート順で次へ。 |
+| `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する成功的新セッション bind 数。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 一時的な上流失敗が連続して起きたのち、以降の新しいセッションを別の適合 pool アカウントに failover する回数。`0` なら失敗ベースの failover をオフにします。 |
 | `modelCacheTtlMs?` | `number` | `300000` | プロバイダー別 `/models` キャッシュの有効期間（5 分）。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt cache ポリシー。オフ、5 分 ephemeral、1 時間 extended のいずれか。 |
@@ -72,11 +74,13 @@ namespaced selected id を bare id に変えます。
 :::note[Codex アカウントプール]
 pool アカウントの追加と quota 更新はダッシュボードの **Codex Auth** ページで処理してください。設定には secret で
 ないアカウント metadata だけを保存し、access/refresh token は強化された Codex アカウント credential store に別途
-保管します。既存 thread id はアカウント affinity を維持し、新しいセッションは quota、cooldown、health に
-応じて自動ルーティングされる場合があります。
+保管します。既存 thread id はアカウント affinity を維持し、新しいセッションは `accountPoolStrategy`、quota、cooldown、health に
+応じて自動ルーティングされます。
 一時停止したアカウントと quota metadata は表示されたままですが、自動切り替え、再試行/failover 選択、cooldown 復旧プローブ、手動有効化の対象外です。
 状態は再起動後も保持され、すべてのアカウントが一時停止中なら Pool ルーティングは別のアカウントを暗黙に選ばず失敗します。
 **上限到達を一括停止** は全アカウントを先に更新し、関連する quota window が今回 100% と確認できたアカウントだけを停止します。quota が不明、または更新に失敗したアカウントは変更しません。
+
+**rotation 戦略**（新しいセッションのみ；bound thread は不変）：`quota`（既定）— `autoSwitchThreshold` 超過時に最小 usage を選択；`round-robin` — 均等分散、`accountPoolStickyLimit`（既定 `1`、1–100）で 1 選択あたりの成功 bind 数；`fill-first` — アクティブアカウントを cooldown、再認証、または threshold まで使い切り（未知 usage は強制切替しない）後、安定ソート順で次へ。rotation は provider enforcement を回避しません — 複数アカウント利用は ToS 違反の可能性があります。
 :::
 
 ### 管理型レコード形式
@@ -140,6 +144,7 @@ token の代わりに使えます。すべての候補は timing side channel �
 | `responsesPath?` | `string` | `key` 認証の `openai-responses` リクエストに使う任意の相対 resource path。`/` で始め、URL scheme、query、fragment を含めてはいけません。省略時は従来の `/v1/responses` URL 構築を維持します。 |
 | `disabled?` | `boolean` | 設定はディスクに残すがルーティングとモデル/カタログ一覧から除外します。 |
 | `apiKey?` | `string` | API キーまたはリクエスト時に解釈する `${ENV_VAR}` / `$ENV_VAR` 参照。 |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API キーのヘッダー方式。デフォルトはネイティブの `x-api-key` です。`Authorization: Bearer <key>` が必要な互換 gateway では `"bearer"` を設定します。key 認証の `anthropic` プロバイダーでのみ有効です。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 複数キーを納める pool。`apiKey` はアクティブ項目を反映します。各項目には `id`、`key`、選択 `label`、選択数値 `addedAt` があります。 |
 | `defaultModel?` | `string` | 明示的なモデルなしでこのプロバイダーを選んだときに使うモデル。 |
 | `models?` | `string[]` | seed/fallback モデル一覧。`liveModels` が `false` ならここにあるモデルだけが発見されます。 |

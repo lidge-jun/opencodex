@@ -57,6 +57,15 @@ ChatGPT bearer 認証で直接 POST します。注入された `base_url` が o
   `codex features disable image_generation`(`config.toml` の `[features] image_generation = false`)を
   使ってください。
 
+ツール宣言はモデルへの Responses リクエストにも引き続き含まれます。API キー方式の Responses
+プロバイダーでは、opencodex は Codex のプライベートな `image_gen` 名前空間を、上流で安全な
+`image_gen__<inner-name>` エイリアス(例: `image_gen__imagegen`)に変換します。その利用可能な
+エイリアスがクライアント宣言を置き換える場合にのみ、重複する hosted `image_generation` 宣言を
+削除します。関数呼び出しは Codex に届く前に明示的な `image_gen` 名前空間へ戻され、後続の履歴を
+上流へ再送するときは再びエンコードされます。これにより、名前空間を予約している、またはドットを
+含む関数名を拒否する OpenAI 互換の上流でも、クライアント側の画像生成を呼び出せます。ChatGPT
+forward モードは変更されず、ネイティブな Responses Lite 形式を維持します。
+
 `hostname` がループバックアドレスでない場合、Codex が自動生成した API 認証ヘッダーを送る必要があります。このとき専用
 プロバイダーを注入します。
 

@@ -59,7 +59,9 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
-| `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. |
+| `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
+| `accountPoolStickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache (5 min). |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
@@ -100,16 +102,27 @@ also force the same native-provider recovery with `ocx recover-history --legacy-
 :::note[Codex account pool]
 Use the dashboard's **Codex Auth** page to add pool accounts and refresh quotas. The config stores
 non-secret account metadata only; access and refresh tokens are kept in the hardened Codex account
-credential store. Existing thread ids keep account affinity, while new sessions can auto-route based
-on quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool account is retried
-once on an eligible alternate account in the same request (so Codex CLI does not stall on a depleted
-primary while another account still has quota).
+credential store. Existing thread ids keep account affinity, while new sessions auto-route based on
+`accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
+account is retried once on an eligible alternate account in the same request (so Codex CLI does not
+stall on a depleted primary while another account still has quota).
 Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
 retry/failover selection, cooldown recovery probes, and manual activation. The exclusion survives
 restarts; if every account is paused, Pool routing fails instead of silently selecting one.
 **Pause exhausted** first refreshes every account and pauses only those whose relevant quota window
 is freshly confirmed at 100%; unknown quota and failed refreshes are left unchanged.
 :::
+
+**Rotation strategies** (new sessions only; bound threads are unchanged):
+
+| Strategy | Behaviour |
+| --- | --- |
+| `quota` (default) | When the active account's known usage crosses `autoSwitchThreshold`, pick the lowest-usage eligible account across 5h, weekly, and 30d windows. `autoSwitchThreshold: 0` disables quota-based picking. |
+| `round-robin` | Even spread across eligible accounts. `accountPoolStickyLimit` (default `1`, range 1–100) keeps that many successful new-session binds on one pick before advancing. |
+| `fill-first` | Drain the active account until cooldown, reauthentication, or (when set) `autoSwitchThreshold`; unknown usage does not force a switch. Then advance to the next eligible account in stable sorted order. |
+
+Rotation strategies do not protect against provider enforcement — multi-account use may violate
+provider terms of service.
 
 ### anthropicAccountPool (experimental)
 
@@ -122,7 +135,9 @@ organization can share quota; pooling those will not help.
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | When true, sticky session affinity + 429 cooldown failover across eligible Anthropic OAuth accounts. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). Also used as the drain threshold for `fill-first`. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy when the pool is enabled. Same round-robin/fill-first semantics as `accountPoolStrategy`; `quota` uses 5-hour bars only (not Codex multi-window scoring). Applies to **new** sessions only. |
+| `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only when `strategy` is `round-robin`. |
 
 Reliability contract when enabled:
 
@@ -247,6 +262,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API-key header style. Defaults to native `x-api-key`; set `"bearer"` for compatible gateways that require `Authorization: Bearer <key>`. Valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. When `liveModels` is `false`, these are the only discovered models. |

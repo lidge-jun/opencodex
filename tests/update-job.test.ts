@@ -10,7 +10,9 @@ import {
   readUpdateJob,
   restartCommand,
   restartAfterUpdateForTests,
+  staleActiveUpdateJobReason,
   startUpdateJob,
+  UPDATE_JOB_LEGACY_STALE_MS,
   updateExecutionCommand,
   updateJobPath,
   type UpdateJobState,
@@ -702,6 +704,85 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(), `${JSON.stringify(job)}\n`);
 
     expect(() => startUpdateJob("latest", true)).toThrow("already running");
+  });
+
+  test("stale detection trusts a live PID and recovers dead or legacy workers", () => {
+    const now = Date.now();
+    const active = { status: "running" as const, pid: 321, updatedAt: new Date(0).toISOString() };
+    expect(staleActiveUpdateJobReason(active, now, () => true)).toBeNull();
+    expect(staleActiveUpdateJobReason(active, now, () => false)).toContain("PID 321");
+    expect(staleActiveUpdateJobReason({
+      status: "restarting",
+      updatedAt: new Date(now - UPDATE_JOB_LEGACY_STALE_MS).toISOString(),
+    }, now)).toContain("no worker PID");
+    expect(staleActiveUpdateJobReason({
+      status: "running",
+      updatedAt: new Date(now - UPDATE_JOB_LEGACY_STALE_MS + 1).toISOString(),
+    }, now)).toBeNull();
+  });
+
+  test("recovers a dead worker and persists the replacement worker PID", () => {
+    const now = Date.now();
+    const oldJob: UpdateJobState = {
+      id: "dead-worker",
+      status: "running",
+      startedAt: new Date(now - 60_000).toISOString(),
+      updatedAt: new Date(now - 60_000).toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "bun",
+      restart: true,
+      command: "bun add -g @bitkyc08/opencodex@2.7.41",
+      releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      log: [],
+      pid: 777,
+    };
+    writeFileSync(updateJobPath(), `${JSON.stringify(oldJob)}\n`);
+    let unrefCalled = false;
+
+    const started = startUpdateJob("latest", true, {
+      nowMs: () => now,
+      isProcessAliveFn: () => false,
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "bun",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "bun add -g @bitkyc08/opencodex@2.7.41",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => ({
+        pid: 888,
+        unref: () => { unrefCalled = true; },
+        once: () => undefined,
+      }),
+    });
+
+    expect(started.pid).toBe(888);
+    expect(readUpdateJob(started.id)?.pid).toBe(888);
+    expect(readUpdateJob(started.id)?.log.at(-1)).toContain("PID 888");
+    expect(unrefCalled).toBe(true);
+  });
+
+  test("records a failed job when spawning the worker throws", () => {
+    expect(() => startUpdateJob("latest", false, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "bun",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "bun add -g @bitkyc08/opencodex@2.7.41",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw new Error("spawn denied"); },
+    })).toThrow("Could not start update worker");
+    expect(readUpdateJob()?.status).toBe("failed");
+    expect(readUpdateJob()?.error).toContain("spawn denied");
   });
 });
 

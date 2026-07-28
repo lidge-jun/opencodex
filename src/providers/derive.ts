@@ -5,6 +5,7 @@ export interface DerivedKeyLoginProvider {
   label: string;
   baseUrl: string;
   adapter: string;
+  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   dashboardUrl: string;
   models?: string[];
   liveModels?: boolean;
@@ -103,6 +104,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
   return {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
+    ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
@@ -129,6 +131,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.noTopPModels ? { noTopPModels: [...entry.noTopPModels] } : {}),
     ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
     ...(entry.parallelToolCalls !== undefined ? { parallelToolCalls: entry.parallelToolCalls } : {}),
+    ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
@@ -150,6 +153,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       label: entry.label,
       baseUrl: entry.baseUrl,
       adapter: entry.adapter,
+      ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
       dashboardUrl: entry.dashboardUrl,
       ...(entry.models ? { models: [...entry.models] } : {}),
       ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
@@ -221,6 +225,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
   if (!entry) return;
   const seed = providerConfigSeed(entry);
+  if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
@@ -242,6 +247,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.noTopPModels && seed.noTopPModels) prov.noTopPModels = [...seed.noTopPModels];
   if (!prov.noPenaltyModels && seed.noPenaltyModels) prov.noPenaltyModels = [...seed.noPenaltyModels];
   if (prov.parallelToolCalls === undefined && seed.parallelToolCalls !== undefined) prov.parallelToolCalls = seed.parallelToolCalls;
+  if (prov.promptCacheKey === undefined && seed.promptCacheKey !== undefined) prov.promptCacheKey = seed.promptCacheKey;
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];
