@@ -47,16 +47,22 @@ export type EffortCapPoll = {
   subagentEffortCap: string;
 };
 
-export type DashboardCorePoll = {
+export type DashboardOverviewPoll = {
   health: HealthData | null;
   providers: ProviderInfo[];
+  error: boolean;
+};
+
+/** Multi-agent extras — slower peers must not gate status/uptime/provider counts. */
+export type DashboardMultiAgentPoll = {
   maMode: "v1" | "default" | "v2";
   maModeResolved: boolean;
   /** Absent when the optional endpoint failed — callers must keep prior UI state. */
   injection: InjectionPoll | undefined;
   effortCaps: EffortCapPoll | undefined;
-  error: boolean;
 };
+
+export type DashboardCorePoll = DashboardOverviewPoll & DashboardMultiAgentPoll;
 
 /** Fast path for interactive toggles/selects — must not wait on health/providers/usage. */
 export type DashboardControlsPoll = {
@@ -76,6 +82,11 @@ export type DashboardEpochRefs = {
   shadowCallMutationInFlightRef: { current: boolean };
 };
 
+function isAbortError(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true;
+  return error instanceof Error && error.name === "AbortError";
+}
+
 export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): Promise<StartupHealthStatus> {
   try {
     const response = await fetch(`${apiBase}/api/startup-health`, { signal });
@@ -84,7 +95,11 @@ export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): 
     const mapped = mapStartupHealthProbe(data);
     if (!mapped) throw new Error("invalid startup health response");
     return mapped;
-  } catch {
+  } catch (error) {
+    // Aborts must propagate so client-resource can discard the generation.
+    // Swallowing them as "error" briefly shows "Could not read startup protection"
+    // after refresh / remount races.
+    if (isAbortError(error, signal)) throw error;
     return "error";
   }
 }
@@ -190,79 +205,81 @@ export async function fetchDashboardControls(
   return { settings, startupHealthSeed, sidecar, shadowCall };
 }
 
+export async function fetchDashboardOverview(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardOverviewPoll> {
+  try {
+    const [hRes, pRes] = await Promise.all([
+      fetch(`${apiBase}/healthz`, { signal }),
+      fetch(`${apiBase}/api/providers`, { signal }),
+    ]);
+    const health = await requireJson<HealthData>(hRes);
+    const providers = await requireJson<ProviderInfo[]>(pRes);
+    return { health, providers, error: false };
+  } catch {
+    return { health: null, providers: [], error: true };
+  }
+}
+
+export async function fetchDashboardMultiAgent(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardMultiAgentPoll> {
+  const [v2Res, imRes, ecRes] = await Promise.all([
+    fetch(`${apiBase}/api/v2`, { signal }).catch(() => null),
+    fetch(`${apiBase}/api/injection-model`, { signal }).catch(() => null),
+    fetch(`${apiBase}/api/effort-caps`, { signal }).catch(() => null),
+  ]);
+
+  let maMode: "v1" | "default" | "v2" = "default";
+  let maModeResolved = false;
+  try {
+    if (v2Res?.ok) {
+      const v2Data = await v2Res.json();
+      if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") maMode = v2Data.multiAgentMode;
+      else maMode = "default";
+    }
+  } catch { /* old server */ }
+  finally { maModeResolved = true; }
+
+  let injection: InjectionPoll | undefined;
+  try {
+    if (imRes?.ok) {
+      const imData = await imRes.json() as InjectionSelectionResponse & {
+        efforts?: string[];
+        available?: InjectionPoll["injectionAvailable"];
+      };
+      injection = {
+        ...normalizeInjectionSelection(imData),
+        injectionEfforts: imData.efforts ?? [],
+        injectionAvailable: imData.available ?? [],
+      };
+    }
+  } catch { /* old server / malformed — keep prior UI state */ }
+
+  let effortCaps: EffortCapPoll | undefined;
+  try {
+    if (ecRes?.ok) {
+      const ecData = await ecRes.json() as { effortCap?: string | null; subagentEffortCap?: string | null };
+      effortCaps = {
+        effortCap: ecData.effortCap ?? "",
+        subagentEffortCap: ecData.subagentEffortCap ?? "",
+      };
+    }
+  } catch { /* old server */ }
+
+  return { maMode, maModeResolved, injection, effortCaps };
+}
+
+/** @deprecated Prefer fetchDashboardOverview + fetchDashboardMultiAgent for progressive paint. */
 export async function fetchDashboardCore(
   apiBase: string,
   signal: AbortSignal,
 ): Promise<DashboardCorePoll> {
-  const empty: DashboardCorePoll = {
-    health: null,
-    providers: [],
-    maMode: "default",
-    maModeResolved: true,
-    injection: undefined,
-    effortCaps: undefined,
-    error: true,
-  };
-
-  try {
-    const [hRes, pRes, v2Res, imRes, ecRes] = await Promise.all([
-      fetch(`${apiBase}/healthz`, { signal }),
-      fetch(`${apiBase}/api/providers`, { signal }),
-      fetch(`${apiBase}/api/v2`, { signal }).catch(() => null),
-      fetch(`${apiBase}/api/injection-model`, { signal }).catch(() => null),
-      fetch(`${apiBase}/api/effort-caps`, { signal }).catch(() => null),
-    ]);
-
-    const health = await requireJson<HealthData>(hRes);
-    const providers = await requireJson<ProviderInfo[]>(pRes);
-
-    let maMode: "v1" | "default" | "v2" = "default";
-    let maModeResolved = false;
-    try {
-      if (v2Res?.ok) {
-        const v2Data = await v2Res.json();
-        if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") maMode = v2Data.multiAgentMode;
-        else maMode = "default";
-      }
-    } catch { /* old server */ }
-    finally { maModeResolved = true; }
-
-    let injection: InjectionPoll | undefined;
-    try {
-      if (imRes?.ok) {
-        const imData = await imRes.json() as InjectionSelectionResponse & {
-          efforts?: string[];
-          available?: InjectionPoll["injectionAvailable"];
-        };
-        injection = {
-          ...normalizeInjectionSelection(imData),
-          injectionEfforts: imData.efforts ?? [],
-          injectionAvailable: imData.available ?? [],
-        };
-      }
-    } catch { /* old server / malformed — keep prior UI state */ }
-
-    let effortCaps: EffortCapPoll | undefined;
-    try {
-      if (ecRes?.ok) {
-        const ecData = await ecRes.json() as { effortCap?: string | null; subagentEffortCap?: string | null };
-        effortCaps = {
-          effortCap: ecData.effortCap ?? "",
-          subagentEffortCap: ecData.subagentEffortCap ?? "",
-        };
-      }
-    } catch { /* old server */ }
-
-    return {
-      health,
-      providers,
-      maMode,
-      maModeResolved,
-      injection,
-      effortCaps,
-      error: false,
-    };
-  } catch {
-    return empty;
-  }
+  const [overview, multiAgent] = await Promise.all([
+    fetchDashboardOverview(apiBase, signal),
+    fetchDashboardMultiAgent(apiBase, signal),
+  ]);
+  return { ...overview, ...multiAgent };
 }

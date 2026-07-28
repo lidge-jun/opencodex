@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { useI18n } from "../i18n/shared";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   seedStartupHealthFromSettings,
   type StartupHealthStatus,
 } from "../startup-health-ui";
 import {
-  fetchDashboardCore,
   fetchDashboardControls,
-  fetchDashboardUsage,
   fetchDashboardModels,
+  fetchDashboardMultiAgent,
+  fetchDashboardOverview,
+  fetchDashboardUsage,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
   normalizeInjectionSelection,
@@ -42,11 +44,19 @@ import {
 } from "./dashboard-shared";
 
 const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
+const OVERVIEW_CACHE_PREFIX = "ocx.dash.overview.v1:";
+const USAGE_CACHE_PREFIX = "ocx.dash.usage30d.v1:";
+const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
 
 type CachedControls = {
   settings?: SettingsData | null;
   sidecar?: SidecarData | null;
   shadowCall?: ShadowCallData | null;
+};
+
+type CachedOverview = {
+  health: HealthData;
+  providers: ProviderInfo[];
 };
 
 function readCachedControls(apiBase: string): CachedControls | null {
@@ -71,15 +81,27 @@ export function useDashboardData(apiBase: string) {
   const [selectedSection, setSelectedSection] = useState<DashboardSection>(readDashboardSectionFromHash);
   const [modelQuery, setModelQuery] = useState("");
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
-  const [health, setHealth] = useState<HealthData | null>(null);
-  const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(null);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const cachedControls = useMemo(() => readCachedControls(apiBase), [apiBase]);
+  const cachedOverview = useMemo(
+    () => readSessionListCache<CachedOverview>(`${OVERVIEW_CACHE_PREFIX}${apiBase}`),
+    [apiBase],
+  );
+  const cachedUsage = useMemo(
+    () => readSessionListCache<UsageSummary30d>(`${USAGE_CACHE_PREFIX}${apiBase}`),
+    [apiBase],
+  );
+  const cachedStartup = useMemo(
+    () => readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`),
+    [apiBase],
+  );
+  const [health, setHealth] = useState<HealthData | null>(() => cachedOverview?.health ?? null);
+  const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup);
+  const [providers, setProviders] = useState<ProviderInfo[]>(() => cachedOverview?.providers ?? []);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(() => cachedControls?.settings ?? null);
   const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
-  const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(null);
+  const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -145,7 +167,7 @@ export function useDashboardData(apiBase: string) {
     }
   }, []);
 
-  const startupHealthRef = useRef<StartupHealthStatus | null>(null);
+  const startupHealthRef = useRef<StartupHealthStatus | null>(cachedStartup);
   /** Bumped whenever the dedicated startup-health poll commits; core polls ignore older generations. */
   const startupHealthGenerationRef = useRef(0);
   const epochRefs = useRef<DashboardEpochRefs>({
@@ -164,17 +186,14 @@ export function useDashboardData(apiBase: string) {
     { pollMs: 30_000 },
   );
 
-  const corePoll = useKeyedClientResource(
-    `dashboard-core:${apiBase}`,
+  // Wave 1: status/uptime/providers must not wait on injection-model / usage.
+  const overviewPoll = useKeyedClientResource(
+    `dashboard-overview:${apiBase}`,
     [apiBase],
-    async (signal) => {
-      // Capture generation at fetch start so a newer probe can win at commit time.
-      const startupHealthGeneration = startupHealthGenerationRef.current;
-      const data = await fetchDashboardCore(apiBase, signal);
-      return { ...data, startupHealthGeneration };
-    },
+    (signal) => fetchDashboardOverview(apiBase, signal),
     { pollMs: 5000 },
   );
+  const overviewReady = health !== null || overviewPoll.data !== undefined;
 
   const controlsPoll = useKeyedClientResource(
     `dashboard-controls:${apiBase}`,
@@ -187,25 +206,33 @@ export function useDashboardData(apiBase: string) {
     { pollMs: 5000 },
   );
 
+  // Wave 2: heavier peers start after overview commits (or session seed) to cut contention.
+  const multiAgentPoll = useKeyedClientResource(
+    `dashboard-multi-agent:${apiBase}`,
+    [apiBase],
+    (signal) => fetchDashboardMultiAgent(apiBase, signal),
+    { pollMs: 5000, enabled: overviewReady },
+  );
+
   const usagePoll = useKeyedClientResource(
     `dashboard-usage:${apiBase}`,
     [apiBase],
     (signal) => fetchDashboardUsage(apiBase, signal),
-    { pollMs: 60_000 },
+    { pollMs: 60_000, enabled: overviewReady },
   );
 
   const diagnosticsPoll = useKeyedClientResource(
     `dashboard-diagnostics:${apiBase}`,
     [apiBase],
     (signal) => fetchProjectConfigDiagnostics(apiBase, signal),
-    { pollMs: PROJECT_CONFIG_DIAGNOSTICS_POLL_MS },
+    { pollMs: PROJECT_CONFIG_DIAGNOSTICS_POLL_MS, enabled: overviewReady },
   );
 
   const modelsPoll = useKeyedClientResource(
     `dashboard-models:${apiBase}`,
     [apiBase, error],
     (signal) => fetchDashboardModels(apiBase, signal),
-    { enabled: !error },
+    { enabled: overviewReady && !error },
   );
 
   /* eslint-disable react-hooks/set-state-in-effect -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
@@ -214,14 +241,27 @@ export function useDashboardData(apiBase: string) {
       startupHealthGenerationRef.current += 1;
       setStartupHealth(startupHealthPoll.data);
       startupHealthRef.current = startupHealthPoll.data;
+      writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, startupHealthPoll.data);
     }
-  }, [startupHealthPoll.data]);
+  }, [startupHealthPoll.data, apiBase]);
 
   useEffect(() => {
-    const data = corePoll.data;
+    const data = overviewPoll.data;
     if (!data) return;
-    if (data.health) setHealth(data.health);
+    if (data.health) {
+      setHealth(data.health);
+      writeSessionListCache(`${OVERVIEW_CACHE_PREFIX}${apiBase}`, {
+        health: data.health,
+        providers: data.providers,
+      });
+    }
     setProviders(data.providers);
+    setError(data.error);
+  }, [overviewPoll.data, apiBase]);
+
+  useEffect(() => {
+    const data = multiAgentPoll.data;
+    if (!data) return;
     setMaMode(data.maMode);
     setMaModeResolved(data.maModeResolved);
     if (data.injection) {
@@ -236,8 +276,7 @@ export function useDashboardData(apiBase: string) {
       setEffortCap(data.effortCaps.effortCap);
       setSubagentEffortCap(data.effortCaps.subagentEffortCap);
     }
-    setError(data.error);
-  }, [corePoll.data]);
+  }, [multiAgentPoll.data]);
 
   useEffect(() => {
     const data = controlsPoll.data;
@@ -252,6 +291,7 @@ export function useDashboardData(apiBase: string) {
       const merged = seedStartupHealthFromSettings(startupHealthRef.current, data.startupHealthSeed);
       setStartupHealth(merged);
       startupHealthRef.current = merged;
+      if (merged) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, merged);
     }
     if (data.sidecar) setSidecar(data.sidecar);
     if (data.shadowCall !== undefined) setShadowCall(data.shadowCall);
@@ -263,8 +303,11 @@ export function useDashboardData(apiBase: string) {
   }, [controlsPoll.data, apiBase]);
 
   useEffect(() => {
-    if (usagePoll.data !== undefined) setUsage30d(usagePoll.data);
-  }, [usagePoll.data]);
+    if (usagePoll.data !== undefined) {
+      setUsage30d(usagePoll.data);
+      writeSessionListCache(`${USAGE_CACHE_PREFIX}${apiBase}`, usagePoll.data);
+    }
+  }, [usagePoll.data, apiBase]);
 
   useEffect(() => {
     if (diagnosticsPoll.data) setProjectConfigWarnings(diagnosticsPoll.data);
@@ -566,7 +609,7 @@ export function useDashboardData(apiBase: string) {
     expandedProviders, setExpandedProviders,
     health, startupHealth, providers, models, settings, sidecar, shadowCall, usage30d,
     usageLoading: usagePoll.loading && !usage30d,
-    healthLoading: corePoll.loading && !health,
+    healthLoading: overviewPoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
     maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
     effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
