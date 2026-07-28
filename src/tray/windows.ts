@@ -1,11 +1,11 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { expandUserPath, getConfigDir } from "../config";
+import { getConfigDir } from "../config";
 import { durableBunPath } from "../lib/bun-runtime";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { resolveCodexHomeDir } from "../codex/home";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
@@ -75,8 +75,10 @@ function sourceTrayIconPaths(): string[] {
 }
 
 function currentCodexHome(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
+  // Keep the tray's listener/launcher target aligned with Codex's active home.
+  // This matters on the Windows desktop setup, where CODEX_HOME is E:\\codex
+  // instead of the historical %USERPROFILE%\\.codex fallback.
+  return resolveCodexHomeDir();
 }
 
 function currentEntry(): WindowsTrayEntry {
