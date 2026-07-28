@@ -17,6 +17,13 @@ const MAX_POLL_INTERVAL_MS = 15_000;
 const POLL_BACKOFF = 1.5;
 const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
 
+export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
+export type PollVideoJobFn = (
+  requestId: string,
+  auth: { baseUrl: string; token: string },
+  signal?: AbortSignal,
+) => ReturnType<typeof pollVideoJob>;
+
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new Error("aborted"));
   return new Promise((resolve, reject) => {
@@ -78,6 +85,9 @@ export async function* pollVideoWithHeartbeats(
   auth: { baseUrl: string; token: string },
   signal: AbortSignal,
   timeoutMs: number = DEFAULT_VIDEO_TIMEOUT_MS,
+  /** Test seams — avoid mock.module / global setTimeout (both poison parallel Bun CI). */
+  sleepFn: SleepFn = sleep,
+  pollFn: PollVideoJobFn = pollVideoJob,
 ): AsyncGenerator<
   { type: "heartbeat"; message: string },
   { ok: true; videoUrl: string } | { ok: false; error: string }
@@ -92,7 +102,7 @@ export async function* pollVideoWithHeartbeats(
     }
 
     try {
-      const poll = await pollVideoJob(requestId, auth, signal);
+      const poll = await pollFn(requestId, auth, signal);
       if (poll.status === "done") {
         if (poll.videoUrl) {
           return { ok: true, videoUrl: poll.videoUrl };
@@ -123,7 +133,7 @@ export async function* pollVideoWithHeartbeats(
     yield { type: "heartbeat", message: `Generating video... ${elapsed}s` };
 
     try {
-      await sleep(interval, signal);
+      await sleepFn(interval, signal);
     } catch {
       const isDeadline = signal.aborted && signal.reason instanceof Error && signal.reason.name === "TimeoutError";
       if (isDeadline) return { ok: false, error: timeoutStr };

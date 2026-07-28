@@ -1,6 +1,9 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult } from "../../src/images/fulfill-video";
-import { pollVideoJob } from "../../src/images/xai-video-client";
+import type { PollVideoJobFn } from "../../src/images/fulfill-video";
+
+const auth = { baseUrl: "https://api.x.ai/v1", token: "t" };
+const noopSleep = async (): Promise<void> => {};
 
 describe("parseVideoCallArgs", () => {
   test("parses valid args", () => {
@@ -64,127 +67,67 @@ describe("parseVideoCallArgs", () => {
 });
 
 describe("pollVideoWithHeartbeats", () => {
-  beforeEach(() => {
-    mock.restore();
-  });
-
-  test("returns done on first poll", async () => {
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => Promise.resolve({
-        status: "done" as const,
-        videoUrl: "https://cdn.x.ai/v.mp4",
-      })),
-    }));
-
+  async function drain(
+    pollFn: PollVideoJobFn,
+    timeoutMs = 60_000,
+  ): Promise<{ heartbeats: string[]; result: { ok: true; videoUrl: string } | { ok: false; error: string } }> {
     const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal);
+    const gen = pollVideoWithHeartbeats("r1", auth, ac.signal, timeoutMs, noopSleep, pollFn);
     const heartbeats: string[] = [];
-    let result;
     for (;;) {
       const { value, done } = await gen.next();
-      if (done) { result = value; break; }
+      if (done) return { heartbeats, result: value };
       heartbeats.push(value.message);
     }
+  }
+
+  test("returns done on first poll", async () => {
+    const { result } = await drain(async () => ({
+      status: "done",
+      videoUrl: "https://cdn.x.ai/v.mp4",
+    }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.videoUrl).toBe("https://cdn.x.ai/v.mp4");
   });
 
   test("yields at least one heartbeat before returning", async () => {
-    // Mock sleep to resolve immediately so the 5s poll interval doesn't block CI.
-    const origSetTimeout = globalThis.setTimeout;
     let callCount = 0;
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => {
-        callCount++;
-        return Promise.resolve({
-          status: callCount >= 2 ? "done" as const : "processing" as const,
-          ...(callCount >= 2 ? { videoUrl: "https://x.ai/v.mp4" } : {}),
-        });
-      }),
-    }));
-    // Override setTimeout globally — sleep() uses it internally.
-    globalThis.setTimeout = ((fn: () => void) => { fn(); return 0 as unknown as NodeJS.Timeout; }) as typeof globalThis.setTimeout;
-
-    const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal, 60_000);
-    const heartbeats: string[] = [];
-    let result;
-    for (;;) {
-      const { value, done } = await gen.next();
-      if (done) { result = value; break; }
-      heartbeats.push(value.message);
-    }
-    globalThis.setTimeout = origSetTimeout;
+    const { heartbeats, result } = await drain(async () => {
+      callCount++;
+      return callCount >= 2
+        ? { status: "done" as const, videoUrl: "https://x.ai/v.mp4" }
+        : { status: "processing" as const };
+    });
     expect(heartbeats.length).toBeGreaterThanOrEqual(1);
     expect(result.ok).toBe(true);
-  }, 5_000);
+  });
 
   test("returns failed status", async () => {
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => Promise.resolve({ status: "failed" as const })),
-    }));
-
-    const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal);
-    let result;
-    for (;;) {
-      const { value, done } = await gen.next();
-      if (done) { result = value; break; }
-    }
+    const { result } = await drain(async () => ({ status: "failed" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe("video generation failed");
   });
 
   test("returns timeout error when timeoutMs exceeded", async () => {
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => Promise.resolve({ status: "processing" as const })),
-    }));
-
-    const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal, 0);
-    let result;
-    for (;;) {
-      const { value, done } = await gen.next();
-      if (done) { result = value; break; }
-    }
+    const { result } = await drain(async () => ({ status: "processing" }), 0);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("timed out");
   });
 
   test("returns error when done but no videoUrl", async () => {
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => Promise.resolve({ status: "done" as const })),
-    }));
-
-    const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal);
-    let result;
-    for (;;) {
-      const { value, done } = await gen.next();
-      if (done) { result = value; break; }
-    }
+    const { result } = await drain(async () => ({ status: "done" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("no video URL");
   });
 
   test("stops retrying on permanent 4xx poll error", async () => {
     let pollCount = 0;
-    mock.module("../../src/images/xai-video-client", () => ({
-      pollVideoJob: mock(() => {
-        pollCount++;
-        const err = new Error("xAI videos poll API returned 401") as Error & { status: number };
-        err.status = 401;
-        return Promise.reject(err);
-      }),
-    }));
-
-    const ac = new AbortController();
-    const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal);
-    let result;
-    for (;;) {
-      const { value, done } = await gen.next();
-      if (done) { result = value; break; }
-    }
+    const { result } = await drain(async () => {
+      pollCount++;
+      const err = new Error("xAI videos poll API returned 401") as Error & { status: number };
+      err.status = 401;
+      throw err;
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("permanently");
     expect(pollCount).toBe(1);
