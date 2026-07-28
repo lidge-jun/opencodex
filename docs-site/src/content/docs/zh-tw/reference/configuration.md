@@ -4,9 +4,11 @@ description: ~/.opencodex/config.json 的所有欄位 —— 頂層選項、prov
 ---
 
 opencodex 使用 `~/.opencodex/config.json` 設定。`ocx init` 和儀表板會寫入該檔案，你也可以直接
-編輯；代理會在啟動時重新載入。如果檔案無法解析（例如被截斷或不是有效 JSON），opencodex 會將
-其備份為 `config.json.invalid-<timestamp>`，在 console 中警告，再以預設值啟動。檔案缺失時也會
-回退到預設設定（單個 `openai` forward provider）。
+編輯；代理會在啟動時重新載入。**服務執行期間請優先停止代理，或改用儀表板／管理 API 再手動修改**：
+執行中的程序會把設定放在記憶體中，中途儲存可能用該快照覆寫磁碟。自 v2.7.41 起，手動修改的
+`claudeCode` 子樹在這類儲存中會被保留；其他鍵（例如 `providers`）仍可能被覆寫。如果檔案無法解析
+（例如被截斷或不是有效 JSON），opencodex 會將其備份為 `config.json.invalid-<timestamp>`，在
+console 中警告，再以預設值啟動。檔案缺失時也會回退到預設設定（單個 `openai` forward provider）。
 
 ## 保留的 OpenAI providers
 
@@ -71,6 +73,18 @@ no-replace 方式建立 `config.json.pre-openai-tiers-v2.bak`，並把已知舊 
 metadata；access/refresh token 存放在加固的 Codex account credential store 中。已有 thread id 會
 保留 account affinity，新 session 可按 quota、cooldown 和 health 自動路由。
 :::
+
+### claudeCode（OcxClaudeCodeConfig）
+
+Claude Code 入站設定，供 `/v1/messages` 介面、`ocx claude` 啟動器與 GUI 的 Claude 頁面使用。
+原生透傳 body 上限（隨 body-occupancy 防護一併加入）：
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `claudeCode.bodyStallSec?` | `number` | `90` | 原生透傳 body 閒置預算（秒）——讀取等待中上游原始位元組的靜默時間，而非總時長。最小值 1。剛好為 `0` 時停用。 |
+| `claudeCode.bodyMaxBytes?` | `number` | `67108864` | 原生透傳 body 累計位元組上限（串流 SSE 與緩衝的非串流回應）。剛好為 `0` 時停用。 |
+| `claudeCode.authMode?` | `"proxy" \| "subscription"` | 未設定（auto） | 啟動時如何處理 `ANTHROPIC_AUTH_TOKEN`。未設定即 auto：opencodex 每次啟動都會偵測 Claude 認證，有則選 subscription、無則選 proxy；無法判斷時選 subscription 並警告。明確設定的值絕不會被偵測覆寫。見 [Claude Code](/zh-tw/guides/claude-code/#auth-mode)。 |
+| `claudeCode.authModeMigratedAt?` | `string` | 未設定 | 內部一次性標記。升級時若把 pre-`auto` 設定釘選為 `subscription` 會寫入一次，避免刻意使用訂閱的使用者被靜默改到 proxy。請勿手動設定。 |
 
 ### 受管 record 形狀
 
@@ -138,6 +152,9 @@ x-opencodex-api-key: your-secret-token
 | `contextWindow?` | `number` | 路由目錄條目的 provider 級 Codex 可見 context-window cap。即時 metadata 更小時保留即時值。 |
 | `modelContextWindows?` | `Record<string,number>` | 模型級 context-window cap。匹配模型時優先於 `contextWindow`，且不會抬高更小的即時 metadata。 |
 | `modelInputModalities?` | `Record<string,string[]>` | 模型級目錄 input hint，如 `["text"]` 或 `["text", "image"]`。 |
+| `modelMaxInputTokens?` | `Record<string,number>` | 模型級最大 input token 上限，供目錄自動壓縮提示使用。值必須為正整數。 |
+| `defaultMaxOutputTokens?` | `number` | 當用戶端省略 `max_output_tokens` 時，`openai-chat` 在 provider 層級的 `max_tokens` 後備值。明確請求仍優先。 |
+| `modelMaxOutputTokens?` | `Record<string,number>` | 模型級 `openai-chat` 後備輸出預算。精確／模型 pattern 匹配優先於 `defaultMaxOutputTokens`；所有值必須為正整數。 |
 | `headers?` | `Record<string,string>` | 額外上游 header。Authorization、cookie、API-key header、包含換行的值和無效 header 名稱會被拒絕。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 預設 OpenRouter provider 路由設定。支援 `order`、`only` 和 `allowFallbacks`；僅適用於 canonical OpenRouter URL 和 `openai-chat` adapter。 |
 | `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | 按精確模型 id 覆蓋 `openRouterRouting`。 |
@@ -147,6 +164,7 @@ x-opencodex-api-key: your-secret-token
 | `reasoningEfforts?` | `string[]` | provider 級需要公佈和傳送的 Codex reasoning label（`low`、`medium`、`high`、`xhigh`、`max`、`ultra`）。 |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | 模型級 reasoning label。空陣列會隱藏該模型的 effort 控制元件。 |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | 模型級 reasoning summary 能力。設為 `false` 時不再宣告 summary 支援，並在 `openai-responses` 請求前移除 summary-delivery 欄位。 |
+| `modelAdapters?` | `Record<string,string>` | 同一 gateway 前方承載不同 wire 模型時的逐模型 wire 覆寫。鍵為上游原生模型 id；值必須是 `openai-chat` 或 `openai-responses`。適用於某個模型需要 Responses API 才能使用 `web_search` 等託管工具、而其兄弟模型仍可用 chat completions 的情況。上游釘死單一 wire 的模型，以及 canonical ChatGPT forward provider，會拒絕覆寫。 |
 | `reasoningEffortMap?` | `Record<string,string>` | provider 級 reasoning label wire alias。只在上游需要不同值時使用。 |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | 模型級 reasoning label wire alias。 |
 | `noReasoningModels?` | `string[]` | 拒絕 reasoning/thinking 引數的模型；adapter 會為它們移除 `reasoning_effort`。 |
@@ -154,6 +172,7 @@ x-opencodex-api-key: your-secret-token
 | `noTopPModels?` | `string[]` | 拒絕呼叫方指定 `top_p` 的模型。 |
 | `noPenaltyModels?` | `string[]` | 拒絕 presence/frequency penalty 的模型。 |
 | `parallelToolCalls?` | `boolean` | 啟用或停用並行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 只有顯式為 `true` 時才公佈支援。 |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | provider 本機、預設停用的 passthrough SSE 修復：針對精確的 `message`／`reasoning` 佔位 id 與缺失的 terminal id。僅下游生效；function-call id 與 `call_id` 絕不會被改寫。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；forced/named 選擇會降級。 |
 | `preserveReasoningContentModels?` | `string[]` | 要求在 chat history 中保留先前 assistant `reasoning_content` 的模型。 |
 | `thinkingToggleModels?` | `string[]` | 使用 vendor `thinking.enabled` toggle，而不是 effort ladder 的 chat 模型。 |
@@ -187,6 +206,28 @@ x-opencodex-api-key: your-secret-token
 此時要麼刪掉 `baseUrl`（路由本來就只會使用 registry 端點），要麼改用端點與目標 URL 相符的 provider。
 當同一產品分割槽域運營時，選對條目尤其重要：`alibaba-token-plan` 固定指向北京，而
 `alibaba-token-plan-intl` 覆蓋國際端點，為其中一個簽發的 key 在另一個上會被拒絕。
+
+對於有問題的 `openai-responses` 相容 gateway，`responsesItemIdRepair` 應直接寫在 provider 物件上，例如：
+
+```json
+{
+  "providers": {
+    "custom-gateway": {
+      "adapter": "openai-responses",
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "${GATEWAY_KEY}",
+      "responsesItemIdRepair": {
+        "reasoning": ["rs_0"],
+        "message": ["msg_0"],
+        "repairMissingTerminalIds": true
+      }
+    }
+  }
+}
+```
+
+佔位列表僅做精確字串匹配。一般／有狀態的 Responses 供應商請保持該欄位未設定，讓
+passthrough 與上游保持位元組級一致。
 
 ## Cursor provider（`adapter: "cursor"`）
 

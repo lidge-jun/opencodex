@@ -21,6 +21,21 @@ Codex 使用 OpenAI **Responses API**。opencodex 接收透過 HTTP 與 Server-S
             └─────────────────────────────────────────────────────────────────────┘
 ```
 
+![Codex 多帳號路由：既有 thread 會維持同一個 ChatGPT 帳號，新 session 則可重新整理配額並選擇使用量較低的健康帳號。](../../../../assets/multi-auth-routing.svg)
+
+## Codex 認證帳號選擇
+
+當選中的供應商是 ChatGPT/Codex 直通時，opencodex 可在請求轉發到上游前，先從已儲存的帳號池中選帳。
+規則刻意拆成兩部分：
+
+- **既有 thread id 維持親和性。** thread 會綁定啟動它的帳號世代，因此長時間的 SSH、tmux 或
+  行動裝置掛載的 Codex session 會繼續使用同一個帳號，而不是在對話中途被重新平衡。
+- **新 session 可以重新平衡。** 對新 thread，opencodex 會比較 5 小時、每週與 30 天視窗的已知配額
+  使用量，略過需要重新認證或處於 cooldown 的帳號；當作用中帳號跨過設定門檻時，可切換到使用量較低
+  的合格帳號。
+- **配額與失敗訊號會回饋路由。** 儀表板可用 `GET /api/codex-auth/accounts?refresh=1` 強制重新整理
+  配額；成功的上游回應會擷取配額標頭，429 會讓帳號進入 cooldown，401/403 則標記為需重新認證。
+
 ## Sub-agent 模型選擇
 
 全新安裝會透過 `subagentModels` 在 Codex 的 sub-agent 選擇器中優先顯示 `gpt-5.5`、GPT-5.6
@@ -45,7 +60,8 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
    `defaultProvider` 回退。參見 [模型路由](/zh-tw/guides/model-routing/)。
 
 3. **認證** —— 對於 `oauth` 型別的 provider,opencodex 會換入一個全新、自動重新整理的 access
-   token 作為 bearer key,從而讓現有的 adapter 無需改動即可完成認證。
+   token 作為 bearer key,從而讓現有的 adapter 無需改動即可完成認證。對於 ChatGPT/Codex 帳號池，
+   `codex/auth-context.ts` 會先解析帳號；若必要的池憑證不可用，直通 adapter 會拒絕繼續。
 
 4. **Vision sidecar(可選)** —— 如果已路由的模型被列在 `provider.noVisionModels` 中,且
    請求攜帶了圖像，opencodex 會透過你的 ChatGPT 登入憑證，使用已設定的 vision sidecar 描述

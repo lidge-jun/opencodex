@@ -125,6 +125,65 @@ Codex 顯示的模型來自一個磁碟上的目錄（預設為 `$CODEX_HOME/ope
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 檔位；上游不支援的值會在傳送請求前完成
 對映或下調。
 
+### 自訂模型顯示名稱
+
+自訂模型可以帶一個可讀的**顯示名稱**，只覆寫 Codex 模型選擇器中顯示的標籤，不改變任何路由行為。
+顯示名稱只對應目錄條目的 `display_name` 欄位——路由 slug（`<provider>/<model>`）、別名碰撞順序、
+供應商，以及原生 OpenAI 行銷名稱都維持不動。
+
+可從 CLI 新增顯示名稱（proxy 在線時會立刻同步目錄）：
+
+```bash
+ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
+```
+
+也可以透過管理 API（`POST /api/custom-models`、`PUT /api/custom-models/<id>`，搭配 `displayName`
+字串）與 web 儀表板設定或編輯。`/` 會被拒絕，因為會與路由 slug 的分隔符衝突。
+
+顯示名稱**只用於顯示，且在重新產生時保持穩定**。每次 `ocx sync` 與目錄重新整理都會從
+`config.json`（含 `customModels`）重新推導路由條目，因此會重新套用已設定的名稱，而不會漂移回
+路由 slug。受管服務重啟後，也會在 proxy 繫結後盡力同步一次。若這次啟動時的 best-effort 同步失敗
+（例如離線登入），會保留先前已寫入的目錄，並在下一次成功的 `ocx sync` 重新套用設定名稱。真正的
+上游原生名稱（例如 `gpt-5.6-sol` →「GPT-5.6-Sol」）來自固定的上游快照，絕不會被自訂顯示名稱覆寫。
+
+### 外部供應商管理器
+
+若 `config.toml` 已選用非 `openai` 或 `opencodex` 的供應商，OpenCodex 會保持檔案不變，並跳過
+profile 寫入、目錄／快取重新整理，以及立即與背景的 Codex 歷史遷移。管理自訂供應商的工具常會把既有
+session 標上該供應商 id；若直接替換作用中的 id，可能讓這些完好 session 從 Codex 的歷史檢視中消失。
+由舊版根級 profile 選到的外部供應商也適用同一保護。
+
+請讓單一工具負責 Codex 供應商設定的所有權。若要在既有供應商管理器後方使用 OpenCodex，請把該供應商
+指向 `http://127.0.0.1:10100/v1`，並使用 Responses 直通（Codex TOML 中 `wire_api = "responses"`），
+而不是 Chat Completions 轉譯。啟用 proxy API 認證時，還需從 `OPENCODEX_API_AUTH_TOKEN` 傳入
+`x-opencodex-api-key`，形式與上方 non-loopback 供應商設定一致。若要讓 OpenCodex 直接注入路由，請先把
+Codex 切回內建 `openai` 供應商，並移除任何使用者自有的根級 `openai_base_url`，再重新執行
+`ocx start`。
+
+### 目錄疑難排解
+
+若模型在 Codex 中缺失，或目錄順序／可見性看起來不對，請依序檢查：
+
+1. **供應商上的 `selectedModels`** —— 非空 allowlist 只會把列出的 id 暴露給 Codex；空或省略則暴露所有
+   已發現模型。不在 allowlist 中的 id 永遠不會進入目錄。
+2. **`disabledModels`（頂層）** —— 會同時從目錄與 `/v1/models` 隱藏模型，並把裸原生 GPT slug 的
+   `visibility` 設為 `"hide"`。
+3. **`liveModels: false` 且 `models` 為空** —— 當即時探索關閉，且 `models` 為空或省略時，opencodex
+   不會為該供應商暴露任何路由模型。
+4. **Cursor `GetUsableModels`** —— Cursor adapter 透過 protobuf `GetUsableModels` RPC 探索模型，而不是
+   `/models`，因此 Cursor 端的變更可能獨立於其他供應商改變可見 id。
+5. **快取與 `ocx sync`** —— 即時目錄約快取五分鐘（`modelCacheTtlMs`，預設 `300000`）。執行
+   `ocx sync` 可強制重新抓取並立刻重寫目錄。
+
+:::caution[其他本機寫入者]
+目錄寫入（`opencodex-catalog.json`、`config.toml`）在 opencodex **內部**是原子的，這只避免兩個
+opencodex 擁有的寫入者競爭時出現半寫入檔案。它**不會**阻止其他本機行程、檔案監看器或同步代理在
+opencodex 寫入後改寫目錄可見性或順序。Codex 另有獨立的 `models_cache.json`，可自行重新整理，
+因而可能在不改寫 `opencodex-catalog.json` 的情況下改變可見列表。若 proxy 執行中模型卻意外跳動，
+請先停止或重新設定競爭的寫入者，再執行 `ocx sync`——這是外部寫入者風險，不是已確認的 opencodex
+缺陷。
+:::
+
 ## 代理連線錯誤
 
 如果 Codex 重試後報出類似
