@@ -324,13 +324,15 @@ describe("resolveCodexRuntime", () => {
     } else {
       writeFileSync(bin, [
         "#!/bin/sh",
-        `d=$(dirname "$0")`,
+        "d=${0%/*}",
         `if [ "$1" = "--version" ]; then`,
-        `  echo probe >> "$d/probes.log"`,
-        `  echo "codex-cli 0.145.0-alpha.30"`,
+        `  printf "%s\\n" probe >> "$d/probes.log"`,
+        `  printf "%s\\n" "codex-cli 0.145.0-alpha.30"`,
         "  exit 0",
         "fi",
-        `cat "$d/catalog.json"`,
+        `while IFS= read -r line || [ -n "$line" ]; do`,
+        `  printf "%s\\n" "$line"`,
+        `done < "$d/catalog.json"`,
         "",
       ].join("\n"), "utf8");
       chmodSync(bin, 0o755);
@@ -384,12 +386,14 @@ describe("resolveCodexRuntime", () => {
 
   test("repeat resolveAndPersistCodexRuntime keeps an unchanged selection's persisted stamp", () => {
     const configDir = tempConfigDir();
+    let now = 0;
     const deps = {
       configDir,
       env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "" },
       platform: "win32" as const,
       existsSync: () => true,
       execFileSync: (() => "codex-cli 0.145.0-alpha.30") as RuntimeExecFile,
+      now: () => ++now,
     };
 
     const first = resolveAndPersistCodexRuntime(deps);
@@ -403,6 +407,38 @@ describe("resolveCodexRuntime", () => {
     expect(second.runtime.command).toBe(first.runtime.command);
     expect(second.runtime.version).toBe(first.runtime.version);
     expect(loadPersistedCodexRuntime({ configDir })?.updatedAt).toBe(firstStamp);
+  });
+
+  test("treats missing persisted and resolved versions as the same selection", () => {
+    const configDir = tempConfigDir();
+    const statePath = join(configDir, "codex-runtime.json");
+    writeFileSync(statePath, JSON.stringify({
+      version: 1,
+      command: "codex",
+      source: "environment",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = configDir;
+    resetCodexRuntimeResolveCacheForTests();
+    const deps = { env: { PATH: "" }, discoverAlternatives: false };
+
+    try {
+      const cached = resolveCodexRuntime(deps);
+      expect(cached.runtime.source).toBe("fallback");
+      cached.runtime.source = "environment";
+      (cached.runtime as { version?: string | null }).version = undefined;
+      const before = readFileSync(statePath, "utf8");
+
+      resolveAndPersistCodexRuntime(deps);
+
+      expect(readFileSync(statePath, "utf8")).toBe(before);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetCodexRuntimeResolveCacheForTests();
+    }
   });
 
   test("catalog clamp clears diagnostics inside deps.configDir when probe fails", async () => {

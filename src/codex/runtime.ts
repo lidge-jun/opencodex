@@ -510,7 +510,7 @@ export function resolveAndPersistCodexRuntime(
   const selectionUnchanged = persistedRuntime !== null
     && persistedRuntime.command === result.runtime.command
     && persistedRuntime.source === result.runtime.source
-    && (persistedRuntime.selectedVersion ?? null) === result.runtime.version;
+    && (persistedRuntime.selectedVersion ?? null) === (result.runtime.version ?? null);
   if (result.runtime.command && result.runtime.source !== "fallback" && !selectionUnchanged) {
     try {
       persistCodexRuntime(result.runtime, deps);
