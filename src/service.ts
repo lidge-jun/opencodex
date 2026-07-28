@@ -1070,6 +1070,9 @@ export function windowsTaskRegistrationHealthy(
   const action = taskXmlSection(scrubbed, "Exec");
   // A self-closing <LogonTrigger /> leaves an empty section, so look for the element
   // itself — scoped to <Triggers> so a decoy elsewhere cannot satisfy it.
+  const registeredAction = action.toLowerCase();
+  const registeredCommand = `<Command>${taskXmlString(wscript)}</Command>`.toLowerCase();
+  const registeredArguments = `<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`.toLowerCase();
   return taskXmlElementCount(triggers, "LogonTrigger") > 0
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
@@ -1077,8 +1080,9 @@ export function windowsTaskRegistrationHealthy(
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
-    && action.includes(`<Command>${taskXmlString(wscript)}</Command>`)
-    && action.includes(`<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`);
+    // Windows paths are case-insensitive; schtasks may normalize their casing.
+    && registeredAction.includes(registeredCommand)
+    && registeredAction.includes(registeredArguments);
 }
 
 export interface WindowsSchedulerXmlState {
