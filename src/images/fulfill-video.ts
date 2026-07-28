@@ -106,7 +106,11 @@ export async function* pollVideoWithHeartbeats(
       }
       // still processing — continue with backoff
     } catch (e) {
-      if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
+      if (signal.aborted) {
+        return { ok: false, error: Date.now() - start >= timeoutMs * 0.95
+          ? `video generation timed out after ${Math.floor(timeoutMs / 1000)}s`
+          : "client closed request during video generation" };
+      }
       const status = (e as Error & { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 429) {
         return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
@@ -120,6 +124,9 @@ export async function* pollVideoWithHeartbeats(
     try {
       await sleep(interval, signal);
     } catch {
+      if (Date.now() - start >= timeoutMs * 0.95) {
+        return { ok: false, error: `video generation timed out after ${Math.floor(timeoutMs / 1000)}s` };
+      }
       return { ok: false, error: "client closed request during video generation" };
     }
 
