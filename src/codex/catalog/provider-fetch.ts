@@ -72,13 +72,24 @@ export function isProviderModelsApiItems(value: unknown): value is ProviderModel
 }
 
 /**
- * Normalize OpenAI-compatible /models payloads.
- * Supports `{ data: [...] }`, Google-style `{ models: [...] }`, and top-level arrays
- * (Together AI `#617`).
+ * Normalize OpenAI-compatible /models payloads for catalog discovery.
+ * Supports `{ data: [...] }` and top-level arrays (Together AI `#617`).
+ * Google's `{ models: [...] }` is handled by the connectivity probe only — catalog
+ * discovery must not treat a stray `models` key on openai-chat responses as valid.
  */
 export function providerModelsListFromResponse(json: unknown): unknown {
   if (Array.isArray(json)) return json;
-  if (json !== null && typeof json === "object") {
+  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+    const data = (json as { data?: unknown }).data;
+    if (Array.isArray(data)) return data;
+  }
+  return undefined;
+}
+
+/** Connectivity-probe shape: also accepts Google `{ models: [...] }`. */
+export function providerModelsListFromProbeResponse(json: unknown): unknown {
+  if (Array.isArray(json)) return json;
+  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
     const obj = json as { data?: unknown; models?: unknown };
     if (Array.isArray(obj.data)) return obj.data;
     if (Array.isArray(obj.models)) return obj.models;
