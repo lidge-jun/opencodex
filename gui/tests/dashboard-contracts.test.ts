@@ -26,35 +26,36 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
   const overviewFnStart = core.indexOf("export async function fetchDashboardOverview");
   const usageFnStart = core.indexOf("export async function fetchDashboardUsage");
-  const controlsFnStart = core.indexOf("export async function fetchDashboardControls");
+  const sidecarsFnStart = core.indexOf("export async function fetchDashboardSidecars");
   expect(overviewFnStart).toBeGreaterThan(-1);
   expect(usageFnStart).toBeGreaterThan(-1);
-  expect(controlsFnStart).toBeGreaterThan(-1);
+  expect(sidecarsFnStart).toBeGreaterThan(-1);
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/usage?range=30d");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
-  expect(core.slice(controlsFnStart, overviewFnStart > controlsFnStart ? overviewFnStart : undefined)).toContain("/api/sidecar-settings");
+  expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
   expect(hook).toContain("dashboard-usage:${apiBase}");
-  expect(hook).toContain("dashboard-controls:${apiBase}");
+  expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-overview:${apiBase}");
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
-  expect(hook).toContain("fetchDashboardControls");
+  expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
   expect(hook).toMatch(/dashboard-usage:\$\{apiBase\}[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
-  const controlsFnStart = core.indexOf("export async function fetchDashboardControls");
-  const overviewFnStart = core.indexOf("export async function fetchDashboardOverview");
-  expect(controlsFnStart).toBeGreaterThan(-1);
-  const controlsBody = core.slice(controlsFnStart, overviewFnStart > controlsFnStart ? overviewFnStart : undefined);
-  expect(controlsBody).toContain("/api/settings");
-  expect(controlsBody).toContain("/api/sidecar-settings");
-  expect(controlsBody).toContain("/api/shadow-call-settings");
-  expect(controlsBody).not.toContain("/healthz");
-  expect(controlsBody).not.toContain("/api/providers");
-  expect(controlsBody).not.toContain("/api/usage");
+  const sidecarsFnStart = core.indexOf("export async function fetchDashboardSidecars");
+  const settingsFnStart = core.indexOf("export async function fetchDashboardSettings");
+  expect(sidecarsFnStart).toBeGreaterThan(-1);
+  expect(settingsFnStart).toBeGreaterThan(-1);
+  const sidecarsBody = core.slice(sidecarsFnStart, settingsFnStart > sidecarsFnStart ? settingsFnStart : undefined);
+  expect(sidecarsBody).toContain("/api/sidecar-settings");
+  expect(sidecarsBody).toContain("/api/shadow-call-settings");
+  expect(sidecarsBody).not.toContain("/api/settings");
+  expect(sidecarsBody).not.toContain("/healthz");
+  expect(sidecarsBody).not.toContain("/api/providers");
+  expect(sidecarsBody).not.toContain("/api/usage");
 });
 
 test("Dashboard overview status widgets do not wait on injection-model", async () => {
@@ -74,6 +75,29 @@ test("Dashboard overview status widgets do not wait on injection-model", async (
   expect(hook).toContain("dashboard-overview:${apiBase}");
   expect(hook).toContain("dashboard-multi-agent:${apiBase}");
   expect(hook).toContain("enabled: overviewReady");
+});
+
+test("Dashboard MA mode and sidecars do not wait on settings or injection", async () => {
+  const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
+  const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
+  const maStart = core.indexOf("export async function fetchDashboardMaMode");
+  const sidecarsStart = core.indexOf("export async function fetchDashboardSidecars");
+  const settingsStart = core.indexOf("export async function fetchDashboardSettings");
+  const overviewStart = core.indexOf("export async function fetchDashboardOverview");
+  expect(maStart).toBeGreaterThan(-1);
+  expect(sidecarsStart).toBeGreaterThan(-1);
+  expect(settingsStart).toBeGreaterThan(-1);
+  const maBody = core.slice(maStart, overviewStart > maStart ? overviewStart : undefined);
+  const sidecarsBody = core.slice(sidecarsStart, settingsStart > sidecarsStart ? settingsStart : undefined);
+  expect(maBody).toContain("/api/v2");
+  expect(maBody).not.toContain("/api/injection-model");
+  expect(maBody).not.toContain("/api/settings");
+  expect(sidecarsBody).toContain("/api/sidecar-settings");
+  expect(sidecarsBody).not.toContain("/api/settings");
+  expect(hook).toContain("dashboard-ma-mode:${apiBase}");
+  expect(hook).toContain("dashboard-sidecars:${apiBase}");
+  expect(hook).toContain("dashboard-settings:${apiBase}");
+  expect(hook).not.toContain("dashboard-controls:${apiBase}");
 });
 
 test("Dashboard workspace pane is a labelled section, not a nested main landmark", async () => {

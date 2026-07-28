@@ -1,7 +1,6 @@
 import { readJsonIfOk } from "../fetch-json";
 import {
   settingsPollMayCommit,
-  beginPollEpochs,
   mapStartupHealthProbe,
   type StartupHealthStatus,
 } from "../startup-health-ui";
@@ -73,6 +72,21 @@ export type DashboardControlsPoll = {
   shadowCall: ShadowCallData | null | undefined;
 };
 
+/** Sidecar + shadow only — must not wait on /api/settings (startup-health). */
+export type DashboardSidecarPoll = {
+  sidecar: SidecarData;
+  shadowCall: ShadowCallData | null;
+};
+
+export type DashboardSettingsPoll = {
+  settings: SettingsData | null;
+  startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
+};
+
+export type DashboardMaModePoll = {
+  maMode: "v1" | "default" | "v2";
+};
+
 export type DashboardEpochRefs = {
   settingsRequestEpochRef: { current: number };
   settingsMutationEpochRef: { current: number };
@@ -135,46 +149,42 @@ export async function fetchDashboardUsage(apiBase: string, signal: AbortSignal):
 /**
  * Interactive dashboard controls (auto-start, sidecar, shadow-call). Fetched on their
  * own poll so a slow healthz/providers response cannot gray out toggles/selects.
+ * @deprecated Prefer fetchDashboardSidecars + fetchDashboardSettings for progressive paint.
  */
 export async function fetchDashboardControls(
   apiBase: string,
   signal: AbortSignal,
   epochs: DashboardEpochRefs,
 ): Promise<DashboardControlsPoll> {
-  const epochSnapshot = beginPollEpochs({
-    settingsRequest: epochs.settingsRequestEpochRef,
-    settingsMutation: epochs.settingsMutationEpochRef,
-    shadowRequest: epochs.shadowCallRequestEpochRef,
-    shadowMutation: epochs.shadowCallMutationEpochRef,
-  });
-  const settingsRequestEpoch = epochSnapshot.settings.request;
-  const settingsMutationEpoch = epochSnapshot.settings.mutation;
-  const shadowRequestEpoch = epochSnapshot.shadow.request;
-  const shadowMutationEpoch = epochSnapshot.shadow.mutation;
+  const [sidecars, settings] = await Promise.all([
+    fetchDashboardSidecars(apiBase, signal, epochs),
+    fetchDashboardSettings(apiBase, signal, epochs),
+  ]);
+  return {
+    settings: settings.settings,
+    startupHealthSeed: settings.startupHealthSeed,
+    sidecar: sidecars.sidecar,
+    shadowCall: sidecars.shadowCall,
+  };
+}
 
-  const [sRes, scRes, shRes] = await Promise.all([
-    fetch(`${apiBase}/api/settings`, { signal }),
+/** Web-search / vision sidecar + shadow-call — config reads, typically sub-10ms. */
+export async function fetchDashboardSidecars(
+  apiBase: string,
+  signal: AbortSignal,
+  epochs: DashboardEpochRefs,
+): Promise<DashboardSidecarPoll> {
+  // Only bump shadow epochs — settings has its own poll and must not be invalidated here.
+  const shadowRequestEpoch = ++epochs.shadowCallRequestEpochRef.current;
+  const shadowMutationEpoch = epochs.shadowCallMutationEpochRef.current;
+
+  const [scRes, shRes] = await Promise.all([
     fetch(`${apiBase}/api/sidecar-settings`, { signal }),
     fetch(`${apiBase}/api/shadow-call-settings`, { signal }),
   ]);
 
-  const nextSettings = await requireJson<SettingsData>(sRes);
-  let settings: SettingsData | null = null;
-  let startupHealthSeed: SettingsData["startupHealth"] | null | undefined = undefined;
-  if (settingsPollMayCommit(
-    { request: settingsRequestEpoch, mutation: settingsMutationEpoch },
-    {
-      request: epochs.settingsRequestEpochRef.current,
-      mutation: epochs.settingsMutationEpochRef.current,
-      mutationInFlight: epochs.settingsMutationInFlightRef.current,
-    },
-  )) {
-    settings = nextSettings;
-    startupHealthSeed = nextSettings.startupHealth;
-  }
-
   const sidecar = await requireJson<SidecarData>(scRes);
-  let shadowCall: ShadowCallData | null | undefined = undefined;
+  let shadowCall: ShadowCallData | null = null;
   try {
     if (shRes.ok) {
       const nextShadow = await shRes.json() as ShadowCallData;
@@ -202,7 +212,54 @@ export async function fetchDashboardControls(
     }
   }
 
-  return { settings, startupHealthSeed, sidecar, shadowCall };
+  return { sidecar, shadowCall };
+}
+
+/** Codex auto-start + startup-health seed — can be slower because settings embeds startup probe. */
+export async function fetchDashboardSettings(
+  apiBase: string,
+  signal: AbortSignal,
+  epochs: DashboardEpochRefs,
+): Promise<DashboardSettingsPoll> {
+  const settingsRequestEpoch = ++epochs.settingsRequestEpochRef.current;
+  const settingsMutationEpoch = epochs.settingsMutationEpochRef.current;
+
+  const sRes = await fetch(`${apiBase}/api/settings`, { signal });
+  const nextSettings = await requireJson<SettingsData>(sRes);
+  let settings: SettingsData | null = null;
+  let startupHealthSeed: SettingsData["startupHealth"] | null | undefined = undefined;
+  if (settingsPollMayCommit(
+    { request: settingsRequestEpoch, mutation: settingsMutationEpoch },
+    {
+      request: epochs.settingsRequestEpochRef.current,
+      mutation: epochs.settingsMutationEpochRef.current,
+      mutationInFlight: epochs.settingsMutationInFlightRef.current,
+    },
+  )) {
+    settings = nextSettings;
+    startupHealthSeed = nextSettings.startupHealth;
+  }
+
+  return { settings, startupHealthSeed };
+}
+
+/** Multi-agent mode toggle only — must not wait on injection-model / effort-caps. */
+export async function fetchDashboardMaMode(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardMaModePoll> {
+  try {
+    const v2Res = await fetch(`${apiBase}/api/v2`, { signal });
+    if (!v2Res.ok) return { maMode: "default" };
+    const v2Data = await v2Res.json() as { multiAgentMode?: unknown };
+    if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") {
+      return { maMode: v2Data.multiAgentMode };
+    }
+    return { maMode: "default" };
+  } catch (error) {
+    if (isAbortError(error, signal)) throw error;
+    return { maMode: "default" };
+  }
 }
 
 export async function fetchDashboardOverview(
@@ -226,22 +283,14 @@ export async function fetchDashboardMultiAgent(
   apiBase: string,
   signal: AbortSignal,
 ): Promise<DashboardMultiAgentPoll> {
-  const [v2Res, imRes, ecRes] = await Promise.all([
-    fetch(`${apiBase}/api/v2`, { signal }).catch(() => null),
+  const [imRes, ecRes] = await Promise.all([
     fetch(`${apiBase}/api/injection-model`, { signal }).catch(() => null),
     fetch(`${apiBase}/api/effort-caps`, { signal }).catch(() => null),
   ]);
 
-  let maMode: "v1" | "default" | "v2" = "default";
-  let maModeResolved = false;
-  try {
-    if (v2Res?.ok) {
-      const v2Data = await v2Res.json();
-      if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") maMode = v2Data.multiAgentMode;
-      else maMode = "default";
-    }
-  } catch { /* old server */ }
-  finally { maModeResolved = true; }
+  // Mode is owned by fetchDashboardMaMode; keep a stable default here for composition.
+  const maMode: "v1" | "default" | "v2" = "default";
+  const maModeResolved = true;
 
   let injection: InjectionPoll | undefined;
   try {
@@ -272,14 +321,15 @@ export async function fetchDashboardMultiAgent(
   return { maMode, maModeResolved, injection, effortCaps };
 }
 
-/** @deprecated Prefer fetchDashboardOverview + fetchDashboardMultiAgent for progressive paint. */
+/** @deprecated Prefer fetchDashboardOverview + fetchDashboardMultiAgent + fetchDashboardMaMode. */
 export async function fetchDashboardCore(
   apiBase: string,
   signal: AbortSignal,
 ): Promise<DashboardCorePoll> {
-  const [overview, multiAgent] = await Promise.all([
+  const [overview, multiAgent, ma] = await Promise.all([
     fetchDashboardOverview(apiBase, signal),
     fetchDashboardMultiAgent(apiBase, signal),
+    fetchDashboardMaMode(apiBase, signal),
   ]);
-  return { ...overview, ...multiAgent };
+  return { ...overview, ...multiAgent, maMode: ma.maMode, maModeResolved: true };
 }

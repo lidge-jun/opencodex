@@ -8,10 +8,12 @@ import {
   type StartupHealthStatus,
 } from "../startup-health-ui";
 import {
-  fetchDashboardControls,
+  fetchDashboardMaMode,
   fetchDashboardModels,
   fetchDashboardMultiAgent,
   fetchDashboardOverview,
+  fetchDashboardSettings,
+  fetchDashboardSidecars,
   fetchDashboardUsage,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
@@ -47,6 +49,7 @@ const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
 const OVERVIEW_CACHE_PREFIX = "ocx.dash.overview.v1:";
 const USAGE_CACHE_PREFIX = "ocx.dash.usage30d.v1:";
 const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
+const MA_MODE_CACHE_PREFIX = "ocx.dash.maMode.v1:";
 
 type CachedControls = {
   settings?: SettingsData | null;
@@ -58,6 +61,8 @@ type CachedOverview = {
   health: HealthData;
   providers: ProviderInfo[];
 };
+
+type MaMode = "v1" | "default" | "v2";
 
 function readCachedControls(apiBase: string): CachedControls | null {
   try {
@@ -94,6 +99,10 @@ export function useDashboardData(apiBase: string) {
     () => readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`),
     [apiBase],
   );
+  const cachedMaMode = useMemo(
+    () => readSessionListCache<MaMode>(`${MA_MODE_CACHE_PREFIX}${apiBase}`),
+    [apiBase],
+  );
   const [health, setHealth] = useState<HealthData | null>(() => cachedOverview?.health ?? null);
   const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup);
   const [providers, setProviders] = useState<ProviderInfo[]>(() => cachedOverview?.providers ?? []);
@@ -107,8 +116,8 @@ export function useDashboardData(apiBase: string) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [maMode, setMaMode] = useState<"v1" | "default" | "v2">("default");
-  const [maModeResolved, setMaModeResolved] = useState(false);
+  const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
+  const [maModeResolved, setMaModeResolved] = useState(() => cachedMaMode !== null);
   const [maBusy, setMaBusy] = useState(false);
   const [maHelpOpen, setMaHelpOpen] = useState(false);
   const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
@@ -195,12 +204,31 @@ export function useDashboardData(apiBase: string) {
   );
   const overviewReady = health !== null || overviewPoll.data !== undefined;
 
-  const controlsPoll = useKeyedClientResource(
-    `dashboard-controls:${apiBase}`,
+  // Preferences that are just config — never gate on overview or injection.
+  const maModePoll = useKeyedClientResource(
+    `dashboard-ma-mode:${apiBase}`,
+    [apiBase],
+    (signal) => fetchDashboardMaMode(apiBase, signal),
+    { pollMs: 5000 },
+  );
+
+  const sidecarPoll = useKeyedClientResource(
+    `dashboard-sidecars:${apiBase}`,
     [apiBase],
     async (signal) => {
       const startupHealthGeneration = startupHealthGenerationRef.current;
-      const data = await fetchDashboardControls(apiBase, signal, epochRefs);
+      const data = await fetchDashboardSidecars(apiBase, signal, epochRefs);
+      return { ...data, startupHealthGeneration };
+    },
+    { pollMs: 5000 },
+  );
+
+  const settingsPoll = useKeyedClientResource(
+    `dashboard-settings:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const startupHealthGeneration = startupHealthGenerationRef.current;
+      const data = await fetchDashboardSettings(apiBase, signal, epochRefs);
       return { ...data, startupHealthGeneration };
     },
     { pollMs: 5000 },
@@ -260,10 +288,15 @@ export function useDashboardData(apiBase: string) {
   }, [overviewPoll.data, apiBase]);
 
   useEffect(() => {
+    if (maModePoll.data === undefined) return;
+    setMaMode(maModePoll.data.maMode);
+    setMaModeResolved(true);
+    writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
+  }, [maModePoll.data, apiBase]);
+
+  useEffect(() => {
     const data = multiAgentPoll.data;
     if (!data) return;
-    setMaMode(data.maMode);
-    setMaModeResolved(data.maModeResolved);
     if (data.injection) {
       setMultiAgentGuidanceEnabled(data.injection.multiAgentGuidanceEnabled);
       setSyncCodexSubagentDefaults(data.injection.syncCodexSubagentDefaults);
@@ -279,11 +312,24 @@ export function useDashboardData(apiBase: string) {
   }, [multiAgentPoll.data]);
 
   useEffect(() => {
-    const data = controlsPoll.data;
+    const data = sidecarPoll.data;
+    if (!data) return;
+    setSidecar(data.sidecar);
+    setShadowCall(data.shadowCall);
+    const prev = readCachedControls(apiBase) ?? {};
+    writeCachedControls(apiBase, {
+      ...prev,
+      sidecar: data.sidecar,
+      shadowCall: data.shadowCall,
+    });
+  }, [sidecarPoll.data, apiBase]);
+
+  useEffect(() => {
+    const data = settingsPoll.data;
     if (!data) return;
     if (data.settings) setSettings(data.settings);
     // Latest-wins: only seed from settings when no newer dedicated probe has committed
-    // while this controls poll was in flight. Always merge against the live ref.
+    // while this settings poll was in flight. Always merge against the live ref.
     if (
       data.startupHealthSeed !== undefined
       && data.startupHealthGeneration === startupHealthGenerationRef.current
@@ -293,14 +339,12 @@ export function useDashboardData(apiBase: string) {
       startupHealthRef.current = merged;
       if (merged) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, merged);
     }
-    if (data.sidecar) setSidecar(data.sidecar);
-    if (data.shadowCall !== undefined) setShadowCall(data.shadowCall);
+    const prev = readCachedControls(apiBase) ?? {};
     writeCachedControls(apiBase, {
+      ...prev,
       settings: data.settings ?? undefined,
-      sidecar: data.sidecar ?? undefined,
-      shadowCall: data.shadowCall === undefined ? undefined : data.shadowCall,
     });
-  }, [controlsPoll.data, apiBase]);
+  }, [settingsPoll.data, apiBase]);
 
   useEffect(() => {
     if (usagePoll.data !== undefined) {
@@ -381,7 +425,15 @@ export function useDashboardData(apiBase: string) {
     }
     return out;
   }, [grouped, modelQuery]);
-  const sidecarModels = useMemo(() => sidecarModelOptions(models), [models]);
+  const sidecarModels = useMemo(() => {
+    const opts = sidecarModelOptions(models);
+    for (const id of [sidecar?.webSearch.model, sidecar?.vision.model]) {
+      if (id && !opts.some(option => option.value === id)) {
+        opts.unshift({ value: id, label: id });
+      }
+    }
+    return opts;
+  }, [models, sidecar]);
 
   const saveSidecar = async (patch: SidecarPatch) => {
     if (!sidecar || sidecarSaving) return;
@@ -400,6 +452,11 @@ export function useDashboardData(apiBase: string) {
       });
       const data = await requireJson<SidecarData>(res, "save failed");
       setSidecar({ webSearch: data.webSearch, vision: data.vision });
+      const prev = readCachedControls(apiBase) ?? {};
+      writeCachedControls(apiBase, {
+        ...prev,
+        sidecar: { webSearch: data.webSearch, vision: data.vision },
+      });
     } catch {
       setSidecar(previous);
     } finally {
@@ -439,7 +496,11 @@ export function useDashboardData(apiBase: string) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ multiAgentMode: mode }),
       });
-      if (r.ok) setMaMode(mode);
+      if (r.ok) {
+        setMaMode(mode);
+        setMaModeResolved(true);
+        writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
+      }
     } catch { /* ignore */ }
     finally { setMaBusy(false); }
   };
